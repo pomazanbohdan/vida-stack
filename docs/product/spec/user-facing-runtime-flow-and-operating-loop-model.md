@@ -130,10 +130,10 @@ Design-first intake rule:
 
 1. when one user request already includes research/specification/planning plus later implementation or code delivery, the intake surface must not jump directly into developer-lane execution,
 2. the runtime must first route that request into a design-first path,
-3. the preferred one-shot launcher surface for that path is `vida taskflow bootstrap-spec "<request>" --json`,
-4. the intake/runtime path may first be materialized through `vida taskflow consume final "<request>" --json`, which must emit the routed receipt, dispatch packet, and the bounded next lawful command sequence,
+3. the preferred one-shot launcher surface for that path is `vida taskflow bootstrap-spec "<request>"`,
+4. the intake/runtime path may first be materialized through `vida taskflow consume final "<request>"`, which must emit the routed receipt, dispatch packet, and the bounded next lawful command sequence,
 5. once a lawful persisted packet exists, `vida taskflow consume continue` and `vida taskflow consume advance` become the canonical launcher-owned progression surfaces instead of manually reconstructing the handoff path,
-6. `vida taskflow bootstrap-spec "<request>" --json` remains the preferred tracked launcher action when the returned route is design-first,
+6. `vida taskflow bootstrap-spec "<request>"` remains the preferred tracked launcher action when the returned route is design-first,
 7. that surface must materialize the feature epic, the spec-pack task, and the canonical design-doc scaffold before normal development-team execution begins,
 8. when the runtime launches a bounded `business_analyst` or `pm` lane from that design-first path, that launch is an active wait state, not completion proof,
 9. `work-pool-pack` shaping must remain blocked until specification/planning evidence returns and the design artifact is finalized and validated through `vida docflow`,

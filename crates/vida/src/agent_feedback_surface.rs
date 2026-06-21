@@ -343,6 +343,9 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "blocked feedback derivation",
             "canonical close blocked feedback derivation",
             "blocker keyword matching",
+            "blocker vocabulary",
+            "blocker wording",
+            "blocker classifier",
             "blocked reason detection",
             "failure evidence",
             "concrete blocked task outcomes",
@@ -1123,7 +1126,32 @@ mod tests {
     use crate::HOST_AGENT_OBSERVABILITY_STATE;
     use crate::WORKER_SCORECARDS_STATE;
     use crate::WORKER_STRATEGY_STATE;
+    use std::fs;
     use std::process::ExitCode;
+
+    fn point_host_cli_template_at_existing_codex_source(root: &std::path::Path, cli_system: &str) {
+        let config_path = root.join("vida.config.yaml");
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let mut config_yaml: serde_yaml::Value =
+            serde_yaml::from_str(&config).expect("config should parse as yaml");
+        let host_system = config_yaml
+            .get_mut("host_environment")
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|host_environment| host_environment.get_mut("systems"))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(|systems| systems.get_mut(cli_system))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .expect("selected host system should exist in test config");
+        host_system.insert(
+            serde_yaml::Value::String("template_root".to_string()),
+            serde_yaml::Value::String(".codex".to_string()),
+        );
+        fs::write(
+            &config_path,
+            serde_yaml::to_string(&config_yaml).expect("config should serialize"),
+        )
+        .expect("test config should point selected host template at an existing source");
+    }
 
     #[test]
     fn agent_feedback_records_scorecard_and_refreshes_strategy() {
@@ -1203,6 +1231,7 @@ mod tests {
         let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        point_host_cli_template_at_existing_codex_source(harness.path(), "qwen");
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
@@ -1891,6 +1920,23 @@ mod tests {
             .iter()
             .any(|phrase| phrase == "actionable blocked output"));
         assert!(ignored.iter().any(|phrase| phrase == "genuinely blocked"));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_neutral_blocker_vocabulary_reason() {
+        let reason = "verified dispatch-next blocker vocabulary fix";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored.iter().any(|phrase| phrase == "blocker vocabulary"));
     }
 
     #[test]

@@ -1,31 +1,31 @@
 .PHONY: vida-build vida-check vida-test vida-test-workspace vida-doc-test vida-release-package vida-dev-script-check vida-dev-quick vida-dev-smoke vida-run-help
 
 vida-build:
-	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode build-debug -Json
+	scripts/vida-dev-gate.cmd -Mode build-debug -Json
 
 vida-check:
-	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -Json
+	scripts/vida-dev-gate.cmd -Mode quick -Json
 
 vida-test:
-	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode package-nextest -Json
+	scripts/vida-dev-gate.cmd -Mode package-nextest -Json
 
 vida-test-workspace:
-	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode workspace-nextest -Json
+	scripts/vida-dev-gate.cmd -Mode workspace-nextest -Json
 
 vida-doc-test:
-	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode doc-test -Json
+	scripts/vida-dev-gate.cmd -Mode doc-test -Json
 
 vida-release-package:
-	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-package -Json
+	scripts/vida-dev-gate.cmd -Mode release-package -Json
 
 vida-dev-script-check:
-	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check -Json
+	scripts/vida-dev-gate.cmd -Mode script-check -Json
 
 vida-dev-quick:
-	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -Json
+	scripts/vida-dev-gate.cmd -Mode quick -Json
 
 vida-dev-smoke:
-	pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode runtime-smoke -Json
+	scripts/vida-dev-gate.cmd -Mode runtime-smoke -Json
 
 vida-run-help:
 	cargo run -- --help

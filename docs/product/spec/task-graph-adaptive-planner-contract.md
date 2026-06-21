@@ -170,7 +170,7 @@ Will implement / choose:
 ### Phase 1
 - Add PlanGraph draft types and deterministic `plan generate` / `plan materialize` surfaces.
 - Materialize bounded child tasks and dependencies through existing task store APIs.
-- First proof target: dry-run JSON, materialized graph, and `vida task validate-graph --json` pass.
+- First proof target: dry-run JSON, materialized graph, and `vida task validate-graph` pass.
 
 ### Phase 2
 - Add `graph explain`, `task split`, and `task spawn-blocker`.
@@ -199,7 +199,7 @@ Will implement / choose:
   - `vida task split --json`
   - `vida task spawn-blocker --json`
   - `vida taskflow scheduler dispatch --dry-run --json`
-  - `vida task validate-graph --json`
+  - `vida task validate-graph`
   - `vida taskflow graph-summary --json`
 - Canonical checks:
   - `vida docflow finalize-edit docs/product/spec/task-graph-adaptive-planner-contract.md docs/product/spec/current-spec-map.md active spec/catalog maps and Git history "record task graph adaptive planner design"`

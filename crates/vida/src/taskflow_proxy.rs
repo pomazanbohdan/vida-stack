@@ -27,7 +27,9 @@ const TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
 const TASKFLOW_NEXT_PROJECTION_NAME: &str = "taskflow-next-latest";
 const TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME: &str = "taskflow-graph-summary-latest";
 const TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION: &str =
-    "taskflow-graph-summary-projection-v2";
+    "taskflow-graph-summary-projection-v3";
+const SCHEDULING_ACTUALIZE_BLOCKER_MISSING_OWNED_PATHS: &str =
+    "missing_owned_paths_requires_explicit_scope_or_sequential_classification";
 
 fn safe_taskflow_projection_component(value: &str) -> String {
     let mut safe = value
@@ -186,6 +188,9 @@ pub(crate) struct TaskflowSchedulerDispatchPlan {
     pub(crate) surface: String,
     pub(crate) blocker_codes: Vec<String>,
     pub(crate) next_actions: Vec<String>,
+    pub(crate) artifact_refs: serde_json::Value,
+    pub(crate) shared_fields: serde_json::Value,
+    pub(crate) operator_contracts: serde_json::Value,
     pub(crate) dry_run: bool,
     pub(crate) execute_requested: bool,
     pub(crate) execute_supported: bool,
@@ -245,7 +250,11 @@ struct TaskflowSchedulingActualizeCandidate {
     parent_id: Option<String>,
     current: crate::state_store::TaskExecutionSemantics,
     proposed: crate::state_store::TaskExecutionSemantics,
+    current_owned_paths: Vec<String>,
+    proposed_owned_paths: Vec<String>,
     missing_fields: Vec<String>,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
     status: String,
     applied: bool,
 }
@@ -544,26 +553,27 @@ fn cached_taskflow_graph_summary_projection_admissible(cached: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(cached)
         .ok()
         .is_some_and(|payload| {
-            if graph_summary_payload_has_closed_task_active_run_projection_mismatch(&payload) {
+            if payload.get("surface").and_then(serde_json::Value::as_str)
+                != Some("vida taskflow graph-summary")
+            {
                 return false;
             }
-            payload
+            if payload
                 .get("projection_contract_version")
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|version| {
-                    version == TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION
+                    version != TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION
                 })
-                || (payload.get("surface").and_then(serde_json::Value::as_str)
-                    == Some("vida taskflow graph-summary")
-                    && payload
-                        .get("status")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some()
-                    && payload["operator_contracts"]["contract_id"].as_str()
-                        == Some(
-                            crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC
-                                .contract_id,
-                        ))
+            {
+                return false;
+            }
+            if payload.get("status").and_then(serde_json::Value::as_str) != Some("pass") {
+                return false;
+            }
+            if graph_summary_payload_has_closed_task_active_run_projection_mismatch(&payload) {
+                return false;
+            }
+            true
         })
 }
 
@@ -579,44 +589,9 @@ fn graph_summary_payload_has_closed_task_active_run_projection_mismatch(
             .any(|code| code.as_str() == Some("closed_task_active_run_projection_mismatch"))
 }
 
-fn normalize_scheduler_path(path: &str) -> Option<String> {
-    let mut value = path.trim().replace('\\', "/");
-    while let Some(stripped) = value.strip_prefix("./") {
-        value = stripped.to_string();
-    }
-    let mut parts = Vec::new();
-    for part in value.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            value => parts.push(value),
-        }
-    }
-    value = parts.join("/");
-    #[cfg(windows)]
-    {
-        value = value.to_ascii_lowercase();
-    }
-    value = value.trim_matches('/').to_string();
-    (!value.is_empty()).then_some(value)
-}
-
 fn scheduler_paths_intersect(left: &str, right: &str) -> bool {
-    let Some(left) = normalize_scheduler_path(left) else {
-        return false;
-    };
-    let Some(right) = normalize_scheduler_path(right) else {
-        return false;
-    };
-    left == right
-        || left
-            .strip_prefix(right.as_str())
-            .is_some_and(|suffix| suffix.starts_with('/'))
-        || right
-            .strip_prefix(left.as_str())
-            .is_some_and(|suffix| suffix.starts_with('/'))
+    taskflow_core::path_policy::repo_relative_path_is_owned(left, right)
+        || taskflow_core::path_policy::repo_relative_path_is_owned(right, left)
 }
 
 fn scheduler_owned_path_blocker(
@@ -626,7 +601,8 @@ fn scheduler_owned_path_blocker(
     for candidate_path in &task.owned_paths {
         for selected_path in selected_paths {
             if scheduler_paths_intersect(candidate_path, selected_path) {
-                return normalize_scheduler_path(candidate_path)
+                return taskflow_core::path_policy::normalize_repo_relative_path(candidate_path)
+                    .ok()
                     .map(|path| format!("owned_path_already_selected:{path}"));
             }
         }
@@ -667,41 +643,55 @@ fn scheduler_active_claim_blockers(
     task: &GraphSummaryTaskRef,
     claims: &[crate::state_store::OrchestratorClaim],
 ) -> Vec<String> {
-    let mut blockers = Vec::new();
-    for claim in claims {
-        if claim.task_id.as_deref() == Some(task.id.as_str()) {
-            blockers.push(format!(
-                "active_orchestrator_claim_task:{}:{}",
-                task.id, claim.claim_id
-            ));
-        }
-        if let (Some(left), Some(right)) = (
-            task.conflict_domain.as_deref(),
-            claim.conflict_domain.as_deref(),
-        ) {
-            if !left.trim().is_empty() && left == right {
-                blockers.push(format!(
-                    "active_orchestrator_claim_conflict_domain:{}:{}",
-                    left, claim.claim_id
-                ));
-            }
-        }
-        for task_path in &task.owned_paths {
-            for claim_path in claim.owned_paths.iter().chain(claim.read_only_paths.iter()) {
-                if scheduler_paths_intersect(task_path, claim_path) {
-                    if let Some(path) = normalize_scheduler_path(task_path) {
-                        blockers.push(format!(
-                            "active_orchestrator_claim_path:{}:{}",
-                            path, claim.claim_id
-                        ));
-                    }
-                }
-            }
-        }
-    }
+    let read_only_paths = Vec::<String>::new();
+    let mut blockers = crate::state_store::OrchestratorClaim::task_conflicts(
+        claims,
+        task.id.as_str(),
+        None,
+        task.conflict_domain.as_deref(),
+        &task.owned_paths,
+        &read_only_paths,
+        crate::state_store::LeaseMode::Exclusive,
+        None,
+    )
+    .into_iter()
+    .map(|conflict| scheduler_claim_conflict_blocker(task, &conflict))
+    .collect::<Vec<_>>();
     blockers.sort();
     blockers.dedup();
     blockers
+}
+
+fn scheduler_claim_conflict_blocker(
+    task: &GraphSummaryTaskRef,
+    conflict: &crate::state_store::OrchestratorClaimCompatibilityConflict,
+) -> String {
+    match conflict.conflict_kind.as_str() {
+        "task" => format!(
+            "active_orchestrator_claim_task:{}:{}",
+            task.id, conflict.claim_id
+        ),
+        "run" => format!(
+            "active_orchestrator_claim_run:{}:{}",
+            conflict.run_id.as_deref().unwrap_or(task.id.as_str()),
+            conflict.claim_id
+        ),
+        "conflict_domain" => format!(
+            "active_orchestrator_claim_conflict_domain:{}:{}",
+            conflict
+                .conflict_domain
+                .as_deref()
+                .or(task.conflict_domain.as_deref())
+                .unwrap_or("unknown"),
+            conflict.claim_id
+        ),
+        "owned_path" | "read_only_path" => format!(
+            "active_orchestrator_claim_path:{}:{}",
+            conflict.path.as_deref().unwrap_or("unknown"),
+            conflict.claim_id
+        ),
+        other => format!("active_orchestrator_claim_{other}:{}", conflict.claim_id),
+    }
 }
 
 fn scheduler_external_admission_blockers(
@@ -719,7 +709,16 @@ fn scheduler_external_admission_blockers(
 fn recovery_holds_active_bound_run(
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
 ) -> bool {
-    recovery.is_some_and(|summary| summary.delegation_gate.delegated_cycle_open)
+    recovery.is_some_and(|summary| {
+        if summary.recovery_ready
+            && summary.resume_status == "ready"
+            && summary.resume_target.starts_with("dispatch.")
+            && summary.policy_gate == "not_required"
+        {
+            return false;
+        }
+        summary.delegation_gate.delegated_cycle_open
+    })
 }
 
 fn dispatch_receipt_resolves_recovery_bound_run(
@@ -829,64 +828,18 @@ fn has_foreign_claim_conflict(
         return false;
     };
 
-    for claim in foreign_claims {
-        // Skip claims from current session
-        if claim.orchestrator_session_id == current_session_id {
-            continue;
-        }
-
-        // Skip expired claims
-        if claim.status == "expired" || claim.status == "stale" {
-            continue;
-        }
-
-        // Check if claim is blocked - this always blocks
-        if claim.status == "blocked" {
-            // Only block if the claim intersects with our work
-            if claim_conflicts_with_task(claim, task) {
-                return true;
-            }
-        }
-
-        // Check for exclusive lease mode conflicts
-        if claim.lease_mode == "exclusive" {
-            if claim_conflicts_with_task(claim, task) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Checks if a claim conflicts with a task based on conflict domain, paths, or direct resource overlap
-fn claim_conflicts_with_task(
-    claim: &crate::state_store::OrchestratorClaim,
-    task: &GraphSummaryTaskRef,
-) -> bool {
-    // Same task_id
-    if claim.task_id.as_deref() == Some(task.id.as_str()) {
-        return true;
-    }
-
-    // Same conflict_domain
-    if let Some(claim_domain) = claim.conflict_domain.as_deref() {
-        if task.conflict_domain.as_deref() == Some(claim_domain) {
-            return true;
-        }
-    }
-
-    // Intersecting owned_paths
-    if !claim.owned_paths.is_empty() && !task.owned_paths.is_empty() {
-        for claim_path in &claim.owned_paths {
-            for task_path in &task.owned_paths {
-                if paths_intersect(claim_path, task_path) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    false
+    let read_only_paths = Vec::<String>::new();
+    !crate::state_store::OrchestratorClaim::task_conflicts(
+        foreign_claims,
+        task.id.as_str(),
+        None,
+        task.conflict_domain.as_deref(),
+        &task.owned_paths,
+        &read_only_paths,
+        crate::state_store::LeaseMode::Exclusive,
+        Some(current_session_id),
+    )
+    .is_empty()
 }
 
 fn normalize_conflict_path(path: &str) -> Option<String> {
@@ -1516,19 +1469,17 @@ fn latest_run_graph_evidence_is_ambiguous(
         || latest_run_graph_dispatch_receipt.is_some_and(|receipt| {
             crate::state_store::latest_run_graph_dispatch_receipt_signal_is_ambiguous(receipt)
         })
-        || (!dispatch_receipt_checkpoint_leakage
-            && crate::state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
-                latest_run_graph_status.map(|status| status.run_id.as_str()),
-                latest_run_graph_dispatch_receipt.map(|receipt| receipt.run_id.as_str()),
-            ))
-        || (!dispatch_receipt_checkpoint_leakage
-            && !crate::state_store::latest_run_graph_evidence_snapshot_is_consistent(
-                latest_run_graph_status.map(|status| status.run_id.as_str()),
-                latest_run_graph_recovery.map(|summary| summary.run_id.as_str()),
-                latest_run_graph_checkpoint.map(|summary| summary.run_id.as_str()),
-                latest_run_graph_gate.map(|summary| summary.run_id.as_str()),
-                latest_run_graph_dispatch_receipt.map(|receipt| receipt.run_id.as_str()),
-            ))
+        || crate::state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
+            latest_run_graph_status.map(|status| status.run_id.as_str()),
+            latest_run_graph_dispatch_receipt.map(|receipt| receipt.run_id.as_str()),
+        )
+        || !crate::state_store::latest_run_graph_evidence_snapshot_is_consistent(
+            latest_run_graph_status.map(|status| status.run_id.as_str()),
+            latest_run_graph_recovery.map(|summary| summary.run_id.as_str()),
+            latest_run_graph_checkpoint.map(|summary| summary.run_id.as_str()),
+            latest_run_graph_gate.map(|summary| summary.run_id.as_str()),
+            latest_run_graph_dispatch_receipt.map(|receipt| receipt.run_id.as_str()),
+        )
 }
 
 async fn latest_run_graph_dispatch_receipt_and_evidence_ambiguity(
@@ -1892,7 +1843,7 @@ async fn build_scheduler_packet_backed_execution_gate_for_task(
         None => None,
     };
     if let Some(status) = status.as_ref() {
-        let receipt_missing_packet = receipt.as_ref().map_or(true, |receipt| {
+        let receipt_missing_packet = receipt.as_ref().is_none_or(|receipt| {
             receipt
                 .dispatch_packet_path
                 .as_deref()
@@ -2771,12 +2722,26 @@ fn build_taskflow_scheduler_dispatch_plan(
         &scheduling,
         &blocker_codes,
     );
+    let reservation_ids = dispatch_receipt.reservation_ids.clone();
+    let (shared_fields, operator_contracts, artifact_refs) =
+        taskflow_scheduler_dispatch_operator_contracts(
+            &status,
+            &blocker_codes,
+            &next_actions,
+            &selected_task_ids,
+            &reservation_ids,
+            execute_requested,
+            &dispatch_receipt.dispatch_status,
+        );
 
     TaskflowSchedulerDispatchPlan {
         status,
         surface: "vida taskflow scheduler dispatch".to_string(),
         blocker_codes,
         next_actions,
+        artifact_refs,
+        shared_fields,
+        operator_contracts,
         dry_run,
         execute_requested,
         execute_supported,
@@ -3083,6 +3048,21 @@ fn explicit_task_binding_matches_ready_task(
     (bound_task_id == ready_head.id).then_some(bound_task_id.to_string())
 }
 
+fn ready_task_for_single_taskflow_active_candidate<'a>(
+    ready_tasks: &'a [crate::state_store::TaskRecord],
+    taskflow_active_candidates: &[serde_json::Value],
+) -> Option<&'a crate::state_store::TaskRecord> {
+    let [candidate] = taskflow_active_candidates else {
+        return None;
+    };
+    let task_id = candidate
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    ready_tasks.iter().find(|task| task.id == task_id)
+}
+
 async fn scoped_latest_run_graph_for_explicit_ready_task(
     store: &crate::state_store::StateStore,
     latest_run_graph: Option<crate::state_store::RunGraphStatus>,
@@ -3108,6 +3088,12 @@ async fn scoped_latest_run_graph_for_explicit_ready_task(
         }
         other => other,
     };
+    let latest_run_graph = match latest_run_graph {
+        Some(status) => {
+            Some(reseed_unpersisted_configured_route_mismatch_for_projection(store, status).await?)
+        }
+        None => None,
+    };
     let Some(bound_task_id) =
         explicit_task_binding_matches_ready_task(explicit_binding, ready_head)
     else {
@@ -3126,11 +3112,56 @@ async fn scoped_latest_run_graph_for_explicit_ready_task(
     else {
         return Ok(None);
     };
-    store
+    let status = store
         .run_graph_status_from_task_rows(&run_id, all_tasks)
         .await
+        .map_err(|error| format!("Failed to read scoped run-graph status: {error}"))?;
+    reseed_unpersisted_configured_route_mismatch_for_projection(store, status)
+        .await
         .map(Some)
-        .map_err(|error| format!("Failed to read scoped run-graph status: {error}"))
+}
+
+async fn reseed_unpersisted_configured_route_mismatch_for_projection(
+    store: &crate::state_store::StateStore,
+    status: crate::state_store::RunGraphStatus,
+) -> Result<crate::state_store::RunGraphStatus, String> {
+    if !crate::taskflow_run_graph::run_graph_status_has_configured_dev_team_route_mismatch(
+        store, &status,
+    )
+    .await?
+    {
+        return Ok(status);
+    }
+
+    let persisted_dispatch_context = store
+        .run_graph_dispatch_context(&status.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read persisted dispatch context before projection route reseed: {error}"
+            )
+        })?
+        .is_some();
+    let persisted_dispatch_receipt = store
+        .run_graph_dispatch_receipt(&status.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read persisted dispatch receipt before projection route reseed: {error}"
+            )
+        })?
+        .is_some();
+    if persisted_dispatch_context || persisted_dispatch_receipt {
+        return Ok(status);
+    }
+
+    crate::taskflow_run_graph::derive_seeded_run_graph_status(
+        store,
+        &status.run_id,
+        &status.task_id,
+    )
+    .await
+    .map(|payload| payload.status)
 }
 
 async fn scoped_recovery_for_latest_run_graph(
@@ -3145,6 +3176,24 @@ async fn scoped_recovery_for_latest_run_graph(
         .as_ref()
         .is_some_and(|recovery| recovery.run_id == status.run_id)
     {
+        let has_persisted_dispatch_receipt = store
+            .run_graph_dispatch_receipt(&status.run_id)
+            .await
+            .map_err(|error| format!("Failed to read scoped dispatch receipt: {error}"))?
+            .is_some();
+        if !has_persisted_dispatch_receipt
+            && global_recovery.as_ref().is_some_and(|recovery| {
+                recovery.active_node != status.active_node
+                    || recovery.lifecycle_stage != status.lifecycle_stage
+                    || recovery.resume_target != status.resume_target
+                    || recovery.recovery_ready != status.recovery_ready
+                    || recovery.resume_status != status.status
+            })
+        {
+            return Ok(Some(
+                crate::state_store::RunGraphRecoverySummary::from_status(status.clone()),
+            ));
+        }
         return Ok(global_recovery);
     }
     store
@@ -3167,10 +3216,17 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         .list_tasks(None, true)
         .await
         .map_err(|error| format!("Failed to list tasks for continuation dispatch gate: {error}"))?;
-    let global_latest_run_graph = store
+    let global_latest_run_graph_for_current_session = store
         .latest_run_graph_status_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest run-graph status: {error}"))?;
+    let global_latest_run_graph = match global_latest_run_graph_for_current_session {
+        Some(status) => Some(status),
+        None => store
+            .latest_run_graph_status()
+            .await
+            .map_err(|error| format!("Failed to read latest run-graph status: {error}"))?,
+    };
     if global_latest_run_graph.is_none() {
         return Ok(None);
     }
@@ -3193,6 +3249,27 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         &all_tasks,
     )
     .await?;
+    if latest_run_graph.is_none() {
+        if let Some(scoped_task_id) = scoped_ready_task.map(|task| task.id.clone()).or_else(|| {
+            scope_task_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        }) {
+            let scoped_run_id = store
+                .latest_run_graph_run_id_for_task(&scoped_task_id)
+                .await
+                .map_err(|error| format!("Failed to read scoped run-graph status: {error}"))?
+                .unwrap_or(scoped_task_id);
+            match store.run_graph_status(&scoped_run_id).await {
+                Ok(status) => latest_run_graph = Some(status),
+                Err(crate::state_store::StateStoreError::MissingTask { .. }) => {}
+                Err(error) => {
+                    return Err(format!("Failed to read scoped run-graph status: {error}"))
+                }
+            }
+        }
+    }
     if scope_task_id.is_some() {
         if let Some(status) = latest_run_graph.as_ref() {
             let latest_run_matches_scoped_ready_task = ready_tasks
@@ -3263,7 +3340,7 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         .as_str()
         .unwrap_or_default();
     let active_foreign_claims = store
-        .active_foreign_claims(&current_session_id)
+        .active_foreign_claims(current_session_id)
         .await
         .map_err(|error| format!("Failed to read active foreign orchestrator claims: {error}"))?;
 
@@ -3456,6 +3533,17 @@ fn build_taskflow_next_decision(
         latest_run_graph_status,
         ready_head.as_ref(),
     );
+    let taskflow_active_ready_head = ready_head
+        .as_ref()
+        .is_some_and(|task| task.status == "in_progress");
+    let latest_run_graph_matches_ready_head = latest_run_graph_status
+        .zip(ready_head.as_ref())
+        .is_some_and(|(status, task)| status.task_id == task.id || status.run_id == task.id);
+    let terminal_closure_for_unrelated_ready_head = latest_runtime_consumption_kind
+        == Some("final")
+        && terminal_completed_without_next_unit(latest_run_graph_status)
+        && ready_head.is_some()
+        && !latest_run_graph_matches_ready_head;
     let legacy_ownerless_latest_run_nonblocking = latest_run_graph_legacy_ownerless
         && explicit_next_task_binding
         && latest_run_graph_status
@@ -3475,6 +3563,8 @@ fn build_taskflow_next_decision(
         .zip(terminal_consume_continue_run_id)
         .is_some_and(|(status, run_id)| status.run_id == run_id)
         && !explicit_next_task_binding
+        && !taskflow_active_ready_head
+        && !terminal_closure_for_unrelated_ready_head
         && !latest_run_graph_task_no_longer_active;
     let closed_task_terminal_continue_ready_head = latest_run_graph_status
         .zip(terminal_consume_continue_run_id)
@@ -3488,6 +3578,8 @@ fn build_taskflow_next_decision(
     let completed_without_explicit_next_unit =
         terminal_completed_without_next_unit(latest_run_graph_status)
             && !explicit_next_task_binding
+            && !taskflow_active_ready_head
+            && !terminal_closure_for_unrelated_ready_head
             && !closed_task_terminal_continue_ready_head;
 
     // Check for foreign claim conflicts (multi-session admission rule #3)
@@ -3743,12 +3835,9 @@ fn build_taskflow_next_decision(
             ) {
                 blocker_codes.push(code);
             }
-            next_actions.push(format!(
-                "{}",
-                crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(
+            next_actions.push(crate::status_surface_signals::terminal_next_action_requires_authoritative_run_state(
                     latest_run_graph_status.map(|status| status.run_id.as_str()),
-                )
-            ));
+                ).to_string());
             (
                 Some(next_action.command.clone()),
                 Some(next_action.surface.clone()),
@@ -4022,6 +4111,79 @@ fn taskflow_graph_summary_operator_contracts(
         verdict.operator_contracts,
         verdict.artifact_refs,
     )
+}
+
+fn taskflow_scheduler_dispatch_operator_contracts(
+    status: &str,
+    blocker_codes: &[String],
+    next_actions: &[String],
+    selected_task_ids: &[String],
+    reservation_ids: &[String],
+    execute_requested: bool,
+    dispatch_status: &str,
+) -> (serde_json::Value, serde_json::Value, serde_json::Value) {
+    let artifact_refs = serde_json::json!({
+        "surface": "vida taskflow scheduler dispatch",
+        "selected_task_ids": selected_task_ids,
+        "reservation_ids": reservation_ids,
+        "execute_requested": execute_requested,
+        "dispatch_status": dispatch_status,
+    });
+    let next_actions =
+        if status == crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status {
+            Vec::new()
+        } else {
+            next_actions.to_vec()
+        };
+    let verdict =
+        crate::release1_operator_output::finalize_release1_operator_surface_verdict_with_status(
+            status,
+            blocker_codes.to_vec(),
+            next_actions,
+            artifact_refs,
+        )
+        .expect("taskflow scheduler dispatch operator contract should be valid");
+    (
+        verdict.shared_fields,
+        verdict.operator_contracts,
+        verdict.artifact_refs,
+    )
+}
+
+fn refresh_taskflow_scheduler_dispatch_operator_contracts(
+    plan: &mut TaskflowSchedulerDispatchPlan,
+) {
+    let (shared_fields, operator_contracts, artifact_refs) =
+        taskflow_scheduler_dispatch_operator_contracts(
+            &plan.status,
+            &plan.blocker_codes,
+            &plan.next_actions,
+            &plan.selected_task_ids,
+            &plan.dispatch_receipt.reservation_ids,
+            plan.execute_requested,
+            &plan.dispatch_receipt.dispatch_status,
+        );
+    plan.blocker_codes = shared_fields["blocker_codes"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    plan.next_actions = shared_fields["next_actions"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    plan.shared_fields = shared_fields;
+    plan.operator_contracts = operator_contracts;
+    plan.artifact_refs = artifact_refs;
 }
 
 fn taskflow_graph_summary_blocked_payload(error_stage: &str, error: &str) -> serde_json::Value {
@@ -4622,15 +4784,23 @@ async fn run_taskflow_settle(args: &[String]) -> ExitCode {
     let mut next_actions = Vec::new();
     if let Some(run) = remaining_closed_task_active_run.as_ref() {
         blocker_codes.push("closed_task_active_run_projection_mismatch".to_string());
-        let skipped_reason = summary
+        let skipped = summary
             .skipped_runs
             .iter()
-            .find(|skipped| skipped.run_id == run.run_id)
+            .find(|skipped| skipped.run_id == run.run_id);
+        let skipped_reason = skipped
             .map(|skipped| skipped.reason.as_str())
             .unwrap_or("not_scanned_with_current_limit");
+        let inspect_command = skipped
+            .map(|skipped| skipped.inspect_command.clone())
+            .unwrap_or_else(|| {
+                format!(
+                    "vida taskflow run-graph status {} --json",
+                    shell_quote_arg(&run.run_id)
+                )
+            });
         next_actions.push(format!(
-            "Inspect unresolved closed-task active run with `vida taskflow run-graph status {}`; settle skipped reason={skipped_reason}.",
-            shell_quote_arg(&run.run_id)
+            "Inspect unresolved closed-task active run with `{inspect_command}`; settle skipped reason={skipped_reason}.",
         ));
         if summary.scanned_count >= limit {
             next_actions.push(format!(
@@ -4834,6 +5004,8 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let taskflow_active_candidates =
+        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
     let (global_latest_run_graph, explicit_binding) = match store.as_ref() {
         Some(store) => {
             let global_latest_run_graph =
@@ -4871,6 +5043,12 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     };
     let decision_ready_task =
         ready_task_for_explicit_task_graph_binding(&ready_tasks, explicit_binding.as_ref())
+            .or_else(|| {
+                ready_task_for_single_taskflow_active_candidate(
+                    &ready_tasks,
+                    &taskflow_active_candidates,
+                )
+            })
             .or_else(|| ready_tasks.first());
     let latest_run_graph = match store.as_ref() {
         Some(store) => match scoped_latest_run_graph_for_explicit_ready_task(
@@ -5361,8 +5539,16 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let taskflow_active_candidates =
+        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
     let decision_ready_task =
         ready_task_for_explicit_task_graph_binding(&ready_tasks, explicit_binding.as_ref())
+            .or_else(|| {
+                ready_task_for_single_taskflow_active_candidate(
+                    &ready_tasks,
+                    &taskflow_active_candidates,
+                )
+            })
             .or_else(|| ready_tasks.first());
     let mut latest_run_graph = match scoped_latest_run_graph_for_explicit_ready_task(
         &store,
@@ -5531,6 +5717,25 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         crate::latest_terminal_consume_continue_snapshot_run_id(&proxy_state_root)
             .ok()
             .flatten();
+    let continuation_binding_summary =
+        crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
+            explicit_binding.as_ref(),
+            latest_run_graph.as_ref(),
+            recovery.as_ref(),
+            dispatch.as_ref(),
+            terminal_consume_continue_run_id.as_deref(),
+            evidence_ambiguous,
+            false,
+            latest_run_graph_task_closed,
+            latest_run_graph_task_missing,
+        );
+    let continuation_binding_summary =
+        crate::continuation_binding_summary::add_taskflow_active_work_truth_with_session_claims(
+            continuation_binding_summary,
+            taskflow_active_candidates.clone(),
+            &active_claims,
+            current_session_id,
+        );
 
     let active_foreign_claims: Vec<_> = active_claims
         .into_iter()
@@ -5558,18 +5763,6 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         current_session_id,
         &active_foreign_claims,
     );
-    let continuation_binding_summary =
-        crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
-            explicit_binding.as_ref(),
-            latest_run_graph.as_ref(),
-            recovery.as_ref(),
-            dispatch.as_ref(),
-            terminal_consume_continue_run_id.as_deref(),
-            evidence_ambiguous,
-            false,
-            latest_run_graph_task_closed,
-            latest_run_graph_task_missing,
-        );
 
     let primary_ready_task = if continuation_decision.primary_ready_task.is_some() {
         scheduling.ready.first().map(|candidate| {
@@ -6046,6 +6239,17 @@ fn scheduling_actualize_task_in_scope(
     false
 }
 
+fn scheduling_actualize_has_owned_paths(task: &crate::state_store::TaskRecord) -> bool {
+    task.planner_metadata
+        .owned_paths
+        .iter()
+        .any(|path| !path.trim().is_empty())
+}
+
+fn scheduling_actualize_is_sequential_classification(mode: Option<&str>) -> bool {
+    mode.is_some_and(|mode| mode.trim() == "sequential")
+}
+
 fn scheduling_actualize_candidate(
     task: &crate::state_store::TaskRecord,
     parent_id: Option<String>,
@@ -6069,9 +6273,7 @@ fn scheduling_actualize_candidate(
     if task.execution_semantics.conflict_domain.is_none() {
         missing_fields.push("conflict_domain".to_string());
     }
-    if missing_fields.is_empty() {
-        return None;
-    }
+    let has_owned_paths = scheduling_actualize_has_owned_paths(task);
 
     let order_bucket = parent_id
         .clone()
@@ -6102,6 +6304,34 @@ fn scheduling_actualize_candidate(
                 .unwrap_or_else(|| task.id.clone()),
         ),
     };
+    if !has_owned_paths
+        && !scheduling_actualize_is_sequential_classification(
+            task.execution_semantics.execution_mode.as_deref(),
+        )
+    {
+        missing_fields.push("owned_paths".to_string());
+    }
+    if missing_fields.is_empty() {
+        return None;
+    }
+
+    let mut blocker_codes = Vec::new();
+    let mut next_actions = Vec::new();
+    if !has_owned_paths
+        && !scheduling_actualize_is_sequential_classification(proposed.execution_mode.as_deref())
+    {
+        blocker_codes.push(SCHEDULING_ACTUALIZE_BLOCKER_MISSING_OWNED_PATHS.to_string());
+        next_actions.push(format!(
+            "Set planner_metadata.owned_paths for `{}` or change its execution_mode to sequential before applying scheduling actualize.",
+            task.id
+        ));
+    }
+    let status = if blocker_codes.is_empty() {
+        "pending"
+    } else {
+        "blocked"
+    }
+    .to_string();
 
     Some(TaskflowSchedulingActualizeCandidate {
         task_id: task.id.clone(),
@@ -6110,8 +6340,12 @@ fn scheduling_actualize_candidate(
         parent_id,
         current: task.execution_semantics.clone(),
         proposed,
+        current_owned_paths: task.planner_metadata.owned_paths.clone(),
+        proposed_owned_paths: task.planner_metadata.owned_paths.clone(),
         missing_fields,
-        status: "pending".to_string(),
+        blocker_codes,
+        next_actions,
+        status,
         applied: false,
     })
 }
@@ -6159,8 +6393,12 @@ async fn build_taskflow_scheduling_actualize_plan(
         })
         .collect::<Vec<_>>();
 
+    let blocked_count = candidates
+        .iter()
+        .filter(|candidate| !candidate.blocker_codes.is_empty())
+        .count();
     let mut applied_count = 0usize;
-    if apply {
+    if apply && blocked_count == 0 {
         let no_labels = Vec::<String>::new();
         for candidate in &mut candidates {
             let execution_mode = candidate.proposed.execution_mode.as_deref();
@@ -6192,9 +6430,30 @@ async fn build_taskflow_scheduling_actualize_plan(
         }
     }
 
-    let status = "pass".to_string();
+    let mut blocker_codes = Vec::new();
+    for candidate in &candidates {
+        for blocker_code in &candidate.blocker_codes {
+            if !blocker_codes.contains(blocker_code) {
+                blocker_codes.push(blocker_code.clone());
+            }
+        }
+    }
+    let status = if blocked_count == 0 {
+        "pass"
+    } else {
+        "blocked"
+    }
+    .to_string();
     let next_actions = if candidates.is_empty() {
         vec!["No scheduling semantics actualization candidates were found.".to_string()]
+    } else if blocked_count > 0 {
+        vec![format!(
+            "Resolve blocked scheduling actualize candidates by setting explicit planner_metadata.owned_paths or sequential execution mode, then re-run `{}`.",
+            operator_output::command_text::human_command(&format!(
+                "vida taskflow scheduling actualize --scope {} --dry-run",
+                shell_quote_arg(scope)
+            ))
+        )]
     } else if apply {
         vec![format!(
             "Re-run `{}` to inspect refreshed scheduling projection.",
@@ -6215,9 +6474,9 @@ async fn build_taskflow_scheduling_actualize_plan(
         apply,
         candidate_count: candidates.len(),
         applied_count,
-        blocked_count: 0,
+        blocked_count,
         candidates,
-        blocker_codes: Vec::new(),
+        blocker_codes,
         next_actions,
     })
 }
@@ -6657,7 +6916,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
         {
             Ok(store) => store,
             Err(error) if crate::state_store::StateStore::error_is_lock_contention(&error) => {
-                let plan = match build_taskflow_scheduler_dispatch_plan_from_snapshot_lock_gate(
+                let mut plan = match build_taskflow_scheduler_dispatch_plan_from_snapshot_lock_gate(
                     &state_dir,
                     scope_task_id.as_deref(),
                     current_task_id.as_deref(),
@@ -6672,6 +6931,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
                     }
                 };
                 if as_json {
+                    refresh_taskflow_scheduler_dispatch_operator_contracts(&mut plan);
                     crate::print_json_pretty(
                         &serde_json::to_value(&plan)
                             .expect("scheduler dispatch plan should serialize"),
@@ -6826,6 +7086,7 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
     }
 
     if as_json {
+        refresh_taskflow_scheduler_dispatch_operator_contracts(&mut plan);
         crate::print_json_pretty(
             &serde_json::to_value(&plan).expect("scheduler dispatch plan should serialize"),
         );
@@ -7412,7 +7673,7 @@ fn route_backend_refs_for_current_config_validation(
         selected_backend
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map_or(true, |selected| {
+            .is_none_or(|selected| {
                 backend_id.map(str::trim).filter(|value| !value.is_empty()) == Some(selected)
             })
     };
@@ -8405,14 +8666,178 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
     }
 }
 
+pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
+    if matches!(args.args.first().map(String::as_str), Some("query")) {
+        return run_taskflow_query(&args.args);
+    }
+
+    if matches!(
+        args.args.first().map(String::as_str),
+        Some("--version" | "-V")
+    ) {
+        let command = TaskflowCli::command();
+        let version = command
+            .get_version()
+            .unwrap_or(env!("CARGO_PKG_VERSION"))
+            .to_string();
+        println!("taskflow {version}");
+        return ExitCode::SUCCESS;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("settle")) {
+        return run_taskflow_settle(&args.args).await;
+    }
+
+    if let Some(topic) = taskflow_help_topic(&args.args) {
+        print_taskflow_proxy_help(topic);
+        return ExitCode::SUCCESS;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("recovery")) {
+        return run_taskflow_recovery(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("task")) {
+        return route_taskflow_task(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("next")) {
+        return run_taskflow_next_surface(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("closeout")) {
+        return run_taskflow_closeout(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("receipt-pack")) {
+        return run_taskflow_receipt_pack(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("graph-summary")) {
+        return run_taskflow_graph_summary(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("graph")) {
+        return run_taskflow_graph_surface(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("plan")) {
+        return crate::taskflow_plan_graph::run_taskflow_plan(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("replan")) {
+        return run_taskflow_replan_surface(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("scheduler")) {
+        return run_taskflow_scheduler_surface(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("scheduling")) {
+        return run_taskflow_scheduling_surface(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("pricing")) {
+        return crate::taskflow_pricing::run_taskflow_pricing(&args.args);
+    }
+
+    if matches!(
+        args.args.first().map(String::as_str),
+        Some("route" | "validate-routing" | "config-actuation")
+    ) {
+        return run_taskflow_route_diagnostic(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("doctor")) {
+        return route_taskflow_doctor(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("status")) {
+        return route_taskflow_status(&args.args).await;
+    }
+
+    if matches!(
+        args.args.first().map(String::as_str),
+        Some("bootstrap-spec")
+    ) {
+        return run_taskflow_bootstrap_spec(&args.args).await;
+    }
+
+    if matches!(
+        args.args.first().map(String::as_str),
+        Some("protocol-binding")
+    ) {
+        return taskflow_protocol_binding::run_taskflow_protocol_binding(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("continuation")) {
+        return crate::taskflow_continuation::run_taskflow_continuation(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("packet")) {
+        return crate::taskflow_packet::run_taskflow_packet(&args.args).await;
+    }
+
+    if matches!(
+        args.args.first().map(String::as_str),
+        Some("artifact" | "artifacts")
+    ) {
+        return crate::taskflow_artifacts::run_taskflow_artifacts(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("consume")) {
+        if taskflow_consume::try_print_taskflow_consume_nested_help(&args.args) {
+            return ExitCode::SUCCESS;
+        }
+        let consume_subcommand = args.args.get(1).map(String::as_str);
+        if matches!(
+            consume_subcommand,
+            None | Some(
+                "bundle" | "agent-system" | "final" | "continue" | "advance" | "--help" | "-h"
+            )
+        ) {
+            return taskflow_consume::run_taskflow_consume(&args.args).await;
+        }
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("run-graph")) {
+        if matches!(
+            args.args.get(1).map(String::as_str),
+            Some(
+                "status"
+                    | "latest"
+                    | "diagnose"
+                    | "diagnose-latest"
+                    | "task-identity"
+                    | "--help"
+                    | "-h",
+            )
+        ) {
+            return run_taskflow_run_graph(&args.args).await;
+        }
+        if matches!(
+            args.args.get(1).map(String::as_str),
+            Some("seed" | "advance" | "dispatch-init" | "init" | "update")
+        ) {
+            return run_taskflow_run_graph_mutation(&args.args).await;
+        }
+    }
+
+    let subcommand = args.args.first().map(String::as_str).unwrap_or("unknown");
+    eprintln!(
+        "Unsupported `vida taskflow {subcommand}` subcommand. This launcher-owned top-level taskflow surface fails closed instead of delegating to the external TaskFlow runtime."
+    );
+    ExitCode::from(2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
         cached_operator_projection_exit_code, cached_taskflow_next_open_delegated_cycle_projection,
         compact_taskflow_graph_summary_payload, graph_summary_scheduling_projection_json,
-        graph_summary_task_rows, taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
-        TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
+        graph_summary_task_rows, scheduler_dispatch, taskflow_task_subcommand_supported,
+        GraphSummaryWaveBucket, TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
     };
     use crate::state_store::{
         BlockedTaskRecord, TaskDependencyRecord, TaskDependencyStatus, TaskRecord,
@@ -8668,12 +9093,14 @@ mod tests {
         active.execution_semantics.order_bucket = Some("wave-a".to_string());
         active.execution_semantics.parallel_group = Some("docs".to_string());
         active.execution_semantics.conflict_domain = Some("active".to_string());
+        active.planner_metadata.owned_paths = vec!["docs/active.md".to_string()];
 
         let mut ready = task("ready-sibling", "task", "open", 0, &[], Vec::new());
         ready.execution_semantics.execution_mode = Some("parallel_safe".to_string());
         ready.execution_semantics.order_bucket = Some("wave-a".to_string());
         ready.execution_semantics.parallel_group = Some("docs".to_string());
         ready.execution_semantics.conflict_domain = Some("ready".to_string());
+        ready.planner_metadata.owned_paths = vec!["docs/ready.md".to_string()];
 
         let stale_projection = TaskSchedulingProjection {
             current_task_id: Some("ready-sibling".to_string()),
@@ -8803,6 +9230,159 @@ mod tests {
             active_critical_path,
             parallel_blockers: parallel_blockers.into_iter().map(str::to_string).collect(),
         }
+    }
+
+    #[test]
+    fn scheduling_actualize_candidate_classifies_missing_semantics_as_sequential_repair() {
+        let candidate = super::scheduling_actualize_candidate(
+            &task("needs-semantics", "task", "open", 1, &[], Vec::new()),
+            Some("runtime-epic".to_string()),
+        )
+        .expect("missing semantics should produce an actualize candidate");
+
+        assert_eq!(candidate.status, "pending");
+        assert_eq!(
+            candidate.missing_fields,
+            vec![
+                "execution_mode",
+                "order_bucket",
+                "parallel_group",
+                "conflict_domain",
+                "owned_paths"
+            ]
+        );
+        assert_eq!(
+            candidate.proposed.execution_mode.as_deref(),
+            Some("sequential")
+        );
+        assert_eq!(
+            candidate.proposed.order_bucket.as_deref(),
+            Some("runtime-epic")
+        );
+        assert!(candidate.current_owned_paths.is_empty());
+        assert!(candidate.proposed_owned_paths.is_empty());
+        assert!(candidate.blocker_codes.is_empty());
+    }
+
+    #[test]
+    fn scheduling_actualize_candidate_blocks_parallel_safe_without_owned_paths() {
+        let mut parallel = task("parallel-no-scope", "task", "open", 1, &[], Vec::new());
+        parallel.execution_semantics.execution_mode = Some("parallel_safe".to_string());
+        parallel.execution_semantics.order_bucket = Some("runtime-epic".to_string());
+        parallel.execution_semantics.parallel_group = Some("runtime".to_string());
+        parallel.execution_semantics.conflict_domain = Some("runtime".to_string());
+
+        let candidate =
+            super::scheduling_actualize_candidate(&parallel, Some("runtime-epic".to_string()))
+                .expect(
+                    "parallel-safe task without owned paths should produce a blocked candidate",
+                );
+
+        assert_eq!(candidate.status, "blocked");
+        assert_eq!(candidate.missing_fields, vec!["owned_paths"]);
+        assert_eq!(
+            candidate.blocker_codes,
+            vec![super::SCHEDULING_ACTUALIZE_BLOCKER_MISSING_OWNED_PATHS]
+        );
+        assert_eq!(
+            candidate.proposed.execution_mode.as_deref(),
+            Some("parallel_safe")
+        );
+        assert!(!candidate.next_actions.is_empty());
+    }
+
+    #[test]
+    fn scheduling_actualize_apply_fails_closed_without_partial_mutation() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().join("state"))
+                .await
+                .expect("state store should open");
+            let labels = Vec::<String>::new();
+            store
+                .create_task(crate::state_store::CreateTaskRequest {
+                    task_id: "runtime-epic",
+                    title: "Runtime epic",
+                    display_id: None,
+                    description: "",
+                    issue_type: "epic",
+                    status: "open",
+                    priority: 1,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: ".",
+                })
+                .await
+                .expect("parent epic should create");
+            store
+                .create_task(crate::state_store::CreateTaskRequest {
+                    task_id: "safe-missing-semantics",
+                    title: "Safe missing semantics",
+                    display_id: None,
+                    description: "",
+                    issue_type: "task",
+                    status: "open",
+                    priority: 1,
+                    parent_id: Some("runtime-epic"),
+                    labels: &labels,
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: ".",
+                })
+                .await
+                .expect("safe task should create");
+            store
+                .create_task(crate::state_store::CreateTaskRequest {
+                    task_id: "parallel-missing-scope",
+                    title: "Parallel missing scope",
+                    display_id: None,
+                    description: "",
+                    issue_type: "task",
+                    status: "open",
+                    priority: 2,
+                    parent_id: Some("runtime-epic"),
+                    labels: &labels,
+                    execution_semantics: crate::state_store::TaskExecutionSemantics {
+                        execution_mode: Some("parallel_safe".to_string()),
+                        order_bucket: Some("runtime-epic".to_string()),
+                        parallel_group: Some("runtime".to_string()),
+                        conflict_domain: Some("runtime".to_string()),
+                    },
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: ".",
+                })
+                .await
+                .expect("blocked task should create");
+
+            let plan = super::build_taskflow_scheduling_actualize_plan(
+                &store,
+                "runtime-epic",
+                false,
+                true,
+            )
+            .await
+            .expect("actualize plan should build");
+
+            assert_eq!(plan.status, "blocked");
+            assert_eq!(plan.candidate_count, 2);
+            assert_eq!(plan.blocked_count, 1);
+            assert_eq!(plan.applied_count, 0);
+            assert_eq!(
+                plan.blocker_codes,
+                vec![super::SCHEDULING_ACTUALIZE_BLOCKER_MISSING_OWNED_PATHS]
+            );
+            let safe_after = store
+                .show_task("safe-missing-semantics")
+                .await
+                .expect("safe task should still exist");
+            assert!(safe_after.execution_semantics.execution_mode.is_none());
+        });
     }
 
     #[test]
@@ -9131,7 +9711,7 @@ mod tests {
             Some(global_latest),
             Some(&explicit_binding),
             Some(&ready),
-            &[ready.clone()],
+            std::slice::from_ref(&ready),
         )
         .await
         .expect("resolve scoped latest")
@@ -9197,6 +9777,25 @@ mod tests {
             )
             .await
             .expect("mark foreign blocked");
+        store
+            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "foreign-shared-read-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree".to_string(),
+                orchestrator_session_id: "foreign-session".to_string(),
+                process_id: None,
+                task_id: Some("foreign-reader-task".to_string()),
+                run_id: Some("foreign-reader-run".to_string()),
+                lane_id: Some("foreign-reader-lane".to_string()),
+                claim_kind: "read".to_string(),
+                conflict_domain: Some("foreign-reader-domain".to_string()),
+                owned_paths: Vec::new(),
+                read_only_paths: vec!["docs/shared".to_string()],
+                lease_mode: crate::state_store::LeaseMode::SharedRead,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("foreign shared-read claim");
         let mut disjoint = task("current-disjoint", "task", "open", 1, &[], Vec::new());
         disjoint.planner_metadata.owned_paths = vec!["crates/vida/src/current.rs".to_string()];
         disjoint.execution_semantics.conflict_domain = Some("current-domain".to_string());
@@ -9211,6 +9810,22 @@ mod tests {
             .persist_task_record(colliding)
             .await
             .expect("persist colliding task");
+        let mut shared_read_collision = task(
+            "current-shared-read-collision",
+            "task",
+            "open",
+            3,
+            &[],
+            Vec::new(),
+        );
+        shared_read_collision.planner_metadata.owned_paths =
+            vec!["docs/shared/runtime.md".to_string()];
+        shared_read_collision.execution_semantics.conflict_domain =
+            Some("current-reader-domain".to_string());
+        store
+            .persist_task_record(shared_read_collision)
+            .await
+            .expect("persist shared-read colliding task");
 
         let disjoint_plan = super::build_taskflow_scheduler_dispatch_plan_from_store(
             &store,
@@ -9252,23 +9867,44 @@ mod tests {
                     )
                 })
         }));
+        let shared_read_colliding_plan = super::build_taskflow_scheduler_dispatch_plan_from_store(
+            &store,
+            &root,
+            None,
+            Some("current-shared-read-collision"),
+            Some(1),
+            true,
+            false,
+        )
+        .await
+        .expect("build shared-read colliding plan");
+        assert_eq!(shared_read_colliding_plan.status, "blocked");
+        assert!(
+            shared_read_colliding_plan
+                .rejected_candidates
+                .iter()
+                .any(|candidate| {
+                    candidate.task_id == "current-shared-read-collision"
+                        && candidate.reasons.iter().any(|reason| {
+                            reason.starts_with(
+                                "active_orchestrator_claim_path:docs/shared/runtime.md:foreign-shared-read-claim",
+                            )
+                        })
+                })
+        );
 
         let projection =
             crate::operator_session_projection::build_operator_session_projection(&store)
                 .await
                 .expect("operator projection");
-        assert_eq!(
-            projection["project_foreign_blockers"]
-                .as_array()
-                .expect("foreign blockers")
-                .len(),
-            1
-        );
+        assert!(projection["project_foreign_blockers"]
+            .as_array()
+            .expect("foreign blockers")
+            .is_empty());
         assert!(projection["claim_conflicts"]
             .as_array()
             .expect("claim conflicts")
-            .iter()
-            .any(|claim| claim["claim_id"].as_str() == Some("foreign-blocked-claim")));
+            .is_empty());
         assert!(projection["global_blockers"]
             .as_array()
             .expect("global blockers")
@@ -9512,7 +10148,7 @@ mod tests {
     }
 
     #[test]
-    fn taskflow_next_blocks_ready_head_when_latest_blocked_run_graph_task_is_missing() {
+    fn taskflow_next_requires_stale_cleanup_when_latest_blocked_run_graph_task_is_missing() {
         let ready = task(
             "runtime-defect-stale-rungraph-authority-cascade",
             "task",
@@ -9550,13 +10186,17 @@ mod tests {
         assert_eq!(decision.status, "blocked");
         assert_eq!(
             decision.candidate_task_context.admissibility_gate,
-            "delegated_cycle_runtime_gate"
+            "stale_missing_task_run_graph"
         );
         assert!(!decision.candidate_task_context.admissible_now);
         assert!(decision
             .blocker_codes
             .iter()
-            .any(|code| code == "open_delegated_cycle"));
+            .any(|code| code == "stale_missing_task_run_graph"));
+        assert!(decision
+            .next_actions
+            .iter()
+            .any(|action| action.contains("vida lane retire")));
     }
 
     #[test]
@@ -9787,6 +10427,124 @@ mod tests {
                     reason == "owned_path_already_selected:crates/vida/src/runtime/mod.rs"
                 })
         }));
+    }
+
+    #[test]
+    fn scheduler_dispatch_plan_rejects_parallel_safe_without_owned_paths() {
+        let mut primary = task("primary", "task", "open", 1, &[], Vec::new());
+        primary.execution_semantics.execution_mode = Some("parallel_safe".to_string());
+        primary.execution_semantics.order_bucket = Some("wave-a".to_string());
+        primary.execution_semantics.parallel_group = Some("runtime".to_string());
+        primary.execution_semantics.conflict_domain = Some("primary-domain".to_string());
+        primary.planner_metadata.owned_paths = vec!["crates/vida/src/runtime".to_string()];
+
+        let mut missing_owned_paths =
+            task("missing-owned-paths", "task", "open", 2, &[], Vec::new());
+        missing_owned_paths.execution_semantics.execution_mode = Some("parallel_safe".to_string());
+        missing_owned_paths.execution_semantics.order_bucket = Some("wave-a".to_string());
+        missing_owned_paths.execution_semantics.parallel_group = Some("runtime".to_string());
+        missing_owned_paths.execution_semantics.conflict_domain =
+            Some("missing-owned-domain".to_string());
+
+        let mut disjoint = task("disjoint", "task", "open", 3, &[], Vec::new());
+        disjoint.execution_semantics.execution_mode = Some("parallel_safe".to_string());
+        disjoint.execution_semantics.order_bucket = Some("wave-a".to_string());
+        disjoint.execution_semantics.parallel_group = Some("runtime".to_string());
+        disjoint.execution_semantics.conflict_domain = Some("disjoint-domain".to_string());
+        disjoint.planner_metadata.owned_paths = vec!["docs/runtime.md".to_string()];
+
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("primary".to_string()),
+            ready: vec![
+                scheduling_candidate(primary.clone(), true, false, true, Vec::new(), vec![]),
+                scheduling_candidate(
+                    missing_owned_paths.clone(),
+                    true,
+                    false,
+                    false,
+                    Vec::new(),
+                    vec!["missing_owned_paths_for_parallel_execution"],
+                ),
+                scheduling_candidate(disjoint.clone(), true, true, false, Vec::new(), vec![]),
+            ],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: vec![disjoint],
+        };
+
+        let graph_summary = graph_summary_scheduling_projection_json(&projection, None);
+        let graph_candidate = projection
+            .ready
+            .iter()
+            .find(|candidate| candidate.task.id == "missing-owned-paths")
+            .expect("graph-summary projection should include the unsafe ready candidate");
+        assert!(!graph_candidate.ready_parallel_safe);
+        assert_eq!(
+            graph_candidate.parallel_blockers,
+            vec![
+                scheduler_dispatch::PARALLEL_BLOCKER_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION
+                    .to_string()
+            ]
+        );
+        assert_eq!(
+            graph_summary["ready"][1]["ready_parallel_safe"],
+            serde_json::Value::Bool(false)
+        );
+        assert_eq!(
+            graph_summary["ready"][1]["parallel_blockers"],
+            serde_json::json!([
+                scheduler_dispatch::PARALLEL_BLOCKER_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION
+            ])
+        );
+
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection.clone(),
+            3,
+            None,
+            None,
+            None,
+            None,
+            std::path::Path::new("/tmp/vida-scheduler-state"),
+            true,
+            false,
+        );
+
+        assert_eq!(
+            plan.selected_task_ids,
+            vec!["primary".to_string(), "disjoint".to_string()]
+        );
+        assert!(plan.rejected_candidates.iter().any(|candidate| {
+            candidate.task_id == "missing-owned-paths"
+                && candidate
+                    .reasons
+                    .iter()
+                    .any(|reason| reason == "missing_owned_paths_for_parallel_execution")
+        }));
+        let rejected_candidate = plan
+            .rejected_candidates
+            .iter()
+            .find(|candidate| candidate.task_id == "missing-owned-paths")
+            .expect("scheduler should reject graph-summary-unsafe ready candidate");
+        assert_eq!(
+            rejected_candidate.parallel_blockers,
+            graph_candidate.parallel_blockers
+        );
+        assert_eq!(
+            rejected_candidate.reasons,
+            graph_candidate.parallel_blockers
+        );
+        assert_eq!(
+            plan.fanout_guard["ready_parallel_safe_count"],
+            serde_json::json!(projection
+                .ready
+                .iter()
+                .filter(|candidate| candidate.ready_parallel_safe)
+                .count())
+        );
+        assert_eq!(
+            plan.fanout_guard["rejected_candidate_count"],
+            serde_json::json!(plan.rejected_candidates.len())
+        );
+        assert_eq!(plan.fanout_guard["unsafe_ready_rejected_count"], 1);
     }
 
     #[test]
@@ -10568,11 +11326,11 @@ mod tests {
 
         let parallel_blocked_payload =
             super::build_taskflow_graph_explain_payload(&projection, None, Some("current"));
-        assert_eq!(parallel_blocked_payload["status"], "blocked");
+        assert_eq!(parallel_blocked_payload["status"], "pass");
         assert_eq!(parallel_blocked_payload["ready_now"], true);
         assert!(parallel_blocked_payload["blocker_codes"]
             .as_array()
-            .is_some_and(|codes| !codes.is_empty()));
+            .is_some_and(|codes| codes.is_empty()));
     }
 
     #[test]
@@ -10869,7 +11627,7 @@ mod tests {
             Some("internal_subagents")
         );
         assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
-        assert_eq!(payload["status"].as_str(), Some("blocked"));
+        assert_eq!(payload["status"].as_str(), Some("pass"));
         assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
             !codes.contains(&serde_json::json!(
                 "selected_backend_not_admissible_for_dispatch_target"
@@ -12111,7 +12869,7 @@ agent_system:
         assert_eq!(plan.fanout_guard["lanes_selected"], 0);
         assert_eq!(plan.selected_parallel_tasks.len(), 1);
         assert_eq!(plan.selected_parallel_tasks[0].id, "parallel-ready");
-        assert_eq!(plan.execute_supported, false);
+        assert!(!plan.execute_supported);
         assert_eq!(plan.dispatch_receipt.dispatch_status, "blocked");
         assert!(plan.dispatch_receipt.selected_task_ids.is_empty());
         assert!(plan.dispatch_receipt.reservation_ids.is_empty());
@@ -13013,6 +13771,105 @@ agent_system:
     }
 
     #[test]
+    fn terminal_continue_snapshot_with_taskflow_active_ready_head_is_admissible() {
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            "terminal-run",
+            "stale-run-task",
+            "analysis",
+        );
+        latest_status.status = "completed".to_string();
+        latest_status.lifecycle_stage = "analysis_complete".to_string();
+        let mut active_task = sample_task("active-taskflow-leaf");
+        active_task.status = "in_progress".to_string();
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&active_task),
+            false,
+            true,
+            Some("final"),
+            None,
+            None,
+            Some(&latest_status),
+            false,
+            false,
+            false,
+            None,
+            Some("terminal-run"),
+            "test-session",
+            &[],
+        );
+
+        assert_eq!(decision.status, "pass");
+        assert!(decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "ready_now"
+        );
+        assert_eq!(
+            decision
+                .primary_ready_task
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("active-taskflow-leaf")
+        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit"));
+    }
+
+    #[test]
+    fn terminal_closure_snapshot_for_unrelated_ready_head_is_admissible() {
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            "closed-run",
+            "closed-task",
+            "analysis",
+        );
+        latest_status.status = "completed".to_string();
+        latest_status.lifecycle_stage = "closure_complete".to_string();
+        latest_status.active_node = "closure".to_string();
+        latest_status.next_node = None;
+        latest_status.handoff_state = "none".to_string();
+        latest_status.resume_target = "none".to_string();
+        latest_status.recovery_ready = false;
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("different-ready-head")),
+            false,
+            true,
+            Some("final"),
+            None,
+            None,
+            Some(&latest_status),
+            false,
+            false,
+            false,
+            None,
+            Some("closed-run"),
+            "test-session",
+            &[],
+        );
+
+        assert_eq!(decision.status, "pass");
+        assert!(decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "ready_now"
+        );
+        assert_eq!(
+            decision
+                .primary_ready_task
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("different-ready-head")
+        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "terminal_continue_snapshot_without_next_bounded_unit"));
+    }
+
+    #[test]
     fn terminal_continue_snapshot_for_closed_task_allows_ready_head_without_explicit_binding() {
         let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
             "closed-run",
@@ -13229,7 +14086,7 @@ agent_system:
             .any(|code| code == "closed_task_active_run_projection_mismatch"));
         assert!(next_actions.iter().any(|action| {
             action.contains("vida task reconcile-closed-runs --limit 25")
-                && !action.contains("vida task reconcile-closed-runs --limit 25")
+                && !action.contains("--json")
                 && action.contains("closed tasks must not remain projected as active runtime work")
         }));
         assert_eq!(next_actions.len(), 1);
@@ -13243,7 +14100,28 @@ agent_system:
         assert!(super::cached_taskflow_graph_summary_projection_admissible(
             &serde_json::json!({
                 "surface": "vida taskflow graph-summary",
-                "projection_contract_version": super::TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION
+                "projection_contract_version": super::TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION,
+                "status": "pass"
+            })
+            .to_string()
+        ));
+        assert!(!super::cached_taskflow_graph_summary_projection_admissible(
+            &serde_json::json!({
+                "surface": "vida taskflow graph-summary",
+                "projection_contract_version": "taskflow-graph-summary-projection-v2",
+                "status": "pass",
+                "operator_contracts": {
+                    "contract_id": crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC.contract_id
+                }
+            })
+            .to_string()
+        ));
+        assert!(!super::cached_taskflow_graph_summary_projection_admissible(
+            &serde_json::json!({
+                "surface": "vida taskflow graph-summary",
+                "projection_contract_version": super::TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION,
+                "status": "blocked",
+                "blocker_codes": ["terminal_continue_snapshot_without_next_bounded_unit"]
             })
             .to_string()
         ));
@@ -13692,168 +14570,4 @@ agent_system:
             .iter()
             .all(|action| !action.contains("--task-id <task-id>")));
     }
-}
-
-pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
-    if matches!(args.args.first().map(String::as_str), Some("query")) {
-        return run_taskflow_query(&args.args);
-    }
-
-    if matches!(
-        args.args.first().map(String::as_str),
-        Some("--version" | "-V")
-    ) {
-        let command = TaskflowCli::command();
-        let version = command
-            .get_version()
-            .unwrap_or(env!("CARGO_PKG_VERSION"))
-            .to_string();
-        println!("taskflow {version}");
-        return ExitCode::SUCCESS;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("settle")) {
-        return run_taskflow_settle(&args.args).await;
-    }
-
-    if let Some(topic) = taskflow_help_topic(&args.args) {
-        print_taskflow_proxy_help(topic);
-        return ExitCode::SUCCESS;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("recovery")) {
-        return run_taskflow_recovery(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("task")) {
-        return route_taskflow_task(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("next")) {
-        return run_taskflow_next_surface(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("closeout")) {
-        return run_taskflow_closeout(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("receipt-pack")) {
-        return run_taskflow_receipt_pack(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("graph-summary")) {
-        return run_taskflow_graph_summary(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("graph")) {
-        return run_taskflow_graph_surface(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("plan")) {
-        return crate::taskflow_plan_graph::run_taskflow_plan(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("replan")) {
-        return run_taskflow_replan_surface(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("scheduler")) {
-        return run_taskflow_scheduler_surface(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("scheduling")) {
-        return run_taskflow_scheduling_surface(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("pricing")) {
-        return crate::taskflow_pricing::run_taskflow_pricing(&args.args);
-    }
-
-    if matches!(
-        args.args.first().map(String::as_str),
-        Some("route" | "validate-routing" | "config-actuation")
-    ) {
-        return run_taskflow_route_diagnostic(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("doctor")) {
-        return route_taskflow_doctor(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("status")) {
-        return route_taskflow_status(&args.args).await;
-    }
-
-    if matches!(
-        args.args.first().map(String::as_str),
-        Some("bootstrap-spec")
-    ) {
-        return run_taskflow_bootstrap_spec(&args.args).await;
-    }
-
-    if matches!(
-        args.args.first().map(String::as_str),
-        Some("protocol-binding")
-    ) {
-        return taskflow_protocol_binding::run_taskflow_protocol_binding(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("continuation")) {
-        return crate::taskflow_continuation::run_taskflow_continuation(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("packet")) {
-        return crate::taskflow_packet::run_taskflow_packet(&args.args).await;
-    }
-
-    if matches!(
-        args.args.first().map(String::as_str),
-        Some("artifact" | "artifacts")
-    ) {
-        return crate::taskflow_artifacts::run_taskflow_artifacts(&args.args).await;
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("consume")) {
-        if taskflow_consume::try_print_taskflow_consume_nested_help(&args.args) {
-            return ExitCode::SUCCESS;
-        }
-        let consume_subcommand = args.args.get(1).map(String::as_str);
-        if matches!(
-            consume_subcommand,
-            None | Some(
-                "bundle" | "agent-system" | "final" | "continue" | "advance" | "--help" | "-h"
-            )
-        ) {
-            return taskflow_consume::run_taskflow_consume(&args.args).await;
-        }
-    }
-
-    if matches!(args.args.first().map(String::as_str), Some("run-graph")) {
-        if matches!(
-            args.args.get(1).map(String::as_str),
-            Some(
-                "status"
-                    | "latest"
-                    | "diagnose"
-                    | "diagnose-latest"
-                    | "task-identity"
-                    | "--help"
-                    | "-h",
-            )
-        ) {
-            return run_taskflow_run_graph(&args.args).await;
-        }
-        if matches!(
-            args.args.get(1).map(String::as_str),
-            Some("seed" | "advance" | "dispatch-init" | "init" | "update")
-        ) {
-            return run_taskflow_run_graph_mutation(&args.args).await;
-        }
-    }
-
-    let subcommand = args.args.first().map(String::as_str).unwrap_or("unknown");
-    eprintln!(
-        "Unsupported `vida taskflow {subcommand}` subcommand. This launcher-owned top-level taskflow surface fails closed instead of delegating to the external TaskFlow runtime."
-    );
-    ExitCode::from(2)
 }

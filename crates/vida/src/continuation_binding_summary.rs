@@ -1029,7 +1029,7 @@ pub(crate) fn add_taskflow_active_work_truth(
     let active_bounded_unit = summary.get("active_bounded_unit").cloned();
     let summary_active_unit_missing = active_bounded_unit
         .as_ref()
-        .map_or(true, serde_json::Value::is_null);
+        .is_none_or(serde_json::Value::is_null);
     let run_graph_task_id = active_bounded_unit
         .as_ref()
         .and_then(|unit| unit.get("task_id"))
@@ -1263,7 +1263,7 @@ pub(crate) fn add_taskflow_active_work_truth_with_session_claims(
 ) -> serde_json::Value {
     let summary_active_unit_missing = summary
         .get("active_bounded_unit")
-        .map_or(true, serde_json::Value::is_null);
+        .is_none_or(serde_json::Value::is_null);
     if summary_active_unit_missing && taskflow_active_candidates.len() > 1 {
         if let Some(candidate) = current_session_taskflow_candidate(
             &taskflow_active_candidates,
@@ -1385,9 +1385,7 @@ fn current_session_taskflow_candidate<'a>(
     }
 
     for candidate in candidates {
-        let Some(task_id) = candidate_task_id(candidate) else {
-            return None;
-        };
+        let task_id = candidate_task_id(candidate)?;
         if task_id == selected_task_id {
             continue;
         }

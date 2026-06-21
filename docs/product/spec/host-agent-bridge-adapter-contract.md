@@ -132,8 +132,20 @@ The host adapter must write:
 VIDA then validates and records the result through a runtime-owned command such as:
 
 ```powershell
-vida lane complete <run-id> --receipt-id <id> --host-bridge-request <path> --host-agent-id <id> --host-bridge-summary <text> --json
+vida lane complete <run-id> --receipt-id <id> `
+  --host-bridge-request <path> `
+  --host-agent-id <id> `
+  --decision pass `
+  --verdict implemented `
+  --allowed-next-node coach `
+  --blocker-codes [] `
+  --host-bridge-summary <text> `
+  --json
 ```
+
+`decision`, `verdict`, `allowed_next_node`, `blocker_codes`, and
+`rework_target` are the control-plane result contract. `host-bridge-summary` is
+display-only evidence and must not determine lane state transitions.
 
 ### FR-5: Fail-closed unsupported environments
 
@@ -154,7 +166,7 @@ If the current environment does not expose the configured adapter capability, VI
 2. Verify `adapter_kind`, `adapter_capability_id`, `packet_path`, `run_id`, `dispatch_target`, `backend_id`, `carrier_id`, and declared write scope.
 3. Invoke the configured host capability. For `codex_host_tools`, this means `multi_agent_v1.spawn_agent`, then `multi_agent_v1.wait_agent`, then `multi_agent_v1.close_agent`.
 4. Write `host_tool_bridge_result` to `result_path` and `host_tool_bridge_receipt` to `receipt_path`.
-5. Call `vida lane complete <run-id> --receipt-id <id> --host-bridge-request <request_path> --host-agent-id <id> --host-bridge-summary <summary> --json`.
+5. Call `vida lane complete <run-id> --receipt-id <id> --host-bridge-request <request_path> --host-agent-id <id> --decision <decision> --verdict <verdict> --allowed-next-node <node> --blocker-codes <json-or-list> --host-bridge-summary <summary> --json`, or pass the same machine result through `--host-bridge-result-file <path>`.
 
 The adapter is parent-session code, not a child process launched by `vida.exe`. VIDA may emit the request and validate completion, but the host adapter owns native host-tool invocation because those tools are not available inside the binary process.
 
@@ -168,18 +180,40 @@ vida agent host-bridge --request <request_path> --json
 The command is read-only. It returns the required `multi_agent_v1.spawn_agent`,
 `multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent` sequence, the
 expected result/receipt artifact paths, capacity blocker vocabulary, and the
-canonical `vida lane complete ... --host-bridge-request ...` command. It must not
-write completion artifacts or claim execution by itself.
+canonical `vida lane complete ... --host-bridge-request ... --decision ...
+--verdict ...` command. It must not write completion artifacts or claim execution
+by itself.
 
 After the parent host adapter has executed the host agent, it can complete the
 same request through VIDA validation with:
 
 ```powershell
-vida agent host-bridge --request <request_path> --complete --host-agent-id <id> --summary <summary> --json
+vida agent host-bridge --request <request_path> --complete `
+  --host-agent-id <id> `
+  --decision pass `
+  --verdict implemented `
+  --allowed-next-node coach `
+  --blocker-codes [] `
+  --summary <summary> `
+  --json
 ```
 
 `--complete` delegates the mutation to `vida lane complete`; it is not a second
 state writer.
+
+For larger adapter payloads, the adapter may write the typed result object under
+the VIDA state root and call:
+
+```powershell
+vida agent host-bridge --request <request_path> --complete --host-agent-id <id> --result-file <path> --summary <summary> --json
+```
+
+The result file and typed flags share the same contract. Missing required fields
+must fail closed with precise blocker codes such as
+`missing_required_result_field_decision`, `missing_required_result_field_verdict`,
+`missing_required_result_field_allowed_next_node`,
+`missing_required_result_field_blocker_codes`, or
+`missing_required_result_field_rework_target`.
 
 Minimum successful result:
 
@@ -192,12 +226,13 @@ Minimum successful result:
   "dispatch_target": "implementer",
   "backend_id": "internal_subagents",
   "carrier_id": "junior",
+  "status": "pass",
   "execution_state": "executed",
   "decision": "pass",
-  "verdict": "completed",
+  "verdict": "implemented",
   "blocker_codes": [],
   "rework_target": null,
-  "allowed_next_node": "vida_lane_complete",
+  "allowed_next_node": "coach",
   "host_agent_id": "...",
   "summary": "..."
 }
@@ -231,14 +266,15 @@ Minimum non-pass result:
   "dispatch_target": "implementer",
   "backend_id": "internal_subagents",
   "carrier_id": "junior",
+  "status": "blocked",
   "execution_state": "blocked",
-  "decision": "rework",
-  "verdict": "blocked",
+  "decision": "rework_required",
+  "verdict": "rework_required",
   "blocker_codes": [
     "host_agent_capacity_unavailable"
   ],
   "rework_target": "host_agent_bridge_adapter",
-  "allowed_next_node": "reclaim_or_retry_host_bridge_request",
+  "allowed_next_node": "developer_rework",
   "host_agent_id": null,
   "summary": "Host agent capacity is unavailable; reclaim completed host handles or retry when capacity is available.",
   "next_actions": [
@@ -250,11 +286,11 @@ Minimum non-pass result:
 If the adapter cannot start a host agent, it must write blocked artifacts with:
 
 - `execution_state: "blocked"`
-- `decision: "rework"` or another non-pass decision that prevents lane completion
-- `verdict: "blocked"` or the precise non-pass verdict
+- `decision: "blocked"` / `"rework_required"` or another non-pass decision that prevents lane completion
+- `verdict: "blocked"` / `"rework_required"` or the precise non-pass verdict
 - `blocker_codes` containing one or more of `host_agent_capacity_unavailable`, `host_tool_capability_missing`, or `host_agent_execution_failed`
 - `rework_target` naming the adapter, request, host capability, or process-carrier configuration that must be repaired
-- `allowed_next_node` naming only the next rework-safe node, such as reclaiming, retrying, repairing the adapter, or selecting an explicit process carrier
+- `allowed_next_node` naming only the next rework-safe node, such as `developer_rework`, `tester`, or another state-machine-valid repair node for the completed lane
 - `next_actions` with an exact reclaim, retry, repair, or explicit process-carrier command.
 
 Thread limits and unavailable host capabilities are capacity/readiness blockers, not routing success and not `internal_codex_carrier_unavailable`.

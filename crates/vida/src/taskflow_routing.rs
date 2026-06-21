@@ -68,6 +68,9 @@ fn legacy_dispatch_contract_lane<'a>(
     match dispatch_target {
         DISPATCH_TARGET_IMPLEMENTER => dispatch_contract.get("implementer_activation"),
         DISPATCH_TARGET_SPECIFICATION => dispatch_contract.get("specification_activation"),
+        "test_author" | "autotester" => dispatch_contract
+            .get("test_author_activation")
+            .or_else(|| dispatch_contract.get("autotester_activation")),
         DISPATCH_TARGET_COACH => dispatch_contract.get("coach_activation"),
         DISPATCH_TARGET_VERIFICATION => dispatch_contract.get("verifier_activation"),
         "escalation" | DISPATCH_TARGET_EXECUTION_PREPARATION => {
@@ -133,6 +136,11 @@ pub(crate) fn dispatch_contract_lane_sequence(
     }
     if dispatch_contract.get("escalation_activation").is_some() {
         legacy.push("execution_preparation".to_string());
+    }
+    if dispatch_contract.get("test_author_activation").is_some() {
+        legacy.push("test_author".to_string());
+    } else if dispatch_contract.get("autotester_activation").is_some() {
+        legacy.push("autotester".to_string());
     }
     if dispatch_contract.get("implementer_activation").is_some() {
         legacy.push("implementer".to_string());
@@ -308,9 +316,7 @@ fn route_field_truth(route: &serde_json::Value) -> serde_json::Value {
     serde_json::Value::Array(rejected.chain(diagnostic_only).collect())
 }
 
-pub(crate) fn runtime_assignment_from_route<'a>(
-    route: &'a serde_json::Value,
-) -> &'a serde_json::Value {
+pub(crate) fn runtime_assignment_from_route(route: &serde_json::Value) -> &serde_json::Value {
     route
         .get("carrier_runtime_assignment")
         .or_else(|| route.get("runtime_assignment"))
@@ -328,9 +334,9 @@ pub(crate) fn runtime_assignment_source_from_route(route: &serde_json::Value) ->
     }
 }
 
-pub(crate) fn runtime_assignment_from_execution_plan<'a>(
-    execution_plan: &'a serde_json::Value,
-) -> &'a serde_json::Value {
+pub(crate) fn runtime_assignment_from_execution_plan(
+    execution_plan: &serde_json::Value,
+) -> &serde_json::Value {
     execution_plan
         .get("runtime_assignment")
         .or_else(|| execution_plan.get("carrier_runtime_assignment"))

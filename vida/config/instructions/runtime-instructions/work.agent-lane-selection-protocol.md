@@ -77,7 +77,7 @@ Mixed feature-delivery rule:
    - close the spec-pack task only after the bounded design/spec document is finalized and validated,
    - tracked task/task-pool shaping through the canonical TaskFlow/form-task path,
    - only then delegated implementation/review/proof lanes.
-4. when the runtime exposes `vida taskflow consume final <request> --json`, use that direct-consumption surface to materialize the spec-first tracked-flow bootstrap and required next commands before broader orchestration.
+4. when the runtime exposes `vida taskflow consume final <request>`, use that direct-consumption surface to materialize the spec-first tracked-flow bootstrap and required next commands before broader orchestration.
 5. once direct consumption has persisted a lawful receipt, use `vida taskflow consume continue` for one resume entry or `vida taskflow consume advance` for bounded scheduler progression instead of re-deriving the same handoff path manually.
 5. do not treat the presence of implementation language inside the request as permission to skip the conversational/spec stage.
 

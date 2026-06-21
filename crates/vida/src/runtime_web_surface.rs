@@ -19,7 +19,7 @@ const RUNTIME_WEB_RESTART_SURFACE: &str = "vida runtime web restart";
 const RESTART_EXECUTOR_BLOCKER: BlockerCode = BlockerCode::ToolContractMissing;
 const STATUS_STALE_LISTENER_BLOCKER: BlockerCode = BlockerCode::OwnerSurfaceContradiction;
 const RESTART_EXECUTOR_NEXT_ACTION: &str = "VIDA does not execute project-local runtime web restart adapters automatically; rerun with --dry-run to inspect the restart plan, then manually run only trusted reviewed scripts outside VIDA.";
-const STATUS_STALE_LISTENER_NEXT_ACTION: &str = "Run `vida runtime web restart --scope current-repo --include-edge-proxy --dry-run --json` to inspect current-repo web proof listeners, then manually stop only reviewed stale processes.";
+const STATUS_STALE_LISTENER_NEXT_ACTION: &str = "Run `vida runtime web restart --scope current-repo --include-edge-proxy --dry-run` to inspect current-repo web proof listeners, then manually stop only reviewed stale processes.";
 const RUNTIME_WEB_SAFE_RESTART_COMMAND: &str =
     "vida runtime web restart --scope current-repo --include-edge-proxy --dry-run --json";
 const LOCAL_WEB_ADAPTER: &str = "scripts/windows/Start-WebDevServer.ps1";
@@ -353,10 +353,7 @@ fn normalize_process_path(value: &str) -> String {
 }
 
 fn runtime_web_component_for_command_line(command_line: &str) -> Option<&'static str> {
-    let command_line = command_line
-        .replace('\'', "")
-        .replace('"', "")
-        .to_ascii_lowercase();
+    let command_line = command_line.replace(['\'', '"'], "").to_ascii_lowercase();
     if command_line.contains("get-ciminstance win32_process") {
         return None;
     }

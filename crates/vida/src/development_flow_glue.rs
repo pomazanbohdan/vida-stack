@@ -1,5 +1,5 @@
 pub(crate) fn display_lane_label(value: &str) -> String {
-    let label = value.trim().replace('_', " ").replace('-', " ");
+    let label = value.trim().replace(['_', '-'], " ");
     if label.is_empty() {
         value.to_string()
     } else {

@@ -33,11 +33,91 @@ If a required skill is not visible in the active session catalog, continue from 
 For every runtime development session:
 
 1. read `AGENTS.md` and `AGENTS.sidecar.md`,
-2. run `vida orchestrator-init --json`,
+2. run `vida orchestrator-init`,
 3. record `active_bounded_unit`, `why_this_unit`, and `sequential_vs_parallel_posture`,
 4. load the relevant skill body before packet shaping or writes,
 5. create a DB-backed `todo` before any write-producing mutation,
 6. validate TaskFlow graph after mutations.
+
+## Windows MSVC Coverage Environment
+
+On this Windows host, Cargo or shell commands launched from agent tooling may
+inherit a stripped process environment. Before running `cargo llvm-cov`,
+workspace tests that compile C dependencies, or any proof that invokes MSVC
+`cl.exe`, set the Windows and MSVC environment explicitly instead of relying on
+ambient `PATH`.
+
+The observed failure shape was:
+
+1. `cargo llvm-cov --workspace --lcov --output-path .vida/tmp/cargo-crap-workspace.lcov`
+   failed before producing LCOV.
+2. `cl.exe` reported `D8037: cannot create temporary il file`.
+3. Fresh `TEMP`/`TMP` directories and `cargo llvm-cov clean --workspace` did
+   not fix the failure while `SystemRoot`, `windir`, and `ComSpec` were absent
+   from the process environment.
+4. Restoring the full Windows process environment made `cl.exe` usable and
+   moved the proof forward to the current Rust test failure.
+5. Keep `C:\Users\pomaz\AppData\Local\Microsoft\WindowsApps` in `PATH` when
+   agent/runtime proofs need `pwsh.exe`; on this host PowerShell may resolve
+   through the WindowsApps app alias even when MSVC paths are correct.
+
+Use the repository gate before local MSVC/Cargo proof. It restores the stripped
+Windows process environment, normalizes `TEMP`/`TMP` to a writable VIDA build
+temp root, imports the Visual Studio Build Tools environment, and prefers
+PowerShell Core when nested scripts are needed:
+
+```powershell
+.\scripts\vida-dev-gate.cmd -Mode cargo-env-check
+.\scripts\vida-dev-gate.cmd -Mode quick
+```
+
+Add `-Json` only when a caller explicitly needs machine-readable timing proof.
+The manual PowerShell setup below is fallback diagnostic evidence, not the
+default operator path:
+
+```powershell
+$vc = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207'
+$sdk = 'C:\Program Files (x86)\Windows Kits\10'
+$sdkver = '10.0.26100.0'
+New-Item -ItemType Directory -Force 'C:\temp\vida-msvc' | Out-Null
+
+$env:SystemRoot = 'C:\Windows'
+$env:windir = 'C:\Windows'
+$env:ComSpec = 'C:\Windows\System32\cmd.exe'
+$env:TEMP = 'C:\temp\vida-msvc'
+$env:TMP = 'C:\temp\vida-msvc'
+$env:PATH = "$vc\bin\Hostx64\x64;$sdk\bin\$sdkver\x64;C:\Program Files\PowerShell\7;C:\Users\pomaz\AppData\Local\Microsoft\WindowsApps;C:\Windows\System32\WindowsPowerShell\v1.0;C:\Users\pomaz\.cargo\bin;C:\Program Files\Git\cmd;C:\Windows\System32;C:\Windows"
+$env:LIB = "$vc\lib\x64;$sdk\Lib\$sdkver\ucrt\x64;$sdk\Lib\$sdkver\um\x64"
+$env:INCLUDE = "$vc\include;$sdk\Include\$sdkver\ucrt;$sdk\Include\$sdkver\um;$sdk\Include\$sdkver\shared;$sdk\Include\$sdkver\winrt;$sdk\Include\$sdkver\cppwinrt"
+```
+
+Sanity-check the environment before the long gate:
+
+```powershell
+& 'C:\Users\pomaz\.cargo\bin\cargo.exe' --version
+where.exe cl
+where.exe link
+where.exe pwsh
+```
+
+Then run the coverage proof with absolute Cargo path:
+
+```powershell
+& 'C:\Users\pomaz\.cargo\bin\cargo.exe' llvm-cov clean --workspace
+& 'C:\Users\pomaz\.cargo\bin\cargo.exe' llvm-cov --workspace --lcov --output-path .vida/tmp/cargo-crap-workspace.lcov
+```
+
+Microsoft documents D8037 as failure to create temporary compiler intermediate
+files and recommends removing old `_CL_*.ss` files in `%TMP%`. In this project
+environment, the stronger first check is whether `%SystemRoot%`, `%windir%`,
+`%ComSpec%`, `%TEMP%`, and `%TMP%` exist in the current process, because missing
+Windows environment variables reproduced the same compiler error even with an
+empty temp directory.
+
+Keep `C:\Users\pomaz\AppData\Local\Microsoft\WindowsApps` in `PATH` for this
+host. `pwsh.exe` can resolve through the WindowsApps app alias, and Rust tests
+that spawn PowerShell may fail after MSVC is fixed if the agent-shell `PATH`
+omits that directory.
 
 ## GitHub Issues Workflow
 
@@ -55,7 +135,7 @@ Use:
 
 ```powershell
 gh issue list --repo pomazanbohdan/vida-stack --state open --limit 200 --json number,title,state,url,labels,updatedAt,createdAt
-vida task validate-graph --json
+vida task validate-graph
 ```
 
 ## Operator-Efficiency Loop
@@ -84,7 +164,7 @@ Before reporting a runtime environment/docs/skill update as complete:
 
 1. run skill validation for changed skills,
 2. run DocFlow check for changed docs,
-3. run `vida task validate-graph --json`,
+3. run `vida task validate-graph`,
 4. run `git status --short`,
 5. close the bounded TODO only after the above pass.
 
@@ -92,10 +172,10 @@ Before reporting a runtime environment/docs/skill update as complete:
 artifact_path: process/vida-runtime-development-environment
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-04'
+artifact_revision: '2026-06-18'
 schema_version: '1'
 status: canonical
 source_path: docs/process/vida-runtime-development-environment.md
 created_at: 2026-06-04T00:00:00+03:00
-updated_at: 2026-06-04T05:00:00Z
+updated_at: 2026-06-18T10:02:00+03:00
 changelog_ref: vida-runtime-development-environment.changelog.jsonl

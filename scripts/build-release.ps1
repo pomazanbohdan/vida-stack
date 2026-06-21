@@ -12,6 +12,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "vida-windows-env.ps1")
+Initialize-VidaWindowsEnvironment -NormalizeBuildTemp
+$CargoPath = Resolve-VidaCommandPath "cargo" @((Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe")) -Required
 
 function Show-Help {
     @"
@@ -380,9 +383,12 @@ try {
     $script:ResolvedReleaseBinDir = [System.IO.Path]::GetFullPath($ReleaseBinDir)
 
     if (-not $SkipBuild) {
+        if (Test-HostWindows) {
+            Import-VidaMsvcEnvironment
+        }
         Push-Location $RootDir
         try {
-            & cargo build --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent -p vida-coder
+            & $CargoPath build --release -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent -p vida-coder
             if ($LASTEXITCODE -ne 0) {
                 Fail "Cargo release build failed."
             }

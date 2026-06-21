@@ -22,8 +22,8 @@ ambiguous, blocked, audited, or changed.
 
 Run this checklist in order:
 
-1. when runtime is usable, confirm project-local runtime path with `vida status --json`,
-2. when runtime is usable, confirm current taskflow state with `vida orchestrator-init --json`,
+1. when runtime is usable, confirm project-local runtime path with `vida status`,
+2. when runtime is usable, confirm current taskflow state with `vida orchestrator-init`,
 3. read framework bootstrap carriers:
    - `AGENTS.md`
    - `AGENTS.sidecar.md`
@@ -107,9 +107,11 @@ Backlog-wide pre-splitting into `execution_block` before first dispatch is forbi
 When runtime is usable, use these commands as the canonical session-start smoke path:
 
 ```bash
-vida status --json
-vida orchestrator-init --json
+vida status
+vida orchestrator-init
 ```
+
+Use `--json` only for explicit machine-readable field extraction or automated contract checks.
 
 Optional next-step inspection when active work already exists:
 

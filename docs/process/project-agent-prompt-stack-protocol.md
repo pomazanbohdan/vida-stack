@@ -121,9 +121,11 @@ Role:
 
 Mandatory sources when execution state matters:
 
-1. `vida status --json`
-2. `vida orchestrator-init --json`
+1. `vida status`
+2. `vida orchestrator-init`
 3. bounded `vida taskflow task` views when a specific active unit exists
+
+Use `--json` only for explicit machine-readable extraction, contract tests, or tooling that needs stable fields.
 
 Role:
 

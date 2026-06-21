@@ -98,17 +98,16 @@ pub(crate) fn build_task_ensure_command(
         command.push_str(&format!(" --description {description_quoted}"));
     }
     append_execution_semantics_args(&mut command, execution_semantics);
-    command.push_str(" --json");
     command
 }
 
 pub(crate) fn build_task_show_command(task_id: &str) -> String {
-    format!("vida task show {task_id} --json")
+    format!("vida task show {task_id}")
 }
 
 pub(crate) fn build_task_close_command(task_id: &str, reason: &str) -> String {
     format!(
-        "vida task close {} --reason {} --json",
+        "vida task close {} --reason {}",
         task_id,
         shell_quote(reason)
     )

@@ -80,10 +80,7 @@ pub(crate) fn feature_delivery_design_terms(request: &str) -> Vec<String> {
     }
 
     let mut combined = Vec::new();
-    for term in design_matches
-        .into_iter()
-        .chain(implementation_matches.into_iter())
-    {
+    for term in design_matches.into_iter().chain(implementation_matches) {
         if !combined.contains(&term) {
             combined.push(term);
         }

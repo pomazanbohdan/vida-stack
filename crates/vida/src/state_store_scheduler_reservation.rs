@@ -18,6 +18,7 @@ impl ReservationAcquireGuard {
         let guard_path = root.join(".vida-scheduler-dispatch-reservation-acquire.guard");
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&guard_path)?;
@@ -187,7 +188,8 @@ fn scheduler_reservation_blocker_codes(blocker_codes: &[String]) -> Vec<String> 
         .iter()
         .map(|code| code.trim())
         .filter(|code| !code.is_empty())
-        .filter_map(|code| seen.insert(code.to_string()).then(|| code.to_string()))
+        .filter(|&code| seen.insert(code.to_string()))
+        .map(|code| code.to_string())
         .collect()
 }
 
@@ -415,6 +417,7 @@ mod tests {
             let guard_path = root.join(".vida-scheduler-dispatch-reservation-acquire.guard");
             let file = OpenOptions::new()
                 .create(true)
+                .truncate(false)
                 .read(true)
                 .write(true)
                 .open(&guard_path)?;
@@ -474,7 +477,7 @@ mod tests {
             requested_current_task_id: None,
             selection_source: "test".to_string(),
             max_parallel_agents: 2,
-            command: "vida agent-init --json".to_string(),
+            command: "vida agent-init".to_string(),
             state_dir: "/tmp/vida-state".to_string(),
             lease_owner: "test-owner".to_string(),
             lease_token: format!("token-{reservation_id}"),

@@ -8,10 +8,12 @@ Purpose: define how project-owned documentation is organized, versioned, and mad
 
 1. Repository product narrative lives in root documents such as `README.md`, `CONTRIBUTING.md`, and `VERSION-PLAN.md`.
 2. Product prose canon lives in `docs/product/spec/**`.
-3. Product map and entrypoint docs live in `docs/product/index.md`.
-4. Product research staging lives in `docs/product/research/**`.
-5. Project process docs live in `docs/process/**`.
-6. Project-memory source docs live in `docs/project-memory/**`.
+3. DB-backed product control projections live in `docs/product/control/**`.
+4. Generated project wiki projections live in `docs/product/wiki/**`.
+5. Product map and entrypoint docs live in `docs/product/index.md`.
+6. Product research staging lives in `docs/product/research/**`.
+7. Project process docs live in `docs/process/**`.
+8. Project-memory source docs live in `docs/project-memory/**`.
 
 ## Related Owner Documents
 
@@ -64,13 +66,37 @@ Required fields:
 4. `product_research_doc` for promoted research staging.
 5. `process_doc` for project process/runbook docs.
 6. `project_memory_doc` for project-memory source docs.
+7. `product_control_doc` for DB-backed product control-plane projections and accepted decision records.
+8. `product_wiki_doc` for generated product/project wiki projections.
 
 ## Promotion Rule
 
 1. If a document defines stable product law, it belongs in `docs/product/spec/**`.
-2. If a document is project-specific operating process, it belongs in `docs/process/**`.
-3. If a document captures project-memory source material, it belongs in `docs/project-memory/**`.
-4. If a document is only narrative or contribution framing for the repo, it remains at root.
+2. If a document is a DB-backed controlled object projection or accepted product decision record, it belongs in `docs/product/control/**`.
+3. If a document is a generated internal or public project wiki page, it belongs in `docs/product/wiki/**`.
+4. If a document is project-specific operating process, it belongs in `docs/process/**`.
+5. If a document captures project-memory source material, it belongs in `docs/project-memory/**`.
+6. If a document is only narrative or contribution framing for the repo, it remains at root.
+
+## Authority Lane Rule
+
+1. Top-level `docs/product/**` lanes are organized by authority before domain.
+2. `docs/product/spec/**` owns active law, contracts, models, maps, plans, templates, and matrices.
+3. `docs/product/control/**` owns repository projections of DB-backed controlled objects.
+4. `docs/product/wiki/**` owns generated reader-facing views.
+5. `docs/product/research/**` owns research inputs and does not own accepted decisions after promotion.
+6. Domain grouping inside `docs/product/spec/**` should follow the active current-spec-catalog groups for future and bounded migration work.
+7. Existing flat product/spec files are grandfathered until moved by bounded ownership-group migration waves.
+8. Superseded active markdown copies must not be retained in a parallel archive lane unless a stricter future law introduces one.
+
+## Generated Projection Rule
+
+1. Generated product control or wiki projection files must declare projection posture in footer metadata.
+2. The required generated projection fields are:
+   - `projection_mode: generated`
+   - `edit_authority: db`
+3. Lane-root `index.md` files may be authored docs when they define lane routing rather than generated object content.
+4. Manual edits to generated projection files are not authoritative; changes must enter through DB-backed web, CLI, CR, or reconcile flows.
 
 ## Documentation Standard Precedence Rule
 
@@ -133,5 +159,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/project-documentation-law.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: '2026-03-12T07:58:34+02:00'
+updated_at: 2026-06-18T00:00:00+03:00
 changelog_ref: project-documentation-law.changelog.jsonl

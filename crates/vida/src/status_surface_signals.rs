@@ -141,88 +141,6 @@ pub(crate) fn terminal_next_action_requires_authoritative_run_state(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        blocked_run_graph_status_next_actions, consume_continue_command,
-        open_delegated_cycle_continue_next_action, recovery_latest_command,
-        recovery_readiness_blocked_next_action_for_run, recovery_resume_target_missing_next_action,
-        runtime_binding_task_missing_next_action,
-        terminal_next_action_requires_authoritative_run_state,
-    };
-
-    #[test]
-    fn string_runtime_status_signals_use_default_human_commands() {
-        let actions = blocked_run_graph_status_next_actions(Some("run-1"), Some("task-1"), true);
-        assert!(actions.iter().all(|action| !action.contains("--json")));
-        assert!(actions
-            .iter()
-            .any(|action| action.contains("vida lane retire run-1")));
-
-        let missing = runtime_binding_task_missing_next_action(Some("run-2"), "task-2");
-        assert!(missing.contains("vida taskflow recovery status run-2"));
-        assert!(!missing.contains("--json"));
-
-        let recovery = recovery_resume_target_missing_next_action(Some("run-3"), Some("task-3"));
-        assert!(recovery.contains("vida taskflow recovery status run-3"));
-        assert!(!recovery.contains("--json"));
-
-        let terminal = terminal_next_action_requires_authoritative_run_state(Some("run-4"));
-        assert!(terminal.contains("vida taskflow run-graph status run-4"));
-        assert!(!terminal.contains("--json"));
-
-        assert_eq!(
-            consume_continue_command(Some("run-5")),
-            "vida taskflow consume continue --run-id run-5"
-        );
-        assert_eq!(
-            open_delegated_cycle_continue_next_action(Some("run-6")),
-            "Continue the active bound run with `vida taskflow consume continue --run-id run-6` before considering backlog ready-head work."
-        );
-        assert_eq!(recovery_latest_command(), "vida taskflow recovery latest");
-        let targeted_recovery = recovery_readiness_blocked_next_action_for_run(Some("run-7"));
-        assert!(targeted_recovery.contains("vida taskflow recovery status run-7"));
-        assert!(targeted_recovery.contains("vida taskflow consume continue --run-id run-7"));
-        assert!(!targeted_recovery.contains("--json"));
-
-        let untargeted_recovery = recovery_readiness_blocked_next_action_for_run(None);
-        assert!(untargeted_recovery.contains("no validated run_id"));
-        assert!(untargeted_recovery.contains("vida status"));
-        assert!(!untargeted_recovery.contains("vida taskflow recovery latest"));
-        assert!(!untargeted_recovery.contains("vida taskflow consume continue"));
-        assert!(!untargeted_recovery.contains("--json"));
-    }
-
-    #[test]
-    fn catalog_runtime_status_signals_use_default_human_commands() {
-        let actions = vec![
-            super::run_graph_latest_snapshot_inconsistent_next_action(),
-            super::run_graph_latest_dispatch_receipt_signal_ambiguous_next_action(),
-            super::continuation_binding_ambiguous_next_action(),
-            super::run_graph_latest_dispatch_receipt_summary_inconsistent_next_action(),
-            super::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action(),
-            super::protocol_binding_check_next_action(),
-            super::project_activation_next_action(),
-            super::project_activation_unknown_next_action(),
-            super::missing_run_graph_dispatch_receipt_operator_evidence_next_action(),
-            super::closed_task_active_run_projection_mismatch_next_action(),
-            super::missing_root_session_write_guard_next_action(),
-            super::recovery_readiness_blocked_next_action(),
-            super::task_validate_graph_next_action(),
-            super::missing_retrieval_trust_source_operator_evidence_next_action(),
-            super::missing_retrieval_trust_signal_operator_evidence_next_action(),
-            super::missing_retrieval_trust_operator_evidence_next_action(),
-        ];
-
-        for action in actions {
-            assert!(
-                !action.contains("--json"),
-                "human next-action must not force JSON-first default: {action}"
-            );
-        }
-    }
-}
-
 pub(crate) fn run_graph_latest_dispatch_receipt_summary_inconsistent_next_action() -> String {
     let status_command = next_actions::status_command();
     let recovery_command = next_actions::recovery_latest_command();
@@ -341,4 +259,86 @@ pub(crate) fn final_snapshot_missing_release_admission_evidence(snapshot_path: &
         return true;
     }
     !crate::runtime_consumption_snapshot_has_release_admission_evidence(&summary_json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        blocked_run_graph_status_next_actions, consume_continue_command,
+        open_delegated_cycle_continue_next_action, recovery_latest_command,
+        recovery_readiness_blocked_next_action_for_run, recovery_resume_target_missing_next_action,
+        runtime_binding_task_missing_next_action,
+        terminal_next_action_requires_authoritative_run_state,
+    };
+
+    #[test]
+    fn string_runtime_status_signals_use_default_human_commands() {
+        let actions = blocked_run_graph_status_next_actions(Some("run-1"), Some("task-1"), true);
+        assert!(actions.iter().all(|action| !action.contains("--json")));
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("vida lane retire run-1")));
+
+        let missing = runtime_binding_task_missing_next_action(Some("run-2"), "task-2");
+        assert!(missing.contains("vida taskflow recovery status run-2"));
+        assert!(!missing.contains("--json"));
+
+        let recovery = recovery_resume_target_missing_next_action(Some("run-3"), Some("task-3"));
+        assert!(recovery.contains("vida taskflow recovery status run-3"));
+        assert!(!recovery.contains("--json"));
+
+        let terminal = terminal_next_action_requires_authoritative_run_state(Some("run-4"));
+        assert!(terminal.contains("vida taskflow run-graph status run-4"));
+        assert!(!terminal.contains("--json"));
+
+        assert_eq!(
+            consume_continue_command(Some("run-5")),
+            "vida taskflow consume continue --run-id run-5"
+        );
+        assert_eq!(
+            open_delegated_cycle_continue_next_action(Some("run-6")),
+            "Continue the active bound run with `vida taskflow consume continue --run-id run-6` before considering backlog ready-head work."
+        );
+        assert_eq!(recovery_latest_command(), "vida taskflow recovery latest");
+        let targeted_recovery = recovery_readiness_blocked_next_action_for_run(Some("run-7"));
+        assert!(targeted_recovery.contains("vida taskflow recovery status run-7"));
+        assert!(targeted_recovery.contains("vida taskflow consume continue --run-id run-7"));
+        assert!(!targeted_recovery.contains("--json"));
+
+        let untargeted_recovery = recovery_readiness_blocked_next_action_for_run(None);
+        assert!(untargeted_recovery.contains("no validated run_id"));
+        assert!(untargeted_recovery.contains("vida status"));
+        assert!(!untargeted_recovery.contains("vida taskflow recovery latest"));
+        assert!(!untargeted_recovery.contains("vida taskflow consume continue"));
+        assert!(!untargeted_recovery.contains("--json"));
+    }
+
+    #[test]
+    fn catalog_runtime_status_signals_use_default_human_commands() {
+        let actions = vec![
+            super::run_graph_latest_snapshot_inconsistent_next_action(),
+            super::run_graph_latest_dispatch_receipt_signal_ambiguous_next_action(),
+            super::continuation_binding_ambiguous_next_action(),
+            super::run_graph_latest_dispatch_receipt_summary_inconsistent_next_action(),
+            super::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action(),
+            super::protocol_binding_check_next_action(),
+            super::project_activation_next_action(),
+            super::project_activation_unknown_next_action(),
+            super::missing_run_graph_dispatch_receipt_operator_evidence_next_action(),
+            super::closed_task_active_run_projection_mismatch_next_action(),
+            super::missing_root_session_write_guard_next_action(),
+            super::recovery_readiness_blocked_next_action(),
+            super::task_validate_graph_next_action(),
+            super::missing_retrieval_trust_source_operator_evidence_next_action(),
+            super::missing_retrieval_trust_signal_operator_evidence_next_action(),
+            super::missing_retrieval_trust_operator_evidence_next_action(),
+        ];
+
+        for action in actions {
+            assert!(
+                !action.contains("--json"),
+                "human next-action must not force JSON-first default: {action}"
+            );
+        }
+    }
 }

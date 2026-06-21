@@ -63,7 +63,7 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 11. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/index.md`.
 12. For command timing, slow gates, script optimization, CI/local proof latency, or operator-friction diagnostics, continue to `docs/process/command-timing-and-gate-optimization-protocol.md`.
 13. For runtime defects, multi-defect pools, TaskFlow/DocFlow contradictions, run-graph/recovery/lane/dispatch/receipt blockers, session/worktree ownership conflicts, provider/model/carrier routing blockers, or CI failure clusters, continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`.
-14. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.
+14. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.
 15. After bootstrap, prefer the default `vida taskflow ...` shell path with project-local runtime resolution; do not reintroduce installed shim roots that point outside this repository.
 16. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
 17. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
@@ -99,7 +99,7 @@ Project-routing rule:
 1. Use `AGENTS.md` for lane routing and hard invariants.
 2. Use this sidecar for project-local agent instructions, project operating rules, and project-document orientation.
 3. **MANDATORY TODO BEFORE WRITE-PRODUCING ACTION:** Before every write-producing action (file edit, file create, file delete, config change, code modification, project mutation), first create a DB-backed `todo` task through the current TaskFlow command surface:
-   - command shape: `vida task create <todo-id> "<title>" --type todo --status in_progress --parent-id <active-task-id> --description "<what/why/outcome>" --notes "<owner/activeForm/stop>" --json`
+   - command shape: `vida task create <todo-id> "<title>" --type todo --status in_progress --parent-id <active-task-id> --description "<what/why/outcome>" --notes "<owner/activeForm/stop>"`
    - title — one-line imperative description of the bounded action,
    - description — what will be done, why, and the expected outcome,
    - notes — owner, present-continuous `activeForm`, stop criterion, and immediate fallback when blocked,
@@ -109,7 +109,7 @@ Project-routing rule:
    - `STOP`: what condition signals completion or a blocker
    - `IF_BLOCKED`: the immediate fallback when the stop-criterion is not met
    - If the stop-criterion cannot be stated, do NOT proceed. Ask the user to clarify the acceptance target before continuing.
-5. **NO WRITE WITHOUT TODO:** After creating the todo, execute only the single bounded action. Do not chain multiple write-producing actions in one turn without updating the todo list. After completing the action, close the todo through `vida task close <todo-id> --reason "<proof>" --json` and create the next todo before the following write-producing move. This prevents the "unbounded action loop" pattern where the model repeats the same action indefinitely without explicit stop conditions.
+5. **NO WRITE WITHOUT TODO:** After creating the todo, execute only the single bounded action. Do not chain multiple write-producing actions in one turn without updating the todo list. After completing the action, close the todo through `vida task close <todo-id> --reason "<proof>"` and create the next todo before the following write-producing move. This prevents the "unbounded action loop" pattern where the model repeats the same action indefinitely without explicit stop conditions.
 6. **READ-ONLY EXCEPTION:** This rule does not apply to read-only actions: file reads, code analysis, diagnostic commands, searches, git log, status checks, or any operation that does not modify project files or state.
 7. **EXPLICIT RUNTIME-DEFECT BYPASS:** When the user/operator explicitly says VIDA runtime is defective for the current cleanup, planning, or documentation block, do not invent TODO receipts and do not run mutating VIDA runtime commands. Use bounded static analysis, file proof, script-only checks, and scoped commits. Record any missing TaskFlow/DocFlow evidence as a later runtime-repair follow-up once the runtime is usable.
 8. Prefer the project canonical maps here over broad manual repo scanning when the task depends on project/product understanding.
@@ -176,6 +176,19 @@ Project-routing rule:
 10. Integration-test variance rule: prefer smaller, varied integration tests over one oversized scenario. Cover meaningful variants such as happy path, blocked gate, persisted snapshot parity, command-output parity, recovery/next-action guidance, and cross-surface consistency.
 11. Focused-defect discovery rule: if a focused test exposes a production defect while the batch is still incomplete, fix the production contract and continue completing the planned batch before broad/full verification.
 12. Public-surface proof rule: architectural defects require proof at the contract boundary and through every affected public CLI/operator surface family in the bounded scope; unit-only proof is insufficient for closing a runtime behavior defect. The proof plan must include default compact TOON output where applicable, explicit JSON output, `--help`/option descriptions, fail-closed blocker shape, and rewritten integration tests for old behavior that should now be owned by the shared boundary.
+
+## Current Local Release-Install Environment
+
+1. In the current Windows development environment, the canonical system-runtime refresh is:
+   - `pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-install -Json`
+2. That wrapper must build the current revision's release runtime with `cargo build --locked -p vida --release` under the script's effective Cargo target directory.
+3. In this repository root the wrapper sets `CARGO_TARGET_DIR` to `.vida\cargo-target`, so the current local release binary is `.vida\cargo-target\release\vida.exe`. When a command or note says `target/release/vida.exe`, interpret it as the effective Cargo target's `release\vida.exe`, not the stale repository-default `target\release\vida.exe`.
+4. The source runtime installed into the system patch is the freshly built `.vida\cargo-target\release\vida.exe`; the install step is equivalent to running `.vida\cargo-target\release\vida.exe release install --skip-build --source-binary .vida\cargo-target\release\vida.exe --json`.
+5. The expected installed system binary is `C:\Users\pomaz\AppData\Local\vida-stack\current\bin\vida.exe`, reached through the normal `vida` command on `PATH`, not by directly calling `target/debug/vida.exe`.
+6. The wrapper must finish by smoke-checking the installed runtime with `vida status --json` through the normal `PATH`.
+7. If `orchestrator-init`, `status`, or runtime bundle reporting shows `divergent_installed_binaries=true`, a versioned `releases\v*` binary taking precedence, or a hash mismatch between `.vida\cargo-target\release\vida.exe` and `current\bin\vida.exe`, treat that as installer/runtime environment drift. Do not treat a runtime-hardening task, wave, or release slice as operationally closed until the release install is rerun and the installed `vida` smoke check passes.
+8. If the release-install wrapper times out in the host shell, first inspect live `cargo`, `rustc`, `link`, `pwsh`, and `vida` processes before retrying. Do not start a second release build while the first build is still running.
+
 ## Defective Runtime Emulation Overlay
 
 Generic defective-runtime recovery law is owned by the orchestration, TaskFlow, command-execution, lane handoff, and runtime diagnostic protocols. This sidecar keeps only vida-stack residue:
@@ -249,5 +262,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-06-13T00:00:00+03:00
+updated_at: 2026-06-18T18:00:00+03:00
 changelog_ref: AGENTS.sidecar.changelog.jsonl

@@ -823,7 +823,7 @@ pub(crate) fn runtime_delivery_task_packet_with_scope_context(
             format!("`{dispatch_target}` handoff produces a bounded runtime result artifact"),
             "dispatch receipt and downstream preview are refreshed consistently"
         ],
-        "verification_command": format!("vida taskflow consume continue --run-id {run_id} --json"),
+            "verification_command": format!("vida taskflow consume continue --run-id {run_id}"),
         "proof_target": "runtime dispatch result artifact plus updated dispatch receipt",
         "active_skills": "no_applicable_skill",
         "stop_rules": [
@@ -867,7 +867,7 @@ pub(crate) fn runtime_execution_block_packet(
         "definition_of_done": [
             "bounded blocker is resolved with receipt-backed evidence"
         ],
-        "verification_command": format!("vida taskflow consume continue --run-id {run_id} --json"),
+            "verification_command": format!("vida taskflow consume continue --run-id {run_id}"),
         "proof_target": "runtime receipt evidence that blocker is resolved or escalated",
         "active_skills": "no_applicable_skill",
         "stop_rules": [
@@ -933,7 +933,7 @@ pub(crate) fn runtime_verifier_proof_packet(
         "packet_id": runtime_verifier_proof_packet_id(run_id, dispatch_target),
         "source_packet_id": runtime_delivery_source_packet_id(run_id, "coach"),
         "proof_goal": format!("Independently verify bounded closure readiness for `{dispatch_target}`"),
-        "verification_command": format!("vida taskflow consume continue --run-id {run_id} --json"),
+            "verification_command": format!("vida taskflow consume continue --run-id {run_id}"),
         "proof_target": proof_target,
         "owned_paths": [],
         "read_only_paths": [

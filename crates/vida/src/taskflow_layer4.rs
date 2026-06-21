@@ -47,8 +47,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Canonical commands:");
             println!("  vida task list --all");
-            println!("  vida task ready --json");
-            println!("  vida task next --json");
+            println!("  vida task ready");
+            println!("  vida task next");
             println!("  vida task next [--scope <task-id>] [--state-dir <path>] [--json]");
             println!("  vida task ready --scope <task-id>");
             println!("  vida task show <task-id>");
@@ -596,7 +596,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("Canonical commands:");
             println!("  vida taskflow status [--summary] [--json]");
             println!("  vida status [--json]");
-            println!("  vida taskflow graph-summary --json");
+            println!("  vida taskflow graph-summary");
             println!();
             println!("Returned semantics:");
             println!(
@@ -618,12 +618,12 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical commands:");
-            println!("  vida task deps <task-id> --json");
-            println!("  vida task reverse-deps <task-id> --json");
-            println!("  vida task tree <task-id> --json");
-            println!("  vida task critical-path --json");
-            println!("  vida task validate-graph --json");
-            println!("  vida taskflow graph-summary --json");
+            println!("  vida task deps <task-id>");
+            println!("  vida task reverse-deps <task-id>");
+            println!("  vida task tree <task-id>");
+            println!("  vida task critical-path");
+            println!("  vida task validate-graph");
+            println!("  vida taskflow graph-summary");
             println!();
             println!("Failure modes:");
             println!(
@@ -685,7 +685,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]"
             );
-            println!("  vida taskflow bootstrap-spec \"<request>\" --json");
+            println!("  vida taskflow bootstrap-spec \"<request>\" [--json]");
             println!();
             println!("Output modes:");
             println!(
@@ -836,11 +836,11 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical commands:");
-            println!("  vida taskflow run-graph status <run-id> [--state-dir <path>] --json");
-            println!("  vida taskflow recovery status <run-id> --json");
-            println!("  vida taskflow packet render <run-id> --json");
-            println!("  vida taskflow packet latest --json");
-            println!("  vida taskflow status --summary --json");
+            println!("  vida taskflow run-graph status <run-id> [--state-dir <path>] [--json]");
+            println!("  vida taskflow recovery status <run-id> [--json]");
+            println!("  vida taskflow packet render <run-id> [--json]");
+            println!("  vida taskflow packet latest [--json]");
+            println!("  vida taskflow status --summary [--json]");
             println!();
             println!("Failure modes:");
             println!(
@@ -1105,8 +1105,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  protocol-binding  bounded protocol/runtime bridge receipts");
     println!();
     println!("Canonical examples:");
-    println!("  vida task ready --json");
-    println!("  vida task next --json");
+    println!("  vida task ready");
+    println!("  vida task next");
     println!("  vida task tree <task-id>");
     println!("  vida task deps <task-id>");
     println!("  vida taskflow graph-summary");
@@ -1122,7 +1122,6 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
         "  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\""
     );
     println!("  vida taskflow scheduler dispatch");
-    println!("  vida taskflow scheduler dispatch --json");
     println!("  vida taskflow help dependencies");
     println!("  vida taskflow help queue");
     println!("  vida taskflow help dispatch");
@@ -1226,7 +1225,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-parallelism",
             why: "Sequencing and parallel-safe admission are now first-class task semantics, so the safest operator path is to inspect the scheduler projection and the explicit parallelism contract together.",
-            command: "vida taskflow graph-summary --json",
+            command: "vida taskflow graph-summary",
             failure_modes: "Graph readiness alone is not parallel authority. If the scheduler output is unclear, read `vida task help parallelism` and treat missing execution semantics as fail-closed for co-scheduling.",
         };
     }
@@ -1238,7 +1237,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "next-display-id",
             why: "Display-id reservation should come from the live backlog runtime before creating a new child task under an epic.",
-            command: "vida task next-display-id <parent-display-id> --json",
+            command: "vida task next-display-id <parent-display-id>",
             failure_modes: "Unknown parent display ids fail closed in the delegated runtime, and the returned slot should be treated as runtime-state dependent until the child task is actually created.",
         };
     }
@@ -1252,7 +1251,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-subtree",
             why: "Nested backlog structure should be inspected through the canonical task tree surface before resequencing or splitting work under one epic.",
-            command: "vida task tree <task-id> --json",
+            command: "vida task tree <task-id>",
             failure_modes: "Unknown task ids fail closed in the delegated runtime, and subtree inspection is graph truth only; it does not by itself grant parallel-safe execution.",
         };
     }
@@ -1292,7 +1291,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "next-ready-slice",
             why: "TaskFlow readiness is the canonical way to pick the next unblocked execution slice.",
-            command: "vida task next --json",
+            command: "vida task next",
             failure_modes: "Next-step output depends on current runtime state; inspect the embedded blockers, ready task, and recovery summary before mutating runtime state.",
         };
     }
@@ -1308,7 +1307,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-dispatch-status",
             why: "Dispatch refusal and active-lane diagnosis should be inspected through one bounded run-graph diagnosis surface backed by persisted recovery and projection truth.",
-            command: "vida taskflow run-graph diagnose <run-id> --json",
+            command: "vida taskflow run-graph diagnose <run-id>",
             failure_modes: "Dispatch diagnosis remains execution-state truth, not backlog readiness authority; missing or wrong run ids fail closed and latest-run selection still requires explicit operator intent.",
         };
     }
@@ -1329,9 +1328,9 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
     {
         let latest_mode = normalized.contains("latest");
         let command = if latest_mode {
-            "vida taskflow packet latest --json"
+            "vida taskflow packet latest"
         } else {
-            "vida taskflow packet render <run-id> --json"
+            "vida taskflow packet render <run-id>"
         };
         let failure_modes = if latest_mode {
             "Packet rendering fails closed when no latest persisted dispatch receipt exists yet, or when the latest receipt points at packet evidence that is missing."
@@ -1356,7 +1355,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-config-actuation",
             why: "Routing and model-selection config actuation should be inspected through the bounded census surface that links each covered key to its validator, runtime consumer, and proof status.",
-            command: "vida taskflow config-actuation census --json",
+            command: "vida taskflow config-actuation census",
             failure_modes: "The census is bounded to routing/model-selection keys and fails closed when dispatch context is missing; it does not claim whole-project config coverage.",
         };
     }
@@ -1370,7 +1369,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "replace-backlog-snapshot",
             why: "Authoritative backlog replacement should use the canonical snapshot artifact and the store's replace path instead of additive import-only wiring.",
-            command: "vida task replace-jsonl <path> --json",
+            command: "vida task replace-jsonl <path>",
             failure_modes: "Replacement mutates the live backlog by removing stale tasks absent from the snapshot; inspect the artifact first if identity or completeness is uncertain.",
         };
     }
@@ -1388,9 +1387,9 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
             || normalized.contains("specific artifact")
             || normalized.contains("developer_handoff_packet");
         let command = if show_mode {
-            "vida taskflow artifacts show <artifact-id> --json"
+            "vida taskflow artifacts show <artifact-id>"
         } else {
-            "vida taskflow artifacts list --json"
+            "vida taskflow artifacts list"
         };
         return TaskflowQueryAnswer {
             intent: "inspect-execution-preparation-artifacts",
@@ -1408,7 +1407,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-latest-resumability",
             why: "Latest run-graph and recovery inspection surfaces are the canonical launcher-owned summaries for the most recent routed run.",
-            command: "vida taskflow recovery latest --json",
+            command: "vida taskflow recovery latest",
             failure_modes: "Latest recovery inspection returns null when no routed run exists yet and must not be treated as backlog readiness authority.",
         };
     }
@@ -1417,7 +1416,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-gate",
             why: "Gate inspection is the bounded recovery projection for policy gate, handoff state, and context state on one routed run.",
-            command: "vida taskflow recovery gate <run-id> --json",
+            command: "vida taskflow recovery gate <run-id>",
             failure_modes: "Gate inspection must not be treated as backlog readiness authority, and missing run ids fail closed.",
         };
     }
@@ -1441,8 +1440,8 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-protocol-binding",
             why: "The Wave-1 protocol bridge should be inspected through the bounded TaskFlow protocol-binding surface backed by the authoritative state store.",
-            command: "vida taskflow protocol-binding status --json",
-            failure_modes: "If no protocol-binding receipt exists yet, run `vida taskflow protocol-binding sync --json` first and treat detached file logs as non-authoritative.",
+            command: "vida taskflow protocol-binding status",
+            failure_modes: "If no protocol-binding receipt exists yet, run `vida taskflow protocol-binding sync` first and treat detached file logs as non-authoritative.",
         };
     }
 
@@ -1454,7 +1453,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-task",
             why: "Task inspection should read one canonical record from the runtime store before mutation.",
-            command: "vida task show <task-id> --json",
+            command: "vida task show <task-id>",
             failure_modes: "Unknown task ids fail closed in the delegated runtime.",
         };
     }
@@ -1468,7 +1467,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "create-task",
             why: "New tracked work should be created directly in the primary backlog runtime with an explicit parent and display-id allocation path.",
-            command: "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json",
+            command: "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\"",
             failure_modes: "Task ids must remain stable, parent/display references must resolve in the delegated runtime, and creation should be recorded only after the target epic or parent task has been confirmed.",
         };
     }
@@ -1480,7 +1479,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "record-progress",
             why: "Progress should be recorded against the primary backlog store after a proven runtime or documentation step.",
-            command: "vida task update <task-id> --status in_progress --notes-file <path> --json",
+            command: "vida task update <task-id> --status in_progress --notes-file <path>",
             failure_modes: "Illegal status transitions or missing task ids fail closed in the delegated runtime. When shell metacharacters or multiline notes are involved, prefer `--notes-file` over inline shell quoting.",
         };
     }
@@ -1492,7 +1491,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "close-task",
             why: "Closure should happen only after proof/doc sync confirms the slice is complete.",
-            command: "vida task close <task-id> --reason \"...\" --json",
+            command: "vida task close <task-id> --reason \"...\"",
             failure_modes: "Closing the wrong task mutates the primary backlog; inspect the task first if the identifier is uncertain.",
         };
     }
@@ -1501,7 +1500,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "export-runtime-store",
             why: "JSONL export is the bounded compatibility snapshot for the current backlog/runtime state, not the live source of truth.",
-            command: "vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json",
+            command: "vida task export-jsonl .vida/exports/tasks.snapshot.jsonl",
             failure_modes: "Export artifacts can drift immediately after they are written, so verify live state through the runtime store when operator decisions depend on freshness.",
         };
     }
@@ -1515,8 +1514,8 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-resumability",
             why: "Run-graph and recovery state are the canonical node-level resumability surfaces for one routed execution run.",
-            command: "vida taskflow recovery latest --json",
-            failure_modes: "Recovery inspection must not be treated as backlog readiness authority; when no latest run exists, continue via `vida taskflow consume continue --json` or inspect a specific run id explicitly.",
+            command: "vida taskflow recovery latest",
+            failure_modes: "Recovery inspection must not be treated as backlog readiness authority; when no latest run exists, continue via `vida taskflow consume continue` or inspect a specific run id explicitly.",
         };
     }
 
@@ -1524,7 +1523,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-checkpoint",
             why: "Checkpoint state is the bounded recovery projection for resume target and checkpoint kind on one routed run.",
-            command: "vida taskflow recovery checkpoint <run-id> --json",
+            command: "vida taskflow recovery checkpoint <run-id>",
             failure_modes: "Checkpoint inspection must not be treated as backlog readiness authority, and missing run ids fail closed.",
         };
     }
@@ -1537,7 +1536,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "diagnose-runtime",
             why: "Launcher/runtime health should be checked through the fail-closed doctor surface before further mutation.",
-            command: "vida taskflow doctor --json",
+            command: "vida taskflow doctor",
             failure_modes: "Doctor reports the current local runtime state only; incompatible boot/migration posture must be resolved before continuing.",
         };
     }
@@ -1550,7 +1549,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "closure-handoff",
             why: "Direct consumption is the explicit TaskFlow-to-closure bridge when implementation and proof are already complete.",
-            command: "vida taskflow consume final \"<request>\" --json",
+            command: "vida taskflow consume final \"<request>\"",
             failure_modes: "Use only at closure time; final consumption now fails closed when the runtime bundle is not ready or the bounded DocFlow evidence branch returns blocking results.",
         };
     }
@@ -1640,7 +1639,7 @@ mod tests {
     fn taskflow_query_answer_routes_parallelism_requests() {
         let answer = taskflow_query_answer("what can run in parallel with the current task");
         assert_eq!(answer.intent, "inspect-parallelism");
-        assert_eq!(answer.command, "vida taskflow graph-summary --json");
+        assert_eq!(answer.command, "vida taskflow graph-summary");
         let why = answer.why.to_lowercase();
         assert!(why.contains("parallel-safe"));
         assert!(why.contains("scheduler projection"));
@@ -1650,7 +1649,7 @@ mod tests {
     fn taskflow_query_answer_routes_replace_snapshot_requests() {
         let answer = taskflow_query_answer("replace snapshot artifact");
         assert_eq!(answer.intent, "replace-backlog-snapshot");
-        assert_eq!(answer.command, "vida task replace-jsonl <path> --json");
+        assert_eq!(answer.command, "vida task replace-jsonl <path>");
         let why = answer.why.to_lowercase();
         assert!(why.contains("backlog replacement"));
         assert!(why.contains("canonical snapshot artifact"));

@@ -127,7 +127,6 @@ pub enum TaskflowCoreError {
     EmptyTaskId,
 }
 
-#[must_use]
 pub fn validate_task_id(id: &TaskId) -> Result<(), TaskflowCoreError> {
     if id.0.trim().is_empty() {
         Err(TaskflowCoreError::EmptyTaskId)

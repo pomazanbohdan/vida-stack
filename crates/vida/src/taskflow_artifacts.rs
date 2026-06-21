@@ -273,7 +273,7 @@ fn build_artifact_list_payload(snapshot: &ArtifactSnapshot, project_root: Option
     with_artifact_operator_contract(
         payload,
         None,
-        "inspect execution-preparation artifacts with `vida taskflow artifacts list --json`",
+        "inspect execution-preparation artifacts with `vida taskflow artifacts list`",
     )
 }
 
@@ -301,7 +301,7 @@ fn build_artifact_show_payload(list_payload: &Value, artifact_id: &str) -> Value
             "artifact_refs": list_payload["artifact_refs"].clone(),
             }),
             None,
-            "inspect execution-preparation artifacts with `vida taskflow artifacts list --json`",
+            "inspect execution-preparation artifacts with `vida taskflow artifacts list`",
         ),
         None => with_artifact_operator_contract(
             json!({
@@ -316,13 +316,13 @@ fn build_artifact_show_payload(list_payload: &Value, artifact_id: &str) -> Value
             "source": list_payload["source"].clone(),
             "artifact_refs": list_payload["artifact_refs"].clone(),
             "next_actions": [
-                "Run `vida taskflow artifacts list --json` to inspect queryable execution-preparation artifacts."
+                "Run `vida taskflow artifacts list` to inspect queryable execution-preparation artifacts."
             ],
             }),
             Some(
                 crate::release1_contracts::BlockerCode::MissingExecutionPreparationArtifactQueryTarget,
             ),
-            "run `vida taskflow artifacts list --json` to inspect queryable execution-preparation artifacts",
+                "run `vida taskflow artifacts list` to inspect queryable execution-preparation artifacts",
         ),
     }
 }

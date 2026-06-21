@@ -40,7 +40,19 @@ Companion rule:
     - compiled autonomous delivery runtime architecture
 13. [bootstrap-carriers-and-project-activator-model.md](bootstrap-carriers-and-project-activator-model.md)
     - bootstrap carrier and project activator model
-14. [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md)
+14. [host-agent-bridge-adapter-contract.md](host-agent-bridge-adapter-contract.md)
+    - host-agent bridge request/result/receipt adapter contract
+15. [requirements-documentation-control-plane.md](requirements-documentation-control-plane.md)
+    - DB-first requirements, documentation, baseline, change-control, and projection model
+16. [requirements-control-plane-state-model.md](requirements-control-plane-state-model.md)
+    - DB-first requirements control-plane state model for entities, lifecycles, relations, projections, validation verdicts, adapters, indexes, and migration posture
+17. [requirements-control-plane-runtime-implementation-model.md](requirements-control-plane-runtime-implementation-model.md)
+    - DB-first requirements control-plane runtime implementation model
+18. [docs/product/control/index.md](../control/index.md)
+    - product control projection lane root
+19. [docs/product/wiki/index.md](../wiki/index.md)
+    - generated project wiki projection lane root
+20. [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md)
     - DocFlow and documentation operator-command map
 
 ## Detailed Catalog Companions
@@ -56,10 +68,15 @@ Companion rule:
 
 ## Routing Pointers
 
-1. Documentation ownership, naming, and inventory questions route to [project-documentation-law.md](project-documentation-law.md), [project-document-naming-law.md](project-document-naming-law.md), [canonical-documentation-and-inventory-layer-matrix.md](canonical-documentation-and-inventory-layer-matrix.md), and [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md).
-2. Runtime readiness, runtime layering, and operator-surface questions route to [canonical-runtime-readiness-law.md](canonical-runtime-readiness-law.md), [canonical-runtime-layer-matrix.md](canonical-runtime-layer-matrix.md), and the active runtime contract/profile specs.
-3. Role, carrier, skill, profile, lane, and flow questions route to [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md) and [docs/process/agent-extensions/index.md](../../process/agent-extensions/index.md).
-4. Detailed artifact lookup routes to [current-spec-catalog.md](current-spec-catalog.md).
+1. Documentation ownership, naming, tree optimization, and inventory questions route to [project-documentation-law.md](project-documentation-law.md), [project-document-naming-law.md](project-document-naming-law.md), [canonical-documentation-and-inventory-layer-matrix.md](canonical-documentation-and-inventory-layer-matrix.md), and [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md).
+2. Requirements, change-control, project wiki, and DB-first control-plane product-law questions route to [requirements-documentation-control-plane.md](requirements-documentation-control-plane.md).
+3. Requirements control-plane DB state, entity graph, lifecycle, state-spine tables, relation indexes, projection receipts, validation verdict rows, and adapter mapping questions route to [requirements-control-plane-state-model.md](requirements-control-plane-state-model.md).
+4. Requirements control-plane runtime implementation, CLI/API, web, adapter execution, and rollout questions route to [requirements-control-plane-runtime-implementation-model.md](requirements-control-plane-runtime-implementation-model.md).
+5. Product control object projection and accepted decision-record questions route to [docs/product/control/index.md](../control/index.md).
+6. Project wiki projection questions route to [docs/product/wiki/index.md](../wiki/index.md).
+7. Runtime readiness, runtime layering, host-agent bridge, and operator-surface questions route to [canonical-runtime-readiness-law.md](canonical-runtime-readiness-law.md), [canonical-runtime-layer-matrix.md](canonical-runtime-layer-matrix.md), [host-agent-bridge-adapter-contract.md](host-agent-bridge-adapter-contract.md), and the active runtime contract/profile specs.
+8. Role, carrier, skill, profile, lane, and flow questions route to [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md) and [docs/process/agent-extensions/index.md](../../process/agent-extensions/index.md).
+9. Detailed artifact lookup routes to [current-spec-catalog.md](current-spec-catalog.md).
 
 ## Current Rule
 
@@ -84,10 +101,10 @@ Companion rule:
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-06-13
+artifact_revision: 2026-06-18
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-10T10:20:00+02:00'
-updated_at: 2026-06-13T00:00:00+03:00
+updated_at: 2026-06-18T00:00:00+03:00
 changelog_ref: current-spec-map.changelog.jsonl

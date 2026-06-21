@@ -605,7 +605,7 @@ pub fn run(cli: Cli) -> String {
                 )
                 } else {
                     rows.iter()
-                        .map(|row| encode_line(row))
+                        .map(encode_line)
                         .collect::<Result<Vec<_>, _>>()
                         .map(|lines| lines.join("\n"))
                         .unwrap_or_else(|error| format!("{{\"path\":\"\",\"issues\":[\"encode_error:{}\"]}}", error))
@@ -685,7 +685,7 @@ pub fn run(cli: Cli) -> String {
         Command::Links(args) => match relation_scan_rows(&args.path) {
             Ok((rows, target)) => rows
                 .iter()
-                .map(|row| encode_line(row))
+                .map(encode_line)
                 .collect::<Result<Vec<_>, _>>()
                 .map(|lines| lines.join("\n"))
                 .unwrap_or_else(|error| {
@@ -707,7 +707,7 @@ pub fn run(cli: Cli) -> String {
         Command::DepsMap(args) => match deps_map_rows(&args.path) {
             Ok(rows) => rows
                 .iter()
-                .map(|row| encode_line(row))
+                .map(encode_line)
                 .collect::<Result<Vec<_>, _>>()
                 .map(|lines| lines.join("\n"))
                 .unwrap_or_else(|error| {
@@ -780,7 +780,7 @@ pub fn run(cli: Cli) -> String {
             match fastcheck_rows(args.root.as_deref(), &args.profile, &args.files) {
                 Ok(rows) => rows
                     .iter()
-                    .map(|issue| encode_line(issue))
+                    .map(encode_line)
                     .collect::<Result<Vec<_>, _>>()
                     .map(|lines| lines.join("\n"))
                     .unwrap_or_else(|error| {
@@ -799,7 +799,7 @@ pub fn run(cli: Cli) -> String {
             match activation_rows(args.root.as_deref(), &args.profile, &args.files) {
                 Ok(rows) => rows
                     .iter()
-                    .map(|issue| encode_line(issue))
+                    .map(encode_line)
                     .collect::<Result<Vec<_>, _>>()
                     .map(|lines| lines.join("\n"))
                     .unwrap_or_else(|error| {
@@ -818,7 +818,7 @@ pub fn run(cli: Cli) -> String {
             match protocol_coverage_rows(args.root.as_deref(), &args.profile, &args.files) {
                 Ok(rows) => rows
                     .iter()
-                    .map(|issue| encode_line(issue))
+                    .map(encode_line)
                     .collect::<Result<Vec<_>, _>>()
                     .map(|lines| lines.join("\n"))
                     .unwrap_or_else(|error| {
@@ -868,7 +868,7 @@ pub fn run(cli: Cli) -> String {
             match build_registry(&scope) {
                 Ok(rows) => doctor_rows_for(&args.root, &rows, args.show_warnings)
                     .iter()
-                    .map(|row| encode_line(row))
+                    .map(encode_line)
                     .collect::<Result<Vec<_>, _>>()
                     .map(|lines| lines.join("\n"))
                     .unwrap_or_else(|error| {
@@ -997,7 +997,7 @@ pub fn run(cli: Cli) -> String {
             match build_registry(&scope) {
                 Ok(rows) => rows
                     .iter()
-                    .map(|row| encode_line(row))
+                    .map(encode_line)
                     .collect::<Result<Vec<_>, _>>()
                     .map(|lines| lines.join("\n"))
                     .unwrap_or_else(|error| {
@@ -1793,10 +1793,10 @@ fn task_changed_doc_paths(
     })?;
     let mut paths = BTreeSet::new();
     for row in rows {
-        if let Some(path) = row.get("path").and_then(Value::as_str).map(str::trim) {
-            if !path.is_empty() {
-                paths.insert(path.to_string());
-            }
+        if let Some(path) = row.get("path").and_then(Value::as_str).map(str::trim)
+            && !path.is_empty()
+        {
+            paths.insert(path.to_string());
         }
     }
     Ok(paths.into_iter().collect())
@@ -2105,12 +2105,12 @@ fn artifact_type_for_path(path: &str) -> &'static str {
 
 fn footer_map(content: &str) -> BTreeMap<String, String> {
     let mut output = BTreeMap::new();
-    if let Ok(artifact) = docflow_markdown::split_footer(content) {
-        if let Some(footer) = artifact.footer {
-            for line in footer.lines() {
-                if let Some((key, value)) = line.split_once(':') {
-                    output.insert(key.trim().to_string(), value.trim().to_string());
-                }
+    if let Ok(artifact) = docflow_markdown::split_footer(content)
+        && let Some(footer) = artifact.footer
+    {
+        for line in footer.lines() {
+            if let Some((key, value)) = line.split_once(':') {
+                output.insert(key.trim().to_string(), value.trim().to_string());
             }
         }
     }
@@ -2510,15 +2510,15 @@ fn task_summary_payload(
             events += 1;
             let rel = normalize_path_for_root(&markdown_file, &scope_root);
             *file_counts.entry(rel).or_insert(0) += 1;
-            if let Some(actor) = row.get("actor").and_then(Value::as_str) {
-                if !actor.is_empty() {
-                    *actor_counts.entry(actor.to_string()).or_insert(0) += 1;
-                }
+            if let Some(actor) = row.get("actor").and_then(Value::as_str)
+                && !actor.is_empty()
+            {
+                *actor_counts.entry(actor.to_string()).or_insert(0) += 1;
             }
-            if let Some(scope) = row.get("scope").and_then(Value::as_str) {
-                if !scope.is_empty() {
-                    *scope_counts.entry(scope.to_string()).or_insert(0) += 1;
-                }
+            if let Some(scope) = row.get("scope").and_then(Value::as_str)
+                && !scope.is_empty()
+            {
+                *scope_counts.entry(scope.to_string()).or_insert(0) += 1;
             }
             if let Some(tags) = row.get("tags").and_then(Value::as_array) {
                 for tag in tags.iter().filter_map(Value::as_str) {
@@ -2829,7 +2829,7 @@ fn relative_doc_ref(from_rel: &str, to_rel: &str) -> String {
     }
 
     let mut result = Vec::new();
-    result.extend(std::iter::repeat("..").take(from_parts.len() - shared));
+    result.extend(std::iter::repeat_n("..", from_parts.len() - shared));
     result.extend(to_parts[shared..].iter().copied());
     if result.is_empty() {
         to
@@ -2956,18 +2956,16 @@ fn project_doc_registration_validation_issues(
     if matches!(
         rel,
         "docs/project-root-map.md" | "docs/process/documentation-tooling-map.md"
-    ) {
-        if let Some(body) = sidecar_content.as_deref() {
-            if !body.contains(rel) {
-                issues.push(custom_validation_issue(
-                    rel,
-                    "missing_sidecar_bootstrap_pointer",
-                    format!(
-                        "`AGENTS.sidecar.md` must reference `{rel}` when it is a bootstrap-visible project documentation surface."
-                    ),
-                ));
-            }
-        }
+    ) && let Some(body) = sidecar_content.as_deref()
+        && !body.contains(rel)
+    {
+        issues.push(custom_validation_issue(
+            rel,
+            "missing_sidecar_bootstrap_pointer",
+            format!(
+                "`AGENTS.sidecar.md` must reference `{rel}` when it is a bootstrap-visible project documentation surface."
+            ),
+        ));
     }
 
     issues
@@ -4016,6 +4014,7 @@ fn changelog_path_for_path(
     Ok(path.with_file_name(changelog_ref))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_changelog_event(
     path: &std::path::Path,
     footer: &[(String, String)],
@@ -4119,10 +4118,10 @@ fn quiet_check_paths(paths: &[std::path::PathBuf]) -> Vec<(String, Vec<String>)>
         {
             issues.push("missing_changelog_ref".into());
         }
-        if is_activation_governed_protocol(&rel) {
-            if let Some(issue) = activation_issue_for(&rel, &activation_body) {
-                issues.push(issue.issues);
-            }
+        if is_activation_governed_protocol(&rel)
+            && let Some(issue) = activation_issue_for(&rel, &activation_body)
+        {
+            issues.push(issue.issues);
         }
         for link in extract_markdown_links(&rel, &body) {
             if !link.exists {
@@ -4399,7 +4398,7 @@ fn render_readiness_check_rows(rows: &[ReadinessRow], format: &str) -> String {
     match format {
         "jsonl" => rows
             .iter()
-            .map(|row| encode_line(row))
+            .map(encode_line)
             .collect::<Result<Vec<_>, _>>()
             .map(|lines| lines.join("\n"))
             .unwrap_or_else(|error| {

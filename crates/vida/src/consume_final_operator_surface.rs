@@ -313,9 +313,7 @@ fn consume_final_operator_next_actions(payload: &serde_json::Value) -> Vec<Strin
     if operator_contract_status_is_blocked(&payload["closure_admission"]["status"]) {
         next_actions.push(format!(
             "Run `{}` and resolve closure blockers.",
-            operator_output::command_text::human_command(
-                "vida taskflow consume bundle check --json"
-            )
+            operator_output::command_text::human_command("vida taskflow consume bundle check")
         ));
     }
     if payload["dispatch_packet_preview"]["status"].as_str() == Some("blocked") {

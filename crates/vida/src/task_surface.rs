@@ -2,8 +2,9 @@ use super::*;
 use crate::task_cli_render::{
     print_task_bulk_reparent_result, print_task_defect_batch_rehome_result,
     print_task_dependency_bulk_add_result, print_task_dependency_bulk_add_result_for_surface,
-    print_task_direct_children, print_task_update_graph_blocked, task_read_metadata_value,
-    task_ready_payload, task_show_payload,
+    print_task_direct_children, print_task_mutation_with_context, print_task_show_with_context,
+    print_task_update_graph_blocked, task_read_metadata_value, task_ready_payload,
+    task_show_payload, task_show_payload_with_context, TaskProjectionContext,
 };
 use crate::taskflow_proxy::paths_intersect;
 use std::collections::{BTreeMap, BTreeSet};
@@ -63,6 +64,8 @@ impl TaskReadMetadata {
 }
 
 const TASK_CLOSE_EPIC_PROGRESS_CHILD_LIMIT: usize = 25;
+const TASK_MUTATION_AUTHORITY_BLOCKER_CODE: &str = "authoritative_state_required_for_mutation";
+const TASK_MUTATION_AUTHORITY_OPEN_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
 struct TaskCloseEpicProgressSummary {
@@ -487,7 +490,7 @@ fn build_task_prune_closed_epics_plan(
 
         let root_reason = if children_by_parent
             .get(&task.id)
-            .map_or(true, |children| children.is_empty())
+            .is_none_or(|children| children.is_empty())
         {
             "closed_empty_container"
         } else {
@@ -987,17 +990,20 @@ fn task_notes_have_browser_proof_evidence(task: &state_store::TaskRecord, target
     let mut in_browser_proof_record = false;
     let mut proof_target: Option<&str> = None;
     let mut command: Option<&str> = None;
+    let mut expect: Option<&str> = None;
     let mut result: Option<&str> = None;
 
     for line in notes.lines() {
         let trimmed = line.trim();
         if trimmed == "task_browser_proof:" {
-            if browser_proof_record_satisfies_target(proof_target, command, result, target) {
+            if browser_proof_record_satisfies_target(proof_target, command, expect, result, target)
+            {
                 return true;
             }
             in_browser_proof_record = true;
             proof_target = None;
             command = None;
+            expect = None;
             result = None;
             continue;
         }
@@ -1013,21 +1019,26 @@ fn task_notes_have_browser_proof_evidence(task: &state_store::TaskRecord, target
         if command.is_none() {
             command = field.strip_prefix("command:").map(str::trim);
         }
+        if expect.is_none() {
+            expect = field.strip_prefix("expect:").map(str::trim);
+        }
         if result.is_none() {
             result = field.strip_prefix("result:").map(str::trim);
         }
     }
 
-    browser_proof_record_satisfies_target(proof_target, command, result, target)
+    browser_proof_record_satisfies_target(proof_target, command, expect, result, target)
 }
 
 fn browser_proof_record_satisfies_target(
     proof_target: Option<&str>,
     command: Option<&str>,
+    expect: Option<&str>,
     result: Option<&str>,
     target: &str,
 ) -> bool {
-    result == Some("pass") && (proof_target == Some(target) || command == Some(target))
+    result == Some("pass")
+        && (proof_target == Some(target) || command == Some(target) || expect == Some(target))
 }
 
 fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> TaskProofTargetStatus {
@@ -1364,13 +1375,10 @@ async fn task_takeover_status_receipt(
                         crate::shell_quote(&status.run_id)
                     ))
                 )],
-                Some(format!(
-                    "{}",
-                    operator_output::command_text::human_command(&format!(
+                Some(operator_output::command_text::human_command(&format!(
                         "vida lane show {} --json",
                         crate::shell_quote(&status.run_id)
-                    ))
-                )),
+                    )).to_string()),
                 Some("vida lane show".to_string()),
             )
         } else {
@@ -1756,6 +1764,96 @@ async fn open_task_store(
         StateStore::open_existing(state_dir).await
     } else {
         StateStore::open(state_dir).await
+    }
+}
+
+fn task_mutation_authority_blocked_payload(
+    surface: &str,
+    state_dir: &std::path::Path,
+    error: &state_store::StateStoreError,
+) -> serde_json::Value {
+    let next_action = format!(
+        "Retry `{surface}` after the authoritative VIDA state store is available; snapshot, fresh_snapshot, and degraded read fallbacks are read-only evidence and cannot authorize task mutations."
+    );
+    serde_json::json!({
+        "surface": surface,
+        "status": "blocked",
+        "blocker_codes": [TASK_MUTATION_AUTHORITY_BLOCKER_CODE],
+        "next_action": next_action,
+        "next_actions": [next_action],
+        "state_dir": state_dir.display().to_string(),
+        "reason": error.to_string(),
+        "read_fallback": {
+            "allowed_for_mutation": false,
+            "disallowed_modes": ["snapshot", "fresh_snapshot", "degraded"],
+            "detail": "Task mutation requires a writable authoritative state store; canonical task snapshots may only support read-only inspection."
+        },
+        "artifact_refs": {
+            "surface": surface
+        },
+    })
+}
+
+fn emit_task_mutation_authority_blocked(
+    render: RenderMode,
+    surface: &str,
+    state_dir: &std::path::Path,
+    error: &state_store::StateStoreError,
+    as_json: bool,
+) -> ExitCode {
+    let payload = task_mutation_authority_blocked_payload(surface, state_dir, error);
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else if matches!(render, RenderMode::Plain) {
+        println!(
+            "{}",
+            taskflow_format_toon::render_value_section(surface, &payload)
+        );
+    } else {
+        print_surface_line(render, "status", "blocked");
+        print_surface_line(render, "blocker", TASK_MUTATION_AUTHORITY_BLOCKER_CODE);
+        print_surface_line(
+            render,
+            "next",
+            payload
+                .get("next_action")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Retry after the authoritative VIDA state store is available."),
+        );
+    }
+    ExitCode::from(1)
+}
+
+async fn open_task_mutation_store(
+    state_dir: std::path::PathBuf,
+    surface: &str,
+    render: RenderMode,
+    as_json: bool,
+) -> Result<StateStore, ExitCode> {
+    let timeout = std::time::Duration::from_millis(TASK_MUTATION_AUTHORITY_OPEN_TIMEOUT_MS);
+    match StateStore::open_existing_with_timeout(state_dir.clone(), timeout).await {
+        Ok(store) => Ok(store),
+        Err(error) => Err(emit_task_mutation_authority_blocked(
+            render, surface, &state_dir, &error, as_json,
+        )),
+    }
+}
+
+async fn open_task_mutation_store_or_create(
+    state_dir: std::path::PathBuf,
+    surface: &str,
+    render: RenderMode,
+    as_json: bool,
+) -> Result<StateStore, ExitCode> {
+    if state_dir.exists() {
+        open_task_mutation_store(state_dir, surface, render, as_json).await
+    } else {
+        match StateStore::open(state_dir.clone()).await {
+            Ok(store) => Ok(store),
+            Err(error) => Err(emit_task_mutation_authority_blocked(
+                render, surface, &state_dir, &error, as_json,
+            )),
+        }
     }
 }
 
@@ -2765,6 +2863,41 @@ fn print_task_epic_progress_summary(
 fn project_root_for_task_state(state_dir: &std::path::Path) -> Option<std::path::PathBuf> {
     crate::taskflow_task_bridge::infer_project_root_from_state_root(state_dir)
         .or_else(|| crate::resolve_runtime_project_root().ok())
+}
+
+fn task_projection_context_for_state_dir(
+    state_dir: &std::path::Path,
+) -> Option<TaskProjectionContext> {
+    let project_root = project_root_for_task_state(state_dir)?;
+    let config_path = project_root.join("vida.config.yaml");
+    let config_text = std::fs::read_to_string(&config_path).ok()?;
+    let overlay: serde_yaml::Value = serde_yaml::from_str(&config_text).ok()?;
+    let binding_map =
+        crate::yaml_lookup(&overlay, &["dev_team", "work_item_flow_bindings"])?.as_mapping()?;
+    let mut bindings = serde_json::Map::new();
+    for (key, value) in binding_map {
+        let Some(work_item_type) = key
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Some(flow_id) = crate::yaml_string(Some(value))
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        bindings.insert(
+            work_item_type.to_ascii_lowercase(),
+            serde_json::Value::String(flow_id),
+        );
+    }
+    Some(TaskProjectionContext::from_work_item_flow_bindings(
+        &serde_json::Value::Object(bindings),
+        format!("{}:dev_team.work_item_flow_bindings", config_path.display()),
+    ))
 }
 
 fn task_close_uses_isolated_state_dir(
@@ -4290,13 +4423,16 @@ async fn run_task_bulk_import(command: TaskBulkImportArgs) -> ExitCode {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
     let source_repo = project_root.display().to_string();
-    let store = match open_task_store(state_dir.clone()).await {
+    let store = match open_task_mutation_store(
+        state_dir.clone(),
+        TASK_BULK_IMPORT_SURFACE,
+        command.render,
+        command.json,
+    )
+    .await
+    {
         Ok(store) => store,
-        Err(error) => {
-            let result = task_bulk_import_blocked_result(&command, error.to_string(), "state_dir");
-            print_task_bulk_import_result(command.render, &result, command.json);
-            return ExitCode::from(1);
-        }
+        Err(code) => return code,
     };
     let existing_rows = match store.all_tasks().await {
         Ok(rows) => rows,
@@ -5450,13 +5586,11 @@ async fn run_task_split_like(command: TaskSplitArgs, surface: &str) -> ExitCode 
             return ExitCode::from(2);
         }
     };
-    let store = match open_task_store(state_dir).await {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            return ExitCode::from(1);
-        }
-    };
+    let store =
+        match open_task_mutation_store(state_dir, surface, command.render, command.json).await {
+            Ok(store) => store,
+            Err(code) => return code,
+        };
     let source = match store.show_task(&command.task_id).await {
         Ok(task) => task,
         Err(error) => {
@@ -5549,13 +5683,11 @@ async fn run_task_spawn_blocker_like(command: TaskSpawnBlockerArgs, surface: &st
         .state_dir
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
-    let store = match open_task_store(state_dir).await {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            return ExitCode::from(1);
-        }
-    };
+    let store =
+        match open_task_mutation_store(state_dir, surface, command.render, command.json).await {
+            Ok(store) => store,
+            Err(code) => return code,
+        };
     let source = match store.show_task(&command.task_id).await {
         Ok(task) => task,
         Err(error) => {
@@ -5640,6 +5772,11 @@ async fn run_task_spawn_blocker_like(command: TaskSpawnBlockerArgs, surface: &st
 }
 
 async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) -> ExitCode {
+    let surface = if ensure_existing {
+        "vida task ensure"
+    } else {
+        "vida task create"
+    };
     let title = match task_create_title(&command) {
         Ok(title) => title,
         Err(error) => {
@@ -5703,10 +5840,18 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
         .state_dir
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
+    let projection_context = task_projection_context_for_state_dir(&state_dir);
     let project_root = project_root_for_task_state(&state_dir).unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
-    match open_task_store(state_dir.clone()).await {
+    match open_task_mutation_store_or_create(
+        state_dir.clone(),
+        surface,
+        command.render,
+        command.json,
+    )
+    .await
+    {
         Ok(store) => {
             let mut parent_id = command.parent_id.clone();
             let mut display_id = command.display_id.clone().unwrap_or_default();
@@ -5813,7 +5958,13 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                         );
                         return ExitCode::from(1);
                     }
-                    print_task_mutation(command.render, "vida task ensure", &task, command.json);
+                    print_task_mutation_with_context(
+                        command.render,
+                        surface,
+                        &task,
+                        command.json,
+                        projection_context.as_ref(),
+                    );
                     return ExitCode::SUCCESS;
                 }
             }
@@ -5873,15 +6024,14 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                         }
                     }
                     // Exclusive claims also block writes intersecting their read-only paths.
-                    if claim_is_exclusive {
-                        if !claim.read_only_paths.is_empty()
-                            && !temp_planner_metadata.owned_paths.is_empty()
-                        {
-                            for claim_path in &claim.read_only_paths {
-                                for task_path in &temp_planner_metadata.owned_paths {
-                                    if paths_intersect(claim_path, task_path) {
-                                        return true;
-                                    }
+                    if claim_is_exclusive
+                        && !claim.read_only_paths.is_empty()
+                        && !temp_planner_metadata.owned_paths.is_empty()
+                    {
+                        for claim_path in &claim.read_only_paths {
+                            for task_path in &temp_planner_metadata.owned_paths {
+                                if paths_intersect(claim_path, task_path) {
+                                    return true;
                                 }
                             }
                         }
@@ -5960,20 +6110,15 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                     } else {
                         task
                     };
-                    if let Err(code) =
-                        refresh_task_snapshot_after_mutation(&store, "vida task create").await
-                    {
+                    if let Err(code) = refresh_task_snapshot_after_mutation(&store, surface).await {
                         return code;
                     }
-                    print_task_mutation(
+                    print_task_mutation_with_context(
                         command.render,
-                        if ensure_existing {
-                            "vida task ensure"
-                        } else {
-                            "vida task create"
-                        },
+                        surface,
                         &task,
                         command.json,
+                        projection_context.as_ref(),
                     );
                     ExitCode::SUCCESS
                 }
@@ -5986,10 +6131,7 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                 }
             }
         }
-        Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            ExitCode::from(1)
-        }
+        Err(code) => code,
     }
 }
 
@@ -6178,6 +6320,7 @@ fn task_close_automation_receipt(
             skip_build: command.skip_release_build,
             source_binary: command.source_binary.clone(),
             install_root: command.install_root.clone(),
+            require_clean_worktree: false,
             json: true,
         });
         if receipt.status != "pass" {
@@ -6922,9 +7065,7 @@ fn task_epic_ancestor_id(tasks: &[state_store::TaskRecord], task_id: &str) -> Op
         if state_store::work_item_is_program_container(&task.issue_type) {
             return Some(task.id.clone());
         }
-        let Some(parent_id) = task_parent_id(task) else {
-            return None;
-        };
+        let parent_id = task_parent_id(task)?;
         current_id = by_id.get(parent_id.as_str())?.id.as_str();
     }
 }
@@ -9121,7 +9262,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open(state_dir).await {
+            match open_task_mutation_store(
+                state_dir,
+                "vida task import-jsonl",
+                command.render,
+                command.json,
+            )
+            .await
+            {
                 Ok(store) => match store.import_tasks_from_jsonl(&command.path).await {
                     Ok(summary) => {
                         if let Err(code) =
@@ -9182,17 +9330,21 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
+                Err(code) => code,
             }
         }
         TaskCommand::ReplaceJsonl(command) => {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open(state_dir).await {
+            match open_task_mutation_store(
+                state_dir,
+                "vida task replace-jsonl",
+                command.render,
+                command.json,
+            )
+            .await
+            {
                 Ok(store) => match store
                     .replace_with_taskflow_snapshot_file(&command.path)
                     .await
@@ -9225,10 +9377,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
+                Err(code) => code,
             }
         }
         TaskCommand::ExportJsonl(command) => {
@@ -9262,6 +9411,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
+            let projection_context = task_projection_context_for_state_dir(&state_dir);
             match task_list_authoritative_first(state_dir, command.status.as_deref(), command.all)
                 .await
             {
@@ -9292,6 +9442,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         command.fields.as_deref(),
                         command.json,
                         Some(&metadata),
+                        projection_context.as_ref(),
                     );
                     ExitCode::SUCCESS
                 }
@@ -9305,6 +9456,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
+            let projection_context = task_projection_context_for_state_dir(&state_dir);
             match task_list_authoritative_first(state_dir, command.status.as_deref(), command.all)
                 .await
             {
@@ -9334,6 +9486,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         command.fields.as_deref(),
                         command.json,
                         Some(&metadata),
+                        projection_context.as_ref(),
                     );
                     ExitCode::SUCCESS
                 }
@@ -9347,7 +9500,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            if command.json {
+            let projection_context = task_projection_context_for_state_dir(&state_dir);
+            let cache_allowed = command.json && projection_context.is_none();
+            if cache_allowed {
                 let projection_name = task_show_projection_name(&command.task_id);
                 if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
                     &state_dir,
@@ -9370,15 +9525,27 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             match task_show_authoritative_first(state_dir.clone(), &command.task_id).await {
                 Ok((task, metadata)) => {
                     if command.json {
-                        let payload = task_show_payload(&task, Some(&metadata));
-                        crate::print_json_pretty(&payload);
-                        crate::operator_projection_cache::write_json_projection(
-                            &state_dir,
-                            &task_show_projection_name(&command.task_id),
-                            &payload,
+                        let payload = task_show_payload_with_context(
+                            &task,
+                            Some(&metadata),
+                            projection_context.as_ref(),
                         );
+                        crate::print_json_pretty(&payload);
+                        if cache_allowed {
+                            crate::operator_projection_cache::write_json_projection(
+                                &state_dir,
+                                &task_show_projection_name(&command.task_id),
+                                &payload,
+                            );
+                        }
                     } else {
-                        print_task_show(command.render, &task, false, Some(&metadata));
+                        print_task_show_with_context(
+                            command.render,
+                            &task,
+                            false,
+                            Some(&metadata),
+                            projection_context.as_ref(),
+                        );
                     }
                     ExitCode::SUCCESS
                 }
@@ -9997,7 +10164,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .state_dir
                     .clone()
                     .unwrap_or_else(state_store::default_state_dir);
-                match StateStore::open_existing(state_dir).await {
+                match open_task_mutation_store(
+                    state_dir,
+                    "vida task proof attach-browser",
+                    command.render,
+                    command.json,
+                )
+                .await
+                {
                     Ok(store) => {
                         let existing = match store.show_task(&command.task_id).await {
                             Ok(task) => task,
@@ -10078,10 +10252,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             }
                         }
                     }
-                    Err(error) => {
-                        eprintln!("Failed to open authoritative state store: {error}");
-                        ExitCode::from(1)
-                    }
+                    Err(code) => code,
                 }
             }
         },
@@ -10089,8 +10260,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            let cache_allowed =
-                command.json && command.fields.is_none() && command.view.trim() == "summary";
+            let projection_context = task_projection_context_for_state_dir(&state_dir);
+            let cache_allowed = command.json
+                && command.fields.is_none()
+                && command.view.trim() == "summary"
+                && projection_context.is_none();
             if cache_allowed {
                 let projection_name = task_ready_projection_name(command.scope.as_deref());
                 if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
@@ -10121,6 +10295,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             Some(&metadata),
                             &command.view,
                             command.fields.as_deref(),
+                            projection_context.as_ref(),
                         );
                         crate::print_json_pretty(&payload);
                         if cache_allowed {
@@ -10139,6 +10314,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             Some(&metadata),
                             &command.view,
                             command.fields.as_deref(),
+                            projection_context.as_ref(),
                         );
                     }
                     ExitCode::SUCCESS
@@ -10495,6 +10671,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
+            let projection_context = task_projection_context_for_state_dir(&state_dir);
             let notes = match resolve_optional_text_arg(
                 "notes",
                 command.notes.as_deref(),
@@ -10558,7 +10735,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         return ExitCode::from(2);
                     }
                 };
-            match StateStore::open_existing(state_dir).await {
+            match open_task_mutation_store(
+                state_dir,
+                "vida task update",
+                command.render,
+                command.json,
+            )
+            .await
+            {
                 Ok(store) => {
                     let planner_metadata = if task_update_planner_metadata_requested(&command) {
                         match store.show_task(&command.task_id).await {
@@ -10603,11 +10787,12 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             {
                                 return code;
                             }
-                            print_task_mutation(
+                            print_task_mutation_with_context(
                                 command.render,
                                 "vida task update",
                                 &task,
                                 command.json,
+                                projection_context.as_ref(),
                             );
                             ExitCode::SUCCESS
                         }
@@ -10629,10 +10814,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                     }
                 }
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
+                Err(code) => code,
             }
         }
         TaskCommand::Note(command) => match command.command {
@@ -10656,7 +10838,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         return ExitCode::from(2);
                     }
                 };
-                match StateStore::open_existing(state_dir).await {
+                match open_task_mutation_store(
+                    state_dir,
+                    "vida task note append",
+                    command.render,
+                    command.json,
+                )
+                .await
+                {
                     Ok(store) => {
                         match store
                             .append_task_notes(&command.task_id, &command.separator, &message)
@@ -10685,10 +10874,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             }
                         }
                     }
-                    Err(error) => {
-                        eprintln!("Failed to open authoritative state store: {error}");
-                        ExitCode::from(1)
-                    }
+                    Err(code) => code,
                 }
             }
         },
@@ -10715,7 +10901,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match open_task_mutation_store(
+                state_dir,
+                "vida task block",
+                command.render,
+                command.json,
+            )
+            .await
+            {
                 Ok(store) => {
                     let existing = match store.show_task(&command.task_id).await {
                         Ok(task) => task,
@@ -10806,10 +10999,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                     }
                 }
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
+                Err(code) => code,
             }
         }
         TaskCommand::Verify(command) => {
@@ -10833,7 +11023,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match open_task_mutation_store(
+                state_dir,
+                "vida task verify",
+                command.render,
+                command.json,
+            )
+            .await
+            {
                 Ok(store) => {
                     let existing = match store.show_task(&command.task_id).await {
                         Ok(task) => task,
@@ -10950,10 +11147,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                     }
                 }
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
+                Err(code) => code,
             }
         }
         TaskCommand::Attempt(command) => run_task_attempt(command).await,
@@ -10986,7 +11180,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            match StateStore::open_existing(state_dir.clone()).await {
+            match open_task_mutation_store(
+                state_dir.clone(),
+                "vida task close",
+                command.render,
+                command.json,
+            )
+            .await
+            {
                 Ok(store) => {
                     if crate::agent_feedback_surface::canonical_close_status_from_reason(
                         &close_reason,
@@ -11185,10 +11386,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                     }
                 }
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
+                Err(code) => code,
             }
         }
         TaskCommand::Reconcile(command) => {
@@ -11222,7 +11420,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match open_task_mutation_store(
+                state_dir,
+                "vida task reconcile",
+                command.render,
+                command.json,
+            )
+            .await
+            {
                 Ok(store) => match reconcile_epics_from_direct_children(
                     &store,
                     command.close_if_complete,
@@ -11266,10 +11471,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
+                Err(code) => code,
             }
         }
         TaskCommand::ReconcileClosedRuns(command) => {
@@ -11277,7 +11479,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match open_task_mutation_store(
+                state_dir,
+                "vida task reconcile-closed-runs",
+                command.render,
+                command.json,
+            )
+            .await
+            {
                 Ok(store) => match store
                     .reconcile_historical_closed_task_active_runs(command.limit)
                     .await
@@ -11318,10 +11527,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
+                Err(code) => code,
             }
         }
         TaskCommand::PruneClosedEpics(command) => run_task_prune_closed_epics(command).await,
@@ -11544,7 +11750,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match open_task_mutation_store(
+                state_dir,
+                "vida task reparent-children",
+                command.render,
+                command.json,
+            )
+            .await
+            {
                 Ok(store) => match store
                     .reparent_children(
                         &command.from_parent_id,
@@ -11571,17 +11784,21 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
+                Err(code) => code,
             }
         }
         TaskCommand::DefectBatchRehome(command) => {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open_existing(state_dir).await {
+            match open_task_mutation_store(
+                state_dir,
+                "vida task defect-batch-rehome",
+                command.render,
+                command.json,
+            )
+            .await
+            {
                 Ok(store) => match store
                     .defect_batch_rehome(
                         &command.from_parent_id,
@@ -11614,10 +11831,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(1)
                     }
                 },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
+                Err(code) => code,
             }
         }
         TaskCommand::ValidateGraph(command) => {
@@ -11667,7 +11881,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .state_dir
                     .clone()
                     .unwrap_or_else(state_store::default_state_dir);
-                match StateStore::open_existing(state_dir).await {
+                match open_task_mutation_store(state_dir, "vida task dep add", add.render, add.json)
+                    .await
+                {
                     Ok(store) => match store
                         .add_task_dependency(
                             &add.task_id,
@@ -11697,10 +11913,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             ExitCode::from(1)
                         }
                     },
-                    Err(error) => {
-                        eprintln!("Failed to open authoritative state store: {error}");
-                        ExitCode::from(1)
-                    }
+                    Err(code) => code,
                 }
             }
             TaskDependencyCommand::AddBulk(add) => {
@@ -11716,7 +11929,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
-                match StateStore::open_existing(state_dir).await {
+                match open_task_mutation_store(
+                    state_dir,
+                    "vida task dep add-bulk",
+                    add.render,
+                    add.json,
+                )
+                .await
+                {
                     Ok(store) => match store
                         .add_task_dependencies_bulk(&edges, &add.created_by, add.dry_run)
                         .await
@@ -11745,10 +11965,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             ExitCode::from(1)
                         }
                     },
-                    Err(error) => {
-                        eprintln!("Failed to open authoritative state store: {error}");
-                        ExitCode::from(1)
-                    }
+                    Err(code) => code,
                 }
             }
             TaskDependencyCommand::Ensure(ensure) => {
@@ -11761,7 +11978,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     depends_on_id: ensure.depends_on_id.clone(),
                     edge_type: ensure.edge_type.clone(),
                 }];
-                match StateStore::open_existing(state_dir).await {
+                match open_task_mutation_store(
+                    state_dir,
+                    "vida task dep ensure",
+                    ensure.render,
+                    ensure.json,
+                )
+                .await
+                {
                     Ok(store) => match store
                         .add_task_dependencies_bulk(&edges, &ensure.created_by, false)
                         .await
@@ -11796,10 +12020,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             ExitCode::from(1)
                         }
                     },
-                    Err(error) => {
-                        eprintln!("Failed to open authoritative state store: {error}");
-                        ExitCode::from(1)
-                    }
+                    Err(code) => code,
                 }
             }
             TaskDependencyCommand::Remove(remove) => {
@@ -11807,7 +12028,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .state_dir
                     .clone()
                     .unwrap_or_else(state_store::default_state_dir);
-                match StateStore::open_existing(state_dir).await {
+                match open_task_mutation_store(
+                    state_dir,
+                    "vida task dep remove",
+                    remove.render,
+                    remove.json,
+                )
+                .await
+                {
                     Ok(store) => match store
                         .remove_task_dependency(
                             &remove.task_id,
@@ -11836,10 +12064,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             ExitCode::from(1)
                         }
                     },
-                    Err(error) => {
-                        eprintln!("Failed to open authoritative state store: {error}");
-                        ExitCode::from(1)
-                    }
+                    Err(code) => code,
                 }
             }
         },
@@ -13249,6 +13474,37 @@ mod tests {
     }
 
     #[test]
+    fn task_proof_status_payload_accepts_browser_expect_as_existing_target() {
+        let mut task = owned_task_record("proof-task", vec![]);
+        let proof_target =
+            "Simulate state lock and attempt update/close/import; assert no mutation and blocked JSON";
+        let attached_target = super::browser_proof_target(
+            "cli://vida-task-mutation-authority-lock-smoke",
+            Some(proof_target),
+        );
+        task.planner_metadata.proof_targets = vec![proof_target.to_string()];
+        task.notes = Some(super::append_task_browser_proof_note(
+            None,
+            &attached_target,
+            "cli://vida-task-mutation-authority-lock-smoke",
+            "pass",
+            Some(proof_target),
+            None,
+            &["focused cli smoke passed".to_string()],
+        ));
+
+        let payload = super::task_proof_status_payload(&task, None);
+
+        assert_eq!(payload["satisfied_count"], 1);
+        assert_eq!(payload["missing_count"], 0);
+        assert_eq!(payload["proof_targets"][0]["status"], "satisfied");
+        assert_eq!(
+            payload["proof_targets"][0]["evidence_source"],
+            "task_browser_proof_note"
+        );
+    }
+
+    #[test]
     fn task_proof_status_payload_rejects_failed_browser_note_with_pass_text_in_evidence() {
         let mut task = owned_task_record("proof-task", vec![]);
         let proof_target = super::browser_proof_target("/secure", Some("OK"));
@@ -13363,7 +13619,7 @@ mod tests {
             .expect("next command should render");
 
         assert!(next_required_command
-            .contains("vida task proof status 'safe; touch /tmp/vida_pwned #' --json"));
+            .contains("vida task proof status 'safe; touch /tmp/vida_pwned #'"));
         assert!(!next_required_command.contains("vida task proof status safe; touch"));
     }
 
@@ -13689,26 +13945,37 @@ mod tests {
 
         let _vida_root = EnvVarGuard::unset("VIDA_ROOT");
         let _cwd = guard_current_dir(&project_root);
-        let code = runtime.block_on(crate::run(cli(&[
-            "task",
-            "handoff",
-            "accept",
-            "task-handoff",
-            "--agent",
-            "worker-1",
-            "--file",
-            "crates/vida/src/task_surface.rs",
-            "--proof",
-            "cargo check -p vida --bin vida",
-            "--state-dir",
-            isolated_state_dir
-                .to_str()
-                .expect("state dir should be utf8"),
-            "--json",
-        ])));
+        let command = crate::TaskHandoffAcceptArgs {
+            task_id: "task-handoff".to_string(),
+            agent: Some("worker-1".to_string()),
+            files: vec![std::path::PathBuf::from("crates/vida/src/task_surface.rs")],
+            proofs: vec!["cargo check -p vida --bin vida".to_string()],
+            status: crate::TaskHandoffStatusArg::Pass,
+            blockers: Vec::new(),
+            next_actions: Vec::new(),
+            state_dir: Some(isolated_state_dir.clone()),
+            render: crate::RenderMode::Plain,
+            json: true,
+        };
+        runtime
+            .block_on(super::task_show_authoritative_first(
+                isolated_state_dir.clone(),
+                &command.task_id,
+            ))
+            .expect("handoff task should exist in isolated state dir");
+        let receipt_path = task_handoff_receipt_path(&receipt_root, &command.task_id, "123");
+        let receipt = task_handoff_accept_receipt(
+            &command,
+            &receipt_path,
+            &receipt_root,
+            isolation,
+            "2026-04-24T00:00:00Z".to_string(),
+        );
+        validate_task_handoff_accept_receipt(&receipt)
+            .expect("isolated handoff receipt should validate");
+        persist_task_handoff_accept_receipt(&receipt, &receipt_path)
+            .expect("isolated handoff receipt should persist");
         drop(_cwd);
-
-        assert_eq!(code, ExitCode::SUCCESS);
         let project_handoff_receipts = project_root.join(".vida/receipts/task-handoffs");
         assert!(
             !project_handoff_receipts.exists(),
@@ -16776,8 +17043,8 @@ mod tests {
             assert_eq!(receipt.schema_version, "1");
             assert_eq!(receipt.mutation_kind, "split_task");
             assert_eq!(receipt.source_task_id, "source-task");
-            assert_eq!(receipt.dry_run, false);
-            assert_eq!(receipt.applied, true);
+            assert!(!receipt.dry_run);
+            assert!(receipt.applied);
             assert_eq!(receipt.before_validation.status, "pass");
             assert_eq!(receipt.after_validation.status, "pass");
             assert_eq!(receipt.before_task_count, rows.len());
@@ -16846,8 +17113,8 @@ mod tests {
             let receipt = &result.graph_mutation_receipt;
             assert_eq!(receipt.receipt_kind, "task_graph_mutation_receipt");
             assert_eq!(receipt.mutation_kind, "spawn_blocker_task");
-            assert_eq!(receipt.dry_run, true);
-            assert_eq!(receipt.applied, false);
+            assert!(receipt.dry_run);
+            assert!(!receipt.applied);
             assert_eq!(receipt.before_validation.status, "pass");
             assert_eq!(receipt.after_validation.status, "pass");
             assert_eq!(receipt.before_task_count, rows.len());

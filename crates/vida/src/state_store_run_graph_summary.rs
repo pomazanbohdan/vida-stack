@@ -33,6 +33,46 @@ fn invalid_reconciled_pack_dispatch_packet_error(
     }
 }
 
+fn completed_lane_downstream_packet_matches_receipt(receipt: &RunGraphDispatchReceipt) -> bool {
+    let Some(expected_target) = receipt
+        .downstream_dispatch_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if crate::runtime_dispatch_state::completion_allowed_next_node_is_abstract_next(expected_target)
+    {
+        return false;
+    }
+    let Some(packet_path) = receipt
+        .downstream_dispatch_packet_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
+    let Ok(encoded) = std::fs::read_to_string(packet_path) else {
+        return false;
+    };
+    let Ok(packet) = serde_json::from_str::<serde_json::Value>(&encoded) else {
+        return false;
+    };
+    packet["dispatch_target"].as_str() == Some(expected_target)
+        && packet["downstream_dispatch_target"].as_str() == Some(expected_target)
+        && packet["downstream_dispatch_ready"].as_bool() == Some(true)
+        && matches!(
+            packet["downstream_dispatch_status"].as_str(),
+            Some("packet_ready" | "executed")
+        )
+        && packet["downstream_dispatch_blockers"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+}
+
 fn reconcile_run_graph_status_with_dispatch_receipt(
     mut status: RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceiptStored>,
@@ -63,7 +103,7 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.handoff_state = "none".to_string();
         status.resume_target = "none".to_string();
         status.context_state = "sealed".to_string();
-        status.checkpoint_kind = "none".to_string();
+        status.checkpoint_kind = "terminal_closure".to_string();
         status.recovery_ready = false;
         return Ok(status);
     }
@@ -124,6 +164,32 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         && status.handoff_state == format!("awaiting_{retry_target}")
         && status.resume_target == format!("dispatch.{retry_target}_lane")
         && status.recovery_ready;
+    if let Some(success_route) = downstream_success_route_from_completion_result(&receipt) {
+        if matches!(
+            success_route.allowed_next_node.as_str(),
+            "terminal_closure" | "closure" | "closure_lane"
+        ) {
+            if let Some(selected_backend) = receipt
+                .selected_backend
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                status.selected_backend = selected_backend.to_string();
+            }
+            status.active_node = "closure".to_string();
+            status.next_node = None;
+            status.status = "completed".to_string();
+            status.lifecycle_stage = "closure_complete".to_string();
+            status.policy_gate = "not_required".to_string();
+            status.handoff_state = "none".to_string();
+            status.resume_target = "none".to_string();
+            status.context_state = "sealed".to_string();
+            status.checkpoint_kind = "terminal_closure".to_string();
+            status.recovery_ready = false;
+            return Ok(status);
+        }
+    }
     if blocked_receipt {
         if retry_ready_same_lane {
             if let Some(selected_backend) = receipt
@@ -226,6 +292,7 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.handoff_state = "none".to_string();
         status.resume_target = "none".to_string();
         status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "terminal_closure".to_string();
         status.recovery_ready = false;
         return Ok(status);
     }
@@ -239,8 +306,6 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
     {
-        let completed_target = receipt.dispatch_target.trim();
-        let lifecycle_target = completed_target.replace('-', "_");
         let downstream_node = receipt
             .downstream_dispatch_target
             .as_deref()
@@ -249,8 +314,10 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         if status.status == "ready"
             && status.recovery_ready
             && status.active_node != receipt.dispatch_target
-            && (status.active_node == downstream_node
-                || status.next_node.as_deref() == Some(downstream_node.as_str()))
+            && status.active_node == downstream_node
+            && status.next_node.as_deref() == Some(downstream_node.as_str())
+            && status.handoff_state == format!("awaiting_{downstream_node}")
+            && status.resume_target == format!("dispatch.{downstream_node}_lane")
         {
             return Ok(status);
         }
@@ -262,10 +329,11 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         {
             status.selected_backend = selected_backend.to_string();
         }
-        status.active_node = completed_target.to_string();
+        status.active_node = downstream_node.clone();
         status.next_node = Some(downstream_node.clone());
         status.status = "ready".to_string();
-        status.lifecycle_stage = format!("{lifecycle_target}_complete");
+        status.lane_id = format!("{downstream_node}_lane");
+        status.lifecycle_stage = format!("{downstream_node}_active");
         status.policy_gate = "not_required".to_string();
         status.handoff_state = format!("awaiting_{downstream_node}");
         status.resume_target = format!("dispatch.{downstream_node}_lane");
@@ -313,6 +381,18 @@ fn downstream_rework_route_from_completion_result(
     receipt: &RunGraphDispatchReceiptStored,
 ) -> Option<crate::runtime_dispatch_result_evidence::DispatchReworkRoute> {
     crate::runtime_dispatch_result_evidence::dispatch_rework_route_from_receipt_fields(
+        receipt.downstream_dispatch_result_path.as_deref(),
+        receipt.dispatch_result_path.as_deref(),
+        receipt.dispatch_packet_path.as_deref(),
+    )
+}
+
+fn downstream_success_route_from_completion_result(
+    receipt: &RunGraphDispatchReceiptStored,
+) -> Option<crate::runtime_dispatch_result_evidence::DispatchSuccessRoute> {
+    crate::runtime_dispatch_result_evidence::dispatch_success_route_from_receipt_fields(
+        None,
+        &receipt.run_id,
         receipt.downstream_dispatch_result_path.as_deref(),
         receipt.dispatch_result_path.as_deref(),
         receipt.dispatch_packet_path.as_deref(),
@@ -371,11 +451,11 @@ fn blocked_source_lane_from_downstream_dispatch_packet(
 
 fn blocked_agent_lane_receipt_keeps_resume_target(receipt: &RunGraphDispatchReceiptStored) -> bool {
     if receipt.dispatch_kind != "agent_lane"
-        || !receipt
+        || receipt
             .dispatch_result_path
             .as_deref()
             .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
+            .is_none_or(|value| value.is_empty())
     {
         return false;
     }
@@ -489,7 +569,7 @@ fn tracked_flow_materialization_result_from_body(
     result_body: &str,
     receipt: &RunGraphDispatchReceiptStored,
 ) -> Option<TrackedFlowMaterializationResult> {
-    let Ok(result_json) = serde_json::from_str::<serde_json::Value>(&result_body) else {
+    let Ok(result_json) = serde_json::from_str::<serde_json::Value>(result_body) else {
         return None;
     };
     if result_json["status"].as_str() != Some("pass")
@@ -556,13 +636,12 @@ fn ready_dispatch_handoff_matches_downstream_receipt(
     else {
         return false;
     };
-    if status.active_node != receipt.dispatch_target {
-        return false;
-    }
     let downstream_node = downstream_target.replace('-', "_");
-    status.next_node.as_deref() == Some(downstream_node.as_str())
+    let has_downstream_handoff = status.next_node.as_deref() == Some(downstream_node.as_str())
         && status.handoff_state == format!("awaiting_{downstream_node}")
-        && status.resume_target == format!("dispatch.{downstream_node}_lane")
+        && status.resume_target == format!("dispatch.{downstream_node}_lane");
+    (status.active_node == receipt.dispatch_target || status.active_node == downstream_node)
+        && has_downstream_handoff
 }
 
 fn receipt_has_pending_spec_first_work_pool_handoff_gate(
@@ -752,6 +831,36 @@ pub(crate) fn normalize_legacy_downstream_preview_drift(
     receipt
 }
 
+fn completed_lane_downstream_handoff_bootstrap(
+    receipt: &RunGraphDispatchReceipt,
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> serde_json::Value {
+    let downstream_target = receipt
+        .downstream_dispatch_target
+        .as_deref()
+        .unwrap_or_default();
+    let task_class = crate::runtime_dispatch_state::runtime_packet_handoff_task_class_for_plan(
+        &role_selection.execution_plan,
+        downstream_target,
+        role_selection.selected_role.as_str(),
+    );
+    serde_json::json!({
+        "status": "dispatch_init_ready",
+        "handoff_ready": true,
+        "run_id": receipt.run_id,
+        "latest_status": {
+            "run_id": receipt.run_id,
+            "status": "ready",
+            "active_node": downstream_target,
+            "next_node": downstream_target,
+            "task_class": task_class,
+            "route_task_class": task_class,
+            "dispatch_ready": true,
+            "dispatch_blockers": [],
+        }
+    })
+}
+
 fn reconcile_run_graph_status_with_closed_task(
     mut status: RunGraphStatus,
     task: Option<&TaskRecord>,
@@ -800,7 +909,12 @@ fn reconcile_run_graph_status_with_closed_task(
     }
     status.handoff_state = "none".to_string();
     status.context_state = "sealed".to_string();
-    status.checkpoint_kind = "none".to_string();
+    status.checkpoint_kind =
+        if status.active_node == "closure" && status.lifecycle_stage == "closure_complete" {
+            "terminal_closure".to_string()
+        } else {
+            "none".to_string()
+        };
     status.resume_target = "none".to_string();
     status.recovery_ready = false;
     status
@@ -1352,7 +1466,7 @@ pub(crate) fn latest_run_graph_dispatch_receipt_signal_is_ambiguous(
 ) -> bool {
     matches!(
         receipt.dispatch_status.as_str(),
-        "packet_ready" | "routed" | "executing" | "executed" | "blocked"
+        "packet_ready" | "routed" | "executing" | "executed" | "blocked" | "bridge_request_pending"
     ) && receipt.lane_status.as_str()
         != normalize_run_graph_lane_status(
             Some(receipt.lane_status.as_str()),
@@ -1362,7 +1476,12 @@ pub(crate) fn latest_run_graph_dispatch_receipt_signal_is_ambiguous(
         )
         || !matches!(
             receipt.dispatch_status.as_str(),
-            "packet_ready" | "routed" | "executing" | "executed" | "blocked"
+            "packet_ready"
+                | "routed"
+                | "executing"
+                | "executed"
+                | "blocked"
+                | "bridge_request_pending"
         )
 }
 
@@ -1435,10 +1554,15 @@ pub(crate) fn downstream_dispatch_allows_completed_lane_status(
     downstream_dispatch_status: Option<&str>,
     canonical_lane_status: &str,
 ) -> bool {
-    matches!(
-        downstream_dispatch_status,
-        Some("executed" | "retired_closed_task_run")
-    ) && canonical_lane_status == "lane_completed"
+    downstream_dispatch_status
+        .map(str::trim)
+        .is_some_and(|status| {
+            matches!(
+                status,
+                "executed" | "retired_closed_task_run" | "packet_ready" | "ready"
+            )
+        })
+        && canonical_lane_status == "lane_completed"
 }
 
 pub(crate) fn deserialize_run_graph_lane_status<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -2226,6 +2350,40 @@ impl StateStore {
         Ok(())
     }
 
+    pub async fn record_run_graph_lane_completion_commit_record(
+        &self,
+        record: &RunGraphLaneCompletionCommitRecord,
+    ) -> Result<(), StateStoreError> {
+        record.validate()?;
+        let _: Option<RunGraphLaneCompletionCommitRecord> = self
+            .db
+            .upsert((
+                "run_graph_lane_completion_commit_record",
+                record.record_id.as_str(),
+            ))
+            .content(record.clone())
+            .await?;
+        crate::operator_projection_cache::touch_state_mutation_marker(self.root());
+        Ok(())
+    }
+
+    pub async fn run_graph_lane_completion_commit_record(
+        &self,
+        record_id: &str,
+    ) -> Result<Option<RunGraphLaneCompletionCommitRecord>, StateStoreError> {
+        let record: Option<RunGraphLaneCompletionCommitRecord> = self
+            .db
+            .select(("run_graph_lane_completion_commit_record", record_id))
+            .await?;
+        match record {
+            Some(record) => {
+                record.validate()?;
+                Ok(Some(record))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub async fn clear_run_graph_projection_checkpoint_records(
         &self,
         run_id: &str,
@@ -2315,20 +2473,23 @@ impl StateStore {
     pub async fn latest_run_graph_replay_lineage_receipt(
         &self,
     ) -> Result<Option<RunGraphReplayLineageReceipt>, StateStoreError> {
-        let Some(status) = self.latest_run_graph_status().await? else {
-            return Ok(None);
-        };
-        match self
-            .run_graph_replay_lineage_receipt(&status.run_id)
-            .await?
-        {
-            Some(receipt) if receipt.run_id == status.run_id => Ok(Some(receipt)),
-            Some(receipt) => Err(StateStoreError::InvalidTaskRecord {
-                reason: format!(
-                    "run-graph replay lineage receipt is inconsistent for `{}`: latest replay lineage receipt run_id must share the same run_id (receipt_run_id={})",
-                    status.run_id, receipt.run_id
-                ),
-            }),
+        if let Some(run_id) = self.latest_run_graph_run_id().await? {
+            return self.run_graph_replay_lineage_receipt(&run_id).await;
+        }
+        let mut query = self
+            .db
+            .query(
+                "SELECT * FROM run_graph_replay_lineage_receipt \
+                 ORDER BY recorded_at DESC, receipt_id DESC \
+                 LIMIT 1;",
+            )
+            .await?;
+        let rows: Vec<RunGraphReplayLineageReceipt> = query.take(0)?;
+        match rows.into_iter().next() {
+            Some(receipt) => {
+                receipt.validate()?;
+                Ok(Some(receipt))
+            }
             None => Ok(None),
         }
     }
@@ -2537,6 +2698,183 @@ impl StateStore {
         self.run_graph_status_from_task_rows(run_id, &[]).await
     }
 
+    async fn normalize_completed_lane_downstream_handoff_receipt_truth(
+        &self,
+        receipt: &mut RunGraphDispatchReceipt,
+    ) -> Result<bool, StateStoreError> {
+        if receipt.dispatch_status != "executed"
+            || receipt.lane_status != crate::LaneStatus::LaneCompleted.as_str()
+            || receipt
+                .blocker_code
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+        {
+            return Ok(false);
+        }
+        let already_ready = receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| {
+                !value.is_empty()
+                    && !crate::runtime_dispatch_state::completion_allowed_next_node_is_abstract_next(
+                        value,
+                    )
+            })
+            && receipt.downstream_dispatch_ready
+            && matches!(
+                receipt.downstream_dispatch_status.as_deref(),
+                Some("packet_ready" | "executed")
+            )
+            && receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+            && completed_lane_downstream_packet_matches_receipt(receipt);
+        if already_ready {
+            return Ok(false);
+        }
+        let route =
+            crate::runtime_dispatch_result_evidence::dispatch_success_route_from_receipt_fields(
+                Some(self.root()),
+                &receipt.run_id,
+                receipt.downstream_dispatch_result_path.as_deref(),
+                receipt.dispatch_result_path.as_deref(),
+                receipt.dispatch_packet_path.as_deref(),
+            );
+        let Some(route) = route else {
+            return Ok(false);
+        };
+        if route.allowed_next_node == receipt.dispatch_target.replace('-', "_") {
+            return Ok(false);
+        }
+
+        let Some(context) = self.run_graph_dispatch_context(&receipt.run_id).await? else {
+            return Ok(false);
+        };
+        let role_selection = context.role_selection()?;
+        let Some(resolved_downstream_target) =
+            crate::runtime_dispatch_state::resolve_completion_allowed_next_node(
+                &role_selection,
+                &receipt.dispatch_target,
+                &route.allowed_next_node,
+            )
+        else {
+            receipt.downstream_dispatch_target = None;
+            receipt.downstream_dispatch_command = None;
+            receipt.downstream_dispatch_packet_path = None;
+            receipt.downstream_dispatch_ready = false;
+            receipt.downstream_dispatch_status = Some("blocked".to_string());
+            receipt.downstream_dispatch_blockers =
+                vec!["missing_configured_downstream_dispatch_target".to_string()];
+            receipt.downstream_dispatch_note = Some(format!(
+                "completed lane result allowed next node `{}` could not be resolved after `{}`",
+                route.allowed_next_node, receipt.dispatch_target
+            ));
+            receipt.downstream_dispatch_result_path = Some(route.result_path);
+            return Ok(true);
+        };
+        let downstream_target = resolved_downstream_target.dispatch_target;
+        let previous_target = receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if previous_target.as_deref() != Some(downstream_target.as_str())
+            || !completed_lane_downstream_packet_matches_receipt(receipt)
+        {
+            receipt.downstream_dispatch_packet_path = None;
+        }
+
+        receipt.downstream_dispatch_target = Some(downstream_target.clone());
+        receipt.downstream_dispatch_note = Some(format!(
+            "completed lane result reconciled allowed next node `{}` to downstream handoff `{}`",
+            route.allowed_next_node, downstream_target
+        ));
+        receipt.downstream_dispatch_result_path = Some(route.result_path);
+        receipt.downstream_dispatch_active_target = Some(receipt.dispatch_target.clone());
+        receipt.downstream_dispatch_last_target = Some(receipt.dispatch_target.clone());
+        receipt.downstream_dispatch_blockers.clear();
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+
+        match self
+            .materialize_completed_lane_downstream_packet(receipt)
+            .await
+        {
+            Ok(Some(packet_path)) => {
+                receipt.downstream_dispatch_packet_path = Some(packet_path.clone());
+                receipt.downstream_dispatch_command = Some(
+                    crate::runtime_dispatch_state::agent_init_execute_command_for_packet_path(
+                        &packet_path,
+                    ),
+                );
+                receipt.downstream_dispatch_ready = true;
+                receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+            }
+            Ok(None) => {
+                receipt.downstream_dispatch_ready = false;
+                receipt.downstream_dispatch_status = Some("blocked".to_string());
+                receipt.downstream_dispatch_blockers =
+                    vec!["missing_downstream_dispatch_packet".to_string()];
+                receipt.downstream_dispatch_note = Some(format!(
+                    "completed lane result resolved downstream target `{}`, but no executable downstream packet could be produced",
+                    downstream_target
+                ));
+            }
+            Err(error) => {
+                receipt.downstream_dispatch_ready = false;
+                receipt.downstream_dispatch_status = Some("blocked".to_string());
+                receipt.downstream_dispatch_blockers =
+                    vec!["downstream_dispatch_packet_materialization_failed".to_string()];
+                receipt.downstream_dispatch_note = Some(format!(
+                    "completed lane result resolved downstream target `{}`, but downstream packet materialization failed: {error}",
+                    downstream_target
+                ));
+            }
+        }
+        Ok(true)
+    }
+
+    async fn materialize_completed_lane_downstream_packet(
+        &self,
+        receipt: &mut RunGraphDispatchReceipt,
+    ) -> Result<Option<String>, StateStoreError> {
+        if let Some(packet_path) = receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(Some(packet_path.to_string()));
+        }
+        let Some(context) = self.run_graph_dispatch_context(&receipt.run_id).await? else {
+            return Ok(None);
+        };
+        let role_selection = context.role_selection()?;
+        receipt.downstream_dispatch_command = receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .and_then(|target| {
+                crate::runtime_dispatch_state::runtime_dispatch_command_for_target(
+                    &role_selection,
+                    target,
+                )
+            });
+        let run_graph_bootstrap =
+            completed_lane_downstream_handoff_bootstrap(receipt, &role_selection);
+        crate::runtime_dispatch_downstream_packets::write_runtime_downstream_dispatch_packet(
+            self.root(),
+            &role_selection,
+            &run_graph_bootstrap,
+            receipt,
+        )
+        .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })
+    }
+
     async fn normalize_spec_first_work_pool_handoff_receipt_truth(
         &self,
         receipt: &mut RunGraphDispatchReceipt,
@@ -2733,10 +3071,10 @@ impl StateStore {
                 receipt.dispatch_target.as_str(),
                 "work-pool-pack" | "dev-pack"
             )
-            || !receipt
+            || receipt
                 .blocker_code
                 .as_deref()
-                .is_none_or(|code| code == "internal_activation_view_only")
+                .is_some_and(|code| code != "internal_activation_view_only")
         {
             return Ok(false);
         }
@@ -3662,7 +4000,7 @@ impl StateStore {
         &self,
         status: &RunGraphStatus,
     ) -> Result<Option<RunGraphDispatchReceiptSummary>, StateStoreError> {
-        self.ensure_run_graph_recovery_surface_has_checkpoint_lineage(&status)
+        self.ensure_run_graph_recovery_surface_has_checkpoint_lineage(status)
             .await?;
         let Some(receipt) = self
             .run_graph_dispatch_receipt_stored(&status.run_id)
@@ -3672,7 +4010,7 @@ impl StateStore {
         };
         let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
         let mut receipt: RunGraphDispatchReceipt = receipt.into();
-        terminal_closure_supersedes_stale_handoff_receipt(&status, &mut receipt);
+        terminal_closure_supersedes_stale_handoff_receipt(status, &mut receipt);
         let host_runtime = crate::taskflow_task_bridge::infer_project_root_from_state_root(
             self.root(),
         )
@@ -3849,6 +4187,12 @@ impl StateStore {
             self.record_run_graph_dispatch_receipt(&receipt).await?;
         }
         if self
+            .normalize_completed_lane_downstream_handoff_receipt_truth(&mut receipt)
+            .await?
+        {
+            self.record_run_graph_dispatch_receipt(&receipt).await?;
+        }
+        if self
             .normalize_spec_first_work_pool_handoff_receipt_truth(&mut receipt)
             .await?
         {
@@ -3922,7 +4266,7 @@ impl StateStore {
             .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
         receipt.downstream_dispatch_target = Some("closure".to_string());
         receipt.downstream_dispatch_command = Some(format!(
-            "vida taskflow consume continue --run-id {} --json",
+            "vida taskflow consume continue --run-id {}",
             receipt.run_id
         ));
         receipt.downstream_dispatch_note =
@@ -4646,7 +4990,7 @@ mod tests {
             exception_path_receipt_id: None,
             dispatch_kind: "agent_lane".to_string(),
             dispatch_surface: Some("vida agent-init".to_string()),
-            dispatch_command: Some("vida agent-init --execute-dispatch --json".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
             dispatch_packet_path: Some("/tmp/packet.json".to_string()),
             dispatch_result_path: None,
             blocker_code: None,
@@ -4666,6 +5010,61 @@ mod tests {
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("middle".to_string()),
             recorded_at: "2026-05-21T00:00:00Z".to_string(),
+        }
+    }
+
+    fn analyst_designer_role_selection() -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "configured_dev_team_test".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "complete analyst and continue to designer".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "test".to_string(),
+            matched_terms: vec!["analyst".to_string(), "designer".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "orchestration_contract": {
+                    "replanning": {
+                        "checkpoints": ["after_designer"]
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["analyst", "designer"],
+                        "lane_catalog": {
+                            "analyst": {
+                                "runtime_role": "business_analyst",
+                                "task_class": "specification",
+                                "closure_class": "specification",
+                                "packet_template_kind": "delivery_task_packet"
+                            },
+                            "designer": {
+                                "runtime_role": "designer",
+                                "task_class": "specification",
+                                "closure_class": "specification",
+                                "packet_template_kind": "delivery_task_packet",
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "designer",
+                                    "selected_tier": "middle"
+                                }
+                            }
+                        }
+                    }
+                },
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "business_analyst",
+                    "selected_backend_id": "internal_subagents"
+                }
+            }),
+            reason: "test analyst to designer route".to_string(),
         }
     }
 
@@ -5213,6 +5612,22 @@ mod tests {
     }
 
     #[test]
+    fn bridge_request_pending_exception_takeover_receipt_signal_is_not_ambiguous() {
+        let mut receipt = sample_dispatch_receipt("run-bridge-request-pending-exception");
+        receipt.dispatch_target = "specifier".to_string();
+        receipt.dispatch_status = "bridge_request_pending".to_string();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.exception_path_receipt_id = Some("exception-receipt".to_string());
+        receipt.supersedes_receipt_id = Some("exception-receipt".to_string());
+
+        let summary = RunGraphDispatchReceiptSummary::from_receipt(receipt);
+
+        assert!(!latest_run_graph_dispatch_receipt_signal_is_ambiguous(
+            &summary
+        ));
+    }
+
+    #[test]
     fn routed_specification_receipt_with_pending_downstream_evidence_stays_dispatch_ready() {
         let mut status = sample_run_graph_status();
         status.run_id = "run-spec-routed".to_string();
@@ -5238,7 +5653,7 @@ mod tests {
             dispatch_kind: "agent_lane".to_string(),
             dispatch_surface: Some("vida agent-init".to_string()),
             dispatch_command: Some(
-                "vida agent-init --dispatch-packet packet --execute-dispatch --json".to_string(),
+                "vida agent-init --dispatch-packet packet --execute-dispatch".to_string(),
             ),
             dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
             dispatch_result_path: None,
@@ -6236,7 +6651,7 @@ mod tests {
                 dispatch_kind: "agent_lane".to_string(),
                 dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
                 dispatch_command: Some(
-                    "vida lane complete run-current-exception-takeover --json".to_string(),
+                    "vida lane complete run-current-exception-takeover".to_string(),
                 ),
                 dispatch_packet_path: Some("/tmp/current-exception-packet.json".to_string()),
                 dispatch_result_path: Some("/tmp/current-exception-result.json".to_string()),
@@ -6589,7 +7004,7 @@ mod tests {
             assert_eq!(reconciled.policy_gate, "not_required");
             assert_eq!(reconciled.handoff_state, "none");
             assert_eq!(reconciled.context_state, "sealed");
-            assert_eq!(reconciled.checkpoint_kind, "none");
+            assert_eq!(reconciled.checkpoint_kind, "terminal_closure");
             assert_eq!(reconciled.resume_target, "none");
             assert!(!reconciled.recovery_ready);
         }
@@ -7190,7 +7605,7 @@ mod tests {
         assert_eq!(reconciled.policy_gate, "not_required");
         assert_eq!(reconciled.handoff_state, "none");
         assert_eq!(reconciled.resume_target, "none");
-        assert_eq!(reconciled.checkpoint_kind, "none");
+        assert_eq!(reconciled.checkpoint_kind, "terminal_closure");
         assert!(!reconciled.recovery_ready);
         assert_eq!(reconciled.selected_backend, "internal_subagents");
 
@@ -7590,7 +8005,7 @@ mod tests {
                 dispatch_kind: "closure".to_string(),
                 dispatch_surface: None,
                 dispatch_command: Some(
-                    "vida taskflow consume continue --run-id run-closure-direct --json".to_string(),
+                    "vida taskflow consume continue --run-id run-closure-direct".to_string(),
                 ),
                 dispatch_packet_path: Some("/tmp/closure-packet.json".to_string()),
                 dispatch_result_path: Some("/tmp/closure-result.json".to_string()),
@@ -7617,6 +8032,105 @@ mod tests {
 
         let reconciled = store
             .run_graph_status("run-closure-direct")
+            .await
+            .expect("load reconciled run graph status");
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.active_node, "closure");
+        assert_eq!(reconciled.lifecycle_stage, "closure_complete");
+        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.handoff_state, "none");
+        assert_eq!(reconciled.resume_target, "none");
+        assert!(!reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn closure_pass_result_overrides_stale_downstream_blocker() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-closure-pass-stale-blocker-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-closure-pass-stale-blocker";
+
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "closure", "delivery");
+        status.task_id = run_id.to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "closure_blocked".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.resume_target = "dispatch.closure".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked closure status");
+
+        let result_dir = root.join("runtime-consumption/dispatch-results");
+        fs::create_dir_all(&result_dir).expect("create result dir");
+        let result_path = result_dir.join(format!("{run_id}-closure-pass.json"));
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "runtime_lane_completion_result",
+                "status": "pass",
+                "execution_state": "executed",
+                "dispatch_target": "closure"
+            }))
+            .expect("result serializes"),
+        )
+        .expect("write closure pass result");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "closure".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init --downstream-packet closure".to_string()),
+                dispatch_packet_path: Some("/tmp/closure-packet.json".to_string()),
+                dispatch_result_path: Some(result_path.display().to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: Some(
+                    "typed closure pass did not require downstream packet".to_string(),
+                ),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec![
+                    "missing_configured_downstream_dispatch_target".to_string()
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: Some(result_path.display().to_string()),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("middle".to_string()),
+                recorded_at: "2026-04-17T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale-blocked closure receipt");
+
+        let reconciled = store
+            .run_graph_status(run_id)
             .await
             .expect("load reconciled run graph status");
         assert_eq!(reconciled.status, "completed");
@@ -8094,6 +8608,256 @@ mod tests {
         assert_eq!(reconciled.handoff_state, "awaiting_writer");
         assert_eq!(reconciled.resume_target, "dispatch.writer_lane");
         assert!(reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn typed_pass_completion_advances_cursor_to_ready_downstream_node() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-typed-pass-downstream-cursor-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-analyst-pass-designer",
+            "specification",
+            "specification",
+        );
+        status.task_id = "task-analyst-pass-designer".to_string();
+        status.active_node = "analyst".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analyst_active".to_string();
+        status.policy_gate = "lane_completion_blocked_by_summary".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist contradictory analyst status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-analyst-pass-designer".to_string(),
+                dispatch_target: "analyst".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
+                dispatch_command: Some("vida lane complete run-analyst-pass-designer".to_string()),
+                dispatch_packet_path: Some("/tmp/analyst-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/analyst-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("designer".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some("typed pass allowed_next_node=designer".to_string()),
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: Some("/tmp/designer-packet.json".to_string()),
+                downstream_dispatch_status: Some("packet_ready".to_string()),
+                downstream_dispatch_result_path: Some("/tmp/analyst-completion.json".to_string()),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analyst".to_string()),
+                downstream_dispatch_last_target: Some("analyst".to_string()),
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-16T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist typed pass receipt");
+
+        let reconciled = store
+            .run_graph_status("run-analyst-pass-designer")
+            .await
+            .expect("load reconciled status");
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.active_node, "designer");
+        assert_eq!(reconciled.next_node.as_deref(), Some("designer"));
+        assert_eq!(reconciled.lane_id, "designer_lane");
+        assert_eq!(reconciled.lifecycle_stage, "designer_active");
+        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.handoff_state, "awaiting_designer");
+        assert_eq!(reconciled.resume_target, "dispatch.designer_lane");
+        assert!(reconciled.recovery_ready);
+
+        let summary = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect("receipt summary should load")
+            .expect("receipt summary should exist");
+        assert_eq!(summary.lane_status, "lane_completed");
+        assert_eq!(
+            summary.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn completed_lane_result_resolves_next_to_concrete_downstream_packet() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-completed-lane-hydrate-downstream-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-analyst-completed-needs-designer";
+        let task_id = "task-analyst-completed-needs-designer";
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "specification",
+            "specification",
+        );
+        status.task_id = task_id.to_string();
+        status.active_node = "analyst".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analyst_active".to_string();
+        status.policy_gate = "lane_completion_blocked_by_summary".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist stale analyst status");
+
+        let role_selection = analyst_designer_role_selection();
+        store
+            .record_run_graph_dispatch_context(&RunGraphDispatchContext {
+                run_id: run_id.to_string(),
+                task_id: task_id.to_string(),
+                request_text: "complete analyst and continue to designer".to_string(),
+                role_selection: serde_json::to_value(role_selection)
+                    .expect("role selection should serialize"),
+                recorded_at: "2026-06-16T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist dispatch context");
+
+        let result_dir = root.join("runtime-consumption/dispatch-results");
+        fs::create_dir_all(&result_dir).expect("create dispatch result dir");
+        let result_path = result_dir.join(format!("{run_id}-analyst-pass.json"));
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "runtime_lane_completion_result",
+                "status": "pass",
+                "execution_state": "executed",
+                "decision": "pass",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "rework_target": "none",
+                "allowed_next_node": "next",
+                "completed_target": "analyst",
+            }))
+            .expect("result json should serialize"),
+        )
+        .expect("write completion result");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "analyst".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
+                dispatch_command: Some(format!("vida lane complete {run_id}")),
+                dispatch_packet_path: Some("/tmp/analyst-packet.json".to_string()),
+                dispatch_result_path: Some(result_path.display().to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-16T00:00:01Z".to_string(),
+            })
+            .await
+            .expect("persist completed lane receipt without downstream");
+
+        let reconciled = store
+            .run_graph_status(run_id)
+            .await
+            .expect("load reconciled status");
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.active_node, "designer");
+        assert_eq!(reconciled.lifecycle_stage, "designer_active");
+        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.resume_target, "dispatch.designer_lane");
+        assert!(reconciled.recovery_ready);
+
+        let receipt = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("receipt should load")
+            .expect("receipt should exist");
+        assert_eq!(
+            receipt.downstream_dispatch_target.as_deref(),
+            Some("designer")
+        );
+        assert!(receipt.downstream_dispatch_ready);
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+        let packet_path = receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .expect("downstream packet path should be hydrated");
+        assert!(
+            std::path::Path::new(packet_path).exists(),
+            "hydrated downstream packet must exist: {packet_path}"
+        );
+        let packet = fs::read_to_string(packet_path).expect("read hydrated downstream packet");
+        let packet: serde_json::Value =
+            serde_json::from_str(&packet).expect("downstream packet should be JSON");
+        assert_eq!(packet["dispatch_target"], "designer");
+        assert_eq!(packet["downstream_dispatch_target"], "designer");
+        assert_eq!(packet["downstream_dispatch_ready"], true);
+        assert_eq!(packet["downstream_dispatch_status"], "packet_ready");
+        assert_eq!(
+            packet["downstream_dispatch_blockers"]
+                .as_array()
+                .expect("blockers should be an array")
+                .len(),
+            0
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -9328,6 +10092,14 @@ mod tests {
             nanos
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("task-replay-old", "open"))
+            .await
+            .expect("seed older replay lineage task");
+        store
+            .persist_task_record(test_task_record("task-replay-new", "open"))
+            .await
+            .expect("seed latest replay lineage task");
 
         let mut older_status = sample_run_graph_status();
         older_status.run_id = "run-replay-old".to_string();

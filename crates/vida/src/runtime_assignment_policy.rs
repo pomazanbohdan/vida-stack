@@ -149,9 +149,12 @@ pub(crate) fn backend_admissibility_key_for_task_class(
     task_class: &str,
 ) -> Option<BackendAdmissibilityKey> {
     match task_class.trim() {
-        "implementation" | "delivery_task" | "execution_block" | "writer" => {
-            Some(BackendAdmissibilityKey::Implementation)
-        }
+        "implementation"
+        | "implementation_medium"
+        | "delivery_task"
+        | "execution_block"
+        | "writer"
+        | "refactor" => Some(BackendAdmissibilityKey::Implementation),
         "verification" | "test_authoring" | "quality_gate" | "release_readiness" => {
             Some(BackendAdmissibilityKey::Verification)
         }
@@ -180,17 +183,25 @@ pub(crate) fn backend_admissibility_key_for_dispatch_target(
     match canonical_target.as_str() {
         "implementer" | "writer" => BackendAdmissibilityKey::Implementation,
         "execution_preparation" => BackendAdmissibilityKey::Architecture,
-        "implementation" | "developer" => BackendAdmissibilityKey::Implementation,
-        "verification" | "tester" | "test_author" | "test_authoring" => {
+        "implementation" | "developer" | "coder" | "cleaner" | "refactorer" => {
+            BackendAdmissibilityKey::Implementation
+        }
+        "verification" | "tester" | "test_author" | "autotester" | "test_authoring" => {
             BackendAdmissibilityKey::Verification
         }
+        "qa" | "hardener" => BackendAdmissibilityKey::Verification,
         "architecture" | "architect" | "solution_architect" | "escalation" => {
             BackendAdmissibilityKey::Architecture
         }
-        "specification" | "business_analyst" | "pm" | "planning" => {
+        "specification" | "specifier" | "business_analyst" | "pm" | "planning" => {
             BackendAdmissibilityKey::Specification
         }
-        "coach" => BackendAdmissibilityKey::Coach,
+        "coach"
+        | "reviewer"
+        | "reviewer_test_gate"
+        | "reviewer_implementation_gate"
+        | "reviewer_validator"
+        | "cleaner_review_gate" => BackendAdmissibilityKey::Coach,
         "analysis" => BackendAdmissibilityKey::Analysis,
         "review" => BackendAdmissibilityKey::Review,
         other => BackendAdmissibilityKey::Conservative(other.to_string()),
@@ -207,10 +218,20 @@ pub(crate) fn canonical_dispatch_target_alias(value: &str) -> Option<&'static st
     };
 
     match value.trim() {
-        "writer" | "implementation" | RUNTIME_ROLE_WORKER => Some(DISPATCH_TARGET_IMPLEMENTER),
+        "writer" | "implementation" | "coder" | "cleaner" | "refactorer" | RUNTIME_ROLE_WORKER => {
+            Some(DISPATCH_TARGET_IMPLEMENTER)
+        }
         RUNTIME_ROLE_BUSINESS_ANALYST | RUNTIME_ROLE_PM => Some(DISPATCH_TARGET_SPECIFICATION),
-        RUNTIME_ROLE_VERIFIER | RUNTIME_ROLE_PROVER => Some(DISPATCH_TARGET_VERIFICATION),
-        "escalation" | "architecture" | RUNTIME_ROLE_SOLUTION_ARCHITECT => {
+        "specifier" => Some(DISPATCH_TARGET_SPECIFICATION),
+        "qa" | "hardener" | RUNTIME_ROLE_VERIFIER | RUNTIME_ROLE_PROVER => {
+            Some(DISPATCH_TARGET_VERIFICATION)
+        }
+        "reviewer"
+        | "reviewer_test_gate"
+        | "reviewer_implementation_gate"
+        | "reviewer_validator"
+        | "cleaner_review_gate" => Some(DISPATCH_TARGET_COACH),
+        "escalation" | "architecture" | "architect" | RUNTIME_ROLE_SOLUTION_ARCHITECT => {
             Some(DISPATCH_TARGET_EXECUTION_PREPARATION)
         }
         "release" | "release/closure" => Some(DISPATCH_TARGET_CLOSURE),
@@ -505,6 +526,31 @@ pub(crate) fn task_complexity_multiplier(task_class: &str) -> u64 {
     }
 }
 
+pub(crate) fn configured_task_class_supports_requested(
+    configured_task_class: &str,
+    requested_task_class: &str,
+) -> bool {
+    let configured_task_class = configured_task_class.trim();
+    let requested_task_class = requested_task_class.trim();
+    if configured_task_class.is_empty() || requested_task_class.is_empty() {
+        return false;
+    }
+    if configured_task_class == requested_task_class {
+        return true;
+    }
+    if requested_task_class != "refactor" {
+        return false;
+    }
+    let Some(configured_key) = backend_admissibility_key_for_task_class(configured_task_class)
+    else {
+        return false;
+    };
+    let Some(requested_key) = backend_admissibility_key_for_task_class(requested_task_class) else {
+        return false;
+    };
+    configured_key == requested_key
+}
+
 pub(crate) fn role_supports_task_class(role: &serde_json::Value, task_class: &str) -> bool {
     let task_classes = role["task_classes"]
         .as_array()
@@ -512,7 +558,10 @@ pub(crate) fn role_supports_task_class(role: &serde_json::Value, task_class: &st
         .flatten()
         .filter_map(serde_json::Value::as_str)
         .collect::<Vec<_>>();
-    task_classes.is_empty() || task_classes.contains(&task_class)
+    task_classes.is_empty()
+        || task_classes
+            .iter()
+            .any(|configured| configured_task_class_supports_requested(configured, task_class))
 }
 
 #[cfg(test)]
@@ -577,6 +626,42 @@ mod tests {
             infer_runtime_task_class(&selection, true),
             TASK_CLASS_VERIFICATION
         );
+    }
+
+    #[test]
+    fn task_class_compatibility_admits_pack_alias_classes() {
+        assert!(configured_task_class_supports_requested(
+            "implementation",
+            "refactor"
+        ));
+        assert!(configured_task_class_supports_requested(
+            "implementation_medium",
+            "refactor"
+        ));
+        assert!(!configured_task_class_supports_requested("coach", "review"));
+        assert!(!configured_task_class_supports_requested(
+            "coach",
+            "validation"
+        ));
+        assert!(!configured_task_class_supports_requested(
+            "verification",
+            "architecture"
+        ));
+    }
+
+    #[test]
+    fn role_supports_task_class_uses_compatibility_aliases() {
+        let worker_role = serde_json::json!({
+            "task_classes": ["implementation"]
+        });
+        let coach_role = serde_json::json!({
+            "task_classes": ["coach"]
+        });
+
+        assert!(role_supports_task_class(&worker_role, "refactor"));
+        assert!(!role_supports_task_class(&coach_role, "review"));
+        assert!(!role_supports_task_class(&coach_role, "validation"));
+        assert!(!role_supports_task_class(&worker_role, "architecture"));
     }
 
     #[test]

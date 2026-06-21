@@ -8,6 +8,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "vida-windows-env.ps1")
+Initialize-VidaWindowsEnvironment -NormalizeBuildTemp
+$PwshPath = Resolve-VidaCommandPath "pwsh" @(
+    "C:\Program Files\PowerShell\7\pwsh.exe",
+    "$env:ProgramFiles\PowerShell\7\pwsh.exe",
+    (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\pwsh.exe")
+) -Required
 
 function Show-Help {
     @"
@@ -86,7 +93,7 @@ if ($Help) {
     exit 0
 }
 
-$workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("vida-release-package-check-{0}" -f ([System.Guid]::NewGuid().ToString("N")))
+$workRoot = Join-Path $env:TEMP ("vida-release-package-check-{0}" -f ([System.Guid]::NewGuid().ToString("N")))
 $releaseBinDir = Join-Path $workRoot "release-bin"
 $distDir = Join-Path $workRoot "dist"
 $resolvedVersion = Get-ReleaseVersion
@@ -102,7 +109,7 @@ try {
     New-FixtureBinary -Directory $releaseBinDir -Name "vida-coder.exe" -VersionLine "vida-coder $expectedVersion (built fixture)"
 
     $buildScript = Join-Path $RootDir "scripts/build-release.ps1"
-    $receiptText = & pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File $buildScript -SkipBuild -Windows -ReleaseBinDir $releaseBinDir -DistDir $distDir -Version $resolvedVersion -Json
+    $receiptText = & $PwshPath -NoLogo -NoProfile -ExecutionPolicy Bypass -File $buildScript -SkipBuild -Windows -ReleaseBinDir $releaseBinDir -DistDir $distDir -Version $resolvedVersion -Json
     if ($LASTEXITCODE -ne 0) {
         Fail "Native release package smoke failed."
     }

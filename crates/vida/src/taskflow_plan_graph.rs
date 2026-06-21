@@ -927,12 +927,11 @@ fn strip_list_marker(line: &str) -> Option<&str> {
 
 fn clean_work_item_text(value: &str) -> String {
     compact_text(
-        &value
+        value
             .replace("**", "")
             .replace('`', "")
             .trim_matches(|ch: char| matches!(ch, '-' | '*' | '+' | ':' | ';'))
-            .trim()
-            .to_string(),
+            .trim(),
         220,
     )
 }
@@ -943,7 +942,7 @@ fn compact_text(value: &str, max_chars: usize) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .trim()
-        .trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':'))
+        .trim_end_matches(['.', ',', ';', ':'])
         .to_string();
     if compact.chars().count() > max_chars {
         compact = compact
@@ -1158,7 +1157,7 @@ fn acceptance_targets_for_item(
 }
 
 fn proof_targets_for_item(kind: &PlanWorkItemKind, owned_paths: &[String]) -> Vec<String> {
-    let mut targets = vec!["vida taskflow plan generate --json".to_string()];
+    let mut targets = vec!["vida taskflow plan generate".to_string()];
     match kind {
         PlanWorkItemKind::Docs => {
             if owned_paths.iter().any(|path| path.starts_with("docs/")) {
@@ -1166,15 +1165,15 @@ fn proof_targets_for_item(kind: &PlanWorkItemKind, owned_paths: &[String]) -> Ve
                     "vida docflow check --root . docs/product/spec/current-spec-map.md".to_string(),
                 );
             } else {
-                targets.push("vida taskflow plan materialize --dry-run --json".to_string());
+                targets.push("vida taskflow plan materialize --dry-run".to_string());
             }
         }
         PlanWorkItemKind::Proof => {
             targets.push("cargo test -p vida taskflow_plan_graph".to_string());
-            targets.push("vida task validate-graph --json".to_string());
+            targets.push("vida task validate-graph".to_string());
         }
         PlanWorkItemKind::Core | PlanWorkItemKind::State | PlanWorkItemKind::Runtime => {
-            targets.push("vida taskflow plan materialize --dry-run --json".to_string());
+            targets.push("vida taskflow plan materialize --dry-run".to_string());
         }
     }
     targets
@@ -1365,7 +1364,7 @@ fn extract_repo_paths(value: &str) -> Vec<String> {
 fn canonicalize_repo_path_candidate(value: &str) -> Option<String> {
     let mut candidate = value
         .trim()
-        .trim_end_matches(|ch: char| matches!(ch, '.' | ',' | ';' | ':'))
+        .trim_end_matches(['.', ',', ';', ':'])
         .to_string();
     if let Some((path, suffix)) = candidate.rsplit_once(':') {
         if !path.is_empty()

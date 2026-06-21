@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use std::ffi::OsStr;
 use std::io;
 use std::process::{Command, Output};
@@ -1156,6 +1158,24 @@ fn status_and_orchestrator_init_support_compact_field_selection_output() {
         String::from_utf8_lossy(&boot_project.stderr)
     );
 
+    let orchestrator_default = vida()
+        .arg("orchestrator-init")
+        .env("VIDA_STATE_DIR", &project_state_dir)
+        .output()
+        .expect("orchestrator-init default output should run");
+    assert!(
+        orchestrator_default.status.success(),
+        "orchestrator-init default output should succeed: stderr={}",
+        String::from_utf8_lossy(&orchestrator_default.stderr)
+    );
+    let orchestrator_default_stdout = String::from_utf8_lossy(&orchestrator_default.stdout);
+    assert!(orchestrator_default_stdout.starts_with("vida orchestrator-init\n"));
+    assert!(orchestrator_default_stdout.contains("active_bounded_unit:"));
+    assert!(orchestrator_default_stdout.contains("why_this_unit:"));
+    assert!(orchestrator_default_stdout.contains("sequential_vs_parallel_posture:"));
+    assert_not_json_output("vida orchestrator-init", &orchestrator_default_stdout);
+    assert_no_raw_terminal_controls("vida orchestrator-init", &orchestrator_default_stdout);
+
     let orchestrator_json = vida()
         .args([
             "orchestrator-init",
@@ -1641,15 +1661,12 @@ fn persist_host_bridge_lane_receipt_with_helper(
     activation_result_path: &str,
     dispatch_target: &str,
 ) {
-    let downstream_target = if dispatch_target == "coach" {
-        "tester"
-    } else {
-        "coach"
-    };
-    let task_class = if dispatch_target == "coach" {
-        "coach"
-    } else {
-        "implementation"
+    let (downstream_target, task_class) = match dispatch_target {
+        "analyst" => ("designer", "specification"),
+        "coach" => ("tester", "coach"),
+        "tester" => ("reviewer", "verification"),
+        "reviewer" => ("terminal_closure", "review"),
+        _ => ("coach", "implementation"),
     };
     let lifecycle_stage = format!("{dispatch_target}_blocked");
     let resume_target = format!("dispatch.{dispatch_target}");
@@ -2036,10 +2053,16 @@ fn create_host_bridge_lane_fixture_for_target(
     let bridge_receipt_path = format!("{bridge_dir}/{test_name}-receipt.json");
     let activation_result_path = format!("{activation_dir}/{test_name}-activation.json");
     let (task_class, runtime_role, downstream_target) = match dispatch_target {
+        "analyst" => ("specification", "business_analyst", "designer"),
         "coach" => ("coach", "coach", "tester"),
         "tester" => ("verification", "verifier", "reviewer"),
         "reviewer" => ("review", "verifier", "release_closure"),
         _ => ("implementation", "worker", "coach"),
+    };
+    let owned_paths = if dispatch_target == "analyst" {
+        serde_json::json!([])
+    } else {
+        serde_json::json!(["crates/vida/src/lib.rs"])
     };
 
     std::fs::write(
@@ -2049,14 +2072,14 @@ fn create_host_bridge_lane_fixture_for_target(
             "dispatch_target": dispatch_target,
             "activation_runtime_role": runtime_role,
             "packet_template_kind": "delivery_task_packet",
-            "owned_paths": ["crates/vida/src/lib.rs"],
+            "owned_paths": owned_paths.clone(),
             "read_only_paths": ["crates/vida/src"],
             "delivery_task_packet": {
                 "goal": "Complete host bridge lane evidence.",
                 "scope_in": [format!("dispatch_target:{dispatch_target}")],
                 "handoff_task_class": task_class,
                 "handoff_runtime_role": runtime_role,
-                "owned_paths": ["crates/vida/src/lib.rs"],
+                "owned_paths": owned_paths,
                 "read_only_paths": ["crates/vida/src"],
                 "definition_of_done": ["host bridge completion is receipt-backed"],
                 "verification_command": "cargo test -p vida host_bridge_public_cli",
@@ -2065,7 +2088,7 @@ fn create_host_bridge_lane_fixture_for_target(
                 "blocking_question": "none"
             },
             "downstream_dispatch_target": downstream_target,
-            "downstream_dispatch_active_target": "implementer",
+            "downstream_dispatch_active_target": dispatch_target,
             "downstream_dispatch_ready": false,
             "downstream_dispatch_blockers": ["pending_implementation_evidence"],
             "downstream_dispatch_status": "blocked",
@@ -2168,6 +2191,14 @@ fn host_bridge_public_cli_completes_with_taskflow_attempt_artifacts_without_pare
             &fixture.request_path,
             "--host-agent-id",
             "agent-public-proof",
+            "--decision",
+            "pass",
+            "--verdict",
+            "implemented",
+            "--allowed-next-node",
+            "coach",
+            "--blocker-codes",
+            "[]",
             "--host-bridge-summary",
             "internal agent completed",
             "--state-dir",
@@ -2214,6 +2245,14 @@ fn host_bridge_public_cli_summary_prose_does_not_create_false_rework_blocker() {
             &fixture.request_path,
             "--host-agent-id",
             "agent-verification-proof",
+            "--decision",
+            "pass",
+            "--verdict",
+            "implemented",
+            "--allowed-next-node",
+            "coach",
+            "--blocker-codes",
+            "[]",
             "--host-bridge-summary",
             "verifier proof passed focused host-bridge tests and confirmed pending receipt was the only closure blocker",
             "--state-dir",
@@ -2251,12 +2290,20 @@ fn host_bridge_public_cli_summary_prose_does_not_create_false_rework_blocker() {
 fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions() {
     let cases = [
         (
+            "analyst",
+            "decision=pass; verdict=pass; blocker_codes=[]; rework_target=none; allowed_next_node=designer",
+            true,
+            None,
+            None,
+            "designer",
+        ),
+        (
             "coach",
             "coach decision=approve; implementation accepted",
             true,
             None,
             None,
-            "next",
+            "tester",
         ),
         (
             "coach",
@@ -2272,7 +2319,7 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             true,
             None,
             None,
-            "next",
+            "reviewer",
         ),
         (
             "tester",
@@ -2288,7 +2335,7 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             true,
             None,
             None,
-            "next",
+            "terminal_closure",
         ),
         (
             "reviewer",
@@ -2313,23 +2360,56 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             "host-bridge-{target}-{}-summary-receipt",
             if should_pass { "pass" } else { "blocked" }
         );
+        let mut args = vec![
+            "lane".to_string(),
+            "complete".to_string(),
+            fixture.run_id.clone(),
+            "--receipt-id".to_string(),
+            receipt_id,
+            "--host-bridge-request".to_string(),
+            fixture.request_path.clone(),
+            "--host-agent-id".to_string(),
+            "agent-quality-gate-proof".to_string(),
+            "--decision".to_string(),
+            if should_pass {
+                "pass"
+            } else {
+                "rework_required"
+            }
+            .to_string(),
+            "--verdict".to_string(),
+            if should_pass {
+                "pass"
+            } else {
+                "rework_required"
+            }
+            .to_string(),
+            "--allowed-next-node".to_string(),
+            allowed_next_node.to_string(),
+        ];
+        if should_pass {
+            args.extend(["--blocker-codes".to_string(), "[]".to_string()]);
+        } else {
+            args.extend([
+                "--blocker-code".to_string(),
+                blocker_code
+                    .expect("blocked case should name blocker code")
+                    .to_string(),
+                "--rework-target".to_string(),
+                rework_target
+                    .expect("blocked case should name rework target")
+                    .to_string(),
+            ]);
+        }
+        args.extend([
+            "--host-bridge-summary".to_string(),
+            summary.to_string(),
+            "--state-dir".to_string(),
+            fixture.state_dir.clone(),
+            "--json".to_string(),
+        ]);
         let output = vida()
-            .args([
-                "lane",
-                "complete",
-                &fixture.run_id,
-                "--receipt-id",
-                &receipt_id,
-                "--host-bridge-request",
-                &fixture.request_path,
-                "--host-agent-id",
-                "agent-quality-gate-proof",
-                "--host-bridge-summary",
-                summary,
-                "--state-dir",
-                &fixture.state_dir,
-                "--json",
-            ])
+            .args(args)
             .output()
             .expect("quality-gate lane complete should run");
         if should_pass {
@@ -2369,7 +2449,7 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
         assert_eq!(
             bridge_result["decision"],
             if should_pass {
-                "approve"
+                "pass"
             } else {
                 "rework_required"
             },
@@ -2413,6 +2493,53 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
                 bridge_result["allowed_next_node"], allowed_next_node,
                 "{target}"
             );
+            if target == "analyst" {
+                let run_graph = vida()
+                    .args(["taskflow", "run-graph", "status", &fixture.run_id, "--json"])
+                    .env("VIDA_STATE_DIR", &fixture.state_dir)
+                    .output()
+                    .expect("run-graph status should run after analyst pass");
+                assert_success(
+                    &run_graph,
+                    "analyst pass should leave run-graph status readable",
+                );
+                let run_graph_json: serde_json::Value = serde_json::from_slice(&run_graph.stdout)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "run-graph status json should parse after analyst pass: {error}; stdout={}; stderr={}",
+                            String::from_utf8_lossy(&run_graph.stdout),
+                            String::from_utf8_lossy(&run_graph.stderr)
+                        )
+                    });
+                assert_eq!(
+                    run_graph_json["run_graph_status"]["active_node"], "designer",
+                    "analyst pass must advance the execution cursor to designer: {run_graph_json}"
+                );
+                assert_eq!(
+                    run_graph_json["run_graph_status"]["lifecycle_stage"], "designer_active",
+                    "analyst pass must not leave analyst_active after typed completion: {run_graph_json}"
+                );
+                assert_eq!(
+                    run_graph_json["run_graph_status"]["next_node"], "designer",
+                    "designer resume metadata should be complete for dispatch-init: {run_graph_json}"
+                );
+                assert_eq!(
+                    run_graph_json["run_graph_status"]["handoff_state"], "awaiting_designer",
+                    "designer resume metadata should include a matching handoff state: {run_graph_json}"
+                );
+                assert_eq!(
+                    run_graph_json["run_graph_status"]["resume_target"], "dispatch.designer_lane",
+                    "designer resume metadata should expose a dispatch target: {run_graph_json}"
+                );
+                assert_eq!(
+                    run_graph_json["run_graph_status"]["policy_gate"], "not_required",
+                    "typed pass completion must clear stale summary policy gate: {run_graph_json}"
+                );
+                assert_eq!(
+                    run_graph_json["run_graph_status"]["recovery_ready"], true,
+                    "designer handoff should be recovery-ready for downstream dispatch: {run_graph_json}"
+                );
+            }
         } else {
             let blocker_code = blocker_code.expect("blocked case should name blocker code");
             let rework_target = rework_target.expect("blocked case should name rework target");
@@ -2458,6 +2585,156 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
 }
 
 #[test]
+fn agent_host_bridge_typed_pass_advances_analyst_cursor_to_designer() {
+    let fixture = create_host_bridge_lane_fixture_for_target(
+        "agent-host-bridge-analyst-typed-pass",
+        "crates/vida/src/lib.rs",
+        "analyst",
+    );
+
+    let output = vida()
+        .args([
+            "agent",
+            "host-bridge",
+            "--request",
+            &fixture.request_path,
+            "--complete",
+            "--host-agent-id",
+            "agent-analyst-proof",
+            "--decision",
+            "pass",
+            "--verdict",
+            "pass",
+            "--allowed-next-node",
+            "designer",
+            "--blocker-codes",
+            "[]",
+            "--summary",
+            "analyst typed pass with designer downstream handoff",
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("agent host-bridge typed completion should run");
+    assert_success(
+        &output,
+        "agent host-bridge typed analyst pass should complete",
+    );
+
+    let bridge_result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
+    )
+    .expect("bridge result should parse");
+    assert_eq!(bridge_result["status"], "pass");
+    assert_eq!(bridge_result["decision"], "pass");
+    assert_eq!(bridge_result["verdict"], "pass");
+    assert_eq!(bridge_result["allowed_next_node"], "designer");
+    assert_eq!(bridge_result["blocker_codes"], serde_json::json!([]));
+
+    let run_graph = vida()
+        .args(["taskflow", "run-graph", "status", &fixture.run_id, "--json"])
+        .env("VIDA_STATE_DIR", &fixture.state_dir)
+        .output()
+        .expect("run-graph status should run after agent host-bridge pass");
+    assert_success(
+        &run_graph,
+        "agent host-bridge analyst pass should leave run-graph status readable",
+    );
+    let run_graph_json: serde_json::Value =
+        serde_json::from_slice(&run_graph.stdout).unwrap_or_else(|error| {
+            panic!(
+                "run-graph status json should parse after agent host-bridge pass: {error}; stdout={}; stderr={}",
+                String::from_utf8_lossy(&run_graph.stdout),
+                String::from_utf8_lossy(&run_graph.stderr)
+            )
+        });
+    assert_eq!(
+        run_graph_json["run_graph_status"]["active_node"], "designer",
+        "canonical agent host-bridge typed pass must advance the cursor: {run_graph_json}"
+    );
+    assert_eq!(
+        run_graph_json["run_graph_status"]["lifecycle_stage"], "designer_active",
+        "canonical agent host-bridge typed pass must not leave analyst_active: {run_graph_json}"
+    );
+    assert_eq!(
+        run_graph_json["run_graph_status"]["resume_target"], "dispatch.designer_lane",
+        "designer handoff must be dispatch-init resumable: {run_graph_json}"
+    );
+    assert_eq!(
+        run_graph_json["run_graph_status"]["policy_gate"], "not_required",
+        "typed pass must clear stale summary policy gate: {run_graph_json}"
+    );
+    assert_eq!(
+        run_graph_json["run_graph_status"]["recovery_ready"], true,
+        "designer downstream handoff must be recovery-ready: {run_graph_json}"
+    );
+}
+
+#[test]
+fn host_bridge_public_cli_summary_only_typed_fields_fail_closed_without_rework_routing() {
+    let fixture = create_host_bridge_lane_fixture_for_target(
+        "host-bridge-analyst-summary-only",
+        "crates/vida/src/lib.rs",
+        "analyst",
+    );
+
+    let output = vida()
+        .args([
+            "lane",
+            "complete",
+            &fixture.run_id,
+            "--receipt-id",
+            "host-bridge-analyst-summary-only-receipt",
+            "--host-bridge-request",
+            &fixture.request_path,
+            "--host-agent-id",
+            "agent-analyst-proof",
+            "--host-bridge-summary",
+            "decision=pass; verdict=pass; blocker_codes=[]; rework_target=none; allowed_next_node=designer",
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("summary-only lane complete should run");
+    assert_failure(
+        &output,
+        "summary-only typed fields must fail closed until supplied as typed result fields",
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("lane complete json should parse");
+    assert_eq!(payload["surface"], "vida lane");
+    assert_eq!(payload["status"], "blocked");
+    let completion_result_path = payload["artifact_refs"]["downstream_dispatch_result_path"]
+        .as_str()
+        .expect("completion result path should be present");
+    let completion_result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(completion_result_path)
+            .expect("completion result should be readable"),
+    )
+    .expect("completion result should parse");
+    assert_eq!(completion_result["status"], "blocked");
+    let blockers = completion_result["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should be an array");
+    assert!(
+        blockers.contains(&serde_json::json!("missing_required_result_field_decision")),
+        "summary-only completion should expose missing typed decision: {completion_result}"
+    );
+    assert!(
+        blockers.contains(&serde_json::json!(
+            "missing_required_result_field_allowed_next_node"
+        )),
+        "summary-only completion should expose missing typed next node: {completion_result}"
+    );
+    assert!(
+        !blockers.contains(&serde_json::json!("lane_completion_blocked_by_summary")),
+        "summary display text must not be treated as control-plane rework evidence: {completion_result}"
+    );
+}
+
+#[test]
 fn coach_blocked_flow_does_not_dispatch_verification() {
     let fixture = create_host_bridge_lane_fixture_for_target(
         "host-bridge-coach-blocked-no-verification",
@@ -2476,6 +2753,16 @@ fn coach_blocked_flow_does_not_dispatch_verification() {
             &fixture.request_path,
             "--host-agent-id",
             "agent-coach-blocked-regression",
+            "--decision",
+            "rework_required",
+            "--verdict",
+            "rework_required",
+            "--blocker-code",
+            "coach_rework_required",
+            "--rework-target",
+            "developer",
+            "--allowed-next-node",
+            "developer_rework",
             "--host-bridge-summary",
             "coach decision=blocked; implementation must return to developer rework",
             "--state-dir",
@@ -2616,6 +2903,14 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
             "--complete",
             "--host-agent-id",
             "agent-public-retry-proof",
+            "--decision",
+            "pass",
+            "--verdict",
+            "implemented",
+            "--allowed-next-node",
+            "coach",
+            "--blocker-codes",
+            "[]",
             "--summary",
             "retry after accepted implementation attempt artifact",
             "--state-dir",
@@ -2713,6 +3008,14 @@ fn host_bridge_public_cli_completes_reconciled_active_request_when_receipt_point
             "--complete",
             "--host-agent-id",
             "agent-stale-receipt-proof",
+            "--decision",
+            "pass",
+            "--verdict",
+            "implemented",
+            "--allowed-next-node",
+            "coach",
+            "--blocker-codes",
+            "[]",
             "--summary",
             "completion after recovery reconciled active implementer request",
             "--state-dir",
@@ -2789,6 +3092,14 @@ fn host_bridge_public_cli_blocks_out_of_scope_taskflow_attempt_artifacts_without
             &fixture.request_path,
             "--host-agent-id",
             "agent-public-proof",
+            "--decision",
+            "pass",
+            "--verdict",
+            "implemented",
+            "--allowed-next-node",
+            "coach",
+            "--blocker-codes",
+            "[]",
             "--host-bridge-summary",
             "internal agent completed",
             "--state-dir",
@@ -3405,6 +3716,130 @@ fn session_triage_fails_closed_for_multiple_active_tasks_without_explicit_bindin
         explicit_payload["active_bounded_unit"]["id"],
         "session-triage-active-b"
     );
+}
+
+#[test]
+fn orchestrator_init_preserves_explicit_task_binding_with_unrelated_active_work() {
+    let (_project_root, state_dir) = project_bound_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+    sync_protocol_binding(&state_dir);
+    create_session_triage_task(
+        &state_dir,
+        "explicit-routing-epic",
+        "Explicit routing epic",
+        "epic",
+        "open",
+        "0",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        "explicit-routing-unrelated-active",
+        "Unrelated active task",
+        "task",
+        "in_progress",
+        "1",
+        Some("explicit-routing-epic"),
+    );
+    create_session_triage_task(
+        &state_dir,
+        "explicit-routing-selected-ready",
+        "Selected ready task",
+        "task",
+        "ready",
+        "2",
+        Some("explicit-routing-epic"),
+    );
+    let run_id = "explicit-routing-selected-ready";
+    let init = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "init",
+            run_id,
+            "closure",
+            "planning",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run graph init should run");
+    assert_success(&init, "run graph init");
+    let update = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            run_id,
+            "terminal",
+            "terminal",
+            "completed",
+            "planning",
+            "{\"lifecycle_stage\":\"closure_complete\",\"next_node\":null}",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run graph update should run");
+    assert_success(&update, "run graph update");
+    let bind = vida()
+        .args([
+            "taskflow",
+            "continuation",
+            "bind",
+            run_id,
+            "--task-id",
+            "explicit-routing-selected-ready",
+            "--why",
+            "public test explicit selected task remains authoritative",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("continuation bind should run");
+    assert_success(&bind, "continuation bind");
+
+    let orchestrator = vida()
+        .args(["orchestrator-init", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("orchestrator-init should run");
+    assert_success(&orchestrator, "orchestrator-init");
+    let orchestrator_json: serde_json::Value =
+        serde_json::from_slice(&orchestrator.stdout).expect("orchestrator json should parse");
+    assert_eq!(
+        orchestrator_json["continuation_binding"]["active_bounded_unit"]["task_id"],
+        "explicit-routing-selected-ready"
+    );
+    assert_eq!(
+        orchestrator_json["continuation_binding"]["ambiguity_reason"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        orchestrator_json["continuation_binding"]["binding_source"],
+        "explicit_continuation_bind_task"
+    );
+
+    let status = vida()
+        .args(["status", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status should run");
+    assert_success(&status, "status");
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status json should parse");
+    assert_eq!(
+        status_json["continuation_binding"]["active_bounded_unit"]["task_id"],
+        "explicit-routing-selected-ready"
+    );
+    assert!(!status_json["operator_contracts"]["blocker_codes"]
+        .as_array()
+        .expect("status blocker codes")
+        .iter()
+        .any(|code| code == "continuation_binding_ambiguous"));
 }
 
 #[test]
@@ -4701,6 +5136,55 @@ fn projection_surfaces_fail_closed_for_ready_missing_task_run_host_bridge() {
 }
 
 #[test]
+fn agent_dispatch_next_no_ready_guidance_uses_default_task_ready_command() {
+    let state_dir = boot_session_triage_state();
+    sync_protocol_binding(&state_dir);
+
+    let dispatch_json = vida()
+        .args(["agent", "dispatch-next", "--dev-team", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("dispatch-next json should run");
+    assert!(
+        !dispatch_json.status.success(),
+        "dispatch-next should fail closed when no ready candidates exist"
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&dispatch_json.stdout).expect("dispatch-next json should parse");
+    assert!(payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should be an array")
+        .iter()
+        .any(|code| code == "no_ready_task_candidates"));
+    let next_actions = payload["next_actions"].to_string();
+    assert!(
+        next_actions.contains("vida task ready"),
+        "dispatch-next should point operators at the default task-ready surface: {payload}"
+    );
+    assert!(
+        !next_actions.contains("--json"),
+        "dispatch-next next_actions should not bias operators toward --json: {payload}"
+    );
+
+    let dispatch_default = vida()
+        .args(["agent", "dispatch-next", "--dev-team"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("dispatch-next default should run");
+    assert!(
+        !dispatch_default.status.success(),
+        "dispatch-next default should fail closed when no ready candidates exist"
+    );
+    let stdout = String::from_utf8_lossy(&dispatch_default.stdout);
+    assert_not_json_output("vida agent dispatch-next", &stdout);
+    assert_no_raw_terminal_controls("vida agent dispatch-next", &stdout);
+    assert!(
+        !stdout.contains("--json"),
+        "dispatch-next default output should not suggest explicit JSON commands: {stdout}"
+    );
+}
+
+#[test]
 fn dev_team_materialization_blocks_missing_owned_paths_before_packet_write() {
     let state_dir = boot_session_triage_state();
     sync_protocol_binding(&state_dir);
@@ -4746,13 +5230,17 @@ fn dev_team_materialization_blocks_missing_owned_paths_before_packet_write() {
             .as_array()
             .expect("blocker codes should be an array")
             .iter()
-            .any(|code| code == "dispatch_packet_contract_invalid"),
-        "dispatch-next should expose dispatch_packet_contract_invalid: {dispatch_json}"
+            .any(|code| code == "downstream_packet_materialization_requires_owned_scope"),
+        "dispatch-next should expose the planning-scope materialization gate: {dispatch_json}"
     );
     assert_eq!(dispatch_json["packet_materialization"]["status"], "blocked");
     assert_eq!(
         dispatch_json["packet_materialization"]["materializes_packets"],
         false
+    );
+    assert_eq!(
+        dispatch_json["packet_materialization"]["reason"],
+        "blocked_planning_scope"
     );
     assert_eq!(
         dispatch_json["packet_materialization"]["artifacts"],
@@ -4764,13 +5252,16 @@ fn dev_team_materialization_blocks_missing_owned_paths_before_packet_write() {
     assert!(
         errors.iter().any(|error| {
             error["task_id"] == "missing-owned-paths-task"
+                && error["blocker_code"]
+                    == "downstream_packet_materialization_requires_owned_scope"
+                && error["gate"] == "planning_scope_materialization"
                 && error["missing_fields"]
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .any(|field| field == "owned_paths")
+                    .any(|field| field == "owned_write_scope")
         }),
-        "missing owned_paths should be reported before packet artifact write: {dispatch_json}"
+        "missing owned write scope should be reported before packet artifact write: {dispatch_json}"
     );
     let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
     let written_packets = std::fs::read_dir(&packet_dir)

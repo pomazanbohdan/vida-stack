@@ -41,7 +41,7 @@ Companion rule:
 ### Documentation And Inventory
 
 1. [project-documentation-law.md](project-documentation-law.md)
-   Config families: project documentation governance only
+   Config families: project documentation governance, authority lanes, generated projection posture, and staged documentation-tree migration
 2. [canonical-documentation-and-inventory-layer-matrix.md](canonical-documentation-and-inventory-layer-matrix.md)
    Config families: canonical inventory, validation, mutation, relation, readiness, and runtime-consumption architecture across `vida/config/**`
 3. [canonical-inventory-law.md](canonical-inventory-law.md)
@@ -59,9 +59,15 @@ Companion rule:
 9. [root-map-and-runtime-surface-model.md](root-map-and-runtime-surface-model.md)
    Config families: framework root map, project root map, runtime-family submaps, template maps, and activation-trigger discoverability across active canon
 10. [project-document-naming-law.md](project-document-naming-law.md)
-    Config families: `docs/product/spec/**`, `docs/process/**`, `docs/product/research/**`, `docs/project-memory/**`, lane-root naming, reserved filename handling, and bounded rename-wave law for project-owned documentation
+     Config families: `docs/product/spec/**`, `docs/product/control/**`, `docs/product/wiki/**`, `docs/process/**`, `docs/product/research/**`, `docs/project-memory/**`, lane-root naming, reserved filename handling, and bounded rename-wave law for project-owned documentation
 11. [feature-design-and-adr-model.md](feature-design-and-adr-model.md)
     Config families: structured feature/change design artifacts, linked ADR split, framework design-template routing, and bounded proof/rollout authoring for project and framework changes
+12. [requirements-documentation-control-plane.md](requirements-documentation-control-plane.md)
+     Config families: DB-first origin/requirements/use-case graph, optional source document intake, project inception baseline, change request governance, DocFlow validation verdicts, TaskFlow execution linkage, generated project wiki projection, external ALM/wiki adapters, repository projection, and read-only web UI baseline
+13. [requirements-control-plane-state-model.md](requirements-control-plane-state-model.md)
+     Config families: `vida product` DB-first entity records, origin/source/candidate state, requirements/features/PBI/use-case objects, change requests, delivery linkage, trace graph, baseline/gap/risk/waiver records, DocFlow validation verdict rows, projection receipts, wiki projection rows, external adapter mappings, indexes, lifecycle gates, and migration posture
+14. [requirements-control-plane-runtime-implementation-model.md](requirements-control-plane-runtime-implementation-model.md)
+     Config families: control-plane entity types, Surreal state-spine table expansion, relation graph, TaskFlow taxonomy extension, DocFlow validation verdict projection, `vida product` CLI/API operation posture, read-only web interface, repository/wiki projection, external adapter mapping, lifecycle gates, AI boundary, rollout slices, and proof targets
 
 ### Runtime And Agent Control
 
@@ -312,10 +318,10 @@ Companion rule:
 artifact_path: product/spec/current-spec-catalog
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-06-13
+artifact_revision: 2026-06-18
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-catalog.md
 created_at: 2026-06-12T00:00:00+03:00
-updated_at: 2026-06-13T00:00:00+03:00
+updated_at: 2026-06-18T00:00:00+03:00
 changelog_ref: current-spec-catalog.changelog.jsonl

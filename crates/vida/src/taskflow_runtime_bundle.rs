@@ -349,19 +349,19 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
                 Ok(active_claims) => {
                     crate::continuation_binding_summary::add_taskflow_active_work_truth_with_session_claims(
                         continuation_binding,
-                        taskflow_active_candidates,
+                        taskflow_active_candidates.clone(),
                         &active_claims,
                         &current_session_id,
                     )
                 }
                 Err(_) => crate::continuation_binding_summary::add_taskflow_active_work_truth(
                     continuation_binding,
-                    taskflow_active_candidates,
+                    taskflow_active_candidates.clone(),
                 ),
             },
             None => crate::continuation_binding_summary::add_taskflow_active_work_truth(
                 continuation_binding,
-                taskflow_active_candidates,
+                taskflow_active_candidates.clone(),
             ),
         };
     let continuation_binding = if terminal_task_active_run_graph_task_missing {
@@ -410,9 +410,14 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         }
         _ => false,
     };
-    let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
+    let taskflow_active_work_is_authoritative =
+        crate::continuation_binding_summary::taskflow_active_work_binding_is_authoritative(
+            &continuation_binding,
+        );
+    let closed_task_active_run_projection_mismatch = (latest_run_graph_task_closed
         || global_closed_run_is_current
-        || terminal_closed_run_is_current;
+        || terminal_closed_run_is_current)
+        && !taskflow_active_work_is_authoritative;
     let continuation_binding = if closed_task_active_run_projection_mismatch {
         crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
             continuation_binding,

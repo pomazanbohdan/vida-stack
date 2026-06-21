@@ -6,6 +6,7 @@ use crate::state_store::{
     TaskProgressSummary, TaskRecord,
 };
 use crate::{print_surface_header, print_surface_line, RenderMode};
+use std::collections::BTreeMap;
 use taskflow_core::task::import_export::{
     task_export_jsonl_success_fields, TaskExportJsonlSummary,
 };
@@ -43,15 +44,130 @@ fn print_task_read_metadata(
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TaskProjectionContext {
+    work_item_flow_bindings: BTreeMap<String, String>,
+    flow_binding_source: Option<String>,
+}
+
+impl TaskProjectionContext {
+    pub(crate) fn from_work_item_flow_bindings(
+        bindings: &serde_json::Value,
+        source: impl Into<String>,
+    ) -> Self {
+        let mut work_item_flow_bindings = BTreeMap::new();
+        if let Some(bindings) = bindings.as_object() {
+            for (key, value) in bindings {
+                let key = normalize_task_projection_lookup_key(key);
+                let Some(flow_id) = value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    continue;
+                };
+                work_item_flow_bindings.insert(key, flow_id.to_string());
+            }
+        }
+        Self {
+            work_item_flow_bindings,
+            flow_binding_source: Some(source.into()),
+        }
+    }
+
+    fn configured_flow_binding_for_issue_type(&self, issue_type: &str) -> Option<&str> {
+        let kind = crate::state_store::task_work_item_kind(issue_type);
+        let mut lookup_keys = Vec::new();
+        push_task_projection_lookup_key(&mut lookup_keys, issue_type);
+        push_task_projection_lookup_key(&mut lookup_keys, &kind.canonical_issue_type);
+        if let Some(provider_issue_type) = kind.provider_issue_type.as_deref() {
+            push_task_projection_lookup_key(&mut lookup_keys, provider_issue_type);
+        }
+        push_task_projection_lookup_key(&mut lookup_keys, &kind.default_flow_binding);
+        lookup_keys
+            .iter()
+            .find_map(|key| self.work_item_flow_bindings.get(key).map(String::as_str))
+    }
+
+    fn flow_binding_source(&self) -> &str {
+        self.flow_binding_source
+            .as_deref()
+            .unwrap_or("dev_team.work_item_flow_bindings")
+    }
+}
+
+fn push_task_projection_lookup_key(keys: &mut Vec<String>, value: &str) {
+    let normalized = normalize_task_projection_lookup_key(value);
+    if !normalized.is_empty() && !keys.iter().any(|key| key == &normalized) {
+        keys.push(normalized);
+    }
+}
+
+fn normalize_task_projection_lookup_key(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| match ch {
+            ' ' | '-' => '_',
+            _ => ch,
+        })
+        .collect()
+}
+
+fn task_work_item_kind_value_with_context(
+    issue_type: &str,
+    projection_context: Option<&TaskProjectionContext>,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(crate::state_store::task_work_item_kind(issue_type))
+        .expect("work item kind should serialize");
+    let Some(context) = projection_context else {
+        return value;
+    };
+    let Some(configured_flow_binding) = context.configured_flow_binding_for_issue_type(issue_type)
+    else {
+        return value;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    if let Some(taxonomy_default) = object.get("default_flow_binding").cloned() {
+        object.insert(
+            "taxonomy_default_flow_binding".to_string(),
+            taxonomy_default,
+        );
+    }
+    object.insert(
+        "default_flow_binding".to_string(),
+        serde_json::Value::String(configured_flow_binding.to_string()),
+    );
+    object.insert(
+        "configured_flow_binding".to_string(),
+        serde_json::Value::String(configured_flow_binding.to_string()),
+    );
+    object.insert(
+        "flow_binding_source".to_string(),
+        serde_json::Value::String(context.flow_binding_source().to_string()),
+    );
+    value
+}
+
 fn task_work_item_kind_value(issue_type: &str) -> serde_json::Value {
-    serde_json::to_value(crate::state_store::task_work_item_kind(issue_type))
-        .expect("work item kind should serialize")
+    task_work_item_kind_value_with_context(issue_type, None)
+}
+
+fn task_record_value_with_context(
+    task: &TaskRecord,
+    projection_context: Option<&TaskProjectionContext>,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(task).expect("task record should serialize");
+    value["work_item_kind"] =
+        task_work_item_kind_value_with_context(&task.issue_type, projection_context);
+    value
 }
 
 fn task_record_value(task: &TaskRecord) -> serde_json::Value {
-    let mut value = serde_json::to_value(task).expect("task record should serialize");
-    value["work_item_kind"] = task_work_item_kind_value(&task.issue_type);
-    value
+    task_record_value_with_context(task, None)
 }
 
 fn default_task_record_list_toon_rows(tasks: &[TaskRecord]) -> serde_json::Value {
@@ -75,11 +191,16 @@ fn default_task_record_list_toon_rows(tasks: &[TaskRecord]) -> serde_json::Value
     serde_json::json!(rows)
 }
 
-fn task_record_list_toon_text(surface: &str, tasks: &[TaskRecord], fields: Option<&str>) -> String {
+fn task_record_list_toon_text(
+    surface: &str,
+    tasks: &[TaskRecord],
+    fields: Option<&str>,
+    projection_context: Option<&TaskProjectionContext>,
+) -> String {
     let rows = if fields.is_some() {
         tasks
             .iter()
-            .map(|task| task_list_row_value(task, false))
+            .map(|task| task_list_row_value_with_context(task, false, projection_context))
             .map(|value| apply_json_field_selector(value, fields))
             .collect::<Vec<_>>()
             .into()
@@ -129,7 +250,7 @@ pub(crate) fn print_task_update_graph_blocked(issue: &TaskGraphIssue, as_json: b
             "Repair emptied parent `{}` with `{}`, then rerun the original task update.",
             issue.issue_id,
             operator_output::command_text::human_command(&format!(
-                "vida task update {} --status closed --json",
+                "vida task update {} --status closed",
                 quoted_issue_id
             ))
         )],
@@ -226,14 +347,18 @@ fn task_parent_edge_value(task: &TaskRecord, full: bool) -> serde_json::Value {
         .unwrap_or(serde_json::Value::Null)
 }
 
-fn task_list_row_value(task: &TaskRecord, full: bool) -> serde_json::Value {
+fn task_list_row_value_with_context(
+    task: &TaskRecord,
+    full: bool,
+    projection_context: Option<&TaskProjectionContext>,
+) -> serde_json::Value {
     let parent_edge = task_parent_edge_value(task, full);
     let parent_id = parent_edge
         .get("parent_id")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
     if full {
-        let mut value = task_record_value(task);
+        let mut value = task_record_value_with_context(task, projection_context);
         value["parent_id"] = parent_id;
         value["parent_edge"] = parent_edge;
         return value;
@@ -246,10 +371,14 @@ fn task_list_row_value(task: &TaskRecord, full: bool) -> serde_json::Value {
         "title": task.title,
         "priority": task.priority,
         "issue_type": task.issue_type,
-        "work_item_kind": task_work_item_kind_value(&task.issue_type),
+        "work_item_kind": task_work_item_kind_value_with_context(&task.issue_type, projection_context),
         "parent_id": parent_id,
         "parent_edge": parent_edge,
     })
+}
+
+fn task_list_row_value(task: &TaskRecord, full: bool) -> serde_json::Value {
+    task_list_row_value_with_context(task, full, None)
 }
 
 pub(crate) fn print_task_list(
@@ -261,6 +390,7 @@ pub(crate) fn print_task_list(
     fields: Option<&str>,
     as_json: bool,
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+    projection_context: Option<&TaskProjectionContext>,
 ) {
     let view = match view {
         "compact" => "compact",
@@ -272,7 +402,7 @@ pub(crate) fn print_task_list(
     let row_full = explicit_full && view == "full";
     let task_rows = tasks
         .iter()
-        .map(|task| task_list_row_value(task, row_full))
+        .map(|task| task_list_row_value_with_context(task, row_full, projection_context))
         .map(|value| apply_json_field_selector(value, fields))
         .collect::<Vec<_>>();
     let payload = if summary_only {
@@ -309,7 +439,10 @@ pub(crate) fn print_task_list(
     }
 
     if matches!(render, RenderMode::Plain) {
-        println!("{}", task_record_list_toon_text(surface, tasks, fields));
+        println!(
+            "{}",
+            task_record_list_toon_text(surface, tasks, fields, projection_context)
+        );
         return;
     }
 
@@ -335,8 +468,16 @@ pub(crate) fn print_task_ready(
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
     view: &str,
     fields: Option<&str>,
+    projection_context: Option<&TaskProjectionContext>,
 ) {
-    let payload = task_ready_payload(scope_task_id, tasks, read_metadata, view, fields);
+    let payload = task_ready_payload(
+        scope_task_id,
+        tasks,
+        read_metadata,
+        view,
+        fields,
+        projection_context,
+    );
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -348,7 +489,7 @@ pub(crate) fn print_task_ready(
     if matches!(render, RenderMode::Plain) {
         println!(
             "{}",
-            task_record_list_toon_text("vida task ready", tasks, fields)
+            task_record_list_toon_text("vida task ready", tasks, fields, projection_context)
         );
         return;
     }
@@ -375,6 +516,7 @@ pub(crate) fn task_ready_payload(
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
     view: &str,
     fields: Option<&str>,
+    projection_context: Option<&TaskProjectionContext>,
 ) -> serde_json::Value {
     let view = match view {
         "compact" => "compact",
@@ -385,7 +527,7 @@ pub(crate) fn task_ready_payload(
     let row_full = view == "full";
     let task_rows = tasks
         .iter()
-        .map(|task| task_list_row_value(task, row_full))
+        .map(|task| task_list_row_value_with_context(task, row_full, projection_context))
         .map(|value| apply_json_field_selector(value, fields))
         .collect::<Vec<_>>();
     build_pass_operator_surface_payload(
@@ -406,12 +548,20 @@ pub(crate) fn task_show_payload(
     task: &TaskRecord,
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
 ) -> serde_json::Value {
+    task_show_payload_with_context(task, read_metadata, None)
+}
+
+pub(crate) fn task_show_payload_with_context(
+    task: &TaskRecord,
+    read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+    projection_context: Option<&TaskProjectionContext>,
+) -> serde_json::Value {
     build_pass_operator_surface_payload(
         "vida task show",
         serde_json::json!({
             "state_access": task_read_metadata_value(read_metadata),
             "task_id": task.id,
-            "task": task_record_value(task),
+            "task": task_record_value_with_context(task, projection_context),
         }),
     )
 }
@@ -422,7 +572,17 @@ pub(crate) fn print_task_show(
     as_json: bool,
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
 ) {
-    let payload = task_show_payload(task, read_metadata);
+    print_task_show_with_context(render, task, as_json, read_metadata, None)
+}
+
+pub(crate) fn print_task_show_with_context(
+    render: RenderMode,
+    task: &TaskRecord,
+    as_json: bool,
+    read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+    projection_context: Option<&TaskProjectionContext>,
+) {
+    let payload = task_show_payload_with_context(task, read_metadata, projection_context);
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -774,7 +934,17 @@ pub(crate) fn print_task_mutation(
     task: &TaskRecord,
     as_json: bool,
 ) {
-    let payload = task_mutation_payload(title, task);
+    print_task_mutation_with_context(render, title, task, as_json, None)
+}
+
+pub(crate) fn print_task_mutation_with_context(
+    render: RenderMode,
+    title: &str,
+    task: &TaskRecord,
+    as_json: bool,
+    projection_context: Option<&TaskProjectionContext>,
+) {
+    let payload = task_mutation_payload_with_context(title, task, projection_context);
     if crate::surface_render::print_surface_json(&payload, as_json, "task should render as json") {
         return;
     }
@@ -789,6 +959,14 @@ pub(crate) fn print_task_mutation(
 }
 
 pub(crate) fn task_mutation_payload(title: &str, task: &TaskRecord) -> serde_json::Value {
+    task_mutation_payload_with_context(title, task, None)
+}
+
+pub(crate) fn task_mutation_payload_with_context(
+    title: &str,
+    task: &TaskRecord,
+    projection_context: Option<&TaskProjectionContext>,
+) -> serde_json::Value {
     let mutation_summary = serde_json::json!({
         "changed_task_count": 1,
         "changed_task_ids": [task.id.clone()],
@@ -801,7 +979,7 @@ pub(crate) fn task_mutation_payload(title: &str, task: &TaskRecord) -> serde_jso
         serde_json::json!({
             "task_id": task.id,
             "mutation_summary": mutation_summary,
-            "task": task_record_value(task),
+            "task": task_record_value_with_context(task, projection_context),
         }),
     )
 }
@@ -1088,7 +1266,7 @@ pub(crate) fn print_task_dependency_tree(
                 "repeated_count": dependency_repeated_count + child_repeated_count,
                 "bounded": true,
             },
-            "drill_down": "run vida task tree <task-id> --json on a listed dependency or child for the next bounded slice",
+            "drill_down": "run vida task tree <task-id> on a listed dependency or child for the next bounded slice",
         }),
     );
     if crate::surface_render::print_surface_json(
@@ -1389,7 +1567,7 @@ fn build_task_graph_issues_payload(issues: &[TaskGraphIssue]) -> serde_json::Val
     } else {
         vec![format!(
             "Resolve task graph validation issues and rerun `{}`.",
-            operator_output::command_text::human_command("vida task validate-graph --json")
+            operator_output::command_text::human_command("vida task validate-graph")
         )]
     };
     build_operator_surface_payload(
@@ -1468,7 +1646,7 @@ pub(crate) fn print_task_dependency_bulk_add_result_for_surface(
             })
             .map(|edge| {
                 operator_output::command_text::human_command(&format!(
-                    "{} {} {} {} --json",
+                    "{} {} {} {}",
                     surface,
                     crate::shell_quote(edge.issue_id.trim()),
                     crate::shell_quote(edge.depends_on_id.trim()),
@@ -1636,7 +1814,8 @@ mod tests {
     use super::{
         build_pass_operator_surface_payload, build_task_graph_issues_payload,
         task_children_toon_text, task_mutation_payload, task_progress_payload,
-        task_progress_toon_text, task_record_list_toon_text,
+        task_progress_toon_text, task_record_list_toon_text, task_show_payload_with_context,
+        TaskProjectionContext,
     };
     use crate::release1_operator_output::shared_operator_output_contract_parity_error;
     use crate::state_store::{
@@ -1738,7 +1917,7 @@ mod tests {
                 "dependencies": [],
                 "children": [],
                 "tree_depth": "immediate_edges_only",
-                "drill_down": "run vida task tree <task-id> --json on a listed dependency or child for the next bounded slice",
+            "drill_down": "run vida task tree <task-id> on a listed dependency or child for the next bounded slice",
             }),
         );
 
@@ -1751,7 +1930,7 @@ mod tests {
 
     #[test]
     fn task_list_summary_payload_keeps_release1_operator_contract_parity() {
-        let tasks = vec![sample_task("task-1")];
+        let tasks = [sample_task("task-1")];
         let payload = build_pass_operator_surface_payload(
             "vida task list",
             serde_json::json!({
@@ -1788,7 +1967,7 @@ mod tests {
         let mut task = sample_task("task-1");
         task.title = "Compact output task".to_string();
 
-        let text = task_record_list_toon_text("vida task list", &[task], None);
+        let text = task_record_list_toon_text("vida task list", &[task], None, None);
 
         assert!(text.starts_with("vida task list\n  task_count: 1"));
         assert!(text.contains("\n  tasks[1]{id,status,priority,title}:"));
@@ -1863,7 +2042,7 @@ mod tests {
 
     #[test]
     fn task_list_payload_applies_json_field_selector() {
-        let tasks = vec![sample_task("task-1")];
+        let tasks = [sample_task("task-1")];
         let rows = tasks
             .iter()
             .map(|task| super::task_list_row_value(task, false))
@@ -2185,6 +2364,44 @@ mod tests {
         assert_eq!(
             payload["task"]["work_item_kind"]["provider_issue_type"],
             "pr"
+        );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_show_payload_projects_configured_flow_binding_when_context_exists() {
+        let mut task = sample_task("pr-1");
+        task.issue_type = "pr".to_string();
+        let context = TaskProjectionContext::from_work_item_flow_bindings(
+            &serde_json::json!({
+                "pull_request": "pr_processing_team",
+                "pr_repair": "pr_processing_team"
+            }),
+            "test.dev_team.work_item_flow_bindings",
+        );
+
+        let payload = task_show_payload_with_context(&task, None, Some(&context));
+
+        assert_eq!(payload["task"]["issue_type"], "pr");
+        assert_eq!(
+            payload["task"]["work_item_kind"]["canonical_issue_type"],
+            "pull_request"
+        );
+        assert_eq!(
+            payload["task"]["work_item_kind"]["taxonomy_default_flow_binding"],
+            "pr_repair_verified"
+        );
+        assert_eq!(
+            payload["task"]["work_item_kind"]["default_flow_binding"],
+            "pr_processing_team"
+        );
+        assert_eq!(
+            payload["task"]["work_item_kind"]["configured_flow_binding"],
+            "pr_processing_team"
+        );
+        assert_eq!(
+            payload["task"]["work_item_kind"]["flow_binding_source"],
+            "test.dev_team.work_item_flow_bindings"
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }

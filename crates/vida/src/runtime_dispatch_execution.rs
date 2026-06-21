@@ -13,7 +13,7 @@ use crate::runtime_assignment_policy::DispatchContractLane;
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 use taskflow_host_bridge::{
-    default_host_bridge_required_result_fields,
+    default_host_bridge_required_result_fields, host_agent_execution_evidence_v2_contract_decision,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
     host_bridge_completed_result_status_is_admissible,
@@ -288,7 +288,7 @@ fn profile_list_allows(profile: &serde_json::Value, key: &str, candidates: &[&st
         .filter_map(serde_json::Value::as_str)
         .any(|row| {
             let row = row.trim();
-            !row.is_empty() && candidates.iter().any(|candidate| row == *candidate)
+            !row.is_empty() && candidates.contains(&row)
         })
 }
 
@@ -368,12 +368,12 @@ fn ready_external_profile_for_dispatch_target(
         if excluded_profile_id == Some(candidate_profile_id) {
             continue;
         }
-        if !profile_supports_dispatch_target(&profile, &policy_dispatch_target) {
+        if !profile_supports_dispatch_target(&profile, policy_dispatch_target) {
             continue;
         }
         if !profile_compatible_with_packet_scope(
             &profile,
-            &policy_dispatch_target,
+            policy_dispatch_target,
             packet_has_concrete_owned_paths,
         ) {
             continue;
@@ -952,12 +952,31 @@ fn drain_command_output_events(
 }
 
 #[cfg(windows)]
+fn windows_taskkill_command() -> std::process::Command {
+    let system_root = std::env::var("SystemRoot")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("windir")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        });
+    if let Some(root) = system_root {
+        let taskkill_path = PathBuf::from(root).join("System32").join("taskkill.exe");
+        if taskkill_path.is_file() {
+            return std::process::Command::new(taskkill_path);
+        }
+    }
+    std::process::Command::new("taskkill")
+}
+
+#[cfg(windows)]
 fn terminate_windows_process_tree(
     child: &mut std::process::Child,
     reason: &str,
 ) -> Result<(), String> {
     let pid = child.id();
-    if let Ok(status) = std::process::Command::new("taskkill")
+    if let Ok(status) = windows_taskkill_command()
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1061,9 +1080,9 @@ fn execute_wrapped_command(
             }
         }
 
-        if status.is_some() && stdout_done && stderr_done {
+        if let Some(status) = status.filter(|_| stdout_done && stderr_done) {
             return Ok(ObservedCommandOutput {
-                status: status.expect("status checked above"),
+                status,
                 stdout,
                 stderr,
                 timed_out,
@@ -2321,20 +2340,25 @@ fn default_codex_host_tool_bridge_string(
     }
 }
 
-fn dispatch_packet_string_list(dispatch_packet_path: &str, field: &str) -> Vec<String> {
+fn dispatch_packet_active_field(
+    dispatch_packet_path: &str,
+    field: &str,
+) -> Option<serde_json::Value> {
     std::fs::read_to_string(dispatch_packet_path)
         .ok()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
         .and_then(|packet| {
-            packet
-                .get(field)
-                .or_else(|| {
-                    packet
-                        .get("delivery_task_packet")
-                        .and_then(|value| value.get(field))
-                })
-                .cloned()
+            if let Some(active_packet) = packet.get("delivery_task_packet") {
+                active_packet.get(field).cloned()
+            } else {
+                packet.get(field).cloned()
+            }
         })
+        .filter(|value| !value.is_null())
+}
+
+fn dispatch_packet_string_list(dispatch_packet_path: &str, field: &str) -> Vec<String> {
+    dispatch_packet_active_field(dispatch_packet_path, field)
         .and_then(|value| {
             value.as_array().map(|items| {
                 items
@@ -2350,40 +2374,20 @@ fn dispatch_packet_string_list(dispatch_packet_path: &str, field: &str) -> Vec<S
 }
 
 fn dispatch_packet_string_field(dispatch_packet_path: &str, field: &str) -> Option<String> {
-    std::fs::read_to_string(dispatch_packet_path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|packet| {
-            packet
-                .get(field)
-                .or_else(|| {
-                    packet
-                        .get("delivery_task_packet")
-                        .and_then(|value| value.get(field))
-                })
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        })
+    dispatch_packet_active_field(dispatch_packet_path, field).and_then(|value| {
+        value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
 }
 
 fn dispatch_packet_value_field(
     dispatch_packet_path: &str,
     field: &str,
 ) -> Option<serde_json::Value> {
-    std::fs::read_to_string(dispatch_packet_path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|packet| {
-            packet.get(field).cloned().or_else(|| {
-                packet
-                    .get("delivery_task_packet")
-                    .and_then(|value| value.get(field))
-                    .cloned()
-            })
-        })
-        .filter(|value| !value.is_null())
+    dispatch_packet_active_field(dispatch_packet_path, field)
 }
 
 fn host_tool_bridge_request_id_segment(value: &str) -> String {
@@ -2515,6 +2519,8 @@ fn validate_existing_host_bridge_request_identity_matches_expected(
         "request_id",
         "run_id",
         "task_id",
+        "dispatch_generation_id",
+        "lane_id",
         "dispatch_target",
         "packet_path",
         "runtime_role",
@@ -2568,7 +2574,7 @@ fn existing_host_bridge_request_needs_adapter_refresh(
             .get("invocation_mode")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|value| value != "configured_host_capability_required");
-    legacy_unconfigured
+    let adapter_refresh_required = legacy_unconfigured
         && expected_configured
         && [
             "receipt_mode",
@@ -2578,7 +2584,11 @@ fn existing_host_bridge_request_needs_adapter_refresh(
             "adapter_params",
         ]
         .iter()
-        .any(|field| !host_bridge_request_value_matches(existing, expected, field))
+        .any(|field| !host_bridge_request_value_matches(existing, expected, field));
+    let active_dispatch_generation_changed = ["dispatch_generation_id", "lane_id"]
+        .iter()
+        .any(|field| !host_bridge_request_value_matches(existing, expected, field));
+    adapter_refresh_required || active_dispatch_generation_changed
 }
 
 fn materialize_host_tool_bridge_request(
@@ -2589,7 +2599,7 @@ fn materialize_host_tool_bridge_request(
     backend_id: &str,
     carrier_id: &str,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
-    _role_selection: &RuntimeConsumptionLaneSelection,
+    role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Result<serde_json::Value, String> {
     let request_id = host_tool_bridge_request_id(receipt, dispatch_packet_path);
     let paths =
@@ -2622,16 +2632,50 @@ fn materialize_host_tool_bridge_request(
     } else {
         serde_json::json!(["patch_proposal", "isolated_worktree_manifest"])
     };
+    let task_id = dispatch_packet_string_field(dispatch_packet_path, "task_id")
+        .unwrap_or_else(|| receipt.run_id.clone());
+    let dispatch_generation_id =
+        dispatch_packet_string_field(dispatch_packet_path, "dispatch_generation_id")
+            .unwrap_or_else(|| {
+                crate::runtime_dispatch_receipt_helpers::dispatch_generation_id_for_receipt(receipt)
+            });
+    let lane_id = dispatch_packet_string_field(dispatch_packet_path, "lane_id")
+        .or_else(|| {
+            crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
+                &role_selection.execution_plan,
+                &receipt.dispatch_target,
+            )
+            .and_then(|resolution| resolution.lane_id)
+        })
+        .unwrap_or_else(|| receipt.dispatch_target.clone());
+    let task_class = dispatch_packet_string_field(dispatch_packet_path, "task_class")
+        .or_else(|| {
+            Some(
+                crate::runtime_dispatch_state::runtime_packet_handoff_task_class_for_plan(
+                    &role_selection.execution_plan,
+                    &receipt.dispatch_target,
+                    receipt
+                        .activation_runtime_role
+                        .as_deref()
+                        .unwrap_or(role_selection.selected_role.as_str()),
+                ),
+            )
+        })
+        .unwrap_or_else(|| canonical_dispatch_target_for_admissibility(&receipt.dispatch_target));
     let request = serde_json::json!({
         "schema_version": 1,
         "status": "pending",
         "request_id": request_id,
         "run_id": receipt.run_id,
-        "task_id": receipt.run_id,
+        "task_id": task_id,
+        "dispatch_generation_id": dispatch_generation_id,
+        "lane_id": lane_id,
         "dispatch_target": receipt.dispatch_target,
         "packet_path": dispatch_packet_path,
         "runtime_role": receipt.activation_runtime_role,
-        "task_class": canonical_dispatch_target_for_admissibility(&receipt.dispatch_target),
+        "task_class": task_class,
+        "flow_id": role_selection.execution_plan["development_flow"]["flow_id"].clone(),
+        "flow_revision": role_selection.execution_plan["development_flow"]["flow_revision"].clone(),
         "backend_id": backend_id,
         "carrier_id": carrier_id,
         "execution_boundary": "parent_host_session",
@@ -2795,6 +2839,11 @@ fn validate_host_bridge_request_dispatch_binding(
 ) -> Result<(), String> {
     let typed_request =
         HostBridgeRequest::from_value(request.clone()).map_err(|error| error.to_string())?;
+    let packet_path = typed_request.packet_path.display().to_string();
+    let expected_task_id = dispatch_packet_string_field(&packet_path, "task_id")
+        .unwrap_or_else(|| receipt.run_id.clone());
+    let expected_dispatch_generation_id =
+        crate::runtime_dispatch_receipt_helpers::dispatch_generation_id_for_receipt(receipt);
     let decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
         request: typed_request.clone(),
         receipt: Some(serde_json::json!({
@@ -2815,7 +2864,15 @@ fn validate_host_bridge_request_dispatch_binding(
         (
             "task_id",
             typed_request.task_id.as_str(),
-            receipt.run_id.as_str(),
+            expected_task_id.as_str(),
+        ),
+        (
+            "dispatch_generation_id",
+            typed_request
+                .dispatch_generation_id
+                .as_deref()
+                .unwrap_or_default(),
+            expected_dispatch_generation_id.as_str(),
         ),
         ("backend_id", typed_request.backend_id.as_str(), backend_id),
         ("carrier_id", typed_request.carrier_id.as_str(), carrier_id),
@@ -2887,6 +2944,17 @@ fn validate_completed_host_bridge_artifacts(
     if request_receipt_path != rendered_receipt_path {
         return Err(
             "Host bridge request receipt_path does not match the resolved receipt path.".into(),
+        );
+    }
+    if host_bridge_completed_artifacts_are_v2(result, bridge_receipt) {
+        return validate_completed_host_bridge_artifacts_v2(
+            request,
+            result,
+            bridge_receipt,
+            receipt,
+            backend_id,
+            request_id,
+            packet_path,
         );
     }
     for (artifact, label) in [(result, "result"), (bridge_receipt, "receipt")] {
@@ -3028,6 +3096,104 @@ fn validate_completed_host_bridge_artifacts(
     {
         return Err(
             "Host bridge receipt result_path does not match the active bridge result.".into(),
+        );
+    }
+    Ok(())
+}
+
+fn host_bridge_completed_artifacts_are_v2(
+    result: &serde_json::Value,
+    bridge_receipt: &serde_json::Value,
+) -> bool {
+    result
+        .get("artifact_kind")
+        .and_then(serde_json::Value::as_str)
+        == Some("host_agent_execution_result")
+        || bridge_receipt
+            .get("artifact_kind")
+            .and_then(serde_json::Value::as_str)
+            == Some("host_agent_execution_receipt")
+}
+
+fn validate_completed_host_bridge_artifacts_v2(
+    request: &serde_json::Value,
+    result: &serde_json::Value,
+    bridge_receipt: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    backend_id: &str,
+    request_id: &str,
+    packet_path: &str,
+) -> Result<(), String> {
+    let decision = host_agent_execution_evidence_v2_contract_decision(result, Some(bridge_receipt));
+    if !decision.accepted || !decision.receipt_backed {
+        return Err(format!(
+            "Host bridge v2 evidence contract failed: {}.",
+            decision.detail_blocker_codes.join(",")
+        ));
+    }
+    for (field, expected) in [
+        ("request_id", request_id),
+        ("run_id", receipt.run_id.as_str()),
+        (
+            "task_id",
+            request
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(receipt.run_id.as_str()),
+        ),
+        (
+            "dispatch_generation_id",
+            request
+                .get("dispatch_generation_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+        ),
+        ("dispatch_target", receipt.dispatch_target.as_str()),
+        ("backend_id", backend_id),
+        ("packet_path", packet_path),
+    ] {
+        if result.get(field).and_then(serde_json::Value::as_str) != Some(expected) {
+            return Err(format!(
+                "Host bridge v2 result `{field}` does not match active dispatch."
+            ));
+        }
+    }
+    for (field, expected) in [
+        ("request_id", request_id),
+        ("run_id", receipt.run_id.as_str()),
+        (
+            "task_id",
+            request
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(receipt.run_id.as_str()),
+        ),
+        (
+            "dispatch_generation_id",
+            request
+                .get("dispatch_generation_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default(),
+        ),
+        ("dispatch_target", receipt.dispatch_target.as_str()),
+    ] {
+        if bridge_receipt
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            != Some(expected)
+        {
+            return Err(format!(
+                "Host bridge v2 receipt `{field}` does not match active dispatch."
+            ));
+        }
+    }
+    if !matches!(
+        request.get("status").and_then(serde_json::Value::as_str),
+        Some("completed" | "result_available")
+    ) {
+        return Err(
+            "Host bridge request status is not completed or result_available for v2 evidence ingestion."
+                .into(),
         );
     }
     Ok(())
@@ -3648,6 +3814,84 @@ fn mark_dispatch_result_execution_evidence(
     }
 }
 
+fn completion_blocker_codes_from_result_body(
+    body: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<String> {
+    let mut blocker_codes = body
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if blocker_codes.is_empty() {
+        if let Some(blocker_code) = body
+            .get("blocker_code")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "none" && *value != "null")
+        {
+            blocker_codes.push(blocker_code.to_string());
+        }
+    }
+    blocker_codes
+}
+
+fn annotate_agent_lane_completion_verdict_fields(
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    completed_target: &str,
+) {
+    let blocker_codes = completion_blocker_codes_from_result_body(body);
+    let verdict_fields = taskflow_host_bridge::host_bridge_result_verdict_fields_for_gate(
+        completed_target,
+        &blocker_codes,
+        None,
+    );
+    body.insert(
+        "decision".to_string(),
+        serde_json::json!(verdict_fields.decision),
+    );
+    body.insert(
+        "verdict".to_string(),
+        serde_json::json!(verdict_fields.verdict),
+    );
+    body.insert(
+        "blocker_codes".to_string(),
+        serde_json::json!(verdict_fields.blocker_codes),
+    );
+    body.insert(
+        "rework_target".to_string(),
+        verdict_fields
+            .rework_target
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null),
+    );
+    body.insert(
+        "allowed_next_node".to_string(),
+        serde_json::json!(verdict_fields.allowed_next_node),
+    );
+    body.insert(
+        "completion_verdict".to_string(),
+        body.get("verdict")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    );
+    body.insert(
+        "closure_ready".to_string(),
+        serde_json::json!(blocker_codes.is_empty()),
+    );
+    if blocker_codes.is_empty() {
+        body.insert("blocker_code".to_string(), serde_json::Value::Null);
+        body.insert("blockers".to_string(), serde_json::json!([]));
+    } else if let Some(first) = blocker_codes.first() {
+        body.insert("blocker_code".to_string(), serde_json::json!(first));
+        body.insert("blockers".to_string(), serde_json::json!(blocker_codes));
+    }
+}
+
 pub(crate) async fn execute_internal_agent_lane_dispatch(
     state_root: &Path,
     project_root: &Path,
@@ -4243,9 +4487,11 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         );
         refresh_execution_truth(body, role_selection, receipt, Some(carrier_id), "missing");
     } else {
-        let effective_stderr = (!internal_codex_stderr_is_benign_warning(&stderr))
-            .then_some(stderr.as_str())
-            .unwrap_or("");
+        let effective_stderr = if !internal_codex_stderr_is_benign_warning(&stderr) {
+            stderr.as_str()
+        } else {
+            ""
+        };
         let blocker_reason = if !effective_stderr.is_empty() {
             effective_stderr.to_string()
         } else if !parsed_output.error_messages.is_empty() {
@@ -4271,6 +4517,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         );
         refresh_execution_truth(body, role_selection, receipt, Some(carrier_id), "missing");
     }
+    annotate_agent_lane_completion_verdict_fields(body, &receipt.dispatch_target);
 
     Ok(Some(result))
 }
@@ -4903,6 +5150,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         );
         refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "missing");
     }
+    annotate_agent_lane_completion_verdict_fields(body, &receipt.dispatch_target);
     Ok(result)
 }
 
@@ -6346,6 +6594,152 @@ agent_system:
     }
 
     #[test]
+    fn completed_host_bridge_artifacts_accept_v2_result_available_lifecycle() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-v2-evidence-{}-{nanos}",
+            std::process::id()
+        ));
+        let packet_path = project_root.join(".vida/dispatch-v2.json");
+        let request_path = project_root.join(".vida/host-bridge/request-v2.json");
+        let result_path = project_root.join(".vida/host-bridge/result-v2.json");
+        let receipt_path = project_root.join(".vida/host-bridge/receipt-v2.json");
+        let receipt = internal_codex_fallback_receipt(
+            packet_path.to_str().expect("packet path should render"),
+        );
+        let dispatch_generation_id =
+            crate::runtime_dispatch_receipt_helpers::dispatch_generation_id_for_receipt(&receipt);
+        let request_id = "request-v2";
+        let packet_path_text = packet_path
+            .to_str()
+            .expect("packet path should render")
+            .to_string();
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "result_available",
+            "request_id": request_id,
+            "run_id": receipt.run_id,
+            "task_id": receipt.run_id,
+            "dispatch_generation_id": dispatch_generation_id,
+            "lane_id": "analysis_lane",
+            "dispatch_target": receipt.dispatch_target,
+            "packet_path": packet_path_text,
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "adapter_contract_source": "request",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string(),
+            "required_result_fields": taskflow_host_bridge::default_host_bridge_required_result_fields(),
+            "owned_paths": ["crates/vida"]
+        });
+        let result = serde_json::json!({
+            "artifact_kind": "host_agent_execution_result",
+            "schema_version": taskflow_host_bridge::HOST_AGENT_EXECUTION_RESULT_V2_SCHEMA_VERSION,
+            "request_id": request_id,
+            "run_id": receipt.run_id,
+            "task_id": receipt.run_id,
+            "dispatch_generation_id": dispatch_generation_id,
+            "lane_id": "analysis_lane",
+            "dispatch_target": receipt.dispatch_target,
+            "execution_state": "executed",
+            "outcome": "pass",
+            "blocker_codes": [],
+            "host_agent_id": "host-agent-v2",
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "packet_path": packet_path_text,
+            "packet_hash_blake3": "packet-hash-v2",
+            "summary": "implemented",
+            "completed_at": "2026-06-20T19:00:00Z"
+        });
+        let bridge_receipt = serde_json::json!({
+            "artifact_kind": "host_agent_execution_receipt",
+            "schema_version": taskflow_host_bridge::HOST_AGENT_EXECUTION_RECEIPT_V2_SCHEMA_VERSION,
+            "receipt_id": "receipt-v2",
+            "request_id": request_id,
+            "run_id": receipt.run_id,
+            "task_id": receipt.run_id,
+            "dispatch_generation_id": dispatch_generation_id,
+            "lane_id": "analysis_lane",
+            "dispatch_target": receipt.dispatch_target,
+            "result_path": result_path.display().to_string(),
+            "result_hash_blake3": taskflow_host_bridge::host_agent_execution_result_v2_canonical_hash(&result),
+            "packet_hash_blake3": "packet-hash-v2",
+            "host_agent_id": "host-agent-v2",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "recorded_at": "2026-06-20T19:00:01Z"
+        });
+
+        super::validate_completed_host_bridge_artifacts(
+            &request,
+            &result,
+            &bridge_receipt,
+            &result_path,
+            &receipt_path,
+            &receipt,
+            "internal_subagents",
+        )
+        .expect("v2 host evidence should validate");
+
+        let mut stale_generation_result = result.clone();
+        stale_generation_result["dispatch_generation_id"] = serde_json::json!("stale-generation");
+        let error = super::validate_completed_host_bridge_artifacts(
+            &request,
+            &stale_generation_result,
+            &bridge_receipt,
+            &result_path,
+            &receipt_path,
+            &receipt,
+            "internal_subagents",
+        )
+        .expect_err("stale v2 result generation must be rejected");
+        assert!(error.contains("dispatch_generation_id"));
+
+        let mut stale_generation_receipt = bridge_receipt.clone();
+        stale_generation_receipt["dispatch_generation_id"] = serde_json::json!("stale-generation");
+        let error = super::validate_completed_host_bridge_artifacts(
+            &request,
+            &result,
+            &stale_generation_receipt,
+            &result_path,
+            &receipt_path,
+            &receipt,
+            "internal_subagents",
+        )
+        .expect_err("stale v2 receipt generation must be rejected");
+        assert!(error.contains("dispatch_generation_id"));
+
+        let mut pass_status_request = request.clone();
+        pass_status_request["status"] = serde_json::json!("pass");
+        let error = super::validate_completed_host_bridge_artifacts(
+            &pass_status_request,
+            &result,
+            &bridge_receipt,
+            &result_path,
+            &receipt_path,
+            &receipt,
+            "internal_subagents",
+        )
+        .expect_err("workflow outcome must not be accepted as request lifecycle state");
+        assert!(error.contains("completed or result_available"));
+
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
     fn internal_host_tool_bridge_preserves_blocked_coach_product_rework_result() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -6666,7 +7060,7 @@ agent_system:
             "unexpected error: {error}"
         );
         assert!(
-            error.contains("host_bridge_result_missing_verdict_field"),
+            error.contains("missing_required_result_field_decision"),
             "unexpected error: {error}"
         );
     }
@@ -9369,7 +9763,7 @@ agent_system:
         );
         let child_command = format!("Start-Sleep -Seconds 30 # {token}");
         let parent_command = format!(
-            "Start-Process -WindowStyle Hidden -FilePath powershell -ArgumentList @('-NoProfile','-Command','{}'); Start-Sleep -Seconds 30",
+            "& powershell -NoProfile -Command '{}'",
             child_command.replace('\'', "''")
         );
         let wrapped = wrap_command_with_optional_timeouts(
@@ -9395,7 +9789,10 @@ agent_system:
             "expected Windows process-tree timeout wrapper to return promptly, got {:?}",
             started.elapsed()
         );
-        std::thread::sleep(Duration::from_millis(500));
+        let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+        while windows_process_command_line_contains(&token) && Instant::now() < cleanup_deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
         assert!(
             !windows_process_command_line_contains(&token),
             "timeout wrapper should kill descendant process carrying token {token}"
@@ -10194,6 +10591,13 @@ agent_system:
         assert_eq!(result["execution_state"], "executed");
         assert_eq!(result["provider_result"], "STDIN_OK");
         assert_eq!(result["blocker_code"], serde_json::Value::Null);
+        assert_eq!(result["decision"], "approve");
+        assert_eq!(result["verdict"], "pass");
+        assert_eq!(result["blocker_codes"], serde_json::json!([]));
+        assert_eq!(result["rework_target"], serde_json::Value::Null);
+        assert_eq!(result["allowed_next_node"], "coach");
+        assert_eq!(result["completion_verdict"], "pass");
+        assert_eq!(result["closure_ready"], true);
         let activation_command = result["activation_command"]
             .as_str()
             .expect("activation command should render");
@@ -10269,6 +10673,16 @@ agent_system:
         assert_eq!(result["status"], "blocked");
         assert_eq!(result["execution_state"], "blocked");
         assert_eq!(result["blocker_code"], "configured_backend_dispatch_failed");
+        assert_eq!(result["decision"], "rework_required");
+        assert_eq!(result["verdict"], "rework_required");
+        assert_eq!(
+            result["blocker_codes"],
+            serde_json::json!(["configured_backend_dispatch_failed"])
+        );
+        assert_eq!(result["rework_target"], "developer");
+        assert_eq!(result["allowed_next_node"], "developer_rework");
+        assert_eq!(result["completion_verdict"], "rework_required");
+        assert_eq!(result["closure_ready"], false);
         assert_eq!(result["provider_is_error"], true);
         assert_eq!(result["provider_error_message"], "adapter boom");
         assert_eq!(result["blocker_reason"], "adapter boom");

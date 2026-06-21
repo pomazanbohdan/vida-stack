@@ -2,52 +2,55 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task --help\n  vida taskflow help parallelism\n  vida route explain --json\n  vida state reset --archive --reinit --json\n  vida docflow help\n  vida docs update --json";
+const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task --help\n  vida taskflow help parallelism\n  vida route explain\n  vida state reset --archive --reinit\n  vida docflow help\n  vida docs update";
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
-const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task tree <task-id> --json\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run --json\n  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida task reparent-children <from-parent-id> <to-parent-id> --json\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id> --json\n  vida task critical-path --json\n  vida taskflow help parallelism\n\nLarge-batch transport:\n  Use `vida task import --file tasks.jsonl --dry-run` for many task creates instead of pasting oversized shell payloads.\n  Use JSONL/NDJSON files for large batches and `vida task dep add-bulk --edge-file edges.txt --dry-run` for many dependency edges.\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
+const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready\n  vida task next\n  vida task show <task-id>\n  vida task progress <task-id>\n  vida task deps <task-id>\n  vida task tree <task-id>\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run\n  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\"\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\"\n  vida task reparent-children <from-parent-id> <to-parent-id>\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id>\n  vida task critical-path\n  vida taskflow help parallelism\n\nLarge-batch transport:\n  Use `vida task import --file tasks.jsonl --dry-run` for many task creates instead of pasting oversized shell payloads.\n  Use JSONL/NDJSON files for large batches and `vida task dep add-bulk --edge-file edges.txt --dry-run` for many dependency edges.\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary` for operator readiness; add `--json` only when machine-readable scheduling fields are required.\n  Missing execution semantics never imply safe parallel execution.";
 
 const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
 
-const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow help dependencies\n  vida taskflow help queue\n  vida taskflow help dispatch\n  vida taskflow help scheduler\n  vida taskflow help scheduling\n  vida task tree <task-id> --json\n  vida task import --file tasks.yaml --parent-id <parent-id> --dry-run --json\n  vida taskflow graph explain <task-id> --json\n  vida taskflow graph-summary --json\n  vida taskflow closeout --json --compact\n  vida taskflow receipt-pack --since HEAD~1\n  vida taskflow plan generate --json\n  vida taskflow replan split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json\n  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida taskflow scheduler dispatch --json\n  vida taskflow scheduling actualize --scope open-epics --dry-run --json\n  vida taskflow route explain --json\n  vida taskflow validate-routing --json\n  vida taskflow pricing status --json\n  vida taskflow pricing import --source-file <path> --dry-run --json\n  vida taskflow status --summary --json\n  vida taskflow run-graph status <run-id> --json\n  vida taskflow recovery status <run-id> --json\n  vida taskflow packet latest --json\n  vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json\n  vida taskflow bootstrap-spec \"feature request\" --json\n  vida task next --json\n\nLarge-batch transport:\n  Put large task batches in JSONL/YAML files and run `vida task import --file <path> --dry-run` before applying.\n  Put large dependency batches in an edge file and run `vida task dep add-bulk --edge-file <path> --dry-run`.\n\nParallelism guidance:\n  `vida taskflow graph explain <task-id> --json` explains one task's ready/blocked/parallel-safe posture from canonical projection truth.\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida taskflow scheduler dispatch --json` turns that projection into a preview-first launch plan capped by `max_parallel_agents`.\n  `vida taskflow scheduling actualize --dry-run --json` previews conservative scheduling metadata repairs before `--apply` mutates tasks.\n  `vida taskflow help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
+const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow help dependencies\n  vida taskflow help queue\n  vida taskflow help dispatch\n  vida taskflow help scheduler\n  vida taskflow help scheduling\n  vida task tree <task-id>\n  vida task import --file tasks.yaml --parent-id <parent-id> --dry-run\n  vida taskflow graph explain <task-id>\n  vida taskflow graph-summary\n  vida taskflow closeout --compact\n  vida taskflow receipt-pack --since HEAD~1\n  vida taskflow plan generate\n  vida taskflow replan split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\"\n  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\"\n  vida taskflow scheduler dispatch\n  vida taskflow scheduling actualize --scope open-epics --dry-run\n  vida taskflow route explain\n  vida taskflow validate-routing\n  vida taskflow pricing status\n  vida taskflow pricing import --source-file <path> --dry-run\n  vida taskflow status --summary\n  vida taskflow run-graph status <run-id>\n  vida taskflow recovery status <run-id>\n  vida taskflow packet latest\n  vida taskflow packet repair --run-id <run-id> --from-task <task-id>\n  vida taskflow bootstrap-spec \"feature request\"\n  vida task next\n\nLarge-batch transport:\n  Put large task batches in JSONL/YAML files and run `vida task import --file <path> --dry-run` before applying.\n  Put large dependency batches in an edge file and run `vida task dep add-bulk --edge-file <path> --dry-run`.\n\nParallelism guidance:\n  `vida taskflow graph explain <task-id>` explains one task's ready/blocked/parallel-safe posture from canonical projection truth.\n  `vida taskflow graph-summary` exposes operator scheduling posture; add `--json` only when machine-readable fields are required.\n  `vida taskflow scheduler dispatch` turns that projection into a preview-first launch plan capped by `max_parallel_agents`.\n  `vida taskflow scheduling actualize --dry-run` previews conservative scheduling metadata repairs before `--apply` mutates tasks.\n  `vida taskflow help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
 
 const DOCFLOW_LONG_ABOUT: &str = "Delegate to the DocFlow runtime family.\n\nDocFlow is the standalone documentation/readiness utility. Use it for documentation bootstrap, artifact init, validation, readiness checks, inventory, relations, and agent handoff instructions.";
 
-const DOCFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida docflow help\n  vida docflow init\n  vida docflow init --json\n  vida docflow init --help\n  vida docflow repair-footer --help\n  vida docflow finalize-edit --help\n  vida docflow doctor --root .\n  vida docflow check-file --path <file> --json\n  vida docflow check --root . --json <file>\n  vida docflow readiness-check --profile active-canon\n  vida docflow registry --root .\n\nInit/repair contract:\n  `vida docflow init` without positional args prints agent bootstrap instructions.\n  `vida docflow init --json` prints the same contract as machine-readable JSON.\n  `vida docflow init <markdown_file> <artifact_path> <artifact_type> <change_note>` initializes a canonical markdown artifact.\n  `vida docflow repair-footer <markdown_file>` initializes missing footer metadata on legacy markdown files.";
+const DOCFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida docflow help\n  vida docflow init\n  vida docflow init --help\n  vida docflow repair-footer --help\n  vida docflow finalize-edit --help\n  vida docflow doctor --root .\n  vida docflow check-file --path <file>\n  vida docflow check --root . <file>\n  vida docflow readiness-check --profile active-canon\n  vida docflow registry --root .\n\nInit/repair contract:\n  `vida docflow init` without positional args prints agent bootstrap instructions.\n  `vida docflow init --json` prints the same contract as machine-readable JSON.\n  `vida docflow init <markdown_file> <artifact_path> <artifact_type> <change_note>` initializes a canonical markdown artifact.\n  `vida docflow repair-footer <markdown_file>` initializes missing footer metadata on legacy markdown files.";
 
-const SERVICE_AFTER_HELP: &str = "Service operations:\n  vida service hello --json\n  vida service status --json\n  vida service capabilities --json\n  vida service endpoints --json\n  vida service endpoint-status --json\n  vida service lifecycle-plan --json\n  vida service lifecycle-status --json\n  vida service events --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
+const SERVICE_AFTER_HELP: &str = "Service operations:\n  vida service hello\n  vida service status\n  vida service capabilities\n  vida service endpoints\n  vida service endpoint-status\n  vida service lifecycle-plan\n  vida service lifecycle-status\n  vida service events\n\nOptions:\n  --json    Emit machine-readable JSON output";
 
-const PROJECT_AFTER_HELP: &str = "Project operations:\n  vida project list --json\n  vida project resolve --project <project-id> --json\n  vida project status --project <project-id> --json\n\nOptions:\n  --project <project-id>    Project id or reference for project-scoped operations\n  --json                    Emit machine-readable JSON output";
+const PROJECT_AFTER_HELP: &str = "Project operations:\n  vida project list\n  vida project resolve --project <project-id>\n  vida project status --project <project-id>\n\nOptions:\n  --project <project-id>    Project id or reference for project-scoped operations\n  --json                    Emit machine-readable JSON output";
 
-const WIZARD_AFTER_HELP: &str = "Wizard operations:\n  vida wizard inspect --json\n  vida wizard draft --json\n  vida wizard validate --json\n  vida wizard diff --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
+const WIZARD_AFTER_HELP: &str = "Wizard operations:\n  vida wizard inspect\n  vida wizard draft\n  vida wizard validate\n  vida wizard diff\n\nOptions:\n  --json    Emit machine-readable JSON output";
 
-const JOB_AFTER_HELP: &str = "Job operations:\n  vida job status --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
+const JOB_AFTER_HELP: &str =
+    "Job operations:\n  vida job status\n\nOptions:\n  --json    Emit machine-readable JSON output";
 
-const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
-const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route <route> --expect <text> --json\n\nBrowser proof options:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output";
+const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get\n\nOptions:\n  --json    Emit machine-readable JSON output";
+const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route <route> --expect <text>\n\nBrowser proof options:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output";
 const SESSION_AFTER_HELP: &str = "Session operations:\n  vida session triage\n  vida session triage --task <task-id>\n  vida session triage --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const QUALITY_AFTER_HELP: &str = "Quality operations:\n  vida quality gate --prepush\n  vida quality gate --prepush --advise\n  vida quality gate --prepush --json --advise\n\nOptions:\n  --prepush                        Evaluate the pre-push quality gate advisor\n  --advise                         Include remediation guidance\n  --coverage-file <path>           Read LCOV coverage evidence from this file\n  --coverage-threshold <percent>   Coverage threshold used for covered-line deficit math\n  --project-root <path>            Repository root used for git dirty/changed file evidence\n  --json                           Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive --reinit\n  vida state reset --archive --reinit --json\n  vida state reset --archive --reinit --state-dir <path> --json\n\nOptions:\n  --archive             Rename the current state root to a timestamped sibling archive before reset\n  --reinit              Recreate the authoritative state spine after archive\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output\n\nOutput:\n  Default output is compact plain text for operators.\n  Use --json for machine-readable automation.";
 const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
+const PACK_AFTER_HELP: &str = "Pack operations:\n  vida pack list\n  vida pack show full_six_pack\n  vida pack validate\n  vida pack validate quick_two_pack\n  vida pack list --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
+const AGENT_DISPATCH_NEXT_AFTER_HELP: &str = "Examples:\n  vida agent dispatch-next --dev-team --pack quick_two_pack\n  vida agent dispatch-next --dev-team --pack full_six_pack --preview\n  vida agent dispatch-next --dev-team --current-task-id <task-id>\n  vida agent dispatch-next --dev-team --pack quick_two_pack --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--execution-mode container_only` marks a work-pool/container task as non-executable by the scheduler\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
-const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <title> --parent-id <parent-id> --json\n  vida task create <task-id> --title <title> --json\n  vida task create <task-id> <title> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n\nNotes:\n  Provide exactly one title source: positional <title> or --title <title>.\n  Missing execution semantics fail closed for parallel scheduling.\n  Use `vida taskflow graph-summary --json` to verify parallel-safe admission after mutation.\n  For many task creates or long per-task metadata, write a JSONL/YAML file and use `vida task import --file tasks.jsonl --dry-run` instead of an oversized shell command.";
+const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <title> --parent-id <parent-id>\n  vida task create <task-id> --title <title>\n  vida task create <task-id> <title> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs\n\nNotes:\n  Provide exactly one title source: positional <title> or --title <title>.\n  Missing execution semantics fail closed for parallel scheduling.\n  Use `vida taskflow graph-summary` to verify parallel-safe admission after mutation.\n  For many task creates or long per-task metadata, write a JSONL/YAML file and use `vida task import --file tasks.jsonl --dry-run` instead of an oversized shell command.";
 const TASK_IMPORT_ABOUT: &str = "Create many tracked tasks from a structured file.";
 const TASK_IMPORT_LONG_ABOUT: &str = "Create many tracked tasks from a structured file without oversized shell payloads.\n\nUse this surface when a task batch is too large for a reliable shell command, when per-task descriptions or notes are long, or when operators need a reviewable file before mutating TaskFlow state.\n\nSupported input:\n- JSON or YAML array of task objects\n- JSON or YAML object with a `tasks` array\n- JSONL/NDJSON with one task object per line\n\nEach task object requires `id` (or `task_id`) and `title`. Optional fields include `display_id`, `description`, `type`/`issue_type`, `status`, `priority`, `parent_id`, `notes`, `labels`, execution semantics, and planner metadata. Command flags provide defaults for parent assignment, execution semantics, labels, owned paths, acceptance targets, and proof targets.";
-const TASK_IMPORT_AFTER_HELP: &str = "Examples:\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run --json\n  vida task import --file tasks.yaml --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task create-bulk --file tasks.json --labels operator-dx,taskflow --acceptance-target \"Tasks imported\" --proof-target \"cargo test -p vida task_bulk_import\" --json\n\nInput task object fields:\n  id | task_id, title, display_id, description, type | issue_type, status, priority, parent_id, notes\n  labels: [\"operator-dx\"] or \"operator-dx,taskflow\"\n  execution_semantics: { execution_mode, order_bucket, parallel_group, conflict_domain }\n  planner_metadata: { owned_paths, acceptance_targets, proof_targets, risk, estimate, lane_hint }\n\nLarge-batch transport:\n  Prefer JSONL/NDJSON for large batches because each task is one bounded line in a file.\n  If the shell reports a command line or payload is too large, move the task objects into a file and rerun `vida task import --file <path> --dry-run`.\n  Use `vida task dep add-bulk --edge-file edges.txt --dry-run` for large dependency-edge batches.\n\nNotes:\n  `--dry-run` validates against the current graph and does not mutate TaskFlow state.\n  Per-task fields override command defaults; list defaults are appended and de-duplicated.\n  JSONL lets operators import large batches from a file instead of passing oversized command payloads.";
+const TASK_IMPORT_AFTER_HELP: &str = "Examples:\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run\n  vida task import --file tasks.yaml --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs\n  vida task create-bulk --file tasks.json --labels operator-dx,taskflow --acceptance-target \"Tasks imported\" --proof-target \"cargo test -p vida task_bulk_import\"\n\nInput task object fields:\n  id | task_id, title, display_id, description, type | issue_type, status, priority, parent_id, notes\n  labels: [\"operator-dx\"] or \"operator-dx,taskflow\"\n  execution_semantics: { execution_mode, order_bucket, parallel_group, conflict_domain }\n  planner_metadata: { owned_paths, acceptance_targets, proof_targets, risk, estimate, lane_hint }\n\nLarge-batch transport:\n  Prefer JSONL/NDJSON for large batches because each task is one bounded line in a file.\n  If the shell reports a command line or payload is too large, move the task objects into a file and rerun `vida task import --file <path> --dry-run`.\n  Use `vida task dep add-bulk --edge-file edges.txt --dry-run` for large dependency-edge batches.\n\nNotes:\n  `--dry-run` validates against the current graph and does not mutate TaskFlow state.\n  Per-task fields override command defaults; list defaults are appended and de-duplicated.\n  JSONL lets operators import large batches from a file instead of passing oversized command payloads.";
 
 const TASK_UPDATE_ABOUT: &str = "Update one tracked task in the authoritative backlog store.";
 const TASK_UPDATE_LONG_ABOUT: &str = "Update one tracked task in the authoritative backlog store.\n\nUse execution-semantics flags to correct sequencing and parallelism truth without moving ordering back into notes:\n- `--execution-mode sequential|parallel_safe|exclusive|container_only`\n- `--order-bucket <id>`\n- `--parallel-group <id>`\n- `--conflict-domain <id>`\n- matching `--clear-*` flags remove one semantics field";
-const TASK_UPDATE_AFTER_HELP: &str = "Examples:\n  vida task update <task-id> --status in_progress --json\n  vida task update <task-id> --title \"Retitled task\" --priority 1 --json\n  vida task update <task-id> --parent-id <parent-id> --json\n  vida task update <task-id> --clear-parent-id --json\n  vida task update <task-id> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task update <task-id> --clear-parallel-group --clear-conflict-domain --json\n\nNotes:\n  Use either a value flag or the matching clear flag, not both.\n  Re-check `vida taskflow graph-summary --json` after updates to confirm `ready_parallel_safe` and `parallel_blockers`.\n  For long notes, use `--notes-file <path>`; for many task updates or creates, use `vida task import --file tasks.jsonl --dry-run`.";
+const TASK_UPDATE_AFTER_HELP: &str = "Examples:\n  vida task update <task-id> --status in_progress\n  vida task update <task-id> --title \"Retitled task\" --priority 1\n  vida task update <task-id> --parent-id <parent-id>\n  vida task update <task-id> --clear-parent-id\n  vida task update <task-id> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs\n  vida task update <task-id> --clear-parallel-group --clear-conflict-domain\n\nNotes:\n  Use either a value flag or the matching clear flag, not both.\n  Re-check `vida taskflow graph-summary` after updates to confirm operator parallel-safe admission; add `--json` only when machine-readable fields are required.\n  For long notes, use `--notes-file <path>`; for many task updates or creates, use `vida task import --file tasks.jsonl --dry-run`.";
 const TASK_BLOCK_ABOUT: &str = "record a runtime blocker on one task without closing it";
 const TASK_BLOCK_LONG_ABOUT: &str = "Record a runtime blocker on one task without closing it.\n\nThe command marks the task status as `blocked`, appends a structured blocker note to existing task notes, refreshes the canonical TaskFlow snapshot, and emits a machine-readable receipt when `--json` is set.";
-const TASK_BLOCK_AFTER_HELP: &str = "Examples:\n  vida task block <task-id> --reason \"runtime bridge unavailable\" --evidence \"agent-init returned host_tool_capability_missing\" --json\n  vida task block <task-id> --reason \"browser proof unavailable\" --blocker web_runtime_unhealthy --next-action \"run vida runtime web status --json\" --json\n\nOptions:\n  --reason <text>       Human-readable blocker reason; required\n  --evidence <text>     Evidence command, file, receipt, or observation\n  --blocker <code>      Canonical blocker code; accepts comma-separated values and repeated flags\n  --next-action <text>  Suggested recovery or continuation action; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output";
+const TASK_BLOCK_AFTER_HELP: &str = "Examples:\n  vida task block <task-id> --reason \"runtime bridge unavailable\" --evidence \"agent-init returned host_tool_capability_missing\"\n  vida task block <task-id> --reason \"browser proof unavailable\" --blocker web_runtime_unhealthy --next-action \"run vida runtime web status\"\n\nOptions:\n  --reason <text>       Human-readable blocker reason; required\n  --evidence <text>     Evidence command, file, receipt, or observation\n  --blocker <code>      Canonical blocker code; accepts comma-separated values and repeated flags\n  --next-action <text>  Suggested recovery or continuation action; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output";
 const TASK_VERIFY_ABOUT: &str =
     "record partial verification evidence on one task without closing it";
 const TASK_VERIFY_LONG_ABOUT: &str = "Record partial verification evidence on one task without closing it.\n\nUse this when source changes and tests are verified but browser, API, or external proof remains unavailable due to a runtime condition. The command leaves the task open, appends structured verification notes, updates proof-blocking labels, and emits source_fixed/tests_green/proof_blocked fields in JSON.";
-const TASK_VERIFY_AFTER_HELP: &str = "Examples:\n  vida task verify <task-id> --source-fixed --tests-green --proof-blocked --proof-blocker \"browser proof unavailable\" --evidence \"cargo test -p vida task_verify\" --json\n\nOptions:\n  --source-fixed          Record that the source fix is complete\n  --tests-green           Record that focused tests passed\n  --proof-blocked         Record that final proof is pending on runtime/external conditions\n  --proof-blocker <text>  Human-readable proof blocker reason\n  --evidence <text>       Evidence command, file, receipt, or observation; accepts repeated flags\n  --state-dir <path>      Override the TaskFlow state directory\n  --json                  Emit machine-readable JSON output";
+const TASK_VERIFY_AFTER_HELP: &str = "Examples:\n  vida task verify <task-id> --source-fixed --tests-green --proof-blocked --proof-blocker \"browser proof unavailable\" --evidence \"cargo test -p vida task_verify\"\n\nOptions:\n  --source-fixed          Record that the source fix is complete\n  --tests-green           Record that focused tests passed\n  --proof-blocked         Record that final proof is pending on runtime/external conditions\n  --proof-blocker <text>  Human-readable proof blocker reason\n  --evidence <text>       Evidence command, file, receipt, or observation; accepts repeated flags\n  --state-dir <path>      Override the TaskFlow state directory\n  --json                  Emit machine-readable JSON output";
 const TASK_PRUNE_CLOSED_EPICS_ABOUT: &str =
     "archive and prune closed epic task rows without touching runtime receipts";
 const TASK_PRUNE_CLOSED_EPICS_LONG_ABOUT: &str = "Archive and prune only TaskFlow task rows for closed epic/container subtrees.\n\nThe command previews by default. Use --apply to write a JSONL archive of pruned task rows and then delete only those task rows plus their owned task_dependency rows. Runtime receipts, run-graph state, lane state, and non-task runtime state are never removed by this surface.";
@@ -122,6 +125,11 @@ pub(crate) enum Command {
     AgentInit(AgentInitArgs),
     #[command(about = "preview delegated agent lane selection without executing dispatch")]
     Agent(AgentArgs),
+    #[command(
+        about = "inspect VIDA agent role packs from the configured pack registry",
+        after_help = PACK_AFTER_HELP
+    )]
+    Pack(PackArgs),
     #[command(
         about = "inspect and invoke the feature-gated VIDA coder provider surface",
         after_help = CODER_AFTER_HELP
@@ -397,7 +405,8 @@ pub(crate) struct AgentArgs {
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum AgentCommand {
     #[command(
-        about = "preview next bounded agent dispatch lanes with carrier/model/cost selection truth from TaskFlow readiness"
+        about = "preview next bounded agent dispatch lanes with carrier/model/cost selection truth from TaskFlow readiness",
+        after_help = AGENT_DISPATCH_NEXT_AFTER_HELP
     )]
     DispatchNext(AgentDispatchNextArgs),
     #[command(
@@ -414,6 +423,56 @@ pub(crate) enum AgentCommand {
         after_help = "Examples:\n  vida agent status\n  vida agent status --compact\n  vida agent status --json --compact\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for machine-readable automation."
     )]
     Status(AgentStatusArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct PackArgs {
+    #[command(subcommand)]
+    pub(crate) command: PackCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum PackCommand {
+    #[command(about = "list configured VIDA agent role packs")]
+    List(PackListArgs),
+    #[command(about = "show one configured VIDA agent role pack")]
+    Show(PackShowArgs),
+    #[command(about = "validate configured VIDA agent role packs")]
+    Validate(PackValidateArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct PackListArgs {
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct PackShowArgs {
+    #[arg(help = "Pack id to inspect")]
+    pub(crate) pack_id: String,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct PackValidateArgs {
+    #[arg(help = "Optional pack id to validate; validates all packs when omitted")]
+    pub(crate) pack_id: Option<String>,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -538,9 +597,23 @@ pub(crate) struct AgentDispatchNextArgs {
 
     #[arg(
         long = "dev-team",
-        help = "Preview configured dev-team flow sequence from vida.config.yaml, for example analyst, autotester, developer, coach-validator, tester/prover, and release closure"
+        help = "Preview configured dev-team flow sequence from vida.config.yaml, using canonical pack role names where available"
     )]
     pub(crate) dev_team: bool,
+
+    #[arg(
+        long = "pack",
+        value_name = "PACK_ID",
+        help = "Select a configured VIDA agent pack flow, for example quick_two_pack or full_six_pack; requires --dev-team"
+    )]
+    pub(crate) pack_id: Option<String>,
+
+    #[arg(
+        long = "preview",
+        conflicts_with = "materialize_packets",
+        help = "Preview without packet materialization; this is the default unless --materialize-packets is passed"
+    )]
+    pub(crate) preview: bool,
 
     #[arg(
         long = "materialize-packets",
@@ -639,9 +712,58 @@ pub(crate) struct AgentHostBridgeArgs {
     #[arg(
         long = "summary",
         requires = "complete",
-        help = "Receipt summary from the parent host adapter"
+        help = "Human-readable receipt summary from the parent host adapter; display-only when typed result fields are provided"
     )]
     pub(crate) summary: Option<String>,
+
+    #[arg(
+        long = "decision",
+        requires = "complete",
+        help = "Typed host bridge decision such as pass, blocked, or rework_required"
+    )]
+    pub(crate) decision: Option<String>,
+
+    #[arg(
+        long = "verdict",
+        requires = "complete",
+        help = "Typed host bridge verdict such as implemented, pass, blocked, or rework_required"
+    )]
+    pub(crate) verdict: Option<String>,
+
+    #[arg(
+        long = "allowed-next-node",
+        requires = "complete",
+        help = "Typed next state-machine node authorized by the host bridge result"
+    )]
+    pub(crate) allowed_next_node: Option<String>,
+
+    #[arg(
+        long = "blocker-codes",
+        requires = "complete",
+        help = "Typed blocker code array for blocked/rework host bridge results; accepts JSON array or comma list"
+    )]
+    pub(crate) blocker_codes: Option<String>,
+
+    #[arg(
+        long = "blocker-code",
+        requires = "complete",
+        help = "One typed blocker code for blocked/rework host bridge results; accepts repeated flags"
+    )]
+    pub(crate) blocker_code: Vec<String>,
+
+    #[arg(
+        long = "rework-target",
+        requires = "complete",
+        help = "Typed rework target required for blocked/rework host bridge results"
+    )]
+    pub(crate) rework_target: Option<String>,
+
+    #[arg(
+        long = "result-file",
+        requires = "complete",
+        help = "Typed host bridge result JSON file under the VIDA state root"
+    )]
+    pub(crate) result_file: Option<PathBuf>,
 
     #[arg(
         long = "receipt-id",
@@ -815,6 +937,12 @@ pub(crate) struct ReleaseInstallArgs {
         help = "Root used for install paths; defaults to HOME/USERPROFILE"
     )]
     pub(crate) install_root: Option<PathBuf>,
+
+    #[arg(
+        long = "require-clean-worktree",
+        help = "Block install unless `git status --short` is clean; use for runtime commit release proof"
+    )]
+    pub(crate) require_clean_worktree: bool,
 
     #[arg(long = "json")]
     pub(crate) json: bool,
@@ -3327,6 +3455,12 @@ pub(crate) struct DiagnosticsRulesCheckArgs {
     #[arg(long = "protocol-id")]
     pub(crate) protocol_ids: Vec<String>,
 
+    #[arg(
+        long = "taskflow-invariants",
+        help = "Check TaskFlow state invariants from --state-dir, including graph rows and owned_paths safety"
+    )]
+    pub(crate) taskflow_invariants: bool,
+
     #[arg(long = "json")]
     pub(crate) json: bool,
 }
@@ -3740,6 +3874,8 @@ mod tests {
         assert!(dispatch_help.contains("--state-dir"));
         assert!(dispatch_help.contains("--json"));
         assert!(dispatch_help.contains("--dev-team"));
+        assert!(dispatch_help.contains("--pack"));
+        assert!(dispatch_help.contains("--preview"));
 
         let parsed = Cli::try_parse_from([
             "vida",
@@ -3770,6 +3906,8 @@ mod tests {
             Some("/tmp/vida-state".to_string())
         );
         assert!(!dispatch.dev_team);
+        assert_eq!(dispatch.pack_id, None);
+        assert!(!dispatch.preview);
         assert!(dispatch.json);
 
         let dispatch_dev_team = Cli::try_parse_from([
@@ -3779,6 +3917,9 @@ mod tests {
             "--lanes",
             "5",
             "--dev-team",
+            "--pack",
+            "quick_two_pack",
+            "--preview",
         ])
         .expect("agent dispatch-next should parse");
         let Some(super::Command::Agent(agent_args)) = dispatch_dev_team.command else {
@@ -3788,7 +3929,25 @@ mod tests {
             panic!("agent dispatch-next command should parse");
         };
         assert!(dispatch_dev_team.dev_team);
+        assert_eq!(dispatch_dev_team.pack_id.as_deref(), Some("quick_two_pack"));
+        assert!(dispatch_dev_team.preview);
         assert_eq!(dispatch_dev_team.lanes, 5);
+
+        let pack_list =
+            Cli::try_parse_from(["vida", "pack", "list"]).expect("pack list should parse");
+        let Some(super::Command::Pack(pack_args)) = pack_list.command else {
+            panic!("pack command should parse");
+        };
+        let crate::PackCommand::List(pack_list) = pack_args.command else {
+            panic!("pack list command should parse");
+        };
+        assert!(!pack_list.json);
+
+        let pack_help = Cli::try_parse_from(["vida", "pack", "--help"])
+            .expect_err("help should render clap display error")
+            .to_string();
+        assert!(pack_help.contains("vida pack list"));
+        assert!(pack_help.contains("vida pack show full_six_pack"));
 
         let parsed_select = Cli::try_parse_from([
             "vida",
@@ -3823,6 +3982,13 @@ mod tests {
         assert!(host_bridge_help.contains("--consolidation-receipt"));
         assert!(host_bridge_help.contains("--host-agent-id"));
         assert!(host_bridge_help.contains("--summary"));
+        assert!(host_bridge_help.contains("--decision"));
+        assert!(host_bridge_help.contains("--verdict"));
+        assert!(host_bridge_help.contains("--allowed-next-node"));
+        assert!(host_bridge_help.contains("--blocker-codes"));
+        assert!(host_bridge_help.contains("--blocker-code"));
+        assert!(host_bridge_help.contains("--rework-target"));
+        assert!(host_bridge_help.contains("--result-file"));
         assert!(host_bridge_help.contains("--receipt-id"));
         assert!(host_bridge_help.contains("--state-dir"));
         assert!(host_bridge_help.contains("--json"));
@@ -3838,6 +4004,20 @@ mod tests {
             "agent-1",
             "--summary",
             "done",
+            "--decision",
+            "pass",
+            "--verdict",
+            "implemented",
+            "--allowed-next-node",
+            "coach",
+            "--blocker-codes",
+            "[]",
+            "--blocker-code",
+            "scope_check_passed",
+            "--rework-target",
+            "developer",
+            "--result-file",
+            "/tmp/host-bridge-result.json",
             "--receipt-id",
             "receipt-1",
             "--state-dir",
@@ -3858,6 +4038,22 @@ mod tests {
         assert!(host_bridge.complete);
         assert_eq!(host_bridge.host_agent_id.as_deref(), Some("agent-1"));
         assert_eq!(host_bridge.summary.as_deref(), Some("done"));
+        assert_eq!(host_bridge.decision.as_deref(), Some("pass"));
+        assert_eq!(host_bridge.verdict.as_deref(), Some("implemented"));
+        assert_eq!(host_bridge.allowed_next_node.as_deref(), Some("coach"));
+        assert_eq!(host_bridge.blocker_codes.as_deref(), Some("[]"));
+        assert_eq!(
+            host_bridge.blocker_code,
+            vec!["scope_check_passed".to_string()]
+        );
+        assert_eq!(host_bridge.rework_target.as_deref(), Some("developer"));
+        assert_eq!(
+            host_bridge
+                .result_file
+                .as_deref()
+                .map(|path| path.display().to_string()),
+            Some("/tmp/host-bridge-result.json".to_string())
+        );
         assert_eq!(host_bridge.receipt_id.as_deref(), Some("receipt-1"));
         assert_eq!(
             host_bridge

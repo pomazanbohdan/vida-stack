@@ -1,5 +1,5 @@
 project:
-  id: vida-stack
+  id: agent-init-view-only-activation
   overlay_version: 1
 
 project_bootstrap:
@@ -17,10 +17,10 @@ project_bootstrap:
   require_launch_confirmation: false
 
 language_policy:
-  user_communication: uk
-  reasoning: en
-  documentation: en
-  todo_protocol: en
+  user_communication: english
+  reasoning: english
+  documentation: english
+  todo_protocol: english
 
 host_environment:
   cli_system: codex
@@ -429,6 +429,7 @@ agent_extensions:
     skills: docs/process/agent-extensions/skills.yaml
     profiles: docs/process/agent-extensions/profiles.yaml
     flows: docs/process/agent-extensions/flows.yaml
+    packs: docs/process/agent-extensions/packs.yaml
     dispatch_aliases: docs/process/agent-extensions/dispatch-aliases.yaml
     hook_templates: docs/product/spec/hook-templates.yaml
   enabled_framework_roles:
@@ -972,7 +973,7 @@ dev_team:
         - command_timing_summary
       team_contract:
         team_id: pr_processing_team
-        command_surface: vida agent dispatch-next --dev-team --current-task-id "{{task_id}}" --json
+        command_surface: vida agent dispatch-next --dev-team --current-task-id "{{task_id}}"
         intended_work_items:
           - pull_request
           - pr_repair

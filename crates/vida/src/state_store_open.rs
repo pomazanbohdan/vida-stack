@@ -88,6 +88,7 @@ impl AuthoritativeOpenGuard {
         let guard_path = root.join(".vida-authoritative-open.guard");
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&guard_path)?;
@@ -96,7 +97,7 @@ impl AuthoritativeOpenGuard {
                 Ok(()) => {
                     return Ok(Self { file });
                 }
-                Err(error) if Self::is_lock_contention_error(&error) => {
+                Err(error) if crate::state_access::io_error_is_lock_contention(&error) => {
                     if attempt + 1 < AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT {
                         tokio::time::sleep(std::time::Duration::from_millis(
                             AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS,
@@ -114,19 +115,6 @@ impl AuthoritativeOpenGuard {
             std::io::ErrorKind::TimedOut,
             "timed out while waiting for authoritative datastore access serialization guard",
         )))
-    }
-
-    fn is_lock_contention_error(error: &std::io::Error) -> bool {
-        matches!(
-            error.kind(),
-            std::io::ErrorKind::WouldBlock
-                | std::io::ErrorKind::TimedOut
-                | std::io::ErrorKind::Interrupted
-        ) || error.raw_os_error().is_some_and(|code| {
-            code == libc::EWOULDBLOCK
-                || code == libc::EAGAIN
-                || (cfg!(windows) && matches!(code, 5 | 32 | 33))
-        })
     }
 }
 
@@ -160,7 +148,7 @@ impl StateStore {
         let lock_text = match fs::read_to_string(&lock_path) {
             Ok(lock_text) => lock_text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+            Err(error) if crate::state_access::io_error_is_lock_contention(&error) => {
                 return Ok(false);
             }
             Err(error) => return Err(StateStoreError::Io(error)),
@@ -176,7 +164,7 @@ impl StateStore {
             match fs::remove_file(&lock_path) {
                 Ok(()) => return Ok(true),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+                Err(error) if crate::state_access::io_error_is_lock_contention(&error) => {
                     if attempt + 1 < STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
                         std::thread::sleep(std::time::Duration::from_millis(
                             STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS,
@@ -212,7 +200,7 @@ impl StateStore {
                     break;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+                Err(error) if crate::state_access::io_error_is_lock_contention(&error) => {
                     if attempt + 1 < STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
                         std::thread::sleep(std::time::Duration::from_millis(
                             STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS,
@@ -237,7 +225,7 @@ impl StateStore {
             match fs::remove_file(&lock_path) {
                 Ok(()) => return Ok(true),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+                Err(error) if crate::state_access::io_error_is_lock_contention(&error) => {
                     if attempt + 1 < STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
                         std::thread::sleep(std::time::Duration::from_millis(
                             STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS,
@@ -271,7 +259,7 @@ impl StateStore {
     pub(crate) fn error_is_lock_contention(error: &StateStoreError) -> bool {
         match error {
             StateStoreError::Io(io_error) => {
-                AuthoritativeOpenGuard::is_lock_contention_error(io_error)
+                crate::state_access::io_error_is_lock_contention(io_error)
             }
             StateStoreError::Db(db_error) => {
                 Self::message_is_lock_contention(&db_error.to_string())
@@ -282,16 +270,7 @@ impl StateStore {
     }
 
     pub(crate) fn message_is_lock_contention(message: &str) -> bool {
-        let normalized = message.to_ascii_lowercase();
-        normalized.contains("lock")
-            || normalized.contains("resource temporarily unavailable")
-            || normalized.contains("os error 32")
-            || normalized.contains("os error 33")
-            || normalized.contains("os error 5")
-            || normalized.contains("access is denied")
-            || normalized.contains("being used by another process")
-            || normalized.contains("process cannot access the file")
-            || normalized.contains("portion of the file")
+        crate::state_access::message_is_lock_contention(message)
     }
 
     async fn sanitize_legacy_task_execution_semantics(&self) -> Result<(), StateStoreError> {

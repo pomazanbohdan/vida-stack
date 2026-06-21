@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use time::format_description::well_known::Rfc3339;
 
+use crate::runtime_contract_vocab::TASK_CLASS_SPECIFICATION;
 use crate::runtime_dispatch_packet_text::{
     runtime_packet_prompt, runtime_packet_request_text, runtime_tracked_flow_packet,
 };
@@ -190,8 +191,9 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     );
     if delivery_packet_task_class_requires_owned_paths(handoff_task_class.as_str()) {
         let owned_paths = if implementation_owned_paths_override.is_empty() {
-            crate::runtime_dispatch_state::implementation_owned_paths_for_role_selection(
+            crate::runtime_dispatch_state::owned_paths_for_required_delivery_task_class(
                 role_selection,
+                handoff_task_class.as_str(),
             )
         } else {
             implementation_owned_paths_override.to_vec()
@@ -303,8 +305,12 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         },
     );
     let packet_for_request = serde_json::Value::Object(body.clone());
-    let request_text = runtime_packet_request_text(&packet_template_kind, &packet_for_request)
-        .unwrap_or_else(|| role_selection.request.trim().to_string());
+    let request_text = if handoff_task_class == TASK_CLASS_SPECIFICATION {
+        role_selection.request.trim().to_string()
+    } else {
+        runtime_packet_request_text(&packet_template_kind, &packet_for_request)
+            .unwrap_or_else(|| role_selection.request.trim().to_string())
+    };
     body.insert(
         "request_text".to_string(),
         serde_json::json!(request_text.clone()),

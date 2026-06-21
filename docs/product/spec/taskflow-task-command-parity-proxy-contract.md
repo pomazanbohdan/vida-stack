@@ -207,7 +207,7 @@ Will implement / choose:
   - `vida task close ... --reason ... --json`
   - isolated `vida task close ... --reason ... --state-dir <temp> --json` smoke proving `epic_progress_summary` fields are emitted by the command path
   - `vida taskflow task create ... --json`
-  - `vida task validate-graph --json`
+  - `vida task validate-graph`
 - Canonical checks:
   - `vida docflow activation-check --root . docs/product/spec/taskflow-task-command-parity-proxy-contract.md docs/product/spec/current-spec-map.md`
   - `vida docflow check --root . docs/product/spec/taskflow-task-command-parity-proxy-contract.md docs/product/spec/current-spec-map.md`

@@ -1,0 +1,112 @@
+version: 1
+packs:
+  - pack_id: quick-two-pack
+    aliases: [quick_two_pack]
+    flow_id: quick_two_pack_flow
+    enabled: true
+    default: false
+    description: Fast two-role implementation cleanup pack.
+    work_item_bindings: [task, small_patch]
+    ordered_steps:
+      - role_id: coder
+        task_class: implementation
+      - role_id: cleaner
+        task_class: implementation
+        proof_target: agent:quick-two-pack:cleaner
+  - pack_id: spec-four-pack
+    aliases: [spec_four_pack, four-pack]
+    flow_id: spec_four_pack_flow
+    enabled: true
+    default: true
+    description: Specification, coding, structural cleanup, and architecture review pack.
+    work_item_bindings: [feature, requirements_change, architecture]
+    ordered_steps:
+      - role_id: specifier
+        task_class: specification
+      - role_id: coder
+        task_class: implementation
+      - role_id: refactorer
+        task_class: refactor
+      - role_id: architect
+        task_class: architecture
+        proof_target: agent:spec-four-pack:architect
+  - pack_id: full-six-pack
+    aliases: [full_six_pack]
+    flow_id: full_six_pack_flow
+    enabled: true
+    default: false
+    description: Full six-lane delivery pack with VIDA prover closure as the terminal gate.
+    work_item_bindings: [feature, requirements_change]
+    ordered_steps:
+      - role_id: specifier
+        task_class: specification
+      - role_id: coder
+        task_class: implementation
+      - role_id: cleaner
+        task_class: implementation
+      - role_id: architect
+        task_class: architecture
+      - role_id: hardender
+        task_class: quality_gate
+        receive_mode: batch
+      - role_id: qa_tester
+        task_class: verification
+      - role_id: prover
+        task_class: release_readiness
+        proof_target: agent:full-six-pack:prover
+  - pack_id: adversarial-review
+    aliases: [adversarial_review, adversarial_review_pack]
+    flow_id: adversarial_review_flow
+    enabled: true
+    default: false
+    description: Implementation plus adversarial review and rework before QA and proof closure.
+    work_item_bindings: [review, quality_gate]
+    ordered_steps:
+      - role_id: coder
+        task_class: implementation
+      - role_id: adversarial_reviewer
+        task_class: review
+      - role_id: coder
+        task_class: implementation
+        step_id: adversarial-review-rework
+      - role_id: qa_tester
+        task_class: verification
+      - role_id: prover
+        task_class: release_readiness
+        proof_target: agent:adversarial-review:prover
+  - pack_id: runtime-defect-pack
+    aliases: [runtime_defect_pack]
+    flow_id: runtime_defect_remediation
+    enabled: true
+    default: false
+    description: Runtime-defect remediation pack with specification, test authoring, implementation, validation, hardening, QA, and proof.
+    work_item_bindings: [runtime_defect]
+    ordered_steps:
+      - role_id: specifier
+        task_class: specification
+      - role_id: test_author
+        task_class: test_authoring
+      - role_id: coder
+        task_class: implementation
+      - role_id: reviewer_validator
+        task_class: validation
+      - role_id: hardender
+        task_class: quality_gate
+        receive_mode: batch
+      - role_id: qa_tester
+        task_class: verification
+      - role_id: prover
+        task_class: release_readiness
+        proof_target: agent:runtime-defect-pack:prover
+
+# -----
+# artifact_path: process/agent-extensions/packs
+# artifact_type: process_registry
+# artifact_version: '1'
+# artifact_revision: '2026-06-20'
+# schema_version: '1'
+# status: canonical
+# source_path: docs/process/agent-extensions/packs.yaml
+# created_at: 2026-06-20T00:00:00+03:00
+# updated_at: 2026-06-20T00:00:00+03:00
+# changelog_ref: packs.changelog.jsonl

@@ -122,7 +122,7 @@ async fn resolve_packet_render_run_id(
         })?;
     if bound_receipt.is_none() {
         return Err(format!(
-            "Run `{requested_run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but no fresh persisted dispatch receipt exists for the bound task. Run `vida taskflow run-graph dispatch-init {bound_task_id} --json` first."
+            "Run `{requested_run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but no fresh persisted dispatch receipt exists for the bound task. Run `vida taskflow run-graph dispatch-init {bound_task_id}` first."
         ));
     }
 
@@ -135,7 +135,7 @@ async fn resolve_latest_packet_run_id(store: &StateStore) -> Result<String, Stri
         .await
         .map_err(|error| format!("Failed to read latest persisted dispatch receipt: {error}"))?
     else {
-        return Err("No latest persisted run-graph dispatch receipt exists; run `vida taskflow run-graph dispatch-init <task-id> --json` first.".to_string());
+        return Err("No latest persisted run-graph dispatch receipt exists; run `vida taskflow run-graph dispatch-init <task-id>` first.".to_string());
     };
     Ok(receipt.run_id)
 }
@@ -149,7 +149,7 @@ async fn resolve_task_packet_run_id(store: &StateStore, task_id: &str) -> Result
         })?
     else {
         return Err(format!(
-            "No persisted run-graph status exists for task `{task_id}`; run `vida taskflow run-graph dispatch-init {task_id} --json` first."
+            "No persisted run-graph status exists for task `{task_id}`; run `vida taskflow run-graph dispatch-init {task_id}` first."
         ));
     };
     Ok(run_id)
@@ -182,7 +182,7 @@ fn build_taskflow_packet_render_payload(
             "run_id": run_id,
             "dispatch_packet_path": dispatch_packet_path,
             "downstream_dispatch_packet_path": receipt.downstream_dispatch_packet_path,
-            "continue_command": format!("vida taskflow consume continue --run-id {} --json", receipt.run_id),
+            "continue_command": format!("vida taskflow consume continue --run-id {}", receipt.run_id),
         }
     })
 }
@@ -274,9 +274,7 @@ fn packet_trimmed_string<'a>(packet: &'a serde_json::Value, key: &str) -> Option
         .filter(|value| !value.is_empty())
 }
 
-fn active_repair_packet<'a>(
-    packet: &'a serde_json::Value,
-) -> Result<(&'a str, &'a serde_json::Value), String> {
+fn active_repair_packet(packet: &serde_json::Value) -> Result<(&str, &serde_json::Value), String> {
     let packet_template_kind = packet_trimmed_string(packet, "packet_template_kind")
         .ok_or_else(|| "Persisted dispatch packet is missing packet_template_kind.".to_string())?;
     let active_packet = packet
@@ -484,7 +482,7 @@ fn packet_repair_parse_error_payload(error: &str) -> serde_json::Value {
         "error": error,
         "usage": usage(),
         "next_actions": [
-            "Rerun as `vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json`."
+            "Rerun as `vida taskflow packet repair --run-id <run-id> --from-task <task-id>`."
         ],
     })
 }
@@ -515,11 +513,11 @@ fn build_taskflow_packet_repair_payload(
     load_error: Option<&str>,
 ) -> serde_json::Value {
     let dispatch_init_command =
-        task.map(|task| format!("vida taskflow run-graph dispatch-init {} --json", task.id));
-    let render_command = format!("vida taskflow packet render {run_id} --json");
+        task.map(|task| format!("vida taskflow run-graph dispatch-init {}", task.id));
+    let render_command = format!("vida taskflow packet render {run_id}");
     let repair_command = task.map(|task| {
         format!(
-            "vida taskflow packet repair --run-id {run_id} --from-task {} --json",
+            "vida taskflow packet repair --run-id {run_id} --from-task {}",
             task.id
         )
     });
@@ -562,7 +560,7 @@ fn build_taskflow_packet_repair_payload(
     } else if load_error.is_some() {
         serde_json::json!([
             format!(
-                "vida task show {} --json",
+                "vida task show {}",
                 task.map(|task| task.id.as_str()).unwrap_or("<task-id>")
             ),
             "Create or bind the canonical task before re-running packet repair.".to_string(),
@@ -570,7 +568,7 @@ fn build_taskflow_packet_repair_payload(
     } else {
         serde_json::json!([
             format!(
-                "vida task update {} --owned-path <path> --proof-target <command> --json",
+                "vida task update {} --owned-path <path> --proof-target <command>",
                 task.map(|task| task.id.as_str()).unwrap_or("<task-id>")
             ),
             repair_command.clone().unwrap_or_default(),
@@ -786,7 +784,7 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
     };
     let Some(receipt) = receipt_from_store else {
         eprintln!(
-            "No persisted run-graph dispatch receipt exists for run_id `{effective_run_id}`. Run `vida taskflow run-graph dispatch-init {run_id} --json` first."
+            "No persisted run-graph dispatch receipt exists for run_id `{effective_run_id}`. Run `vida taskflow run-graph dispatch-init {run_id}` first."
         );
         return ExitCode::from(1);
     };
@@ -1161,9 +1159,7 @@ mod tests {
             exception_path_receipt_id: None,
             dispatch_kind: "agent_lane".to_string(),
             dispatch_surface: Some("vida taskflow run-graph dispatch-init".to_string()),
-            dispatch_command: Some(format!(
-                "vida taskflow consume continue --run-id {run_id} --json"
-            )),
+            dispatch_command: Some(format!("vida taskflow consume continue --run-id {run_id}")),
             dispatch_packet_path: Some(packet_path.display().to_string()),
             dispatch_result_path: None,
             blocker_code: None,
@@ -1356,7 +1352,7 @@ mod tests {
         assert_eq!(payload["metadata_complete"], true);
         assert_eq!(
             payload["bind_command"],
-            "vida taskflow run-graph dispatch-init task-with-metadata --json"
+            "vida taskflow run-graph dispatch-init task-with-metadata"
         );
         assert_eq!(
             payload["task_metadata"]["planner_metadata"]["owned_paths"][0],
@@ -1918,7 +1914,7 @@ mod tests {
                 dispatch_kind: "agent_lane".to_string(),
                 dispatch_surface: Some("vida taskflow run-graph dispatch-init".to_string()),
                 dispatch_command: Some(
-                    "vida taskflow consume continue --run-id task-new --json".to_string(),
+                    "vida taskflow consume continue --run-id task-new".to_string(),
                 ),
                 dispatch_packet_path: Some("/tmp/task-new-packet.json".to_string()),
                 dispatch_result_path: None,
@@ -1997,7 +1993,7 @@ mod tests {
                 dispatch_kind: "agent_lane".to_string(),
                 dispatch_surface: Some("vida taskflow run-graph dispatch-init".to_string()),
                 dispatch_command: Some(
-                    "vida taskflow consume continue --run-id run-latest --json".to_string(),
+                    "vida taskflow consume continue --run-id run-latest".to_string(),
                 ),
                 dispatch_packet_path: Some("/tmp/run-latest-packet.json".to_string()),
                 dispatch_result_path: None,

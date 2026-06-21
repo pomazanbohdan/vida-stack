@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use serde_yaml;
-
 pub(crate) fn selected_host_cli_system_entry(
     overlay: &serde_yaml::Value,
 ) -> (String, Option<serde_yaml::Value>) {

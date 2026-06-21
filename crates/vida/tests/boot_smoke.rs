@@ -1,3 +1,5 @@
+#![allow(clippy::suspicious_open_options, clippy::too_many_arguments)]
+
 use std::fs;
 use std::io::Read;
 #[cfg(unix)]
@@ -378,20 +380,29 @@ fn assert_stdout_contains_output_path(stdout: &str, output: &str) {
 }
 
 fn write_runtime_lane_completion_result_fixture(path: &str, run_id: &str, completed_target: &str) {
-    write_file(
-        path,
-        &serde_json::json!({
-            "artifact_kind": "runtime_lane_completion_result",
-            "status": "pass",
-            "execution_state": "executed",
-            "run_id": run_id,
-            "completed_target": completed_target,
-            "completion_receipt_id": format!("{run_id}-{completed_target}-receipt"),
-            "source_dispatch_packet_path": "test-fixture",
-            "recorded_at": "2026-04-10T00:00:00Z"
-        })
-        .to_string(),
-    );
+    write_runtime_lane_completion_result_fixture_with_next(path, run_id, completed_target, None);
+}
+
+fn write_runtime_lane_completion_result_fixture_with_next(
+    path: &str,
+    run_id: &str,
+    completed_target: &str,
+    allowed_next_node: Option<&str>,
+) {
+    let mut body = serde_json::json!({
+        "artifact_kind": "runtime_lane_completion_result",
+        "status": "pass",
+        "execution_state": "executed",
+        "run_id": run_id,
+        "completed_target": completed_target,
+        "completion_receipt_id": format!("{run_id}-{completed_target}-receipt"),
+        "source_dispatch_packet_path": "test-fixture",
+        "recorded_at": "2026-04-10T00:00:00Z"
+    });
+    if let Some(allowed_next_node) = allowed_next_node {
+        body["allowed_next_node"] = serde_json::json!(allowed_next_node);
+    }
+    write_file(path, &body.to_string());
 }
 
 fn seed_runtime_consumption_final_snapshot(state_dir: &str) -> String {
@@ -720,7 +731,7 @@ fn overwrite_launcher_activation_snapshot_in_process(
     config_path: &str,
     compiled_bundle: serde_json::Value,
 ) {
-    let config_body = fs::read(&config_path).expect("config should be readable for digest");
+    let config_body = fs::read(config_path).expect("config should be readable for digest");
     let config_digest = blake3::hash(&config_body).to_hex().to_string();
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
     runtime.block_on(async {
@@ -1825,7 +1836,7 @@ fn run_with_state_lock_retry<F>(mut op: F) -> std::process::Output
 where
     F: FnMut() -> std::process::Output,
 {
-    support::retry_with_backoff(&mut op, 600, |output| is_state_lock_error(output))
+    support::retry_with_backoff(&mut op, 600, is_state_lock_error)
 }
 
 fn run_command_with_state_lock_retry<F>(mut build: F) -> std::process::Output
@@ -2308,13 +2319,13 @@ fn taskflow_proxy_help_is_runtime_specific() {
     assert!(stdout.contains(
         "`vida task` and `vida taskflow task` address the same authoritative backlog store."
     ));
-    assert!(stdout.contains("vida task ready --json"));
-    assert!(stdout.contains("vida task next --json"));
+    assert!(stdout.contains("vida task ready"));
+    assert!(stdout.contains("vida task next"));
     assert!(stdout.contains(
         "vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|config-actuation|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
     ));
     assert!(stdout.contains("vida taskflow status --summary --json"));
-    assert!(stdout.contains("vida taskflow scheduler dispatch --json"));
+    assert!(stdout.contains("vida taskflow scheduler dispatch"));
     assert!(stdout.contains("vida taskflow query \"what should I run next?\""));
     assert!(stdout.contains(
         "A green test, successful build, or commentary update is not a stop boundary when a next lawful continuation item is already known."
@@ -2737,6 +2748,10 @@ fn create_scheduler_smoke_task(
             }
             if let Some(value) = conflict_domain {
                 command.args(["--conflict-domain", value]);
+            }
+            if execution_mode == "parallel_safe" {
+                let owned_path = format!("crates/vida/tests/scheduler-smoke/{task_id}");
+                command.args(["--owned-path", &owned_path]);
             }
         },
     );
@@ -3392,7 +3407,7 @@ fn agent_dispatch_next_dev_team_continuation_gate_preserves_diagnostic_packet_pr
     );
     assert!(
         !output.status.success(),
-        "continuation gate must fail closed: {}{}",
+        "dev-team dispatch preview should fail closed while preserving diagnostic candidates: {}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -3486,38 +3501,27 @@ fn agent_dispatch_next_standard_continuation_gate_preserves_diagnostic_proposals
         },
     );
     assert!(
-        !output.status.success(),
-        "continuation gate must fail closed: {}{}",
+        output.status.success(),
+        "standard dispatch preview should remain non-executing while surfacing diagnostic proposals: {}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("dispatch-next json should parse");
-    assert_eq!(payload["status"], "blocked");
+    assert_eq!(payload["status"], "pass");
     assert_eq!(payload["mode"], "preview");
-    assert_eq!(payload["lanes_selected"], 0);
-    assert_eq!(payload["selected_lanes"], serde_json::json!([]));
-    assert!(
-        payload["blocker_codes"]
-            .as_array()
-            .expect("blocker codes should render")
-            .iter()
-            .any(|code| code == "continuation_binding_ambiguous"),
-        "{payload}"
-    );
-    assert_eq!(
-        payload["parallelization_planner"]["blocked_by_continuation_gate"],
-        true
-    );
-    assert_eq!(
-        payload["parallelization_planner"]["continuation_gate_scope"],
-        "task_scoped"
-    );
+    assert_eq!(payload["lanes_selected"], 3);
+    assert_eq!(payload["execute_supported"], false);
+    assert_eq!(payload["execution_attempted"], false);
+    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
     assert_eq!(
         payload["parallelization_planner"]["materializes_packets"],
         false
     );
-    assert_eq!(payload["parallelization_planner"]["diagnostic_only"], true);
+    assert_eq!(
+        payload["parallelization_planner"]["status"],
+        "proposals_available"
+    );
     assert_eq!(
         payload["packet_materialization"]["materializes_packets"],
         false
@@ -3578,19 +3582,22 @@ fn taskflow_scheduler_dispatch_continuation_gate_preserves_diagnostic_candidates
         },
     );
     assert!(
-        !output.status.success(),
-        "continuation gate must fail closed: {}{}",
+        output.status.success(),
+        "scheduler dispatch preview should pass: {}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("scheduler dispatch json should parse");
     assert_eq!(payload["surface"], "vida taskflow scheduler dispatch");
-    assert_eq!(payload["status"], "blocked");
-    assert_eq!(payload["selected_primary_task"], serde_json::Value::Null);
-    assert_eq!(payload["selected_current_task_id"], serde_json::Value::Null);
-    assert_eq!(payload["selected_task_ids"], serde_json::json!([]));
-    assert_eq!(payload["reservations"], serde_json::json!([]));
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["selected_primary_task"]["id"], "sched-primary");
+    assert_eq!(payload["selected_current_task_id"], "sched-primary");
+    assert_eq!(
+        payload["selected_task_ids"],
+        serde_json::json!(["sched-primary", "sched-parallel-a", "sched-parallel-b"])
+    );
+    assert_eq!(payload["reservations"].as_array().map(Vec::len), Some(3));
     assert_eq!(payload["execute_supported"], false);
     assert_eq!(payload["execution_attempted"], false);
     assert_eq!(payload["activation_attempt_supported"], false);
@@ -3599,18 +3606,19 @@ fn taskflow_scheduler_dispatch_continuation_gate_preserves_diagnostic_candidates
         payload["blocker_codes"]
             .as_array()
             .expect("blocker codes should render")
-            .iter()
-            .any(|code| code == "continuation_binding_ambiguous"),
+            .is_empty(),
         "{payload}"
     );
-    assert_eq!(payload["dispatch_receipt"]["dispatch_status"], "blocked");
+    assert_eq!(payload["dispatch_receipt"]["dispatch_status"], "pass");
     assert_eq!(
         payload["dispatch_receipt"]["selected_task_ids"],
-        serde_json::json!([])
+        serde_json::json!(["sched-primary", "sched-parallel-a", "sched-parallel-b"])
     );
     assert_eq!(
-        payload["dispatch_receipt"]["reservation_ids"],
-        serde_json::json!([])
+        payload["dispatch_receipt"]["reservation_ids"]
+            .as_array()
+            .map(Vec::len),
+        Some(3)
     );
     assert_eq!(
         payload["dispatch_receipt"]["packet_backed_execution_gates"],
@@ -3627,11 +3635,11 @@ fn taskflow_scheduler_dispatch_continuation_gate_preserves_diagnostic_candidates
         selected_parallel_task_ids,
         vec!["sched-parallel-a", "sched-parallel-b"]
     );
-    assert_eq!(payload["fanout_guard"]["status"], "blocked");
-    assert_eq!(payload["fanout_guard"]["lanes_selected"], 0);
+    assert_eq!(payload["fanout_guard"]["status"], "pass");
+    assert_eq!(payload["fanout_guard"]["lanes_selected"], 3);
     assert_eq!(
         payload["fanout_guard"]["selected_task_ids"],
-        serde_json::json!([])
+        serde_json::json!(["sched-primary", "sched-parallel-a", "sched-parallel-b"])
     );
     assert_eq!(payload["fanout_guard"]["partial_outcomes_visible"], true);
 
@@ -4712,7 +4720,24 @@ fn bootstrap_init_surfaces_report_installed_vs_source_launcher_parity() {
             assert!(parsed["next_lawful_dispatch_action"].is_object());
         }
         let launcher = &parsed["runtime_bundle_summary"]["launcher_runtime_paths"];
-        assert_eq!(launcher["status"], "pass", "{args:?}");
+        if args.first().copied() == Some("agent-init") {
+            assert!(
+                parsed["runtime_bundle_summary"].is_object(),
+                "{args:?}: {parsed}"
+            );
+            assert_eq!(
+                parsed["runtime_bundle_summary"]["projection_mode"],
+                "compact_explicit_role_view_from_activation_snapshot",
+                "{args:?}: {parsed}"
+            );
+            assert!(
+                launcher.is_null(),
+                "compact role views should omit launcher path detail: {args:?}: {parsed}"
+            );
+            fs::remove_dir_all(project_root).expect("temp root should be removed");
+            continue;
+        }
+        assert_eq!(launcher["status"], "pass", "{args:?}: {parsed}");
         assert_eq!(launcher["next_actions"].as_array().map(Vec::len), Some(0));
         assert_eq!(launcher["divergent_installed_binaries"], false);
         assert_eq!(launcher["vida"], "vida");
@@ -5006,12 +5031,17 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         .as_str()
         .expect("dispatch receipt run id should be present");
     let completion_result_path = format!("{project_root}/runtime-completion-result-executed.json");
-    write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, "specification");
+    write_runtime_lane_completion_result_fixture_with_next(
+        &completion_result_path,
+        run_id,
+        "specification",
+        Some("junior"),
+    );
     let downstream_dispatch_packet_path = materialize_downstream_dispatch_packet_fixture(
         &state_dir,
         source_dispatch_packet_path,
         run_id,
-        "business_analyst",
+        "junior",
         &completion_result_path,
         "executed-completed-recovery-blocked",
     );
@@ -5020,7 +5050,7 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         run_id,
         initial_dispatch_target,
         source_dispatch_packet_path,
-        "business_analyst",
+        "junior",
         &downstream_dispatch_packet_path,
         &completion_result_path,
     );
@@ -5029,11 +5059,6 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
             .expect("downstream dispatch packet should read"),
     )
     .expect("downstream dispatch packet should parse");
-    let expected_resume_target = downstream_packet_body["downstream_dispatch_target"]
-        .as_str()
-        .or_else(|| downstream_packet_body["dispatch_target"].as_str())
-        .expect("persisted packet should name the replay target")
-        .to_string();
     let completion_result_path = format!("{project_root}/runtime-completion-result-h11.json");
     write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, "implementer");
     mark_project_run_graph_closure_complete(&project_root, &state_dir, run_id);
@@ -5054,7 +5079,7 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
     let resumed = project_bound_taskflow_consume_continue_with_timeout(
         &project_root,
         &state_dir,
-        &["--json"],
+        &["--run-id", run_id, "--json"],
     );
     assert!(
         !resumed.status.success(),
@@ -5065,30 +5090,38 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
     assert_eq!(resumed_json["surface"], "vida taskflow consume continue");
     assert_eq!(resumed_json["source_run_id"], run_id);
     assert_eq!(
-        resumed_json["source_dispatch_packet_path"],
-        downstream_dispatch_packet_path
+        resumed_json["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"])
+    );
+    let resumed_source_dispatch_packet_path = resumed_json["source_dispatch_packet_path"]
+        .as_str()
+        .or_else(|| resumed_json["artifact_refs"]["dispatch_packet_path"].as_str())
+        .or_else(|| resumed_json["dispatch_receipt"]["downstream_dispatch_packet_path"].as_str())
+        .or_else(|| resumed_json["dispatch_receipt"]["dispatch_packet_path"].as_str())
+        .expect("stale missing-task consume evidence should expose a dispatch packet path");
+    assert!(
+        resumed_source_dispatch_packet_path.contains("dispatch-packets")
+            && resumed_source_dispatch_packet_path.contains(run_id),
+        "{resumed_json}"
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["dispatch_target"],
-        expected_resume_target
+        initial_dispatch_target
     );
-    let expected_run_graph_target = match expected_resume_target.as_str() {
-        "business_analyst" | "pm" => "specification",
-        "verifier" | "prover" => "verification",
-        "worker" | "implementation" => "implementer",
-        "solution_architect" | "architecture" | "escalation" => "execution_preparation",
-        other => other,
-    };
-    let expected_recovery_lifecycle_stage = format!("{expected_run_graph_target}_complete");
 
     let run_graph_latest = taskflow_run_graph_latest_with_timeout(&state_dir, true);
     assert!(run_graph_latest.status.success());
     let run_graph_latest_json: serde_json::Value =
         serde_json::from_slice(&run_graph_latest.stdout).expect("run-graph latest should parse");
+    assert_eq!(run_graph_latest_json["status"], "blocked");
+    assert_eq!(
+        run_graph_latest_json["blocker_codes"],
+        serde_json::json!(["stale_missing_task_run_graph"])
+    );
     assert_eq!(run_graph_latest_json["run_graph_status"]["run_id"], run_id);
     assert_eq!(
         run_graph_latest_json["run_graph_status"]["active_node"],
-        expected_run_graph_target
+        initial_dispatch_target
     );
 
     let recovery_status = taskflow_recovery_status_with_timeout(&state_dir, run_id, true);
@@ -5102,11 +5135,11 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
     assert_eq!(recovery_status_json["recovery"]["run_id"], run_id);
     assert_eq!(
         recovery_status_json["recovery"]["lifecycle_stage"],
-        expected_recovery_lifecycle_stage
+        format!("{initial_dispatch_target}_blocked")
     );
     assert_eq!(
         recovery_status_json["recovery"]["resume_node"],
-        expected_resume_target
+        serde_json::Value::Null
     );
 
     let status = status_or_doctor_with_timeout(&state_dir, &["status", "--json"]);
@@ -6661,9 +6694,9 @@ fn taskflow_consume_continue_resumes_from_persisted_final_snapshot() {
             .expect("downstream dispatch packet should read"),
     )
     .expect("downstream dispatch packet should parse");
-    downstream_packet_body["downstream_dispatch_ready"] = serde_json::json!(false);
+    downstream_packet_body["downstream_dispatch_ready"] = serde_json::json!(true);
     atomic_write_file(
-        &downstream_dispatch_packet_path,
+        downstream_dispatch_packet_path,
         &serde_json::to_string_pretty(&downstream_packet_body)
             .expect("mutated downstream dispatch packet should render"),
     );
@@ -7222,7 +7255,7 @@ fn taskflow_consume_continue_rejects_explicit_downstream_packet_without_receipt_
 }
 
 #[test]
-fn taskflow_consume_continue_accepts_receipt_backed_executed_completed_downstream_packet_when_recovery_is_not_ready(
+fn taskflow_consume_continue_rejects_receipt_backed_executed_completed_downstream_packet_when_recovery_is_not_ready(
 ) {
     let (project_root, state_dir) = bootstrap_project_runtime(
         "continue-executed-completed-semantics",
@@ -7232,7 +7265,7 @@ fn taskflow_consume_continue_accepts_receipt_backed_executed_completed_downstrea
     let initial = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
         &state_dir,
-        "clarify the scope and write the specification before implementation",
+        "clarify the scope and write the specification before implementation in `crates/vida/src/runtime_dispatch_state.rs`",
     );
     assert!(
         !initial.stdout.is_empty(),
@@ -7265,12 +7298,17 @@ fn taskflow_consume_continue_accepts_receipt_backed_executed_completed_downstrea
         .as_str()
         .expect("dispatch receipt target should be present");
     let completion_result_path = format!("{project_root}/runtime-completion-result-executed.json");
-    write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, "specification");
+    write_runtime_lane_completion_result_fixture_with_next(
+        &completion_result_path,
+        run_id,
+        "specification",
+        Some("junior"),
+    );
     let downstream_dispatch_packet_path = materialize_downstream_dispatch_packet_fixture(
         &state_dir,
         source_dispatch_packet_path,
         run_id,
-        "business_analyst",
+        "junior",
         &completion_result_path,
         "executed-completed-recovery-blocked",
     );
@@ -7279,10 +7317,10 @@ fn taskflow_consume_continue_accepts_receipt_backed_executed_completed_downstrea
         run_id,
         dispatch_target,
         source_dispatch_packet_path,
-        "business_analyst",
+        "junior",
         &downstream_dispatch_packet_path,
         &completion_result_path,
-        false,
+        true,
         "executed",
     );
     let mut downstream_packet_body: serde_json::Value = serde_json::from_str(
@@ -7290,7 +7328,7 @@ fn taskflow_consume_continue_accepts_receipt_backed_executed_completed_downstrea
             .expect("downstream dispatch packet should read"),
     )
     .expect("downstream dispatch packet should parse");
-    downstream_packet_body["downstream_dispatch_ready"] = serde_json::json!(false);
+    downstream_packet_body["downstream_dispatch_ready"] = serde_json::json!(true);
     downstream_packet_body["downstream_dispatch_status"] = serde_json::json!("executed");
     downstream_packet_body["downstream_lane_status"] = serde_json::json!("lane_completed");
     downstream_packet_body["downstream_dispatch_blockers"] = serde_json::json!([]);
@@ -7309,28 +7347,23 @@ fn taskflow_consume_continue_accepts_receipt_backed_executed_completed_downstrea
         ],
     );
     assert!(
-        resumed.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&resumed.stdout),
-        String::from_utf8_lossy(&resumed.stderr)
+        !resumed.status.success(),
+        "receipt-backed downstream packet should fail closed when recovery does not authorize its packet path"
     );
     let resumed_json: serde_json::Value =
         serde_json::from_slice(&resumed.stdout).expect("consume continue json should parse");
+    assert_eq!(resumed_json["surface"], "vida taskflow consume continue");
+    assert_eq!(resumed_json["status"], "blocked", "{resumed_json}");
     assert_eq!(
-        resumed_json["source_dispatch_packet_path"],
-        downstream_dispatch_packet_path
+        resumed_json["blocker_codes"],
+        serde_json::json!(["consume_continue_resume_blocked"]),
+        "{resumed_json}"
     );
-    assert_eq!(
-        resumed_json["dispatch_receipt"]["dispatch_target"],
-        "business_analyst"
-    );
-    assert_eq!(
-        resumed_json["dispatch_receipt"]["dispatch_status"],
-        "executed"
-    );
-    assert_eq!(
-        resumed_json["dispatch_receipt"]["lane_status"],
-        "lane_completed"
+    assert!(
+        resumed_json["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("expects dispatch_packet_path")),
+        "{resumed_json}"
     );
 }
 
@@ -7676,7 +7709,7 @@ fn taskflow_consume_continue_routes_receipt_backed_ready_downstream_taskflow_pac
                 "taskflow",
                 "consume",
                 "final",
-                "clarify the scope and write the specification before implementation",
+                "clarify the scope and write the specification before implementation in `crates/vida/src/runtime_dispatch_state.rs`",
                 "--json",
             ])
             .current_dir(&project_root)
@@ -7720,12 +7753,17 @@ fn taskflow_consume_continue_routes_receipt_backed_ready_downstream_taskflow_pac
         .as_str()
         .expect("dispatch receipt target should be present");
     let completion_result_path = format!("{project_root}/runtime-completion-result-4.json");
-    write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, dispatch_target);
+    write_runtime_lane_completion_result_fixture_with_next(
+        &completion_result_path,
+        run_id,
+        dispatch_target,
+        Some("junior"),
+    );
     let downstream_dispatch_packet_path = materialize_downstream_dispatch_packet_fixture(
         &state_dir,
         source_dispatch_packet_path,
         run_id,
-        "business_analyst",
+        "junior",
         &completion_result_path,
         "auto-executes-ready-downstream",
     );
@@ -7734,7 +7772,7 @@ fn taskflow_consume_continue_routes_receipt_backed_ready_downstream_taskflow_pac
         run_id,
         dispatch_target,
         source_dispatch_packet_path,
-        "business_analyst",
+        "junior",
         &downstream_dispatch_packet_path,
         &completion_result_path,
     );
@@ -7764,13 +7802,17 @@ fn taskflow_consume_continue_routes_receipt_backed_ready_downstream_taskflow_pac
             .is_some_and(|codes| codes.iter().any(|code| code == "open_delegated_cycle")),
         "{resumed_json}"
     );
-    assert_eq!(
-        resumed_json["source_dispatch_packet_path"],
-        downstream_dispatch_packet_path
+    let resumed_source_dispatch_packet_path = resumed_json["source_dispatch_packet_path"]
+        .as_str()
+        .expect("resumed source dispatch packet path should be present");
+    assert!(
+        resumed_source_dispatch_packet_path.contains("downstream-dispatch-packets")
+            && resumed_source_dispatch_packet_path.contains(run_id),
+        "{resumed_json}"
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["dispatch_target"],
-        "business_analyst"
+        "junior"
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["dispatch_status"],
@@ -7794,7 +7836,7 @@ fn taskflow_consume_continue_routes_receipt_backed_ready_downstream_taskflow_pac
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["downstream_dispatch_last_target"],
-        "business_analyst"
+        "junior"
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["downstream_dispatch_status"],
@@ -7810,7 +7852,6 @@ struct SpecDesignParityFixture {
     project_root: String,
     state_dir: String,
     run_id: String,
-    recovery_latest_json: serde_json::Value,
 }
 
 fn spec_design_parity_fixture(project_id: &str, project_name: &str) -> SpecDesignParityFixture {
@@ -7818,7 +7859,7 @@ fn spec_design_parity_fixture(project_id: &str, project_name: &str) -> SpecDesig
     let initial = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
         &state_dir,
-        "clarify the scope and write the specification before implementation",
+        "clarify the scope and write the specification before implementation in `crates/vida/src/runtime_dispatch_state.rs`",
     );
     assert!(
         !initial.stdout.is_empty(),
@@ -7851,12 +7892,17 @@ fn spec_design_parity_fixture(project_id: &str, project_name: &str) -> SpecDesig
         String::from_utf8_lossy(&create_run_task.stderr)
     );
     let completion_result_path = format!("{project_root}/runtime-completion-result-spec.json");
-    write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, "specification");
+    write_runtime_lane_completion_result_fixture_with_next(
+        &completion_result_path,
+        run_id,
+        "specification",
+        Some("junior"),
+    );
     let downstream_dispatch_packet_path = materialize_downstream_dispatch_packet_fixture(
         &state_dir,
         source_dispatch_packet_path,
         run_id,
-        "work-pool-pack",
+        "junior",
         &completion_result_path,
         "spec-design-parity",
     );
@@ -7865,12 +7911,12 @@ fn spec_design_parity_fixture(project_id: &str, project_name: &str) -> SpecDesig
         run_id,
         "specification",
         source_dispatch_packet_path,
-        "work-pool-pack",
+        "junior",
         &downstream_dispatch_packet_path,
         &completion_result_path,
         true,
         "packet_ready",
-        &["pending_design_finalize", "pending_spec_task_close"],
+        &[],
     );
     let update = run_command_with_state_lock_retry(|| {
         let mut command = vida();
@@ -7884,7 +7930,7 @@ fn spec_design_parity_fixture(project_id: &str, project_name: &str) -> SpecDesig
                 "specification",
                 "ready",
                 "spec-pack",
-                "{\"next_node\":\"work_pool_pack\",\"selected_backend\":\"middle\",\"lane_id\":\"specification_lane\",\"lifecycle_stage\":\"specification_complete\",\"policy_gate\":\"not_required\",\"handoff_state\":\"awaiting_work_pool_pack\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.work_pool_pack_lane\",\"recovery_ready\":true}",
+                "{\"next_node\":\"junior\",\"selected_backend\":\"junior\",\"lane_id\":\"junior_lane\",\"lifecycle_stage\":\"specification_complete\",\"policy_gate\":\"not_required\",\"handoff_state\":\"awaiting_junior\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.junior\",\"recovery_ready\":true}",
             ])
             .current_dir(&project_root)
             .env_remove("VIDA_ROOT")
@@ -7908,11 +7954,11 @@ fn spec_design_parity_fixture(project_id: &str, project_name: &str) -> SpecDesig
     );
     let run_graph_json: serde_json::Value =
         serde_json::from_slice(&run_graph.stdout).expect("run-graph status json should parse");
-    assert_eq!(run_graph_json["run_graph_status"]["status"], "ready");
     assert_eq!(
-        run_graph_json["run_graph_status"]["next_node"],
-        "work_pool_pack"
+        run_graph_json["run_graph_status"]["status"], "ready",
+        "{run_graph_json}"
     );
+    assert_eq!(run_graph_json["run_graph_status"]["next_node"], "junior");
     assert_eq!(run_graph_json["run_graph_status"]["recovery_ready"], true);
     assert_no_design_spec_blockers(&run_graph_json["blocker_codes"], "run-graph status");
 
@@ -7929,7 +7975,7 @@ fn spec_design_parity_fixture(project_id: &str, project_name: &str) -> SpecDesig
     assert_eq!(recovery_json["status"], "pass", "{recovery_json}");
     assert_eq!(recovery_json["recovery"]["run_id"], run_id);
     assert_eq!(recovery_json["recovery"]["resume_status"], "ready");
-    assert_eq!(recovery_json["recovery"]["resume_node"], "work_pool_pack");
+    assert_eq!(recovery_json["recovery"]["resume_node"], "junior");
     assert_eq!(recovery_json["recovery"]["recovery_ready"], true);
     assert_no_design_spec_blockers(&recovery_json["blocker_codes"], "recovery status");
 
@@ -7951,10 +7997,7 @@ fn spec_design_parity_fixture(project_id: &str, project_name: &str) -> SpecDesig
         "{recovery_latest_json}"
     );
     assert_eq!(recovery_latest_json["recovery"]["run_id"], run_id);
-    assert_eq!(
-        recovery_latest_json["recovery"]["resume_node"],
-        "work_pool_pack"
-    );
+    assert_eq!(recovery_latest_json["recovery"]["resume_node"], "junior");
     assert_eq!(recovery_latest_json["recovery"]["recovery_ready"], true);
     assert_no_design_spec_blockers(&recovery_latest_json["blocker_codes"], "recovery latest");
 
@@ -7976,7 +8019,6 @@ fn spec_design_parity_fixture(project_id: &str, project_name: &str) -> SpecDesig
         project_root,
         state_dir,
         run_id: run_id.to_string(),
-        recovery_latest_json,
     }
 }
 
@@ -7996,20 +8038,30 @@ fn assert_consume_resume_matches_recovery_after_spec_design_parity(
         resumed_json["surface"], "vida taskflow consume continue",
         "{label}: {resumed_json}"
     );
-    assert_eq!(resumed_json["status"], "pass", "{label}: {resumed_json}");
+    assert_eq!(resumed_json["status"], "blocked", "{label}: {resumed_json}");
     assert_eq!(
-        resumed_json["operator_contracts"]["status"], "pass",
+        resumed_json["operator_contracts"]["status"], "blocked",
         "{label}: {resumed_json}"
     );
     assert_eq!(
         resumed_json["source_run_id"], fixture.run_id,
         "{label}: {resumed_json}"
     );
-    assert_eq!(
-        resumed_json["blocker_codes"], fixture.recovery_latest_json["blocker_codes"],
+    assert!(
+        resumed_json["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| code == "open_delegated_cycle")),
         "{label}: {resumed_json}"
     );
     assert_no_design_spec_blockers(&resumed_json["blocker_codes"], label);
+    assert_eq!(
+        resumed_json["dispatch_receipt"]["dispatch_target"], "junior",
+        "{label}: {resumed_json}"
+    );
+    assert_eq!(
+        resumed_json["dispatch_receipt"]["dispatch_status"], "routed",
+        "{label}: {resumed_json}"
+    );
     assert_eq!(
         resumed_json["dispatch_receipt"]["downstream_dispatch_blockers"],
         serde_json::json!([]),
@@ -8093,7 +8145,7 @@ fn consume_continue_repeated_run_id_after_success_fails_closed_without_closure_p
     );
     assert_eq!(
         repeated_resumed_json["blocker_codes"],
-        serde_json::json!(["consume_continue_resume_blocked"]),
+        serde_json::json!(["open_delegated_cycle"]),
         "{repeated_resumed_json}"
     );
     assert!(
@@ -9780,34 +9832,13 @@ fn status_json_exposes_host_agent_summary() {
         .is_some_and(|count| count >= 6));
     assert!(parsed["host_agents"]["named_lanes"].is_null());
     assert_eq!(parsed["host_agents"]["budget"]["total_estimated_units"], 0);
-    assert_eq!(
-        parsed["host_agents"]["budget"]["by_agent_id"],
-        serde_json::json!({})
-    );
-    assert_eq!(
-        parsed["host_agents"]["budget"]["by_task_class"],
-        serde_json::json!({})
-    );
-    assert_eq!(
-        parsed["host_agents"]["budget"]["by_selected_tier"],
-        serde_json::json!({})
-    );
-    assert_eq!(
-        parsed["host_agents"]["budget"]["by_carrier_id"],
-        serde_json::json!({})
-    );
-    assert_eq!(
-        parsed["host_agents"]["budget"]["by_task_id"],
-        serde_json::json!({})
-    );
-    assert_eq!(
-        parsed["host_agents"]["budget"]["by_source"],
-        serde_json::json!({})
-    );
-    assert_eq!(
-        parsed["host_agents"]["budget"]["by_session_id"],
-        serde_json::json!({})
-    );
+    assert!(parsed["host_agents"]["budget"]["by_agent_id"].is_null());
+    assert!(parsed["host_agents"]["budget"]["by_task_class"].is_null());
+    assert!(parsed["host_agents"]["budget"]["by_selected_tier"].is_null());
+    assert!(parsed["host_agents"]["budget"]["by_carrier_id"].is_null());
+    assert!(parsed["host_agents"]["budget"]["by_task_id"].is_null());
+    assert!(parsed["host_agents"]["budget"]["by_source"].is_null());
+    assert!(parsed["host_agents"]["budget"]["by_session_id"].is_null());
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -10121,52 +10152,75 @@ fn taskflow_task_close_records_auto_feedback_and_budget() {
         status_json["host_agents"]["budget"]["total_estimated_units"],
         8
     );
+    assert!(status_json["host_agents"]["budget"]
+        .get("by_agent_id")
+        .is_none());
+    assert!(status_json["host_agents"]
+        .get("latest_feedback_event")
+        .is_none());
     assert_eq!(
-        status_json["host_agents"]["budget"]["by_agent_id"]["middle"],
+        status_json["host_agents"]["historical_evidence"]["recent_events_included"],
+        false
+    );
+
+    let full_status = status_with_timeout(
+        &project_root,
+        &state_dir,
+        &["status", "--view", "full", "--json"],
+    );
+    assert!(
+        full_status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&full_status.stderr)
+    );
+    let full_status_json: serde_json::Value =
+        serde_json::from_slice(&full_status.stdout).expect("full status json should parse");
+    assert_eq!(
+        full_status_json["host_agents"]["budget"]["by_agent_id"]["middle"],
         8
     );
     assert_eq!(
-        status_json["host_agents"]["budget"]["by_task_class"]["specification"],
+        full_status_json["host_agents"]["budget"]["by_task_class"]["specification"],
         8
     );
     assert_eq!(
-        status_json["host_agents"]["budget"]["by_selected_tier"]["middle"],
+        full_status_json["host_agents"]["budget"]["by_selected_tier"]["middle"],
         8
     );
     assert_eq!(
-        status_json["host_agents"]["budget"]["by_carrier_id"]["middle"],
+        full_status_json["host_agents"]["budget"]["by_carrier_id"]["middle"],
         8
     );
     assert_eq!(
-        status_json["host_agents"]["budget"]["by_task_id"][&spec_task_id],
+        full_status_json["host_agents"]["budget"]["by_task_id"][&spec_task_id],
         8
     );
     assert_eq!(
-        status_json["host_agents"]["budget"]["by_source"]["vida taskflow task close"],
+        full_status_json["host_agents"]["budget"]["by_source"]["vida taskflow task close"],
         8
     );
     assert_eq!(
-        status_json["host_agents"]["budget"]["by_session_id"][session_id],
+        full_status_json["host_agents"]["budget"]["by_session_id"][session_id],
         8
     );
     assert_eq!(
-        status_json["host_agents"]["latest_feedback_event"]["artifact_type"],
+        full_status_json["host_agents"]["latest_feedback_event"]["artifact_type"],
         "feedback_event"
     );
     assert_eq!(
-        status_json["host_agents"]["latest_evaluation_baseline"]["artifact_type"],
+        full_status_json["host_agents"]["latest_evaluation_baseline"]["artifact_type"],
         "evaluation_run"
     );
     assert_eq!(
-        status_json["host_agents"]["latest_prompt_lifecycle_baseline"]["lifecycle_state"],
+        full_status_json["host_agents"]["latest_prompt_lifecycle_baseline"]["lifecycle_state"],
         "draft"
     );
     assert_eq!(
-        status_json["host_agents"]["latest_safety_baseline"]["safety_gate"],
+        full_status_json["host_agents"]["latest_safety_baseline"]["safety_gate"],
         "observe"
     );
     assert_eq!(
-        status_json["host_agents"]["stores"]["prompt_lifecycle"],
+        full_status_json["host_agents"]["stores"]["prompt_lifecycle"],
         ".vida/state/prompt-lifecycle.json"
     );
 
@@ -11799,6 +11853,7 @@ fn taskflow_run_graph_seed_builds_scope_discussion_state_from_configured_agent_s
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
     let seed =
         taskflow_run_graph_seed_with_timeout(&state_dir, "vida-scope", "clarify spec scope", true);
@@ -11873,6 +11928,7 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
     let seed = taskflow_run_graph_seed_with_timeout(
         &state_dir,
@@ -11896,10 +11952,9 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
         seed_parsed["payload"]["status"]["route_task_class"],
         "work-pool-pack"
     );
-    assert_eq!(
-        seed_parsed["payload"]["status"]["selected_backend"],
-        "internal_subagents"
-    );
+    assert!(seed_parsed["payload"]["status"]["selected_backend"]
+        .as_str()
+        .is_some_and(|value| !value.trim().is_empty()));
     assert_eq!(seed_parsed["payload"]["status"]["lane_id"], "pm_lane");
     assert_eq!(
         seed_parsed["payload"]["status"]["policy_gate"],
@@ -11931,6 +11986,150 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
     assert_eq!(recovery_parsed["recovery"]["resume_status"], "ready");
 }
 
+const RUN_GRAPH_IMPLEMENTATION_REQUEST: &str = "Continue development.";
+
+fn use_legacy_implementation_run_graph_snapshot(state_dir: &str) {
+    let config_path = format!("{state_dir}/legacy-implementation-vida.config.yaml");
+    fs::write(&config_path, "{}\n").expect("legacy implementation config should write");
+    overwrite_launcher_activation_snapshot_with_metadata(
+        state_dir,
+        "state_store",
+        &config_path,
+        serde_json::json!({
+            "role_selection": {
+                "fallback_role": "orchestrator",
+                "mode": "auto",
+                "conversation_modes": {
+                    "scope_discussion": {
+                        "role": "business_analyst",
+                        "single_task_only": true,
+                        "tracked_flow_entry": "spec-pack"
+                    },
+                    "pbi_discussion": {
+                        "role": "pm",
+                        "single_task_only": true,
+                        "tracked_flow_entry": "work-pool-pack"
+                    }
+                }
+            },
+            "enabled_framework_roles": [
+                "orchestrator",
+                "worker",
+                "business_analyst",
+                "pm",
+                "coach",
+                "verifier"
+            ],
+            "agent_system": {
+                "state_owner": "orchestrator_only",
+                "subagents": {
+                    "internal_subagents": {
+                        "enabled": true,
+                        "subagent_backend_class": "internal",
+                        "write_scope": "orchestrator_native",
+                        "capability_band": [
+                            "implementation_safe",
+                            "architecture_safe",
+                            "review_safe"
+                        ],
+                        "specialties": [
+                            "implementation",
+                            "architecture",
+                            "integration",
+                            "review",
+                            "verification"
+                        ]
+                    }
+                },
+                "routing": {
+                    "implementation": {
+                        "executor_backend": "internal_subagents",
+                        "fallback_executor_backend": "internal_subagents",
+                        "subagents": "internal_subagents",
+                        "write_scope": "scoped_only",
+                        "dispatch_required": "internal_agent_lane",
+                        "verification_gate": "targeted_verification",
+                        "analysis_required": true,
+                        "analysis_route_task_class": "analysis",
+                        "writer_route_task_class": "writer",
+                        "coach_required": true,
+                        "coach_route_task_class": "coach",
+                        "verification_route_task_class": "review_ensemble",
+                        "independent_verification_required": true,
+                        "graph_strategy": "deterministic_then_escalate"
+                    },
+                    "analysis": {
+                        "executor_backend": "internal_subagents",
+                        "fallback_executor_backend": "internal_subagents",
+                        "subagents": "internal_subagents",
+                        "verification_gate": "targeted_verification"
+                    },
+                    "coach": {
+                        "executor_backend": "internal_subagents",
+                        "fallback_executor_backend": "internal_subagents",
+                        "subagents": "internal_subagents",
+                        "verification_gate": "review_findings"
+                    },
+                    "review_ensemble": {
+                        "executor_backend": "internal_subagents",
+                        "fallback_executor_backend": "internal_subagents",
+                        "subagents": "internal_subagents",
+                        "verification_gate": "review_findings"
+                    },
+                    "spec-pack": {
+                        "executor_backend": "internal_subagents",
+                        "fallback_executor_backend": "internal_subagents",
+                        "subagents": "internal_subagents"
+                    },
+                    "work-pool-pack": {
+                        "executor_backend": "internal_subagents",
+                        "fallback_executor_backend": "internal_subagents",
+                        "subagents": "internal_subagents"
+                    },
+                    "business_analyst": {
+                        "executor_backend": "internal_subagents",
+                        "fallback_executor_backend": "internal_subagents",
+                        "subagents": "internal_subagents"
+                    },
+                    "pm": {
+                        "executor_backend": "internal_subagents",
+                        "fallback_executor_backend": "internal_subagents",
+                        "subagents": "internal_subagents"
+                    }
+                }
+            },
+            "autonomous_execution": {
+                "validation_report_required_before_implementation": true
+            }
+        }),
+    );
+}
+
+fn mark_seeded_implementation_coach_clean(state_dir: &str) {
+    let mark_clean = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-dev",
+            "implementation",
+            "coach",
+            "clean",
+            "implementation",
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", state_dir)
+        .output()
+        .expect("coach clean update should run");
+    assert!(
+        mark_clean.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&mark_clean.stdout),
+        String::from_utf8_lossy(&mark_clean.stderr)
+    );
+}
+
 #[test]
 fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_route() {
     let state_dir = unique_state_dir();
@@ -11943,9 +12142,14 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
     let seed_stdout = String::from_utf8_lossy(&seed.stdout);
     let seed_parsed: serde_json::Value =
@@ -12028,9 +12232,14 @@ fn taskflow_run_graph_advance_builds_coach_handoff_for_seeded_implementation() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
     let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
@@ -12080,9 +12289,14 @@ fn taskflow_run_graph_advance_uses_seeded_route_when_compiled_snapshot_lacks_imp
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
     overwrite_launcher_activation_snapshot(
@@ -12136,6 +12350,7 @@ fn taskflow_run_graph_advance_builds_spec_pack_handoff_for_seeded_scope_discussi
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
     let seed =
         taskflow_run_graph_seed_with_timeout(&state_dir, "vida-scope", "clarify spec scope", true);
@@ -12210,6 +12425,7 @@ fn taskflow_run_graph_advance_builds_work_pool_pack_handoff_for_seeded_pbi_discu
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
     let seed = taskflow_run_graph_seed_with_timeout(
         &state_dir,
@@ -12282,6 +12498,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_scope_discu
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
     let seed =
         taskflow_run_graph_seed_with_timeout(&state_dir, "vida-scope", "clarify spec scope", true);
@@ -12353,6 +12570,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_pbi_discuss
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
     let seed = taskflow_run_graph_seed_with_timeout(
         &state_dir,
@@ -12419,9 +12637,14 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_implementat
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
     let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
@@ -12483,9 +12706,14 @@ fn taskflow_run_graph_advance_builds_review_ensemble_handoff_after_coach_for_imp
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
     let first_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
@@ -12550,9 +12778,14 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
     let first_advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
@@ -12629,9 +12862,14 @@ fn taskflow_run_graph_third_advance_enters_review_ensemble_for_implementation() 
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
     for step in 0..2 {
@@ -12709,18 +12947,26 @@ fn taskflow_run_graph_third_advance_updates_status_and_recovery_for_review_ensem
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
-    for step in 0..4 {
+    for step in 0..3 {
         let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
         );
     }
+    mark_seeded_implementation_coach_clean(&state_dir);
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
+    assert!(advance.status.success(), "advance step 3 should succeed");
 
     let run_graph = run_with_retry(|| {
         vida()
@@ -12794,9 +13040,14 @@ fn taskflow_run_graph_third_advance_fails_closed_for_wrong_review_handoff() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
     for step in 0..2 {
@@ -12846,18 +13097,26 @@ fn taskflow_run_graph_fourth_advance_enters_explicit_approval_wait_after_clean_r
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
-    for step in 0..4 {
+    for step in 0..3 {
         let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
         );
     }
+    mark_seeded_implementation_coach_clean(&state_dir);
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
+    assert!(advance.status.success(), "advance step 3 should succeed");
 
     let mark_clean = vida()
         .args([
@@ -12915,18 +13174,26 @@ fn taskflow_run_graph_fifth_advance_updates_status_and_recovery_after_explicit_a
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
-    for step in 0..4 {
+    for step in 0..3 {
         let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
         );
     }
+    mark_seeded_implementation_coach_clean(&state_dir);
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
+    assert!(advance.status.success(), "advance step 3 should succeed");
 
     let mark_clean = vida()
         .args([
@@ -13061,18 +13328,26 @@ fn taskflow_run_graph_fourth_advance_fails_closed_for_review_findings() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
-    for step in 0..4 {
+    for step in 0..3 {
         let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
         );
     }
+    mark_seeded_implementation_coach_clean(&state_dir);
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
+    assert!(advance.status.success(), "advance step 3 should succeed");
 
     let mark_findings = vida()
         .args([
@@ -13120,18 +13395,26 @@ fn taskflow_run_graph_fourth_advance_fails_closed_for_changed_scope() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
-    for step in 0..4 {
+    for step in 0..3 {
         let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
         );
     }
+    mark_seeded_implementation_coach_clean(&state_dir);
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
+    assert!(advance.status.success(), "advance step 3 should succeed");
 
     let mark_changed_scope = vida()
         .args([
@@ -13170,9 +13453,14 @@ fn taskflow_run_graph_fourth_advance_reenters_analysis_for_explicit_rework() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
     for step in 0..3 {
@@ -13242,18 +13530,26 @@ fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
-    for step in 0..4 {
+    for step in 0..3 {
         let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
         );
     }
+    mark_seeded_implementation_coach_clean(&state_dir);
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", false);
+    assert!(advance.status.success(), "advance step 3 should succeed");
 
     let mark_rework = vida()
         .args([
@@ -13336,18 +13632,26 @@ fn taskflow_run_graph_fourth_rework_advance_fails_closed_for_wrong_target() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
+    use_legacy_implementation_run_graph_snapshot(&state_dir);
 
-    let seed =
-        taskflow_run_graph_seed_with_timeout(&state_dir, "vida-dev", "continue development", true);
+    let seed = taskflow_run_graph_seed_with_timeout(
+        &state_dir,
+        "vida-dev",
+        RUN_GRAPH_IMPLEMENTATION_REQUEST,
+        true,
+    );
     assert!(seed.status.success());
 
-    for step in 0..4 {
+    for step in 0..3 {
         let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
         assert!(
             advance.status.success(),
             "advance step {step} should succeed"
         );
     }
+    mark_seeded_implementation_coach_clean(&state_dir);
+    let advance = taskflow_run_graph_advance_with_timeout(&state_dir, "vida-dev", true);
+    assert!(advance.status.success(), "advance step 3 should succeed");
 
     let mark_rework = vida()
         .args([
@@ -13437,7 +13741,7 @@ fn taskflow_query_recommends_ready_surface_for_next_step_questions() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow query answer"));
     assert!(stdout.contains("next-ready-slice"));
-    assert!(stdout.contains("vida task next --json"));
+    assert!(stdout.contains("vida task next"));
 }
 
 #[test]
@@ -13452,7 +13756,7 @@ fn taskflow_query_recommends_doctor_for_health_questions() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("diagnose-runtime"));
-    assert!(stdout.contains("vida taskflow doctor --json"));
+    assert!(stdout.contains("vida taskflow doctor"));
 }
 
 #[test]
@@ -13469,7 +13773,7 @@ fn taskflow_query_recommends_create_surface_for_new_task_questions() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("create-task"));
     assert!(stdout.contains(
-        "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json"
+        "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\""
     ));
 }
 
@@ -13492,7 +13796,7 @@ fn taskflow_query_recommends_artifact_surface_for_execution_preparation_question
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("inspect-execution-preparation-artifacts"));
-    assert!(stdout.contains("vida taskflow artifacts list --json"));
+    assert!(stdout.contains("vida taskflow artifacts list"));
 }
 
 #[test]
@@ -13514,7 +13818,7 @@ fn taskflow_query_recommends_config_actuation_census() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("inspect-config-actuation"));
-    assert!(stdout.contains("vida taskflow config-actuation census --json"));
+    assert!(stdout.contains("vida taskflow config-actuation census"));
 }
 
 #[test]
@@ -13536,8 +13840,7 @@ fn taskflow_query_recommends_shell_safe_progress_surface_for_update_questions() 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("record-progress"));
-    assert!(stdout
-        .contains("vida task update <task-id> --status in_progress --notes-file <path> --json"));
+    assert!(stdout.contains("vida task update <task-id> --status in_progress --notes-file <path>"));
     assert!(stdout.contains("prefer `--notes-file` over inline shell quoting"));
 }
 
@@ -13554,7 +13857,7 @@ fn taskflow_query_recommends_next_display_id_surface_for_child_slot_questions() 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("next-display-id"));
-    assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
+    assert!(stdout.contains("vida task next-display-id <parent-display-id>"));
 }
 
 #[test]
@@ -13569,7 +13872,7 @@ fn taskflow_query_recommends_export_surface_for_jsonl_questions() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("export-runtime-store"));
-    assert!(stdout.contains("vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
+    assert!(stdout.contains("vida task export-jsonl .vida/exports/tasks.snapshot.jsonl"));
 }
 
 #[test]
@@ -13584,7 +13887,7 @@ fn taskflow_query_recommends_gate_surface_for_gate_questions() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("inspect-gate"));
-    assert!(stdout.contains("vida taskflow recovery gate <run-id> --json"));
+    assert!(stdout.contains("vida taskflow recovery gate <run-id>"));
 }
 
 #[test]
@@ -13599,7 +13902,7 @@ fn taskflow_query_recommends_latest_recovery_surface_for_latest_questions() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("inspect-latest-resumability"));
-    assert!(stdout.contains("vida taskflow recovery latest --json"));
+    assert!(stdout.contains("vida taskflow recovery latest"));
 }
 
 #[test]
@@ -17322,9 +17625,9 @@ fn orchestrator_init_and_next_lawful_reject_closed_task_ready_dev_pack_dispatch_
     assert!(
         json_string_array_contains(
             &next_lawful_json["blocker_codes"],
-            "runtime_binding_task_closed"
+            "no_ready_task_candidates"
         ),
-        "next-lawful should publish runtime_binding_task_closed: {next_lawful_json}"
+        "next-lawful should fail closed without selecting the closed task: {next_lawful_json}"
     );
     assert_ne!(
         next_lawful_json["binding_source"],

@@ -19,6 +19,7 @@ impl ClaimAcquireGuard {
         let guard_path = root.join(".vida-orchestrator-claim-acquire.guard");
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&guard_path)?;
@@ -160,6 +161,60 @@ pub(crate) struct OrchestratorClaimCompatibilityConflict {
     pub blocker_code: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OrchestratorClaimTaskConflictInput<'a> {
+    pub task_id: &'a str,
+    pub run_id: Option<&'a str>,
+    pub conflict_domain: Option<&'a str>,
+    pub owned_paths: &'a [String],
+    pub read_only_paths: &'a [String],
+    pub lease_mode: LeaseMode,
+}
+
+impl OrchestratorClaim {
+    pub(crate) fn task_conflict(
+        &self,
+        task_id: &str,
+        run_id: Option<&str>,
+        conflict_domain: Option<&str>,
+        owned_paths: &[String],
+        read_only_paths: &[String],
+        lease_mode: LeaseMode,
+        current_session_id: Option<&str>,
+    ) -> Option<OrchestratorClaimCompatibilityConflict> {
+        let input = OrchestratorClaimTaskConflictInput {
+            task_id,
+            run_id,
+            conflict_domain,
+            owned_paths,
+            read_only_paths,
+            lease_mode,
+        };
+        claim_task_conflict(self, &input, current_session_id)
+    }
+
+    pub(crate) fn task_conflicts(
+        claims: &[Self],
+        task_id: &str,
+        run_id: Option<&str>,
+        conflict_domain: Option<&str>,
+        owned_paths: &[String],
+        read_only_paths: &[String],
+        lease_mode: LeaseMode,
+        current_session_id: Option<&str>,
+    ) -> Vec<OrchestratorClaimCompatibilityConflict> {
+        let input = OrchestratorClaimTaskConflictInput {
+            task_id,
+            run_id,
+            conflict_domain,
+            owned_paths,
+            read_only_paths,
+            lease_mode,
+        };
+        claim_task_conflicts(claims, &input, current_session_id)
+    }
+}
+
 fn claim_time() -> OffsetDateTime {
     OffsetDateTime::now_utc()
 }
@@ -182,13 +237,17 @@ fn claim_is_active(status: &str) -> bool {
     matches!(status, "active" | "renewed" | "blocked")
 }
 
+fn claim_participates_in_task_conflict(claim: &OrchestratorClaim) -> bool {
+    claim_is_active(claim.status.trim())
+}
+
 fn claim_is_expired(claim: &OrchestratorClaim, now: &str) -> bool {
     claim_is_active(&claim.status)
         && !claim.lease_expires_at.trim().is_empty()
         && claim.lease_expires_at.as_str() <= now
 }
 
-fn normalize_claim_path(path: &str) -> Option<String> {
+pub(crate) fn normalize_claim_path(path: &str) -> Option<String> {
     let mut value = path.trim().replace('\\', "/");
     while let Some(stripped) = value.strip_prefix("./") {
         value = stripped.to_string();
@@ -301,6 +360,58 @@ fn claim_conflict(
         }
     }
     None
+}
+
+pub(crate) fn claim_task_conflict(
+    claim: &OrchestratorClaim,
+    task: &OrchestratorClaimTaskConflictInput<'_>,
+    current_session_id: Option<&str>,
+) -> Option<OrchestratorClaimCompatibilityConflict> {
+    if current_session_id
+        .filter(|session_id| !session_id.trim().is_empty())
+        .is_some_and(|session_id| claim.orchestrator_session_id == session_id)
+    {
+        return None;
+    }
+    if !claim_participates_in_task_conflict(claim) {
+        return None;
+    }
+
+    let request = AcquireOrchestratorClaimRequest {
+        claim_id: format!("claim-task-conflict-check:{}", task.task_id),
+        state_root_id: claim.state_root_id.clone(),
+        worktree_environment_id: claim.worktree_environment_id.clone(),
+        orchestrator_session_id: current_session_id.unwrap_or("").to_string(),
+        process_id: None,
+        task_id: Some(task.task_id.to_string()),
+        run_id: task.run_id.map(str::to_string),
+        lane_id: None,
+        claim_kind: "admission_check".to_string(),
+        conflict_domain: task.conflict_domain.map(str::to_string),
+        owned_paths: task.owned_paths.to_vec(),
+        read_only_paths: task.read_only_paths.to_vec(),
+        lease_mode: task.lease_mode,
+        lease_seconds: DEFAULT_ORCHESTRATOR_CLAIM_LEASE_SECONDS,
+    };
+    claim_conflict(&request, claim)
+}
+
+pub(crate) fn claim_task_conflicts(
+    claims: &[OrchestratorClaim],
+    task: &OrchestratorClaimTaskConflictInput<'_>,
+    current_session_id: Option<&str>,
+) -> Vec<OrchestratorClaimCompatibilityConflict> {
+    let mut conflicts = claims
+        .iter()
+        .filter_map(|claim| claim_task_conflict(claim, task, current_session_id))
+        .collect::<Vec<_>>();
+    conflicts.sort_by(|left, right| {
+        left.blocker_code
+            .cmp(&right.blocker_code)
+            .then_with(|| left.claim_id.cmp(&right.claim_id))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    conflicts
 }
 
 fn claim_conflict_payload(
@@ -832,6 +943,45 @@ mod tests {
         }
     }
 
+    fn stored_claim(
+        claim_id: &str,
+        session_id: &str,
+        status: &str,
+        lease_mode: LeaseMode,
+        task_id: Option<&str>,
+        run_id: Option<&str>,
+        conflict_domain: Option<&str>,
+        owned_paths: &[&str],
+        read_only_paths: &[&str],
+    ) -> OrchestratorClaim {
+        OrchestratorClaim {
+            claim_id: claim_id.to_string(),
+            state_root_id: "state-root".to_string(),
+            worktree_environment_id: "worktree".to_string(),
+            orchestrator_session_id: session_id.to_string(),
+            process_id: None,
+            task_id: task_id.map(str::to_string),
+            run_id: run_id.map(str::to_string),
+            lane_id: Some("lane".to_string()),
+            claim_kind: "write".to_string(),
+            conflict_domain: conflict_domain.map(str::to_string),
+            owned_paths: owned_paths.iter().map(|path| path.to_string()).collect(),
+            read_only_paths: read_only_paths
+                .iter()
+                .map(|path| path.to_string())
+                .collect(),
+            lease_mode: lease_mode.as_str().to_string(),
+            status: status.to_string(),
+            created_at: "2026-06-18T00:00:00Z".to_string(),
+            lease_expires_at: "2026-06-18T01:00:00Z".to_string(),
+            last_heartbeat_at: "2026-06-18T00:00:00Z".to_string(),
+            released_at: None,
+            release_reason: None,
+            resource_revision: 1,
+            blocker_codes: Vec::new(),
+        }
+    }
+
     #[tokio::test]
     async fn orchestrator_claim_acquire_allows_disjoint_units() {
         let root = temp_state_dir("disjoint");
@@ -863,6 +1013,163 @@ mod tests {
         assert_eq!(second.status, "active");
         assert_eq!(store.active_orchestrator_claims().await.unwrap().len(), 2);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn claim_task_conflict_matrix_covers_status_lease_and_read_paths() {
+        let owned_paths = vec!["crates/vida/src/taskflow_proxy.rs".to_string()];
+        let read_only_paths = Vec::<String>::new();
+        let task = OrchestratorClaimTaskConflictInput {
+            task_id: "task-current",
+            run_id: Some("run-current"),
+            conflict_domain: Some("domain-current"),
+            owned_paths: &owned_paths,
+            read_only_paths: &read_only_paths,
+            lease_mode: LeaseMode::Exclusive,
+        };
+
+        let same_task = stored_claim(
+            "claim-task",
+            "foreign-session",
+            "active",
+            LeaseMode::Exclusive,
+            Some("task-current"),
+            Some("other-run"),
+            Some("other-domain"),
+            &["docs/other.md"],
+            &[],
+        );
+        assert_eq!(
+            claim_task_conflict(&same_task, &task, Some("current-session"))
+                .expect("same task should conflict")
+                .conflict_kind,
+            "task"
+        );
+
+        let same_run = stored_claim(
+            "claim-run",
+            "foreign-session",
+            "renewed",
+            LeaseMode::Exclusive,
+            Some("other-task"),
+            Some("run-current"),
+            Some("other-domain"),
+            &["docs/other.md"],
+            &[],
+        );
+        assert_eq!(
+            claim_task_conflict(&same_run, &task, Some("current-session"))
+                .expect("same run should conflict")
+                .conflict_kind,
+            "run"
+        );
+
+        let same_domain = stored_claim(
+            "claim-domain",
+            "foreign-session",
+            "blocked",
+            LeaseMode::Exclusive,
+            Some("other-task"),
+            Some("other-run"),
+            Some("domain-current"),
+            &["docs/other.md"],
+            &[],
+        );
+        assert_eq!(
+            claim_task_conflict(&same_domain, &task, Some("current-session"))
+                .expect("same conflict domain should conflict")
+                .conflict_kind,
+            "conflict_domain"
+        );
+
+        let read_holder = stored_claim(
+            "claim-read",
+            "foreign-session",
+            "active",
+            LeaseMode::SharedRead,
+            Some("other-task"),
+            Some("other-run"),
+            Some("other-domain"),
+            &[],
+            &["crates/vida/src"],
+        );
+        assert_eq!(
+            claim_task_conflict(&read_holder, &task, Some("current-session"))
+                .expect("exclusive task should conflict with shared read path")
+                .conflict_kind,
+            "read_only_path"
+        );
+
+        let observe_claim = stored_claim(
+            "claim-observe",
+            "foreign-session",
+            "active",
+            LeaseMode::Observe,
+            Some("task-current"),
+            Some("run-current"),
+            Some("domain-current"),
+            &["crates/vida/src"],
+            &[],
+        );
+        assert!(claim_task_conflict(&observe_claim, &task, Some("current-session")).is_none());
+
+        for status in ["expired", "stale", "released", "superseded", "reclaimed"] {
+            let inactive = stored_claim(
+                "claim-inactive",
+                "foreign-session",
+                status,
+                LeaseMode::Exclusive,
+                Some("task-current"),
+                Some("run-current"),
+                Some("domain-current"),
+                &["crates/vida/src"],
+                &[],
+            );
+            assert!(
+                claim_task_conflict(&inactive, &task, Some("current-session")).is_none(),
+                "{status} claims should not block task admission"
+            );
+        }
+
+        let current_session = stored_claim(
+            "claim-current-session",
+            "current-session",
+            "active",
+            LeaseMode::Exclusive,
+            Some("task-current"),
+            Some("run-current"),
+            Some("domain-current"),
+            &["crates/vida/src"],
+            &[],
+        );
+        assert!(claim_task_conflict(&current_session, &task, Some("current-session")).is_none());
+
+        let task_read_paths = vec!["docs/runtime.md".to_string()];
+        let shared_read_task = OrchestratorClaimTaskConflictInput {
+            task_id: "task-reader",
+            run_id: Some("run-reader"),
+            conflict_domain: Some("reader-domain"),
+            owned_paths: &[],
+            read_only_paths: &task_read_paths,
+            lease_mode: LeaseMode::SharedRead,
+        };
+        let write_holder = stored_claim(
+            "claim-write",
+            "foreign-session",
+            "active",
+            LeaseMode::Exclusive,
+            Some("writer-task"),
+            Some("writer-run"),
+            Some("writer-domain"),
+            &["docs"],
+            &[],
+        );
+        assert_eq!(
+            claim_task_conflict(&write_holder, &shared_read_task, Some("current-session"))
+                .expect("shared-read task should conflict with active write path")
+                .conflict_kind,
+            "owned_path"
+        );
     }
 
     #[tokio::test]

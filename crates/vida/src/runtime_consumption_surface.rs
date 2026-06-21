@@ -797,7 +797,7 @@ mod tests {
         assert_eq!(summary.active_executable_path, current_exe);
         assert!(!summary.active_executable_fingerprint.is_empty());
         assert!(summary.installed_binaries.iter().any(|binary| binary.active
-            && PathBuf::from(&binary.path)
+            && binary.path
                 == PathBuf::from(&summary.active_executable_path)
                     .canonicalize()
                     .expect("active executable path should canonicalize")));

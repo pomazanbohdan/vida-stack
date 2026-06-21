@@ -52,12 +52,16 @@ pub fn latest_run_graph_task_orthogonal_to_taskflow_active_work(
 pub fn latest_run_graph_task_stale_for_write_guard(
     latest_run_graph_task_missing: bool,
     latest_run_graph_task_closed: bool,
+    terminal_retired_runtime_run: bool,
     exception_takeover_matches_active_taskflow_work: bool,
     latest_run_graph_task_orthogonal_to_taskflow_active_work: bool,
 ) -> bool {
-    latest_run_graph_task_missing
-        || latest_run_graph_task_closed
-        || (!exception_takeover_matches_active_taskflow_work
+    let terminal_retired_missing_task_run =
+        latest_run_graph_task_missing && terminal_retired_runtime_run;
+    latest_run_graph_task_closed
+        || (!terminal_retired_missing_task_run && latest_run_graph_task_missing)
+        || (!terminal_retired_missing_task_run
+            && !exception_takeover_matches_active_taskflow_work
             && latest_run_graph_task_orthogonal_to_taskflow_active_work)
 }
 
@@ -197,19 +201,25 @@ mod tests {
     #[test]
     fn latest_run_graph_task_stale_for_write_guard_matches_status_formula() {
         assert!(latest_run_graph_task_stale_for_write_guard(
-            true, false, true, false
+            true, false, false, true, false
         ));
         assert!(latest_run_graph_task_stale_for_write_guard(
-            false, true, true, false
+            false, true, false, true, false
         ));
         assert!(latest_run_graph_task_stale_for_write_guard(
-            false, false, false, true
+            false, false, false, false, true
         ));
         assert!(!latest_run_graph_task_stale_for_write_guard(
-            false, false, true, true
+            false, false, false, true, true
         ));
         assert!(!latest_run_graph_task_stale_for_write_guard(
-            false, false, false, false
+            false, false, false, false, false
+        ));
+        assert!(!latest_run_graph_task_stale_for_write_guard(
+            true, false, true, false, true
+        ));
+        assert!(latest_run_graph_task_stale_for_write_guard(
+            false, true, true, true, false
         ));
     }
 }

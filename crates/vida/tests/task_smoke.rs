@@ -1,5 +1,8 @@
+#![allow(clippy::suspicious_open_options)]
+
+use fs2::FileExt;
 use serde_json::Value;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
@@ -10,6 +13,48 @@ use tokio::runtime::Runtime;
 
 fn vida() -> Command {
     vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
+}
+
+fn git_command() -> Command {
+    Command::new(resolve_git_binary())
+}
+
+fn resolve_git_binary() -> std::path::PathBuf {
+    for env_key in ["GIT", "GIT_EXE"] {
+        if let Ok(value) = std::env::var(env_key) {
+            let path = std::path::PathBuf::from(value);
+            if path.is_file() {
+                return path;
+            }
+        }
+    }
+
+    if cfg!(windows) {
+        if let Ok(output) = Command::new("where.exe").arg("git").output() {
+            if output.status.success() {
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    let path = std::path::PathBuf::from(line.trim());
+                    if path.is_file() {
+                        return path;
+                    }
+                }
+            }
+        }
+
+        for candidate in [
+            r"C:\Program Files\Git\cmd\git.exe",
+            r"C:\Program Files\Git\bin\git.exe",
+            r"C:\Program Files (x86)\Git\cmd\git.exe",
+            r"C:\Program Files (x86)\Git\bin\git.exe",
+        ] {
+            let path = std::path::PathBuf::from(candidate);
+            if path.is_file() {
+                return path;
+            }
+        }
+    }
+
+    std::path::PathBuf::from("git")
 }
 
 fn unique_state_dir() -> String {
@@ -35,6 +80,30 @@ fn unique_test_id(prefix: &str) -> String {
     static UNIQUE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
     let counter = UNIQUE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{}-{}-{}-{}", prefix, std::process::id(), nanos, counter)
+}
+
+fn point_host_cli_template_at_existing_codex_source(project_root: &str, cli_system: &str) {
+    let config_path = format!("{project_root}/vida.config.yaml");
+    let mut config: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&config_path).expect("config exists"))
+            .expect("config yaml should parse");
+    let host_system = config
+        .get_mut("host_environment")
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .and_then(|host_environment| host_environment.get_mut("systems"))
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .and_then(|systems| systems.get_mut(cli_system))
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .expect("selected host system should exist in test config");
+    host_system.insert(
+        serde_yaml::Value::String("template_root".to_string()),
+        serde_yaml::Value::String(".codex".to_string()),
+    );
+    fs::write(
+        &config_path,
+        serde_yaml::to_string(&config).expect("patched config should render"),
+    )
+    .expect("patch host cli template root");
 }
 
 fn project_bound_state_dir() -> (String, String) {
@@ -318,6 +387,54 @@ fn run_command_json_allow_failure(args: &[&str], state_dir: &str) -> (serde_json
     (json, output.status.success())
 }
 
+fn hold_authoritative_open_guard(state_dir: &str) -> std::fs::File {
+    fs::create_dir_all(state_dir).expect("state dir should exist before lock simulation");
+    let guard_path = format!("{state_dir}/.vida-authoritative-open.guard");
+    let guard = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&guard_path)
+        .expect("authoritative open guard should open");
+    guard
+        .lock_exclusive()
+        .expect("authoritative open guard should lock");
+    guard
+}
+
+fn assert_mutation_authority_blocked(args: &[&str], state_dir: &str, surface: &str) {
+    let output = run_command_capture(args, state_dir);
+    assert!(
+        !output.status.success(),
+        "args: {args:?}\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.stdout.is_empty(),
+        "blocked mutation should emit json stdout; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("blocked mutation authority payload should parse as json");
+    assert_eq!(payload["surface"], surface);
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["authoritative_state_required_for_mutation"])
+    );
+    assert_eq!(payload["read_fallback"]["allowed_for_mutation"], false);
+    assert!(payload["read_fallback"]["disallowed_modes"]
+        .as_array()
+        .expect("disallowed modes should render")
+        .iter()
+        .any(|value| value == "snapshot"));
+    assert!(payload["next_actions"][0]
+        .as_str()
+        .expect("next action should render")
+        .contains("read-only evidence"));
+}
+
 fn create_epic_parent(state_dir: &str, parent_id: &str, title: &str, status: &str) {
     let parent = run_command_json(
         &[
@@ -369,7 +486,7 @@ fn create_task_fixture_row(
 
 fn init_git_repo(path: &str) {
     fs::create_dir_all(path).expect("create git repo dir");
-    let output = Command::new("git")
+    let output = git_command()
         .args(["init", "--quiet"])
         .current_dir(path)
         .output()
@@ -2314,10 +2431,13 @@ fn cli_help_description_inventory_covers_taskflow_proxy_topics() {
     }
 
     for (topic, expected) in [
-        ("route", "vida taskflow route explain [--json]"),
+        (
+            "route",
+            "vida taskflow route explain [--run-id <run-id>] [--json]",
+        ),
         (
             "validate-routing",
-            "vida taskflow validate-routing [--json]",
+            "vida taskflow validate-routing [--run-id <run-id>] [--json]",
         ),
         ("status", "vida taskflow status [--summary] [--json]"),
     ] {
@@ -3343,7 +3463,7 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         assert!(command.contains("vida agent-init"));
         assert!(command.contains("--role worker"));
         assert!(command.contains("--state-dir"));
-        assert!(command.contains("--json"));
+        assert!(!command.contains("--json"));
     }
 
     let agent_init = run_command_json(
@@ -6699,7 +6819,7 @@ fn implementation_attempt_isolation() {
         ["add", "."].as_slice(),
         ["commit", "--quiet", "-m", "baseline"].as_slice(),
     ] {
-        let output = Command::new("git")
+        let output = git_command()
             .args(args)
             .current_dir(&project_root)
             .output()
@@ -6711,7 +6831,7 @@ fn implementation_attempt_isolation() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let base = Command::new("git")
+    let base = git_command()
         .args(["rev-parse", "HEAD"])
         .current_dir(&project_root)
         .output()
@@ -6932,7 +7052,7 @@ fn implementation_attempt_isolation() {
         ])
     );
 
-    let git_status = Command::new("git")
+    let git_status = git_command()
         .args(["status", "--short", "--", "crates", "docs"])
         .current_dir(&project_root)
         .output()
@@ -7426,7 +7546,7 @@ fn external_attempt_scope_guard() {
         serde_json::json!(["implementation_artifacts_missing"])
     );
 
-    let git_status = Command::new("git")
+    let git_status = git_command()
         .args(["-C", &project_root, "status", "--short"])
         .output()
         .expect("git status should run");
@@ -8078,6 +8198,96 @@ fn task_update_title_priority() {
     assert_eq!(shown["status"], "pass");
     assert_eq!(shown["task"]["title"], "Renamed task");
     assert_eq!(shown["task"]["priority"], 1);
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_mutations_require_authoritative_state_under_lock_without_snapshot_drift() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    create_epic_parent(&state_dir, "locked-root", "Locked root", "open");
+    create_task_fixture_row(
+        &state_dir,
+        "locked-task",
+        "Locked task",
+        "task",
+        "open",
+        Some("locked-root"),
+    );
+    let snapshot_path = format!("{state_dir}/exports/tasks.snapshot.jsonl");
+    let snapshot_before =
+        fs::read_to_string(&snapshot_path).expect("canonical task snapshot should exist");
+    let import_path = format!("{state_dir}/locked-import.jsonl");
+    fs::write(
+        &import_path,
+        "{\"id\":\"locked-import\",\"title\":\"Should not import\",\"parent_id\":\"locked-root\"}\n",
+    )
+    .expect("write import payload");
+
+    let guard = hold_authoritative_open_guard(&state_dir);
+    assert_mutation_authority_blocked(
+        &[
+            "task",
+            "update",
+            "locked-task",
+            "--title",
+            "Should not apply",
+            "--json",
+        ],
+        &state_dir,
+        "vida task update",
+    );
+    assert_mutation_authority_blocked(
+        &[
+            "task",
+            "close",
+            "locked-task",
+            "--reason",
+            "should not close under lock",
+            "--json",
+        ],
+        &state_dir,
+        "vida task close",
+    );
+    assert_mutation_authority_blocked(
+        &["task", "import", "--file", &import_path, "--json"],
+        &state_dir,
+        "vida task import",
+    );
+    assert_mutation_authority_blocked(
+        &[
+            "task",
+            "create",
+            "locked-create",
+            "Should not create",
+            "--parent-id",
+            "locked-root",
+            "--json",
+        ],
+        &state_dir,
+        "vida task create",
+    );
+    let snapshot_after =
+        fs::read_to_string(&snapshot_path).expect("canonical task snapshot should remain readable");
+    assert_eq!(
+        snapshot_after, snapshot_before,
+        "blocked mutation attempts must not rewrite canonical task snapshot"
+    );
+    drop(guard);
+
+    let shown = run_command_json(&["task", "show", "locked-task", "--json"], &state_dir);
+    assert_eq!(shown["task"]["title"], "Locked task");
+    assert_eq!(shown["task"]["status"], "open");
+    let list = run_command_json(&["task", "list", "--json"], &state_dir);
+    let ids = list["tasks"]
+        .as_array()
+        .expect("task list should render tasks")
+        .iter()
+        .map(|task| task["id"].as_str().expect("task id should render"))
+        .collect::<Vec<_>>();
+    assert!(!ids.contains(&"locked-import"));
+    assert!(!ids.contains(&"locked-create"));
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -8871,7 +9081,7 @@ fn run_graph_task_identity_repair_public_cli_matrix() {
             "thread_id": ""
         })
     };
-    let rows = vec![
+    let rows = [
         serde_json::json!({
             "id": root_id,
             "title": "Root epic",
@@ -9330,9 +9540,10 @@ fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_c
     );
     assert_eq!(run_graph["status"], "pass");
     assert_eq!(run_graph["run_graph_status"]["status"], "ready");
+    assert_eq!(run_graph["run_graph_status"]["active_node"], "dev_pack");
     assert_eq!(
         run_graph["run_graph_status"]["lifecycle_stage"],
-        "work_pool_pack_complete"
+        "dev_pack_active"
     );
     assert_eq!(run_graph["blocker_codes"], serde_json::json!([]));
     assert_eq!(run_graph["run_graph_status"]["next_node"], "dev_pack");
@@ -9510,7 +9721,7 @@ fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_c
     assert_eq!(repaired_run_graph["status"], "pass");
     assert_eq!(
         repaired_run_graph["run_graph_status"]["active_node"],
-        "work-pool-pack"
+        "dev_pack"
     );
     assert_eq!(
         repaired_run_graph["run_graph_status"]["next_node"],
@@ -9735,10 +9946,11 @@ fn dev_pack_materialization_pass_resolves_identity_and_unblocks_closure_via_cli(
     );
     assert_eq!(run_graph["status"], "pass");
     assert_eq!(run_graph["run_graph_status"]["status"], "ready");
+    assert_eq!(run_graph["run_graph_status"]["active_node"], "closure");
     assert_eq!(run_graph["run_graph_status"]["next_node"], "closure");
     assert_eq!(
         run_graph["run_graph_status"]["lifecycle_stage"],
-        "dev_pack_complete"
+        "closure_active"
     );
     assert_eq!(run_graph["blocker_codes"], serde_json::json!([]));
     assert!(
@@ -11910,12 +12122,19 @@ fn dev_team_dispatch_current_task_ignores_unrelated_blocked_run_gate() {
     );
     assert_eq!(
         dispatch["flow_projection"]["current_step"]["proof_state"]["status"],
-        "pending_receipt_backed_execution"
+        "pending_dispatch"
     );
-    assert_eq!(dispatch["packet_materialization"]["status"], "pass");
     assert_eq!(
-        dispatch["packet_materialization"]["artifacts"][0]["dispatch_target"],
-        "analyst"
+        dispatch["packet_materialization"]["status"],
+        "not_requested"
+    );
+    assert_eq!(
+        dispatch["packet_materialization"]["materializes_packets"],
+        false
+    );
+    assert_eq!(
+        dispatch["packet_materialization"]["artifacts"],
+        serde_json::json!([])
     );
     assert!(
         !dispatch["blocker_codes"]
@@ -12064,10 +12283,17 @@ fn dev_team_dispatch_resolved_active_binding_ignores_unrelated_blocked_run_gate(
     assert_eq!(dispatch["status"], "pass");
     assert_eq!(dispatch["lanes_selected"], 1);
     assert_eq!(dispatch["selected_lanes"][0]["task_id"], current_task_id);
-    assert_eq!(dispatch["packet_materialization"]["status"], "pass");
     assert_eq!(
-        dispatch["packet_materialization"]["artifacts"][0]["dispatch_target"],
-        "analyst"
+        dispatch["packet_materialization"]["status"],
+        "not_requested"
+    );
+    assert_eq!(
+        dispatch["packet_materialization"]["materializes_packets"],
+        false
+    );
+    assert_eq!(
+        dispatch["packet_materialization"]["artifacts"],
+        serde_json::json!([])
     );
     assert!(
         !dispatch["blocker_codes"]
@@ -12201,7 +12427,7 @@ fn dev_team_dispatch_materialize_packets_writes_persisted_analyst_packet_with_st
 }
 
 #[test]
-fn dev_team_dispatch_config_default_materializes_packets_without_flag() {
+fn dev_team_dispatch_preview_without_flag_does_not_poison_explicit_materialization_retry() {
     let (project_root, state_dir) = project_bound_state_dir();
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
@@ -12235,7 +12461,7 @@ fn dev_team_dispatch_config_default_materializes_packets_without_flag() {
     );
     assert_eq!(task["status"], "pass");
 
-    let materialized_by_default = run_command_json(
+    let preview_without_flag = run_command_json(
         &[
             "agent",
             "dispatch-next",
@@ -12250,14 +12476,18 @@ fn dev_team_dispatch_config_default_materializes_packets_without_flag() {
         ],
         &state_dir,
     );
-    assert_eq!(materialized_by_default["status"], "pass");
+    assert_eq!(preview_without_flag["status"], "pass");
     assert_eq!(
-        materialized_by_default["packet_materialization"]["status"],
-        "pass"
+        preview_without_flag["packet_materialization"]["status"],
+        "not_requested"
     );
     assert_eq!(
-        materialized_by_default["packet_materialization"]["materializes_packets"],
-        true
+        preview_without_flag["packet_materialization"]["materializes_packets"],
+        false
+    );
+    assert_eq!(
+        preview_without_flag["packet_materialization"]["artifacts"],
+        serde_json::json!([])
     );
 
     let materialized = run_command_json(
@@ -12522,14 +12752,17 @@ fn dev_team_dispatch_same_task_stale_coach_run_materializes_analyst_packet() {
         "business_analyst"
     );
     assert_eq!(dispatch["selected_lanes"][0]["task_class"], "specification");
-    assert_eq!(dispatch["packet_materialization"]["status"], "pass");
     assert_eq!(
-        dispatch["packet_materialization"]["artifacts"][0]["dispatch_target"],
-        "analyst"
+        dispatch["packet_materialization"]["status"],
+        "not_requested"
     );
     assert_eq!(
-        dispatch["packet_materialization"]["artifacts"][0]["packet_template_kind"],
-        "delivery_task_packet"
+        dispatch["packet_materialization"]["materializes_packets"],
+        false
+    );
+    assert_eq!(
+        dispatch["packet_materialization"]["artifacts"],
+        serde_json::json!([])
     );
     let blockers = require_json_string_array(&dispatch["blocker_codes"], "dispatch blocker_codes");
     assert!(
@@ -12722,8 +12955,16 @@ fn dev_team_dispatch_keeps_configured_first_step_despite_unrelated_stale_missing
         "specification"
     );
     assert_eq!(
-        dispatch["packet_materialization"]["status"], "pass",
-        "unrelated stale run must not suppress configured packet materialization: {dispatch}"
+        dispatch["packet_materialization"]["status"], "not_requested",
+        "unrelated stale run must not suppress configured dispatch preview: {dispatch}"
+    );
+    assert_eq!(
+        dispatch["packet_materialization"]["materializes_packets"],
+        false
+    );
+    assert_eq!(
+        dispatch["packet_materialization"]["artifacts"],
+        serde_json::json!([])
     );
     let blockers = dispatch["blocker_codes"]
         .as_array()
@@ -17053,6 +17294,7 @@ fn status_json_reports_non_default_host_agents_summary() {
         serde_yaml::to_string(&config).expect("patched yaml should render"),
     )
     .expect("patch config");
+    point_host_cli_template_at_existing_codex_source(&project_root, "qwen");
 
     let activator = vida()
         .args([
@@ -17110,8 +17352,14 @@ fn status_json_reports_non_default_host_agents_summary() {
     let host_agents = &parsed["host_agents"];
     assert_eq!(host_agents["host_cli_system"], "qwen");
     assert_eq!(host_agents["runtime_surface"], ".qwen");
-    assert_eq!(host_agents["root_session_write_guard"]["status"], "missing");
-    assert_eq!(parsed["root_session_write_guard"]["status"], "missing");
+    assert_eq!(
+        host_agents["root_session_write_guard"]["status"],
+        "blocked_by_default"
+    );
+    assert_eq!(
+        parsed["root_session_write_guard"]["status"],
+        "blocked_by_default"
+    );
     let runtime_root = host_agents["runtime_root"]
         .as_str()
         .expect("runtime_root present");
@@ -17122,7 +17370,7 @@ fn status_json_reports_non_default_host_agents_summary() {
         system_entry["template_root"]
             .as_str()
             .expect("template_root"),
-        ".qwen"
+        ".codex"
     );
     assert_eq!(
         system_entry["runtime_root"].as_str().expect("runtime_root"),
@@ -17340,6 +17588,7 @@ fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable()
         serde_yaml::to_string(&config).expect("patched yaml should render"),
     )
     .expect("patch config");
+    point_host_cli_template_at_existing_codex_source(&project_root, "qwen");
 
     let activator = vida()
         .args([
@@ -20197,9 +20446,7 @@ fn multi_session_disjoint_tasks_independent_admission_via_cli() {
 
     let claim_conflicts = &session_1_status["operator_session_projection"]["claim_conflicts"];
     assert!(
-        claim_conflicts
-            .as_array()
-            .map_or(true, |arr| arr.is_empty()),
+        claim_conflicts.as_array().is_none_or(|arr| arr.is_empty()),
         "disjoint tasks should have no claim conflicts: {claim_conflicts}"
     );
 
@@ -20324,9 +20571,7 @@ fn multi_session_regression_legacy_global_blocker_does_not_block_unrelated_sessi
 
     let global_blockers = &status["operator_session_projection"]["global_blockers"];
     assert!(
-        global_blockers
-            .as_array()
-            .map_or(true, |arr| arr.is_empty()),
+        global_blockers.as_array().is_none_or(|arr| arr.is_empty()),
         "legacy global blockers should be empty for fresh session: {global_blockers}"
     );
 
@@ -21763,9 +22008,7 @@ fn multi_session_disjoint_parallel_admission() {
 
     let claim_conflicts = &status["operator_session_projection"]["claim_conflicts"];
     assert!(
-        claim_conflicts
-            .as_array()
-            .map_or(true, |arr| arr.is_empty()),
+        claim_conflicts.as_array().is_none_or(|arr| arr.is_empty()),
         "disjoint parallel tasks should have no claim conflicts initially: {claim_conflicts}"
     );
 

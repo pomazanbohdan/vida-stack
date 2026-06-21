@@ -87,9 +87,8 @@ fn parse_approval_args<'a>(args: &'a [String]) -> Result<ApprovalCommand<'a>, St
 
 fn emit_blocked_approval_envelope(as_json: bool, reason: String) -> ExitCode {
     let latest_command =
-        operator_output::command_text::human_command("vida approval show --latest --json");
-    let run_command =
-        operator_output::command_text::human_command("vida approval show <run-id> --json");
+        operator_output::command_text::human_command("vida approval show --latest");
+    let run_command = operator_output::command_text::human_command("vida approval show <run-id>");
     let next_actions = vec![format!(
         "Use `{latest_command}` or `{run_command}` once approval evidence exists."
     )];
@@ -303,11 +302,11 @@ fn build_approval_envelope(
         ],
         "approved" => vec![format!(
             "Use `{}` to continue the active run after approval.",
-            operator_output::command_text::human_command("vida taskflow consume continue --json")
+            operator_output::command_text::human_command("vida taskflow consume continue")
         )],
         _ => vec![format!(
             "Use `{}` to inspect a specific run.",
-            operator_output::command_text::human_command("vida approval show <run-id> --json")
+            operator_output::command_text::human_command("vida approval show <run-id>")
         )],
     };
     if principal_delegation
@@ -640,6 +639,42 @@ mod tests {
         let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
         let status = sample_run_graph_status();
         store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "approval-test-parent",
+                title: "Approval test parent",
+                display_id: None,
+                description: "Root TaskFlow row backing the approval surface fixture",
+                issue_type: "epic",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "approval-surface-test",
+                source_repo: "",
+            })
+            .await
+            .expect("approval test parent should persist");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "approval-test",
+                title: "Approval test",
+                display_id: None,
+                description: "TaskFlow row backing the approval wait run graph status",
+                issue_type: "defect",
+                status: "in_progress",
+                priority: 1,
+                parent_id: Some("approval-test-parent"),
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "approval-surface-test",
+                source_repo: "",
+            })
+            .await
+            .expect("approval test task should persist");
+        store
             .record_run_graph_status(&status)
             .await
             .expect("persist approval wait run graph status");
@@ -657,6 +692,13 @@ mod tests {
             .run_graph_approval_delegation_receipt(&latest_status.run_id)
             .await
             .expect("approval receipt should load");
+        assert_eq!(
+            approval_receipt
+                .as_ref()
+                .expect("approval wait receipt should exist")
+                .transition_kind,
+            "approval_wait"
+        );
         let envelope = build_approval_envelope(latest_status, dispatch_summary, approval_receipt);
 
         assert_eq!(envelope.surface, "vida approval");

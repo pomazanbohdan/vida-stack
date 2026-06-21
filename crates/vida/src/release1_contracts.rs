@@ -1211,6 +1211,25 @@ pub(crate) enum BlockerCode {
     BundleActivationNotReady,
     DocflowVerdictBlock,
     ClosureAdmissionBlock,
+    MissingGateEvidence,
+    ProtocolRuleViolation,
+    RulesCheckPathMissing,
+    LaneCompletionBlockedBySummary,
+    MissingConfiguredDownstreamDispatchTarget,
+    CodegenDirtyFiles,
+    CoverageBelowThreshold,
+    MissingPrepushGateScope,
+    StageAttemptPolicyAttemptsMissing,
+    StageAttemptPolicyConsolidatorMissing,
+    RuntimeRecoveryBlocked,
+    TaskMetadataNotFound,
+    TaskMetadataMissingOwnedPaths,
+    TaskMetadataMissingProofOrAcceptanceTargets,
+    PricingImportModeConflict,
+    PricingImportSourceFileRequired,
+    UnsupportedPricingImportOption,
+    ConfiguredImplementationBlocker,
+    ConfiguredReviewBlocker,
     Unsupported,
 }
 
@@ -1410,6 +1429,31 @@ impl BlockerCode {
             Self::BundleActivationNotReady => "bundle_activation_not_ready",
             Self::DocflowVerdictBlock => "docflow_verdict_block",
             Self::ClosureAdmissionBlock => "closure_admission_block",
+            Self::MissingGateEvidence => "missing_gate_evidence",
+            Self::ProtocolRuleViolation => "protocol_rule_violation",
+            Self::RulesCheckPathMissing => "rules_check_path_missing",
+            Self::LaneCompletionBlockedBySummary => "lane_completion_blocked_by_summary",
+            Self::MissingConfiguredDownstreamDispatchTarget => {
+                "missing_configured_downstream_dispatch_target"
+            }
+            Self::CodegenDirtyFiles => "codegen_dirty_files",
+            Self::CoverageBelowThreshold => "coverage_below_threshold",
+            Self::MissingPrepushGateScope => "missing_prepush_gate_scope",
+            Self::StageAttemptPolicyAttemptsMissing => "stage_attempt_policy_attempts_missing",
+            Self::StageAttemptPolicyConsolidatorMissing => {
+                "stage_attempt_policy_consolidator_missing"
+            }
+            Self::RuntimeRecoveryBlocked => "runtime_recovery_blocked",
+            Self::TaskMetadataNotFound => "task_metadata_not_found",
+            Self::TaskMetadataMissingOwnedPaths => "task_metadata_missing_owned_paths",
+            Self::TaskMetadataMissingProofOrAcceptanceTargets => {
+                "task_metadata_missing_proof_or_acceptance_targets"
+            }
+            Self::PricingImportModeConflict => "pricing_import_mode_conflict",
+            Self::PricingImportSourceFileRequired => "pricing_import_source_file_required",
+            Self::UnsupportedPricingImportOption => "unsupported_pricing_import_option",
+            Self::ConfiguredImplementationBlocker => "configured_implementation_blocker",
+            Self::ConfiguredReviewBlocker => "configured_review_blocker",
             Self::Unsupported => "unsupported_blocker_code",
         }
     }
@@ -1623,6 +1667,33 @@ impl BlockerCode {
             "bundle_activation_not_ready" => Some(Self::BundleActivationNotReady),
             "docflow_verdict_block" => Some(Self::DocflowVerdictBlock),
             "closure_admission_block" => Some(Self::ClosureAdmissionBlock),
+            "missing_gate_evidence" => Some(Self::MissingGateEvidence),
+            "protocol_rule_violation" => Some(Self::ProtocolRuleViolation),
+            "rules_check_path_missing" => Some(Self::RulesCheckPathMissing),
+            "lane_completion_blocked_by_summary" => Some(Self::LaneCompletionBlockedBySummary),
+            "missing_configured_downstream_dispatch_target" => {
+                Some(Self::MissingConfiguredDownstreamDispatchTarget)
+            }
+            "codegen_dirty_files" => Some(Self::CodegenDirtyFiles),
+            "coverage_below_threshold" => Some(Self::CoverageBelowThreshold),
+            "missing_prepush_gate_scope" => Some(Self::MissingPrepushGateScope),
+            "stage_attempt_policy_attempts_missing" => {
+                Some(Self::StageAttemptPolicyAttemptsMissing)
+            }
+            "stage_attempt_policy_consolidator_missing" => {
+                Some(Self::StageAttemptPolicyConsolidatorMissing)
+            }
+            "runtime_recovery_blocked" => Some(Self::RuntimeRecoveryBlocked),
+            "task_metadata_not_found" => Some(Self::TaskMetadataNotFound),
+            "task_metadata_missing_owned_paths" => Some(Self::TaskMetadataMissingOwnedPaths),
+            "task_metadata_missing_proof_or_acceptance_targets" => {
+                Some(Self::TaskMetadataMissingProofOrAcceptanceTargets)
+            }
+            "pricing_import_mode_conflict" => Some(Self::PricingImportModeConflict),
+            "pricing_import_source_file_required" => Some(Self::PricingImportSourceFileRequired),
+            "unsupported_pricing_import_option" => Some(Self::UnsupportedPricingImportOption),
+            "configured_implementation_blocker" => Some(Self::ConfiguredImplementationBlocker),
+            "configured_review_blocker" => Some(Self::ConfiguredReviewBlocker),
             "unsupported_blocker_code" => Some(Self::Unsupported),
             _ => None,
         }
@@ -2195,14 +2266,14 @@ mod tests {
 
     use super::{
         blocker_code_str, blocker_code_value, canonical_approval_status_str,
-        canonical_artifact_type_str, canonical_blocker_code_list,
-        canonical_compatibility_class_str, canonical_gate_level_str,
-        canonical_release1_contract_status_str, canonical_release1_contract_type_str,
-        canonical_release1_schema_version_str, canonical_risk_tier_str,
-        canonical_workflow_class_str, classify_compatibility_boundary,
+        canonical_artifact_type_str, canonical_blocker_code_list, canonical_blocker_code_str,
+        canonical_blocker_code_value_from_str, canonical_compatibility_class_str,
+        canonical_gate_level_str, canonical_release1_contract_status_str,
+        canonical_release1_contract_type_str, canonical_release1_schema_version_str,
+        canonical_risk_tier_str, canonical_workflow_class_str, classify_compatibility_boundary,
         cli_probe_incident_baseline_summary, cli_probe_tool_contract_summary,
         cli_probe_trace_baseline_summary, evaluate_policy_gate_protocol_binding,
-        exception_takeover_state, missing_downstream_lane_evidence_blocker,
+        exception_takeover_state, local_blocker_code_str, missing_downstream_lane_evidence_blocker,
         release1_contract_status_str, ApprovalStatus, BlockerCode, CanonicalApprovalArtifact,
         CanonicalApprovalRecord, CanonicalArtifactHeader, CanonicalArtifactType,
         CanonicalClosureAdmissionArtifact, CanonicalClosureAdmissionRecord,
@@ -2253,6 +2324,98 @@ mod tests {
             blocker_code_value(BlockerCode::MissingLaneReceipt),
             Some("missing_lane_receipt".to_string())
         );
+    }
+
+    fn release1_blocker_code_impl_section(
+        source: &str,
+        impl_block: &str,
+        start: &str,
+        end: &str,
+    ) -> String {
+        let impl_start = source.find(impl_block).expect("impl marker should exist");
+        let impl_section = &source[impl_start..];
+        let start = impl_section.find(start).expect("start marker should exist");
+        let section = &impl_section[start..];
+        let end = section.find(end).expect("end marker should exist");
+        section[..end].to_string()
+    }
+
+    fn rust_string_literals(source: &str) -> Vec<String> {
+        let mut values = Vec::new();
+        let mut chars = source.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch != '"' {
+                continue;
+            }
+            let mut value = String::new();
+            let mut escaped = false;
+            for literal_ch in chars.by_ref() {
+                if escaped {
+                    value.push(literal_ch);
+                    escaped = false;
+                    continue;
+                }
+                if literal_ch == '\\' {
+                    escaped = true;
+                    continue;
+                }
+                if literal_ch == '"' {
+                    break;
+                }
+                value.push(literal_ch);
+            }
+            values.push(value);
+        }
+        values
+    }
+
+    #[test]
+    fn blocker_code_mapping_table_is_exhaustive_and_canonical() {
+        let source = include_str!("release1_contracts.rs");
+        let impl_block = "impl BlockerCode {";
+        let as_str_section = release1_blocker_code_impl_section(
+            source,
+            impl_block,
+            "    pub(crate) const fn as_str",
+            "    pub(crate) fn from_str",
+        );
+        let from_str_section = release1_blocker_code_impl_section(
+            source,
+            impl_block,
+            "    pub(crate) fn from_str",
+            "            _ => None,",
+        );
+        let as_str_codes = rust_string_literals(&as_str_section);
+        let from_str_codes = rust_string_literals(&from_str_section);
+        let as_str_set = as_str_codes.iter().cloned().collect::<BTreeSet<_>>();
+        let from_str_set = from_str_codes.iter().cloned().collect::<BTreeSet<_>>();
+
+        assert_eq!(as_str_codes.len(), as_str_set.len());
+        assert_eq!(from_str_codes.len(), from_str_set.len());
+        assert_eq!(as_str_set, from_str_set);
+
+        for code in as_str_set {
+            let parsed = BlockerCode::from_str(&code).expect("blocker code should parse");
+            assert_eq!(parsed.as_str(), code);
+            assert_eq!(blocker_code_value(parsed), Some(code.clone()));
+            assert_eq!(canonical_blocker_code_str(&code), Some(code.as_str()));
+            assert_eq!(local_blocker_code_str(&code), Some(code.as_str()));
+            assert_eq!(
+                canonical_blocker_code_value_from_str(&code),
+                Some(code.clone())
+            );
+            assert!(
+                BlockerCode::from_str(&code.to_ascii_uppercase()).is_none(),
+                "uppercase blocker code variant must be rejected: {code}"
+            );
+            let hyphenated = code.replace('_', "-");
+            if hyphenated != code {
+                assert!(
+                    BlockerCode::from_str(&hyphenated).is_none(),
+                    "hyphenated blocker code variant must be rejected: {code}"
+                );
+            }
+        }
     }
 
     #[test]

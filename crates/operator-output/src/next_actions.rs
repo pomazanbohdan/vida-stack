@@ -19,32 +19,32 @@ pub fn consume_continue_command(run_id: Option<&str>) -> String {
             "vida taskflow consume continue --run-id {} --json",
             shell_quote(run_id)
         )),
-        None => human_command("vida taskflow consume continue --json"),
+        None => human_command("vida taskflow consume continue"),
     }
 }
 
 pub fn recovery_latest_command() -> String {
-    human_command("vida taskflow recovery latest --json")
+    human_command("vida taskflow recovery latest")
 }
 
 pub fn status_command() -> String {
-    human_command("vida status --json")
+    human_command("vida status")
 }
 
 pub fn human_recovery_status_command(run_id: &str) -> String {
     human_command(&format!(
-        "vida taskflow recovery status {} --json",
+        "vida taskflow recovery status {}",
         shell_quote(run_id)
     ))
 }
 
 pub fn human_lane_show_command(run_id: &str) -> String {
-    human_command(&format!("vida lane show {} --json", shell_quote(run_id)))
+    human_command(&format!("vida lane show {}", shell_quote(run_id)))
 }
 
 pub fn human_run_graph_status_command(run_id: &str) -> String {
     human_command(&format!(
-        "vida taskflow run-graph status {} --json",
+        "vida taskflow run-graph status {}",
         shell_quote(run_id)
     ))
 }
@@ -62,27 +62,27 @@ pub fn human_protocol_binding_repair_command() -> String {
 }
 
 pub fn human_closed_run_reconcile_command() -> String {
-    human_command("vida task reconcile-closed-runs --limit 25 --json")
+    human_command("vida task reconcile-closed-runs --limit 25")
 }
 
 pub fn human_dependency_graph_repair_command() -> String {
-    human_command("vida task validate-graph --json")
+    human_command("vida task validate-graph")
 }
 
 pub fn human_taskflow_protocol_binding_check_command() -> String {
-    human_command("vida taskflow protocol-binding check --json")
+    human_command("vida taskflow protocol-binding check")
 }
 
 pub fn human_taskflow_protocol_binding_sync_command() -> String {
-    human_command("vida taskflow protocol-binding sync --json")
+    human_command("vida taskflow protocol-binding sync")
 }
 
 pub fn human_project_activator_command() -> String {
-    human_command("vida project-activator --json")
+    human_command("vida project-activator")
 }
 
 pub fn human_bundle_check_command() -> String {
-    human_command("vida taskflow consume bundle check --json")
+    human_command("vida taskflow consume bundle check")
 }
 
 pub fn human_lane_retire_command(run_id: &str) -> String {

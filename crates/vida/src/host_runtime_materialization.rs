@@ -825,6 +825,256 @@ pub(crate) fn overlay_host_runtime_agent_catalog(
     rows
 }
 
+pub(crate) fn host_runtime_entry_carrier_catalog(
+    entry: Option<&serde_yaml::Value>,
+) -> Vec<serde_json::Value> {
+    let Some(serde_yaml::Value::Mapping(carriers)) =
+        entry.and_then(|value| yaml_lookup(value, &["carriers"]))
+    else {
+        return Vec::new();
+    };
+    let mut rows = carriers
+        .iter()
+        .filter_map(|(carrier_id, value)| {
+            let role_id = match carrier_id {
+                serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
+                _ => return None,
+            };
+            let runtime_roles = yaml_string_list(yaml_lookup(value, &["runtime_roles"]));
+            let task_classes = yaml_string_list(yaml_lookup(value, &["task_classes"]));
+            let rate = yaml_string(yaml_lookup(value, &["rate"]))
+                .and_then(|raw| raw.parse::<u64>().ok())
+                .unwrap_or(0);
+            let profile_projection =
+                crate::model_profile_contract::normalize_profile_projection_from_yaml(
+                    role_id,
+                    value,
+                    Some(rate),
+                    &runtime_roles,
+                    &task_classes,
+                );
+            Some(serde_json::json!({
+                "role_id": role_id,
+                "description": yaml_string(yaml_lookup(value, &["description"])).unwrap_or_default(),
+                "config_file": "",
+                "model": profile_projection["model"].clone(),
+                "model_provider": profile_projection["model_provider"].clone(),
+                "model_reasoning_effort": profile_projection["model_reasoning_effort"].clone(),
+                "plan_mode_reasoning_effort": profile_projection["plan_mode_reasoning_effort"].clone(),
+                "sandbox_mode": profile_projection["sandbox_mode"].clone(),
+                "default_model_profile": profile_projection["default_model_profile"].clone(),
+                "model_profiles": profile_projection["model_profiles"].clone(),
+                "tier": yaml_string(yaml_lookup(value, &["tier"])).unwrap_or_else(|| role_id.to_string()),
+                "rate": rate,
+                "normalized_cost_units": profile_projection["model_profiles"]
+                    .as_object()
+                    .and_then(|profiles| profile_projection["default_model_profile"].as_str().and_then(|profile_id| profiles.get(profile_id)))
+                    .and_then(|profile| profile["normalized_cost_units"].as_u64())
+                    .unwrap_or(rate),
+                "reasoning_band": yaml_string(yaml_lookup(value, &["reasoning_band"])).unwrap_or_default(),
+                "default_runtime_role": yaml_string(yaml_lookup(value, &["default_runtime_role"])).unwrap_or_default(),
+                "runtime_roles": runtime_roles,
+                "task_classes": task_classes,
+            }))
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        left["rate"]
+            .as_u64()
+            .unwrap_or(u64::MAX)
+            .cmp(&right["rate"].as_u64().unwrap_or(u64::MAX))
+            .then_with(|| {
+                left["role_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .cmp(right["role_id"].as_str().unwrap_or_default())
+            })
+    });
+    rows
+}
+
+pub(crate) fn materialize_host_runtime_dispatch_alias_catalog(
+    configured_aliases: &[serde_json::Value],
+    agent_catalog: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let carrier_rows = agent_catalog
+        .iter()
+        .filter_map(|row| Some((row["tier"].as_str()?.to_string(), row.clone())))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut rows = configured_aliases
+        .iter()
+        .filter_map(|value| {
+            let lane_id = value["alias_id"].as_str()?.trim();
+            let carrier_tier = value["carrier_tier"].as_str()?.trim();
+            let mut row = carrier_rows.get(carrier_tier)?.clone();
+            let runtime_role = json_string(value.get("runtime_role"))
+                .or_else(|| json_string(value.get("default_runtime_role")))
+                .unwrap_or_default();
+            let runtime_roles = value["runtime_roles"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let task_classes = value["task_classes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            row["role_id"] = serde_json::Value::String(lane_id.to_string());
+            row["description"] = value
+                .get("description")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            row["config_file"] = serde_json::Value::String(format!("agents/{lane_id}.toml"));
+            row["default_runtime_role"] = serde_json::Value::String(runtime_role.clone());
+            row["runtime_roles"] =
+                serde_json::json!(if runtime_roles.is_empty() && !runtime_role.is_empty() {
+                    vec![runtime_role]
+                } else {
+                    runtime_roles
+                });
+            row["task_classes"] = serde_json::json!(task_classes);
+            row["template_role_id"] = serde_json::Value::String(carrier_tier.to_string());
+            row["carrier_tier"] = row["tier"].clone();
+            row["developer_instructions"] = value
+                .get("developer_instructions")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            Some(row)
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        left["role_id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["role_id"].as_str().unwrap_or_default())
+    });
+    rows
+}
+
+pub(crate) fn overlay_host_runtime_dispatch_alias_catalog(
+    config: &serde_yaml::Value,
+    agent_catalog: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let Some(system_id) = selected_host_runtime_system_id(config) else {
+        return Vec::new();
+    };
+    let Some(serde_yaml::Value::Mapping(configured_aliases)) = yaml_lookup(
+        config,
+        &[
+            "host_environment",
+            "systems",
+            &system_id,
+            "dispatch_aliases",
+        ],
+    ) else {
+        return Vec::new();
+    };
+    let carrier_rows = agent_catalog
+        .iter()
+        .filter_map(|row| Some((row["tier"].as_str()?.to_string(), row.clone())))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut rows = configured_aliases
+        .iter()
+        .filter_map(|(lane_id, value)| {
+            let lane_id = match lane_id {
+                serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
+                _ => return None,
+            };
+            let carrier_tier = yaml_string(yaml_lookup(value, &["carrier_tier"]))?;
+            let mut row = carrier_rows.get(&carrier_tier)?.clone();
+            let runtime_role = yaml_string(yaml_lookup(value, &["runtime_role"]))
+                .or_else(|| yaml_string(yaml_lookup(value, &["default_runtime_role"])))
+                .unwrap_or_default();
+            let runtime_roles = {
+                let rows = yaml_string_list(yaml_lookup(value, &["runtime_roles"]));
+                if rows.is_empty() && !runtime_role.is_empty() {
+                    vec![runtime_role.clone()]
+                } else {
+                    rows
+                }
+            };
+            row["role_id"] = serde_json::Value::String(lane_id.to_string());
+            row["description"] = serde_json::Value::String(
+                yaml_string(yaml_lookup(value, &["description"])).unwrap_or_default(),
+            );
+            row["config_file"] = serde_json::Value::String(format!("agents/{lane_id}.toml"));
+            row["default_runtime_role"] = serde_json::Value::String(runtime_role);
+            row["runtime_roles"] = serde_json::json!(runtime_roles);
+            row["task_classes"] =
+                serde_json::json!(yaml_string_list(yaml_lookup(value, &["task_classes"])));
+            row["template_role_id"] = serde_json::Value::String(carrier_tier);
+            row["carrier_tier"] = row["tier"].clone();
+            row["developer_instructions"] = serde_json::Value::String(
+                yaml_string(yaml_lookup(value, &["developer_instructions"])).unwrap_or_default(),
+            );
+            Some(row)
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        left["role_id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["role_id"].as_str().unwrap_or_default())
+    });
+    rows
+}
+
+pub(crate) fn host_runtime_dispatch_alias_catalog_for_root(
+    config: &serde_yaml::Value,
+    root: &Path,
+    agent_catalog: &[serde_json::Value],
+) -> Result<Vec<serde_json::Value>, String> {
+    let require_registry_files = yaml_bool(
+        yaml_lookup(
+            config,
+            &["agent_extensions", "validation", "require_registry_files"],
+        ),
+        false,
+    );
+    let configured_path = yaml_string(yaml_lookup(
+        config,
+        &["agent_extensions", "registries", "dispatch_aliases"],
+    ));
+    if let Some(path) = configured_path.as_deref() {
+        let registry = load_registry_projection(
+            root,
+            Some(path),
+            "dispatch_aliases",
+            "alias_id",
+            "dispatch_aliases",
+            require_registry_files,
+        )
+        .map_err(|error| format!("failed to load dispatch aliases registry `{path}`: {error}"))?;
+        let rows = registry_rows_by_key(&registry, "dispatch_aliases", "alias_id", &[]);
+        if !rows.is_empty() {
+            return Ok(materialize_host_runtime_dispatch_alias_catalog(
+                &rows,
+                agent_catalog,
+            ));
+        }
+    }
+    Ok(overlay_host_runtime_dispatch_alias_catalog(
+        config,
+        agent_catalog,
+    ))
+}
+fn csv_string_list(value: Option<&String>) -> Vec<String> {
+    value
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::temp_state::TempStateHarness;
@@ -1077,254 +1327,4 @@ mod tests {
             assert!(!config_toml.contains(&format!("[agents.{role}]")));
         }
     }
-}
-
-pub(crate) fn host_runtime_entry_carrier_catalog(
-    entry: Option<&serde_yaml::Value>,
-) -> Vec<serde_json::Value> {
-    let Some(serde_yaml::Value::Mapping(carriers)) =
-        entry.and_then(|value| yaml_lookup(value, &["carriers"]))
-    else {
-        return Vec::new();
-    };
-    let mut rows = carriers
-        .iter()
-        .filter_map(|(carrier_id, value)| {
-            let role_id = match carrier_id {
-                serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
-                _ => return None,
-            };
-            let runtime_roles = yaml_string_list(yaml_lookup(value, &["runtime_roles"]));
-            let task_classes = yaml_string_list(yaml_lookup(value, &["task_classes"]));
-            let rate = yaml_string(yaml_lookup(value, &["rate"]))
-                .and_then(|raw| raw.parse::<u64>().ok())
-                .unwrap_or(0);
-            let profile_projection =
-                crate::model_profile_contract::normalize_profile_projection_from_yaml(
-                    role_id,
-                    value,
-                    Some(rate),
-                    &runtime_roles,
-                    &task_classes,
-                );
-            Some(serde_json::json!({
-                "role_id": role_id,
-                "description": yaml_string(yaml_lookup(value, &["description"])).unwrap_or_default(),
-                "config_file": "",
-                "model": profile_projection["model"].clone(),
-                "model_provider": profile_projection["model_provider"].clone(),
-                "model_reasoning_effort": profile_projection["model_reasoning_effort"].clone(),
-                "plan_mode_reasoning_effort": profile_projection["plan_mode_reasoning_effort"].clone(),
-                "sandbox_mode": profile_projection["sandbox_mode"].clone(),
-                "default_model_profile": profile_projection["default_model_profile"].clone(),
-                "model_profiles": profile_projection["model_profiles"].clone(),
-                "tier": yaml_string(yaml_lookup(value, &["tier"])).unwrap_or_else(|| role_id.to_string()),
-                "rate": rate,
-                "normalized_cost_units": profile_projection["model_profiles"]
-                    .as_object()
-                    .and_then(|profiles| profile_projection["default_model_profile"].as_str().and_then(|profile_id| profiles.get(profile_id)))
-                    .and_then(|profile| profile["normalized_cost_units"].as_u64())
-                    .unwrap_or(rate),
-                "reasoning_band": yaml_string(yaml_lookup(value, &["reasoning_band"])).unwrap_or_default(),
-                "default_runtime_role": yaml_string(yaml_lookup(value, &["default_runtime_role"])).unwrap_or_default(),
-                "runtime_roles": runtime_roles,
-                "task_classes": task_classes,
-            }))
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        left["rate"]
-            .as_u64()
-            .unwrap_or(u64::MAX)
-            .cmp(&right["rate"].as_u64().unwrap_or(u64::MAX))
-            .then_with(|| {
-                left["role_id"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .cmp(right["role_id"].as_str().unwrap_or_default())
-            })
-    });
-    rows
-}
-
-pub(crate) fn materialize_host_runtime_dispatch_alias_catalog(
-    configured_aliases: &[serde_json::Value],
-    agent_catalog: &[serde_json::Value],
-) -> Vec<serde_json::Value> {
-    let carrier_rows = agent_catalog
-        .iter()
-        .filter_map(|row| Some((row["tier"].as_str()?.to_string(), row.clone())))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut rows = configured_aliases
-        .iter()
-        .filter_map(|value| {
-            let lane_id = value["alias_id"].as_str()?.trim();
-            let carrier_tier = value["carrier_tier"].as_str()?.trim();
-            let mut row = carrier_rows.get(carrier_tier)?.clone();
-            let runtime_role = json_string(value.get("runtime_role"))
-                .or_else(|| json_string(value.get("default_runtime_role")))
-                .unwrap_or_default();
-            let runtime_roles = value["runtime_roles"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>();
-            let task_classes = value["task_classes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>();
-            row["role_id"] = serde_json::Value::String(lane_id.to_string());
-            row["description"] = value
-                .get("description")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            row["config_file"] = serde_json::Value::String(format!("agents/{lane_id}.toml"));
-            row["default_runtime_role"] = serde_json::Value::String(runtime_role.clone());
-            row["runtime_roles"] =
-                serde_json::json!(if runtime_roles.is_empty() && !runtime_role.is_empty() {
-                    vec![runtime_role]
-                } else {
-                    runtime_roles
-                });
-            row["task_classes"] = serde_json::json!(task_classes);
-            row["template_role_id"] = serde_json::Value::String(carrier_tier.to_string());
-            row["carrier_tier"] = row["tier"].clone();
-            row["developer_instructions"] = value
-                .get("developer_instructions")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            Some(row)
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        left["role_id"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(right["role_id"].as_str().unwrap_or_default())
-    });
-    rows
-}
-
-pub(crate) fn overlay_host_runtime_dispatch_alias_catalog(
-    config: &serde_yaml::Value,
-    agent_catalog: &[serde_json::Value],
-) -> Vec<serde_json::Value> {
-    let Some(system_id) = selected_host_runtime_system_id(config) else {
-        return Vec::new();
-    };
-    let Some(serde_yaml::Value::Mapping(configured_aliases)) = yaml_lookup(
-        config,
-        &[
-            "host_environment",
-            "systems",
-            &system_id,
-            "dispatch_aliases",
-        ],
-    ) else {
-        return Vec::new();
-    };
-    let carrier_rows = agent_catalog
-        .iter()
-        .filter_map(|row| Some((row["tier"].as_str()?.to_string(), row.clone())))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut rows = configured_aliases
-        .iter()
-        .filter_map(|(lane_id, value)| {
-            let lane_id = match lane_id {
-                serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
-                _ => return None,
-            };
-            let carrier_tier = yaml_string(yaml_lookup(value, &["carrier_tier"]))?;
-            let mut row = carrier_rows.get(&carrier_tier)?.clone();
-            let runtime_role = yaml_string(yaml_lookup(value, &["runtime_role"]))
-                .or_else(|| yaml_string(yaml_lookup(value, &["default_runtime_role"])))
-                .unwrap_or_default();
-            let runtime_roles = {
-                let rows = yaml_string_list(yaml_lookup(value, &["runtime_roles"]));
-                if rows.is_empty() && !runtime_role.is_empty() {
-                    vec![runtime_role.clone()]
-                } else {
-                    rows
-                }
-            };
-            row["role_id"] = serde_json::Value::String(lane_id.to_string());
-            row["description"] = serde_json::Value::String(
-                yaml_string(yaml_lookup(value, &["description"])).unwrap_or_default(),
-            );
-            row["config_file"] = serde_json::Value::String(format!("agents/{lane_id}.toml"));
-            row["default_runtime_role"] = serde_json::Value::String(runtime_role);
-            row["runtime_roles"] = serde_json::json!(runtime_roles);
-            row["task_classes"] =
-                serde_json::json!(yaml_string_list(yaml_lookup(value, &["task_classes"])));
-            row["template_role_id"] = serde_json::Value::String(carrier_tier);
-            row["carrier_tier"] = row["tier"].clone();
-            row["developer_instructions"] = serde_json::Value::String(
-                yaml_string(yaml_lookup(value, &["developer_instructions"])).unwrap_or_default(),
-            );
-            Some(row)
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        left["role_id"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(right["role_id"].as_str().unwrap_or_default())
-    });
-    rows
-}
-
-pub(crate) fn host_runtime_dispatch_alias_catalog_for_root(
-    config: &serde_yaml::Value,
-    root: &Path,
-    agent_catalog: &[serde_json::Value],
-) -> Result<Vec<serde_json::Value>, String> {
-    let require_registry_files = yaml_bool(
-        yaml_lookup(
-            config,
-            &["agent_extensions", "validation", "require_registry_files"],
-        ),
-        false,
-    );
-    let configured_path = yaml_string(yaml_lookup(
-        config,
-        &["agent_extensions", "registries", "dispatch_aliases"],
-    ));
-    if let Some(path) = configured_path.as_deref() {
-        let registry = load_registry_projection(
-            root,
-            Some(path),
-            "dispatch_aliases",
-            "alias_id",
-            "dispatch_aliases",
-            require_registry_files,
-        )
-        .map_err(|error| format!("failed to load dispatch aliases registry `{path}`: {error}"))?;
-        let rows = registry_rows_by_key(&registry, "dispatch_aliases", "alias_id", &[]);
-        if !rows.is_empty() {
-            return Ok(materialize_host_runtime_dispatch_alias_catalog(
-                &rows,
-                agent_catalog,
-            ));
-        }
-    }
-    Ok(overlay_host_runtime_dispatch_alias_catalog(
-        config,
-        agent_catalog,
-    ))
-}
-fn csv_string_list(value: Option<&String>) -> Vec<String> {
-    value
-        .map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
 }

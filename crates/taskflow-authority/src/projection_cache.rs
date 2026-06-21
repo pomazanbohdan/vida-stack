@@ -72,10 +72,9 @@ pub fn cached_status_projection_matches_current_session(
     if let (Some(cached_id), Some(current_id)) = (
         cached_worktree_environment_id,
         nonempty(current.worktree_environment_id),
-    ) {
-        if cached_id == current_id {
-            return true;
-        }
+    ) && cached_id == current_id
+    {
+        return true;
     }
 
     if let (Some(cached_id), Some(current_id)) = (cached_session_id, nonempty(current.session_id)) {

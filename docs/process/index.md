@@ -78,6 +78,8 @@ Canonical entrypoints:
    - framework-owned reusable feature/change design template with stable sections and bounded variable fields
 32. `docs/process/runtime-defect-function-option-matrix-protocol.md`
    - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
+33. `docs/process/runtime-command-authority-inventory.md`
+   - VH-00 baseline inventory mapping public runtime command surfaces to authority, state access mode, state-dir behavior, JSON contract, workflow role, and proof owner
 
 -----
 artifact_path: process/index

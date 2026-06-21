@@ -327,7 +327,9 @@ pub(crate) async fn sync_run_graph_continuation_binding_with_request_text(
         })?
     {
         if let Some(bound_task_id) = explicit_task_graph_bound_task_id(&existing) {
-            if bound_task_id != status.task_id.trim() {
+            if bound_task_id != status.task_id.trim()
+                || terminal_completed_without_next_unit(status)
+            {
                 return Ok(Some(existing));
             }
         }
@@ -958,6 +960,80 @@ mod tests {
         assert_eq!(persisted.binding_source, "explicit_continuation_bind_task");
         assert_eq!(persisted.task_id, "task-new");
         assert_eq!(persisted.active_bounded_unit["task_id"], "task-new");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_for_terminal_same_task(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-continuation-sync-preserve-terminal-explicit-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: "task-next".to_string(),
+                    task_id: "task-next".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": "task-next",
+                        "run_id": "task-next",
+                        "task_status": "ready",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "operator selected the ready task after terminal closure"
+                        .to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("continue selected ready task".to_string()),
+                    recorded_at: "2026-04-21T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist explicit task binding");
+
+        let mut terminal_status =
+            crate::taskflow_run_graph::default_run_graph_status("task-next", "closure", "delivery");
+        terminal_status.task_id = "task-next".to_string();
+        terminal_status.active_node = "closure".to_string();
+        terminal_status.next_node = None;
+        terminal_status.status = "completed".to_string();
+        terminal_status.lifecycle_stage = "closure_complete".to_string();
+
+        let binding = sync_run_graph_continuation_binding(
+            &store,
+            &terminal_status,
+            "consume_continue_after_downstream_chain",
+        )
+        .await
+        .expect("terminal status should preserve explicit binding")
+        .expect("binding should remain present");
+
+        assert_eq!(binding.binding_source, "explicit_continuation_bind_task");
+        assert_eq!(binding.task_id, "task-next");
+        assert_eq!(binding.active_bounded_unit["task_id"], "task-next");
+
+        let persisted = store
+            .run_graph_continuation_binding("task-next")
+            .await
+            .expect("reload binding")
+            .expect("binding should stay persisted");
+        assert_eq!(persisted.binding_source, "explicit_continuation_bind_task");
+        assert_eq!(persisted.active_bounded_unit["task_id"], "task-next");
 
         let _ = fs::remove_dir_all(&root);
     }

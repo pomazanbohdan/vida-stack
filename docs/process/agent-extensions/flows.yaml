@@ -14,6 +14,8 @@ flow_sets:
       mode: required_for_code_shaped_work
       task_classes: implementation,execution_preparation,architecture,hard_escalation
       honor_validation_gate: true
+      architecture_signals: architecture,architect,cross-cutting,cross cutting,migration,refactor,topology,boundary,cross-scope,cross scope
+      write_signals: implement,implementation,write code,write the code,patch,refactor,build
     lane_templates:
       - lane_id: specification
         dispatch_target: specification
@@ -64,6 +66,8 @@ flow_sets:
       mode: required_for_code_shaped_work
       task_classes: implementation,execution_preparation,architecture,hard_escalation
       honor_validation_gate: true
+      architecture_signals: architecture,architect,cross-cutting,cross cutting,migration,refactor,topology,boundary,cross-scope,cross scope
+      write_signals: implement,implementation,write code,write the code,patch,refactor,build
     lane_templates:
       - lane_id: specification
         dispatch_target: specification
@@ -115,6 +119,8 @@ flow_sets:
       mode: required_for_code_shaped_work
       task_classes: implementation,execution_preparation,architecture,hard_escalation
       honor_validation_gate: true
+      architecture_signals: architecture,architect,cross-cutting,cross cutting,migration,refactor,topology,boundary,cross-scope,cross scope
+      write_signals: implement,implementation,write code,write the code,patch,refactor,build
     lane_templates:
       - lane_id: specification
         dispatch_target: specification
@@ -265,6 +271,97 @@ flow_sets:
     adapter_projection:
       host_agent_bridge_contract: required
       process_carrier_requires_explicit_backend: true
+      pack_alias_layer: true
+    sequential: true
+    allow_parallel_handoffs: false
+    proof_gates:
+      terminal_proof_target: agent:runtime-defect-pack:prover
+      structured_evidence_required: true
+      evidence_surface: vida task proof attach-evidence
+    steps:
+      - role_id: specifier
+        runtime_role: business_analyst
+        task_class: specification
+        receive_mode: task
+        worktree_policy: current
+        owns: [runtime_defect_spec, reproduction_contract, owned_write_scope]
+        does_not_own: [implementation, closure]
+        allowed_mutations: [task_notes, diagnostic_docs]
+        required_outputs: [bounded_problem_statement, acceptance_contract, owned_write_scope]
+        handoff_target: test_author
+        forbidden_actions: [write_code_without_dispatch]
+      - role_id: test_author
+        runtime_role: worker
+        task_class: test_authoring
+        receive_mode: task
+        worktree_policy: isolated_per_task
+        owns: [regression_test, fixture_rationale]
+        does_not_own: [production_fix, release_approval]
+        allowed_mutations: [tests, fixtures]
+        required_outputs: [failing_regression_test, fixture_rationale, proof_command]
+        handoff_target: coder
+        forbidden_actions: [change_production_code]
+      - role_id: coder
+        runtime_role: worker
+        task_class: implementation
+        receive_mode: task
+        worktree_policy: isolated_per_task
+        owns: [runtime_fix, changed_files, proof_command]
+        does_not_own: [validation_approval, closure]
+        allowed_mutations: [source_code, tests]
+        required_outputs: [changed_files, verification_notes, residual_risks]
+        handoff_target: reviewer_validator
+        forbidden_actions: [approve_own_work]
+      - role_id: reviewer_validator
+        runtime_role: coach
+        task_class: validation
+        receive_mode: task
+        worktree_policy: current
+        owns: [root_cause_validation, false_green_risk_review]
+        does_not_own: [source_mutation, release_approval]
+        allowed_mutations: [review_artifacts]
+        required_outputs: [root_cause_validation, rework_or_approve_decision, explicit_blockers]
+        handoff_target: hardender
+        forbidden_actions: [mutate_source]
+      - role_id: hardender
+        runtime_role: verifier
+        task_class: quality_gate
+        receive_mode: batch
+        worktree_policy: isolated_per_lane
+        quality_profile: runtime_hardening_optional
+        batch_policy:
+          group_by: [priority, order_bucket, parallel_group]
+          require_owned_paths: true
+          require_conflict_domain_clear: true
+        owns: [edge_case_review, mutation_lite, runtime_invariant_hardening]
+        does_not_own: [approval, qa_user_flow_proof]
+        allowed_mutations: [source_code, tests]
+        required_outputs: [hardening_summary, tests_added_or_skipped, conflict_domain_evidence]
+        handoff_target: qa_tester
+        forbidden_actions: [approve_release, batch_without_owned_paths]
+      - role_id: qa_tester
+        runtime_role: verifier
+        task_class: verification
+        receive_mode: task
+        worktree_policy: current
+        quality_profile: runtime_cli_smoke
+        owns: [operator_cli_verification, regression_reproduction]
+        does_not_own: [structured_proof_closure]
+        allowed_mutations: [test_artifacts]
+        required_outputs: [verification_evidence, failing_or_passing_checks, residual_risks]
+        handoff_target: prover
+        forbidden_actions: [close_without_prover]
+      - role_id: prover
+        runtime_role: prover
+        task_class: release_readiness
+        receive_mode: task
+        worktree_policy: current
+        proof_target: agent:runtime-defect-pack:prover
+        owns: [structured_proof_evidence, closure_readiness]
+        does_not_own: [new_implementation]
+        allowed_mutations: [proof_artifacts, task_proof_evidence]
+        required_outputs: [closure_readiness_decision, proof_summary, release_risks]
+        forbidden_actions: [legacy_close_reason_as_proof_authority]
   - flow_id: architecture_design
     schema_version: 1
     flow_class: development
@@ -305,6 +402,287 @@ flow_sets:
     adapter_projection:
       host_agent_bridge_contract: required
       process_carrier_requires_explicit_backend: true
+  - flow_id: quick_two_pack_flow
+    schema_version: 1
+    flow_class: development
+    description: VIDA alias-layer flow for quick-two-pack; code then behavior-preserving cleanup.
+    work_item_bindings: [task, small_patch]
+    sequential: true
+    allow_parallel_handoffs: false
+    proof_gates:
+      terminal_proof_target: agent:quick-two-pack:cleaner
+      structured_evidence_required: true
+      evidence_surface: vida task proof attach-evidence
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
+      pack_alias_layer: true
+    steps:
+      - role_id: coder
+        runtime_role: worker
+        task_class: implementation
+        receive_mode: task
+        worktree_policy: isolated_per_task
+        owns: [implementation, tests, changed_files]
+        does_not_own: [approval, release_readiness]
+        allowed_mutations: [source_code, tests]
+        required_outputs: [changed_files, verification_notes, residual_risks]
+        handoff_target: cleaner
+        forbidden_actions: [close_without_structured_proof]
+      - role_id: cleaner
+        runtime_role: worker
+        task_class: implementation
+        receive_mode: task
+        worktree_policy: isolated_per_task
+        proof_target: agent:quick-two-pack:cleaner
+        quality_profile: cleanup_lite
+        owns: [behavior_preserving_cleanup, dry_review, encapsulation_review]
+        does_not_own: [feature_scope_changes, release_approval]
+        allowed_mutations: [source_code, tests, documentation_when_required]
+        required_outputs: [cleanup_summary, changed_files, proof_command, residual_risks]
+        handoff_target: prover
+        forbidden_actions: [change_external_behavior_without_specifier, approve_release]
+  - flow_id: spec_four_pack_flow
+    schema_version: 1
+    flow_class: development
+    description: "VIDA four-pack internal-agent flow: specifier, coder, refactorer, architect."
+    work_item_bindings: [feature, requirements_change, architecture]
+    sequential: true
+    allow_parallel_handoffs: false
+    proof_gates:
+      terminal_proof_target: agent:spec-four-pack:architect
+      structured_evidence_required: true
+      evidence_surface: vida task proof attach-evidence
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
+      pack_alias_layer: true
+    steps:
+      - role_id: specifier
+        runtime_role: business_analyst
+        task_class: specification
+        receive_mode: task
+        worktree_policy: current
+        owns: [behavior_spec, acceptance_criteria, owned_write_scope]
+        does_not_own: [implementation, final_release_approval]
+        allowed_mutations: [task_notes, design_docs]
+        required_outputs: [detailed_task_brief, acceptance_contract, owned_write_scope, stop_rules]
+        handoff_target: coder
+        forbidden_actions: [write_code_without_dispatch]
+      - role_id: coder
+        runtime_role: worker
+        task_class: implementation
+        receive_mode: task
+        worktree_policy: isolated_per_task
+        owns: [implementation, unit_tests, changed_files]
+        does_not_own: [architecture_approval, release_readiness]
+        allowed_mutations: [source_code, tests]
+        required_outputs: [changed_files, verification_notes, residual_risks]
+        handoff_target: refactorer
+        forbidden_actions: [skip_tests_when_applicable, approve_own_work]
+      - role_id: refactorer
+        runtime_role: worker
+        task_class: refactor
+        receive_mode: task
+        worktree_policy: isolated_per_task
+        quality_profile: structural_cleanup
+        owns: [behavior_preserving_refactor, crap_dry_review, boundary_cleanup]
+        does_not_own: [new_feature_scope, release_approval]
+        allowed_mutations: [source_code, tests]
+        required_outputs: [refactor_summary, changed_files, quality_risks]
+        handoff_target: architect
+        forbidden_actions: [change_external_behavior_without_specifier]
+      - role_id: architect
+        runtime_role: solution_architect
+        task_class: architecture
+        receive_mode: task
+        worktree_policy: current
+        proof_target: agent:spec-four-pack:architect
+        quality_profile: architecture_review
+        owns: [architecture_boundaries, dependency_direction, final_design_review]
+        does_not_own: [direct_code_mutation, qa_user_flow_proof]
+        allowed_mutations: [review_artifacts, architecture_notes]
+        required_outputs: [architecture_review, boundary_risks, approval_or_rework_decision]
+        handoff_target: prover
+        forbidden_actions: [approve_without_structured_evidence]
+  - flow_id: full_six_pack_flow
+    schema_version: 1
+    flow_class: development
+    description: VIDA full-six-pack flow with hardender batch lane, QA tester, and prover closure.
+    work_item_bindings: [feature, requirements_change]
+    sequential: true
+    allow_parallel_handoffs: false
+    proof_gates:
+      terminal_proof_target: agent:full-six-pack:prover
+      structured_evidence_required: true
+      evidence_surface: vida task proof attach-evidence
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
+      pack_alias_layer: true
+    steps:
+      - role_id: specifier
+        runtime_role: business_analyst
+        task_class: specification
+        receive_mode: task
+        worktree_policy: current
+        owns: [behavior_spec, acceptance_criteria, owned_write_scope]
+        does_not_own: [implementation, final_release_approval]
+        allowed_mutations: [task_notes, design_docs]
+        required_outputs: [detailed_task_brief, acceptance_contract, owned_write_scope, stop_rules]
+        handoff_target: coder
+        forbidden_actions: [write_code_without_dispatch]
+      - role_id: coder
+        runtime_role: worker
+        task_class: implementation
+        receive_mode: task
+        worktree_policy: isolated_per_task
+        owns: [implementation, unit_tests, changed_files]
+        does_not_own: [release_readiness]
+        allowed_mutations: [source_code, tests]
+        required_outputs: [changed_files, verification_notes, residual_risks]
+        handoff_target: cleaner
+        forbidden_actions: [approve_own_work]
+      - role_id: cleaner
+        runtime_role: worker
+        task_class: implementation
+        receive_mode: task
+        worktree_policy: isolated_per_task
+        quality_profile: cleanup_lite
+        owns: [behavior_preserving_cleanup, duplication_review, encapsulation_review]
+        does_not_own: [feature_scope_changes, release_approval]
+        allowed_mutations: [source_code, tests]
+        required_outputs: [cleanup_summary, changed_files, residual_risks]
+        handoff_target: architect
+        forbidden_actions: [change_external_behavior_without_specifier]
+      - role_id: architect
+        runtime_role: solution_architect
+        task_class: architecture
+        receive_mode: task
+        worktree_policy: current
+        owns: [architecture_boundaries, dependency_direction, final_design_review]
+        does_not_own: [direct_code_mutation, qa_user_flow_proof]
+        allowed_mutations: [review_artifacts, architecture_notes]
+        required_outputs: [architecture_review, boundary_risks, rework_or_clearance]
+        handoff_target: hardender
+        forbidden_actions: [approve_without_structured_evidence]
+      - role_id: hardender
+        runtime_role: verifier
+        task_class: quality_gate
+        receive_mode: batch
+        worktree_policy: isolated_per_lane
+        quality_profile: hardening_optional
+        batch_policy:
+          group_by: [priority, order_bucket, parallel_group]
+          require_owned_paths: true
+          require_conflict_domain_clear: true
+        owns: [mutation_lite, edge_case_review, securityish_hardening]
+        does_not_own: [approval, qa_user_flow_proof]
+        allowed_mutations: [source_code, tests]
+        required_outputs: [hardening_summary, tests_added_or_skipped, conflict_domain_evidence]
+        handoff_target: qa_tester
+        forbidden_actions: [approve_release, batch_without_owned_paths]
+      - role_id: qa_tester
+        runtime_role: verifier
+        task_class: verification
+        receive_mode: task
+        worktree_policy: current
+        quality_profile: user_flow_e2e
+        owns: [e2e_verification, ui_user_flow_check, regression_reproduction]
+        does_not_own: [structured_proof_closure]
+        allowed_mutations: [test_artifacts, minimal_bugfix_with_rework_handoff]
+        required_outputs: [verification_evidence, failing_or_passing_checks, residual_risks]
+        handoff_target: prover
+        forbidden_actions: [close_without_prover]
+      - role_id: prover
+        runtime_role: prover
+        task_class: release_readiness
+        receive_mode: task
+        worktree_policy: current
+        proof_target: agent:full-six-pack:prover
+        owns: [structured_proof_evidence, closure_readiness]
+        does_not_own: [new_implementation]
+        allowed_mutations: [proof_artifacts, task_proof_evidence]
+        required_outputs: [closure_readiness_decision, proof_summary, release_risks]
+        forbidden_actions: [legacy_close_reason_as_proof_authority]
+  - flow_id: adversarial_review_flow
+    schema_version: 1
+    flow_class: development
+    description: VIDA adversarial-review flow with blocking findings before QA and proof closure.
+    work_item_bindings: [review, quality_gate]
+    sequential: true
+    allow_parallel_handoffs: false
+    rework_transitions:
+      adversarial_reviewer:
+        blocked_target: coder
+        resume_after_findings_addressed: qa_tester
+    proof_gates:
+      terminal_proof_target: agent:adversarial-review:prover
+      structured_evidence_required: true
+      evidence_surface: vida task proof attach-evidence
+    adapter_projection:
+      host_agent_bridge_contract: required
+      process_carrier_requires_explicit_backend: true
+      pack_alias_layer: true
+    steps:
+      - role_id: coder
+        runtime_role: worker
+        task_class: implementation
+        receive_mode: task
+        worktree_policy: isolated_per_task
+        owns: [implementation, tests, changed_files]
+        does_not_own: [review_approval, release_readiness]
+        allowed_mutations: [source_code, tests]
+        required_outputs: [changed_files, verification_notes, residual_risks]
+        handoff_target: adversarial_reviewer
+        forbidden_actions: [approve_own_work]
+      - role_id: adversarial_reviewer
+        runtime_role: coach
+        task_class: review
+        receive_mode: task
+        worktree_policy: current
+        quality_profile: adversarial_readonly
+        owns: [adversarial_findings, approval_blockers, rework_decision]
+        does_not_own: [source_mutation, final_release_approval]
+        allowed_mutations: [review_artifacts]
+        required_outputs: [findings, severity, required_rework_or_clearance]
+        handoff_target: coder
+        forbidden_actions: [mutate_source, approve_without_findings_response]
+      - role_id: coder
+        step_id: adversarial-review-rework
+        runtime_role: worker
+        task_class: implementation
+        receive_mode: task
+        worktree_policy: isolated_per_task
+        owns: [finding_response, implementation_rework, tests]
+        does_not_own: [review_approval, release_readiness]
+        allowed_mutations: [source_code, tests]
+        required_outputs: [finding_response_summary, changed_files, proof_command]
+        handoff_target: qa_tester
+        forbidden_actions: [skip_unresolved_findings]
+      - role_id: qa_tester
+        runtime_role: verifier
+        task_class: verification
+        receive_mode: task
+        worktree_policy: current
+        quality_profile: user_flow_e2e
+        owns: [e2e_verification, regression_reproduction]
+        does_not_own: [structured_proof_closure]
+        allowed_mutations: [test_artifacts]
+        required_outputs: [verification_evidence, failing_or_passing_checks, residual_risks]
+        handoff_target: prover
+        forbidden_actions: [close_without_prover]
+      - role_id: prover
+        runtime_role: prover
+        task_class: release_readiness
+        receive_mode: task
+        worktree_policy: current
+        proof_target: agent:adversarial-review:prover
+        owns: [structured_proof_evidence, closure_readiness]
+        does_not_own: [new_implementation]
+        allowed_mutations: [proof_artifacts, task_proof_evidence]
+        required_outputs: [closure_readiness_decision, proof_summary, release_risks]
+        forbidden_actions: [legacy_close_reason_as_proof_authority]
   - flow_id: party_chat_council_small
     description: Small Party Chat board for bounded architecture and conflict decisions.
     role_chain: party_chat_facilitator,party_chat_architect,party_chat_runtime_systems,party_chat_quality_verification,party_chat_delivery_cost

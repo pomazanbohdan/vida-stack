@@ -141,8 +141,8 @@ fn assert_configured_flow_catalog(config: &serde_yaml::Value, context: &str) {
     );
 
     for (work_item, flow_id) in [
-        ("pull_request", "pr_repair_verified"),
-        ("pr_repair", "pr_repair_verified"),
+        ("pull_request", "pr_processing_team"),
+        ("pr_repair", "pr_processing_team"),
         ("runtime_defect", "runtime_defect_remediation"),
         ("architecture", "architecture_design"),
         ("release_readiness", "release_readiness_gate"),

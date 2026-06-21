@@ -599,7 +599,7 @@ impl StateStore {
     pub(crate) fn critical_path_from_rows(
         tasks: &[TaskRecord],
     ) -> Result<TaskCriticalPath, StateStoreError> {
-        let issues = Self::validate_task_graph_rows(&tasks);
+        let issues = Self::validate_task_graph_rows(tasks);
         if !issues.is_empty() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: "task graph is invalid; run `vida task validate-graph` first".to_string(),
@@ -1241,11 +1241,10 @@ mod tests {
             .push(parent_child_dependency("child", "parent"));
         let touched_task_ids = BTreeSet::from(["parent".to_string(), "child".to_string()]);
 
-        let issues = StateStore::validate_task_graph_rows_for_mutation(
-            &[existing_orphan.clone()],
-            &[existing_orphan, parent, child],
-            &touched_task_ids,
-        );
+        let before = vec![existing_orphan.clone()];
+        let after = vec![existing_orphan, parent, child];
+        let issues =
+            StateStore::validate_task_graph_rows_for_mutation(&before, &after, &touched_task_ids);
 
         assert!(
             issues.is_empty(),

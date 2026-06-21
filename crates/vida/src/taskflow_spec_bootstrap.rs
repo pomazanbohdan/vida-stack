@@ -246,7 +246,7 @@ pub(crate) async fn run_taskflow_bootstrap_spec(args: &[String]) -> ExitCode {
         };
     if role_selection.execution_plan["status"] != "design_first" {
         eprintln!(
-            "Spec bootstrap is allowed only for design-first feature requests. Use `vida taskflow consume final <request> --json` to inspect the routed intake posture first."
+            "Spec bootstrap is allowed only for design-first feature requests. Use `vida taskflow consume final <request>` to inspect the routed intake posture first."
         );
         return ExitCode::from(1);
     }
@@ -520,7 +520,7 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         "tracked_flow_bootstrap.bootstrap_command",
     )?;
     if !bootstrap_command.contains("vida taskflow bootstrap-spec")
-        || !bootstrap_command.contains("--json")
+        || bootstrap_command.contains("--json")
     {
         return Err(
             "tracked bootstrap evidence `tracked_flow_bootstrap.bootstrap_command` is invalid"

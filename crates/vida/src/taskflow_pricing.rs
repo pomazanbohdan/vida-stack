@@ -1,6 +1,6 @@
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::json;
@@ -421,7 +421,7 @@ fn pricing_status_payload(summary: bool) -> serde_json::Value {
 }
 
 fn build_import_payload(
-    source_file: &PathBuf,
+    source_file: &Path,
     bytes: &[u8],
     mode: ImportMode,
 ) -> Result<serde_json::Value, &'static str> {

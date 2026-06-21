@@ -29,16 +29,18 @@ Current state:
    - `docs/product/research/embedded-runtime-bootstrap-and-projection-research.md`
    - `docs/product/research/execution-preparation-and-developer-handoff-survey.md`
    - `docs/product/research/vida-service-tui-wizard-architecture-research.md`
-3. research in this lane may inform active product specs without becoming product law automatically.
+   - `docs/product/research/enterprise-requirements-control-plane-research.md`
+3. accepted decision records are promoted into `docs/product/control/decisions/**`, not retained as research authority,
+4. research in this lane may inform active product specs without becoming product law automatically.
 
 -----
 artifact_path: product/research/index
 artifact_type: product_research_doc
 artifact_version: '1'
-artifact_revision: '2026-06-13'
+artifact_revision: '2026-06-18'
 schema_version: '1'
 status: canonical
 source_path: docs/product/research/index.md
 created_at: '2026-06-13T00:00:00+03:00'
-updated_at: 2026-06-13T00:00:00+03:00
+updated_at: 2026-06-18T00:00:00+03:00
 changelog_ref: index.changelog.jsonl

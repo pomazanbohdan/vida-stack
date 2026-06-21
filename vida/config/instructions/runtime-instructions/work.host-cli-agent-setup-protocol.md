@@ -73,7 +73,7 @@ Activation-path rule:
    - `.vida/state/host-agent-observability.json`
 9. `vida taskflow task ...` must use the native Rust StateStore bridge for core lifecycle operations; non-canonical external helper paths are forbidden in the active runtime.
 10. `vida taskflow task close ...` should refresh the same host-agent score/observability loop automatically when the bounded task can be mapped back into one lawful Codex task class.
-11. `vida status --json` should expose a bounded `host_agents` summary so the operator can inspect tier state, local stores, recent events, and total estimated budget units without reading raw state files.
+11. `vida status` should expose a bounded `host_agents` summary for operators; add `--json` only when machine-readable tier state, local stores, recent events, or budget fields are required.
 12. Project-local role/runtime tuning for Codex remains in `docs/process/codex-agent-configuration-guide.md`.
 13. That project guide must not be treated as the framework owner for selection/materialization.
 14. Rust runtime code must not hardcode dispatch-alias catalogs that duplicate overlay-owned alias definitions; activation must render from template/overlay owner state.

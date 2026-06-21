@@ -3,8 +3,9 @@ use crate::semantic_routing_features::{
     SemanticScoreInputs,
 };
 use crate::{
-    carrier_runtime_section, infer_execution_runtime_role, infer_runtime_task_class, json_lookup,
-    json_u64, role_supports_task_class, runtime_role_for_task_class, task_complexity_multiplier,
+    carrier_runtime_section, configured_task_class_supports_requested,
+    infer_execution_runtime_role, infer_runtime_task_class, json_lookup, json_u64,
+    role_supports_task_class, runtime_role_for_task_class, task_complexity_multiplier,
     RuntimeConsumptionLaneSelection,
 };
 
@@ -689,7 +690,7 @@ fn profile_task_classes(role: &serde_json::Value, profile: &serde_json::Value) -
     }
 }
 
-fn non_empty_string_field<'a>(value: &'a serde_json::Value) -> Option<&'a str> {
+fn non_empty_string_field(value: &serde_json::Value) -> Option<&str> {
     value
         .as_str()
         .map(str::trim)
@@ -723,7 +724,10 @@ fn profile_supports_task_class(
     task_class: &str,
 ) -> bool {
     let task_classes = profile_task_classes(role, profile);
-    task_classes.is_empty() || task_classes.iter().any(|value| value == task_class)
+    task_classes.is_empty()
+        || task_classes
+            .iter()
+            .any(|configured| configured_task_class_supports_requested(configured, task_class))
 }
 
 fn profile_readiness_status(profile: &serde_json::Value) -> String {
@@ -1649,7 +1653,7 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             "selection_rule": selection_rule,
             "next_actions": [
                 "Add or enable a carrier under `vida.config.yaml -> host_environment.systems.<system>.carriers` that declares both the requested runtime_role and task_class.",
-                "Run `vida project-activator --repair --host-cli-system <system> --json` to refresh selected host materialization, then retry the runtime assignment preview."
+                "Run `vida project-activator --repair --host-cli-system <system>` to refresh selected host materialization, then retry the runtime assignment preview."
             ],
             "model_selection_enabled": true,
             "candidate_scope": candidate_scope,
@@ -1831,41 +1835,47 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             || (budget_policy == "strict" && allow_over_budget_escalation));
     if selection_strategy == "quality_first" || selection_strategy == "risk_aware" {
         candidates.sort_by(|left, right| {
-            prefer_in_budget_first
-                .then(|| {
+            if prefer_in_budget_first {
+                {
                     left.over_budget(max_budget_units)
                         .cmp(&right.over_budget(max_budget_units))
-                })
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| right.quality_rank.cmp(&left.quality_rank))
-                .then_with(|| right.reasoning_rank.cmp(&left.reasoning_rank))
-                .then_with(|| left.rate.cmp(&right.rate))
-                .then_with(|| right.effective_score.cmp(&left.effective_score))
+                }
+            } else {
+                std::cmp::Ordering::Equal
+            }
+            .then_with(|| right.quality_rank.cmp(&left.quality_rank))
+            .then_with(|| right.reasoning_rank.cmp(&left.reasoning_rank))
+            .then_with(|| left.rate.cmp(&right.rate))
+            .then_with(|| right.effective_score.cmp(&left.effective_score))
         });
     } else if selection_strategy == "free_first_with_quality_floor" {
         candidates.sort_by(|left, right| {
-            prefer_in_budget_first
-                .then(|| {
+            if prefer_in_budget_first {
+                {
                     left.over_budget(max_budget_units)
                         .cmp(&right.over_budget(max_budget_units))
-                })
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| (left.rate != 0).cmp(&(right.rate != 0)))
-                .then_with(|| left.rate.cmp(&right.rate))
-                .then_with(|| right.effective_score.cmp(&left.effective_score))
+                }
+            } else {
+                std::cmp::Ordering::Equal
+            }
+            .then_with(|| (left.rate != 0).cmp(&(right.rate != 0)))
+            .then_with(|| left.rate.cmp(&right.rate))
+            .then_with(|| right.effective_score.cmp(&left.effective_score))
         });
     } else {
         candidates.sort_by(|left, right| {
-            prefer_in_budget_first
-                .then(|| {
+            if prefer_in_budget_first {
+                {
                     left.over_budget(max_budget_units)
                         .cmp(&right.over_budget(max_budget_units))
-                })
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| left.rate.cmp(&right.rate))
-                .then_with(|| right.quality_rank.cmp(&left.quality_rank))
-                .then_with(|| right.effective_score.cmp(&left.effective_score))
-                .then_with(|| right.reasoning_rank.cmp(&left.reasoning_rank))
+                }
+            } else {
+                std::cmp::Ordering::Equal
+            }
+            .then_with(|| left.rate.cmp(&right.rate))
+            .then_with(|| right.quality_rank.cmp(&left.quality_rank))
+            .then_with(|| right.effective_score.cmp(&left.effective_score))
+            .then_with(|| right.reasoning_rank.cmp(&left.reasoning_rank))
         });
     }
 
@@ -3042,7 +3052,7 @@ mod tests {
 
         assert_eq!(assignment["enabled"], false);
         assert_eq!(assignment["reason"], "selected_model_ref_missing");
-        assert_eq!(assignment["selected_carrier_id"].is_null(), true);
+        assert!(assignment["selected_carrier_id"].is_null());
         assert_eq!(
             assignment["rejected_candidates"]
                 .as_array()
@@ -3093,7 +3103,7 @@ mod tests {
 
         assert_eq!(assignment["enabled"], false);
         assert_eq!(assignment["reason"], "selected_model_profile_id_missing");
-        assert_eq!(assignment["selected_carrier_id"].is_null(), true);
+        assert!(assignment["selected_carrier_id"].is_null());
         assert_eq!(
             assignment["rejected_candidates"]
                 .as_array()

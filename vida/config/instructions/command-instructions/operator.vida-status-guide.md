@@ -47,9 +47,9 @@ python3 vida-boot-snapshot.py
 
 ## Data Sources
 
-1. `vida taskflow task list --status open --json`
-2. `vida taskflow task list --status in_progress --json`
-3. `vida taskflow task ready --json`
+1. `vida taskflow task list --status open`
+2. `vida taskflow task list --status in_progress`
+3. `vida taskflow task ready`
 
 ## Constraints
 

@@ -801,9 +801,7 @@ mod tests {
                 },
             blocker_codes: vec!["open_delegated_cycle".to_string()],
             stale_state_suspected: false,
-            recommended_command: Some(
-                "vida taskflow consume continue --run-id run-1 --json".to_string(),
-            ),
+            recommended_command: Some("vida taskflow consume continue --run-id run-1".to_string()),
             recommended_surface: Some("vida taskflow consume continue".to_string()),
         };
 
@@ -854,9 +852,7 @@ mod tests {
                 },
             blocker_codes: Vec::new(),
             stale_state_suspected: false,
-            recommended_command: Some(
-                "vida taskflow consume continue --run-id run-2 --json".to_string(),
-            ),
+            recommended_command: Some("vida taskflow consume continue --run-id run-2".to_string()),
             recommended_surface: Some("vida taskflow consume continue".to_string()),
         };
 

@@ -22,7 +22,9 @@ Purpose: provide the project-owned bridge/export map for custom roles, custom sk
    - source/export bridge for project profiles that bind roles and skills
 4. `docs/process/agent-extensions/flows.yaml`
    - source/export bridge for project custom flow sets, role chains, ordered lane templates, command templates, lifecycle hook templates, proof gates, and host-agent adapter projection hints
-5. `docs/process/agent-extensions/dispatch-aliases.yaml`
+5. `docs/process/agent-extensions/packs.yaml`
+   - source/export bridge for configurable VIDA-native agent role packs compiled into the dev-team flow projection
+6. `docs/process/agent-extensions/dispatch-aliases.yaml`
    - source/export bridge for runtime dispatch aliases that bind flow lanes to runtime roles and carrier preferences without hardcoding them in Rust
 
 ## Active Runtime Projection Family
@@ -32,8 +34,9 @@ Purpose: provide the project-owned bridge/export map for custom roles, custom sk
 3. `.vida/project/agent-extensions/skills.yaml`
 4. `.vida/project/agent-extensions/profiles.yaml`
 5. `.vida/project/agent-extensions/flows.yaml`
-6. `.vida/project/agent-extensions/dispatch-aliases.yaml`
-7. matching `.vida/project/agent-extensions/*.sidecar.yaml`
+6. `.vida/project/agent-extensions/packs.yaml`
+7. `.vida/project/agent-extensions/dispatch-aliases.yaml`
+8. matching `.vida/project/agent-extensions/*.sidecar.yaml`
 
 Runtime rule:
 
@@ -42,6 +45,7 @@ Runtime rule:
 3. Matching `*.sidecar.yaml` files are editable project-local override surfaces only when the active configuration enables them.
 4. This root `docs/process/agent-extensions/**` tree is a configured source bridge, not an independent competing authority.
 5. When `vida.config.yaml` omits explicit `enabled_project_roles`, `enabled_project_profiles`, or `enabled_project_flows`, runtime should treat the configured registry rows as the canonical enabled set instead of requiring duplicated id lists in config.
+6. Agent packs are config-registry objects. The runtime compiles enabled packs into `dev_team_readiness.flows` for selection; packs do not create a second dispatcher, tmux queue, filesystem handoff queue, or branch-per-pack model.
 
 Shared skill note:
 

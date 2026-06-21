@@ -11,7 +11,7 @@ use crate::{print_surface_header, print_surface_line, ProofArgs, ProofCommand};
 
 const BROWSER_PROOF_SURFACE: &str = "vida proof browser";
 const BROWSER_AUTOMATION_BLOCKER: BlockerCode = BlockerCode::ToolContractMissing;
-const BROWSER_AUTOMATION_NEXT_ACTION: &str = "Configure a browser proof adapter or use a host browser proof collection surface that can produce screenshot, DOM, console, route, and proxy-health artifacts, then rerun `vida proof browser --route <route> --expect <text> --json`.";
+const BROWSER_AUTOMATION_NEXT_ACTION: &str = "Configure a browser proof adapter or use a host browser proof collection surface that can produce screenshot, DOM, console, route, and proxy-health artifacts, then rerun `vida proof browser --route <route> --expect <text>`.";
 
 pub(crate) async fn run_proof(args: ProofArgs) -> ExitCode {
     match args.command {

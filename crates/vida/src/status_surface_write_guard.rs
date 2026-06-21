@@ -41,8 +41,8 @@ fn canonical_root_session_write_guard_defaults() -> serde_json::Value {
 pub(crate) fn root_session_write_guard_required_exception_evidence() -> String {
     format!(
         "Run `{}` and `{}` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
-        operator_output::command_text::human_command("vida taskflow recovery latest --json"),
-        operator_output::command_text::human_command("vida taskflow consume continue --json")
+        operator_output::command_text::human_command("vida taskflow recovery latest"),
+        operator_output::command_text::human_command("vida taskflow consume continue")
     )
 }
 
@@ -50,11 +50,11 @@ fn normalize_root_session_required_exception_evidence(value: &str) -> String {
     value
         .replace(
             "vida taskflow recovery latest --json",
-            &operator_output::command_text::human_command("vida taskflow recovery latest --json"),
+            &operator_output::command_text::human_command("vida taskflow recovery latest"),
         )
         .replace(
             "vida taskflow consume continue --json",
-            &operator_output::command_text::human_command("vida taskflow consume continue --json"),
+            &operator_output::command_text::human_command("vida taskflow consume continue"),
         )
 }
 
@@ -612,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_live_exception_takeover_write_guard_marks_explicit_takeover_active() {
+    fn merge_live_exception_takeover_write_guard_keeps_unsuperseded_takeover_inactive() {
         let guard = canonical_root_session_write_guard_defaults();
         let mut receipt = sample_receipt();
         receipt.lane_status = "lane_exception_takeover".to_string();
@@ -624,10 +624,12 @@ mod tests {
             Some(&sample_recovery("delegated_cycle_clear")),
         );
 
-        assert_eq!(merged["status"], "exception_takeover_active");
-        assert_eq!(merged["root_local_write_allowed"], true);
-        assert_eq!(merged["required_exception_evidence"], "receipt-1");
-        assert_eq!(merged["local_exception_takeover_state"], "active");
+        assert_eq!(merged["status"], "blocked_by_default");
+        assert_eq!(merged["root_local_write_allowed"], false);
+        assert_eq!(
+            merged["local_exception_takeover_state"],
+            "admissible_not_active"
+        );
     }
 
     #[test]

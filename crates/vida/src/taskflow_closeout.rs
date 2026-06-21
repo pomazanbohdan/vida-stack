@@ -352,10 +352,33 @@ pub(crate) async fn build_taskflow_closeout_summary(
                 .cloned()
                 .collect::<Vec<_>>(),
         );
-    let continuation_binding = crate::continuation_binding_summary::add_taskflow_active_work_truth(
-        continuation_binding,
-        taskflow_active_candidates,
-    );
+    let continuation_binding =
+        match crate::orchestrator_session_surface::build_runtime_owner_evidence(store.root(), false)
+            .ok()
+            .and_then(|evidence| {
+                evidence["current_session"]["session_id"]
+                    .as_str()
+                    .map(str::to_string)
+            }) {
+            Some(current_session_id) => match store.active_orchestrator_claims().await {
+                Ok(active_claims) => {
+                    crate::continuation_binding_summary::add_taskflow_active_work_truth_with_session_claims(
+                        continuation_binding,
+                        taskflow_active_candidates,
+                        &active_claims,
+                        &current_session_id,
+                    )
+                }
+                Err(_) => crate::continuation_binding_summary::add_taskflow_active_work_truth(
+                    continuation_binding,
+                    taskflow_active_candidates,
+                ),
+            },
+            None => crate::continuation_binding_summary::add_taskflow_active_work_truth(
+                continuation_binding,
+                taskflow_active_candidates,
+            ),
+        };
     let active_bounded_unit = continuation_binding
         .get("active_bounded_unit")
         .cloned()

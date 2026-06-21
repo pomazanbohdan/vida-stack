@@ -39,7 +39,7 @@ const INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS: u64 = 45;
 const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
 const AGENT_INIT_EXECUTE_DISPATCH_MISSING_PACKET_ERROR: &str =
     "Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`.";
-const AGENT_INIT_PACKET_ARG_READ_LIMIT_BYTES: u64 = 1024 * 1024;
+const AGENT_INIT_PACKET_ARG_READ_LIMIT_BYTES: u64 = 4 * 1024 * 1024;
 static AGENT_INIT_READ_SURFACE_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 fn emit_agent_init_invalid_role(
@@ -561,7 +561,7 @@ fn spawn_agent_init_execute_dispatch_worker(
     let packet_flag = dispatch_packet_flag_for_packet_path(&resume_inputs.dispatch_packet_path);
     #[cfg(windows)]
     {
-        return spawn_agent_init_execute_dispatch_worker_windows(
+        spawn_agent_init_execute_dispatch_worker_windows(
             &executable,
             project_root.as_ref(),
             state_root,
@@ -570,7 +570,7 @@ fn spawn_agent_init_execute_dispatch_worker(
             &stdout_path,
             &stderr_path,
             &worker_id,
-        );
+        )
     }
     #[cfg(not(windows))]
     let stdout = std::fs::File::create(&stdout_path)
@@ -879,10 +879,7 @@ fn windows_create_detached_process(
         unsafe {
             InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size);
         }
-        attribute_storage.resize(
-            (size + std::mem::size_of::<usize>() - 1) / std::mem::size_of::<usize>(),
-            0,
-        );
+        attribute_storage.resize(size.div_ceil(std::mem::size_of::<usize>()), 0);
         let attribute_list = attribute_storage.as_mut_ptr() as *mut std::ffi::c_void;
         let initialized =
             unsafe { InitializeProcThreadAttributeList(attribute_list, 1, 0, &mut size) };
@@ -1597,6 +1594,61 @@ fn humanize_backticked_commands(value: &str) -> String {
     }
 }
 
+fn compact_orchestrator_active_bounded_unit(value: &serde_json::Value) -> String {
+    if value.is_null() {
+        return "none".to_string();
+    }
+    if let Some(value) = value.as_str() {
+        let value = value.trim();
+        return if value.is_empty() {
+            "none".to_string()
+        } else {
+            value.to_string()
+        };
+    }
+    if let Some(object) = value.as_object() {
+        let unit_id = object
+            .get("task_id")
+            .or_else(|| object.get("id"))
+            .or_else(|| object.get("run_id"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("unknown");
+        let mut details = Vec::new();
+        for key in ["kind", "task_status", "title"] {
+            if let Some(detail) = object
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+            {
+                details.push(format!("{key}={detail}"));
+            }
+        }
+        if details.is_empty() {
+            unit_id.to_string()
+        } else {
+            format!("{unit_id} ({})", details.join(", "))
+        }
+    } else {
+        serde_json::to_string(value).unwrap_or_else(|_| "unknown".to_string())
+    }
+}
+
+fn compact_orchestrator_contract_text(value: &serde_json::Value) -> String {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if value.is_null() {
+                "none".to_string()
+            } else {
+                serde_json::to_string(value).unwrap_or_else(|_| "unknown".to_string())
+            }
+        })
+}
+
 fn cached_orchestrator_init_payload_has_top_level_continuation_fields(cached: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(cached)
         .ok()
@@ -1664,10 +1716,10 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
     let Ok(latest_task) = store.show_task(&latest_run_graph_status.task_id).await else {
         return false;
     };
-    !(crate::state_store::StateStore::task_status_is_closed_like(&latest_task.status)
-        && !crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+    !crate::state_store::StateStore::task_status_is_closed_like(&latest_task.status)
+        || crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
             &latest_run_graph_status,
-        ))
+        )
 }
 
 fn cached_orchestrator_init_payload_has_closed_task_active_run_projection_mismatch(
@@ -1925,7 +1977,8 @@ fn validate_agent_init_auto_dispatch_active_unit_ids(
 ) -> Result<(), AgentInitAutoDispatchActiveUnitError> {
     match active_task_ids.as_slice() {
         [] => Err(AgentInitAutoDispatchActiveUnitError {
-            blocker_code: "auto_dispatch_packet_active_unit_missing",
+            blocker_code: taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitMissing
+                .as_str(),
             detail: "`--auto-dispatch-packet` requires one active non-container task.".to_string(),
             active_task_id: None,
             resolved_run_id: resolved_run_id.to_string(),
@@ -1939,7 +1992,8 @@ fn validate_agent_init_auto_dispatch_active_unit_ids(
                 Ok(())
             } else {
                 Err(AgentInitAutoDispatchActiveUnitError {
-                    blocker_code: "auto_dispatch_packet_active_unit_mismatch",
+                    blocker_code: taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitMismatch
+                        .as_str(),
                     detail: format!(
                         "`--auto-dispatch-packet` resolved run `{resolved_run_id}` but active bounded unit is `{active_task_id}`."
                     ),
@@ -1950,7 +2004,8 @@ fn validate_agent_init_auto_dispatch_active_unit_ids(
             }
         }
         _ => Err(AgentInitAutoDispatchActiveUnitError {
-            blocker_code: "auto_dispatch_packet_active_unit_ambiguous",
+            blocker_code: taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitAmbiguous
+                .as_str(),
             detail: "`--auto-dispatch-packet` requires exactly one active non-container task."
                 .to_string(),
             active_task_id: None,
@@ -1968,7 +2023,8 @@ async fn validate_agent_init_auto_dispatch_active_unit(
         .list_tasks(Some("in_progress"), false)
         .await
         .map_err(|error| AgentInitAutoDispatchActiveUnitError {
-            blocker_code: "auto_dispatch_packet_active_unit_unavailable",
+            blocker_code: taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitUnavailable
+                .as_str(),
             detail: format!("Failed to read active task state for auto dispatch: {error}"),
             active_task_id: None,
             resolved_run_id: resume_inputs.dispatch_receipt.run_id.clone(),
@@ -2826,7 +2882,13 @@ mod tests {
             serde_json::to_string_pretty(&json!({
                 "packet_kind": "runtime_dispatch_packet",
                 "packet_template_kind": "coach_review_packet",
-                "coach_review_packet": {},
+                "coach_review_packet": {
+                    "review_goal": "Review coach dispatch resume inputs",
+                    "owned_paths": ["crates/vida/src/init_surfaces.rs"],
+                    "definition_of_done": ["dispatch packet decodes without state store"],
+                    "proof_target": "resume inputs decoded from packet",
+                    "blocking_question": "Can the dispatch packet be decoded without the state store?"
+                },
                 "run_id": "run-fast-dispatch",
                 "dispatch_target": "coach",
                 "dispatch_status": "packet_ready",
@@ -4859,6 +4921,13 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                         );
                     let orchestrator_runtime_contract =
                         build_orchestrator_runtime_contract(&init_view, &dev_team_readiness);
+                    let summary_payload = build_orchestrator_init_summary_payload(
+                        &init_view,
+                        &dev_team_readiness,
+                        &orchestrator_runtime_contract,
+                        &bundle,
+                        store.root(),
+                    );
                     if args.json || selected_output {
                         let payload = if full_output {
                             build_orchestrator_init_full_payload(
@@ -4869,13 +4938,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                                 store.root(),
                             )
                         } else {
-                            build_orchestrator_init_summary_payload(
-                                &init_view,
-                                &dev_team_readiness,
-                                &orchestrator_runtime_contract,
-                                &bundle,
-                                store.root(),
-                            )
+                            summary_payload.clone()
                         };
                         let selected_payload =
                             operator_output::toon_report::select_fields(payload.clone(), field_selection);
@@ -4906,7 +4969,26 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                         print_surface_line(
                             RenderMode::Plain,
                             "status",
-                            init_view["status"].as_str().unwrap_or("unknown"),
+                            summary_payload["status"].as_str().unwrap_or("unknown"),
+                        );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "active_bounded_unit",
+                            &compact_orchestrator_active_bounded_unit(
+                                &summary_payload["active_bounded_unit"],
+                            ),
+                        );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "why_this_unit",
+                            &compact_orchestrator_contract_text(&summary_payload["why_this_unit"]),
+                        );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "sequential_vs_parallel_posture",
+                            &compact_orchestrator_contract_text(
+                                &summary_payload["sequential_vs_parallel_posture"],
+                            ),
                         );
                         print_surface_line(RenderMode::Plain, "boot surface", "vida boot");
                         print_surface_line(
@@ -5435,6 +5517,7 @@ fn normalized_packet_arg_path(packet_path: &str) -> std::path::PathBuf {
 
 fn read_agent_init_packet_arg_with_path(
     packet_path: &str,
+    validate_contract: bool,
 ) -> Result<(serde_json::Value, String), String> {
     let normalized_packet_path = normalized_packet_arg_path(packet_path);
     if normalized_packet_path.components().any(|component| {
@@ -5473,21 +5556,26 @@ fn read_agent_init_packet_arg_with_path(
     }
     let packet = serde_json::from_str::<serde_json::Value>(&body)
         .map_err(|error| format!("Failed to parse dispatch packet `{packet_path}`: {error}"))?;
-    crate::validate_runtime_dispatch_packet_contract(&packet, "Agent init dispatch packet")
-        .map_err(|error| {
-            format!("execution_preparation_gate_blocked: {error}; dispatch packet `{packet_path}`")
-        })?;
+    if validate_contract {
+        crate::validate_runtime_dispatch_packet_contract(&packet, "Agent init dispatch packet")
+            .map_err(|error| {
+                format!(
+                    "execution_preparation_gate_blocked: {error}; dispatch packet `{packet_path}`"
+                )
+            })?;
+    }
     Ok((packet, normalized_packet_path.display().to_string()))
 }
 
 fn read_agent_init_packet_arg(packet_path: &str) -> Result<serde_json::Value, String> {
-    read_agent_init_packet_arg_with_path(packet_path).map(|(packet, _path)| packet)
+    read_agent_init_packet_arg_with_path(packet_path, true).map(|(packet, _path)| packet)
 }
 
 fn resume_inputs_from_downstream_packet_without_store(
     packet_path: &str,
 ) -> Result<super::taskflow_consume_resume::ResumeInputs, String> {
-    let (packet, normalized_packet_path) = read_agent_init_packet_arg_with_path(packet_path)?;
+    let (packet, normalized_packet_path) =
+        read_agent_init_packet_arg_with_path(packet_path, false)?;
     let run_id = string_field(&packet, "run_id")
         .ok_or_else(|| "Persisted downstream dispatch packet is missing run_id".to_string())?;
     let dispatch_target = string_field(&packet, "downstream_dispatch_target").ok_or_else(|| {
@@ -5539,6 +5627,13 @@ fn resume_inputs_from_downstream_packet_without_store(
             "Persisted downstream dispatch packet for run `{run_id}` target `{dispatch_target}` is not ready for execution; blocker_codes=[{blocker_summary}]"
         ));
     }
+    crate::validate_runtime_dispatch_packet_contract(
+        &packet,
+        "Agent init downstream dispatch packet",
+    )
+    .map_err(|error| {
+        format!("execution_preparation_gate_blocked: {error}; dispatch packet `{packet_path}`")
+    })?;
     let dispatch_status = if downstream_dispatch_ready && downstream_dispatch_blockers.is_empty() {
         "packet_ready".to_string()
     } else {
@@ -5608,6 +5703,7 @@ fn resume_inputs_from_downstream_packet_without_store(
         dispatch_packet_path: normalized_packet_path,
         role_selection,
         run_graph_bootstrap,
+        resume_resolution_source: None,
     })
 }
 
@@ -5704,7 +5800,7 @@ fn resume_inputs_from_agent_init_packet_arg_without_store(
 fn resume_inputs_from_dispatch_packet_without_store(
     packet_path: &str,
 ) -> Result<super::taskflow_consume_resume::ResumeInputs, String> {
-    let (packet, normalized_packet_path) = read_agent_init_packet_arg_with_path(packet_path)?;
+    let (packet, normalized_packet_path) = read_agent_init_packet_arg_with_path(packet_path, true)?;
     let run_id = string_field(&packet, "run_id")
         .ok_or_else(|| "Persisted dispatch packet is missing run_id".to_string())?;
     let dispatch_target = string_field(&packet, "dispatch_target")
@@ -5780,6 +5876,7 @@ fn resume_inputs_from_dispatch_packet_without_store(
         dispatch_packet_path: normalized_packet_path,
         role_selection,
         run_graph_bootstrap,
+        resume_resolution_source: None,
     })
 }
 
@@ -6070,6 +6167,13 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 )
                 .await;
             }
+            if packet_arg_count == 0 {
+                if let Some(exit_code) =
+                    try_emit_agent_init_explicit_role_view_from_snapshot(&store, &args).await
+                {
+                    return exit_code;
+                }
+            }
             let bundle = match tokio::time::timeout(
                 std::time::Duration::from_secs(INIT_SURFACE_CONSUME_BUNDLE_PAYLOAD_TIMEOUT_SECONDS),
                 build_taskflow_consume_bundle_payload(&store),
@@ -6206,9 +6310,9 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 );
             let activation_semantics = agent_init_activation_semantics(&selection);
             let dispatch_mode = agent_init_dispatch_mode(&args, &selection);
-            let surface_payload = build_agent_init_surface_payload(
-                &project_root,
-                &bundle.config_path,
+            let surface_payload = match build_agent_init_surface_payload_stack_safe(
+                project_root.clone(),
+                bundle.config_path.clone(),
                 init_view.clone(),
                 selection.clone(),
                 activation_semantics.clone(),
@@ -6220,9 +6324,15 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     "state_dir": store.root().display().to_string(),
                     "launcher_runtime_paths": bundle.launcher_runtime_paths,
                 }),
-                &bundle.activation_bundle,
+                bundle.activation_bundle.clone(),
                 dev_team_readiness,
-            );
+            ) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+            };
 
             if surface_payload["backend_truth"]["assignment_blocker"]["authoritative"]
                 .as_bool()
@@ -6360,11 +6470,16 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
             drop(store);
 
             if args.json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&surface_payload)
-                        .expect("agent-init json should render")
-                );
+                match render_agent_init_surface_payload_json_stack_safe(
+                    surface_payload,
+                    agent_init_selection_is_explicit_role(&selection),
+                ) {
+                    Ok(rendered) => println!("{rendered}"),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                }
             } else {
                 print_surface_header(RenderMode::Plain, "vida agent-init");
                 print_surface_line(
@@ -6798,12 +6913,7 @@ fn agent_init_effective_activation_bundle(
                 &config,
                 &["host_environment", "cli_system"],
             ))
-            .and_then(|system| {
-                registry
-                    .get(&system)
-                    .map(|entry| (system, entry))
-                    .or_else(|| None)
-            })
+            .and_then(|system| registry.get(&system).map(|entry| (system, entry)).or(None))
             .or_else(|| {
                 let mut enabled_entries = registry
                     .iter()
@@ -6811,7 +6921,7 @@ fn agent_init_effective_activation_bundle(
                         crate::project_activator_surface::host_cli_system_enabled(entry)
                     })
                     .collect::<Vec<_>>();
-                enabled_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                enabled_entries.sort_by_key(|(left, _)| *left);
                 enabled_entries
                     .into_iter()
                     .next()
@@ -6819,7 +6929,7 @@ fn agent_init_effective_activation_bundle(
             })
             .or_else(|| {
                 let mut entries = registry.iter().collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries.sort_by_key(|(left, _)| *left);
                 entries
                     .into_iter()
                     .next()
@@ -7224,13 +7334,17 @@ fn build_agent_init_surface_payload(
             .cloned()
             .unwrap_or(serde_json::Value::Null)
     };
+    let backend_truth = compact_agent_init_role_view_backend_truth(backend_truth, &selection);
     let dev_team_readiness = enrich_dev_team_readiness_with_agent_selection(
         dev_team_readiness,
         &selection,
         &backend_truth,
     );
+    let dev_team_readiness =
+        compact_agent_init_role_view_dev_team_readiness(dev_team_readiness, &selection);
     let operator_guidance =
         agent_init_operator_guidance(&selection, &activation_semantics, &dispatch_mode);
+    let init_view = compact_agent_init_surface_init_view(init_view, &selection);
 
     serde_json::json!({
         "surface": "vida agent-init",
@@ -7245,6 +7359,530 @@ fn build_agent_init_surface_payload(
         "packet_activation_evidence": packet_activation_evidence,
         "runtime_bundle_summary": runtime_bundle_summary,
     })
+}
+
+async fn try_emit_agent_init_explicit_role_view_from_snapshot(
+    store: &StateStore,
+    args: &AgentInitArgs,
+) -> Option<ExitCode> {
+    if args.execute_dispatch || args.dispatch_packet.is_some() || args.downstream_packet.is_some() {
+        return None;
+    }
+    let role = args.role.clone()?;
+    let snapshot = match store.read_launcher_activation_snapshot().await {
+        Ok(snapshot) => snapshot,
+        Err(crate::state_store::StateStoreError::MissingLauncherActivationSnapshot) => return None,
+        Err(error) => {
+            eprintln!(
+                "Failed to read launcher activation snapshot for agent-init role view: {error}"
+            );
+            return Some(ExitCode::from(1));
+        }
+    };
+    let project_root = match std::env::current_dir() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Failed to resolve current directory: {error}");
+            return Some(ExitCode::from(1));
+        }
+    };
+    let compiled_bundle_for_invalid_role = snapshot.compiled_bundle.clone();
+    let config_path_for_invalid_role = snapshot.source_config_path.clone();
+    let payload = match build_agent_init_explicit_role_view_payload_from_snapshot_stack_safe(
+        project_root,
+        store.root().to_path_buf(),
+        args.clone(),
+        role.clone(),
+        snapshot.source_config_path,
+        snapshot.source_config_digest,
+        snapshot.source,
+        snapshot.compiled_bundle,
+    ) {
+        Ok(payload) => payload,
+        Err(error) => {
+            if args.json {
+                let dev_team_readiness = super::taskflow_consume_bundle::build_dev_team_readiness(
+                    &config_path_for_invalid_role,
+                    &compiled_bundle_for_invalid_role,
+                );
+                return Some(emit_agent_init_invalid_role(
+                    args,
+                    &role,
+                    &compiled_bundle_for_invalid_role,
+                    &dev_team_readiness,
+                ));
+            }
+            eprintln!("{error}");
+            return Some(ExitCode::from(2));
+        }
+    };
+    if payload["backend_truth"]["assignment_blocker"]["authoritative"]
+        .as_bool()
+        .unwrap_or(false)
+    {
+        let blocker_code = payload["backend_truth"]["assignment_blocker"]["blocker_code"]
+            .as_str()
+            .unwrap_or("runtime_assignment_truth_required");
+        eprintln!(
+            "Agent init requires runtime assignment truth for `{}` mode: {}.",
+            payload["selection"]["mode"].as_str().unwrap_or("unknown"),
+            blocker_code
+        );
+        return Some(ExitCode::from(1));
+    }
+
+    if args.json {
+        match render_agent_init_surface_payload_json_stack_safe(payload, true) {
+            Ok(rendered) => println!("{rendered}"),
+            Err(error) => {
+                eprintln!("{error}");
+                return Some(ExitCode::from(1));
+            }
+        }
+    } else {
+        emit_compact_agent_init_role_view_plain(&payload);
+    }
+    Some(ExitCode::SUCCESS)
+}
+
+fn build_agent_init_explicit_role_view_payload_from_snapshot_stack_safe(
+    project_root: PathBuf,
+    state_root: PathBuf,
+    args: AgentInitArgs,
+    role: String,
+    config_path: String,
+    config_digest: String,
+    activation_source: String,
+    activation_bundle: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    std::thread::Builder::new()
+        .name("vida-agent-init-explicit-role-view".to_string())
+        .stack_size(AGENT_INIT_ROLE_VIEW_STACK_BYTES)
+        .spawn(move || {
+            let dev_team_readiness =
+                super::taskflow_consume_bundle::build_dev_team_readiness(
+                    &config_path,
+                    &activation_bundle,
+                );
+            let Some(resolved_role) =
+                resolve_agent_init_explicit_role(&activation_bundle, &dev_team_readiness, &role)
+            else {
+                return Err(format!(
+                    "Agent init could not resolve requested runtime role `{role}` from the activation snapshot."
+                ));
+            };
+            let selection = agent_init_explicit_role_selection(
+                &resolved_role,
+                &role,
+                args.request_text.clone().unwrap_or_default(),
+            );
+            if !selected_role_allowed_for_agent_init(
+                selection["selected_role"].as_str().unwrap_or_default(),
+            ) {
+                return Err(format!(
+                    "Agent init resolved `{role}` to an orchestrator posture; provide a non-orchestrator `--role`."
+                ));
+            }
+            let project_activation_view =
+                super::project_activator_surface::build_project_activator_view(&project_root);
+            let init_view = compact_agent_init_role_view_init_from_snapshot(
+                &project_root,
+                &activation_bundle,
+                &project_activation_view,
+            );
+            let activation_semantics = agent_init_activation_semantics(&selection);
+            let dispatch_mode = agent_init_dispatch_mode(&args, &selection);
+            let vida_root = project_root.display().to_string();
+            build_agent_init_surface_payload_stack_safe(
+                project_root,
+                config_path,
+                init_view,
+                selection,
+                activation_semantics,
+                dispatch_mode,
+                serde_json::json!({
+                    "bundle_id": format!("taskflow-runtime-bundle-{config_digest}"),
+                    "activation_source": activation_source,
+                    "vida_root": vida_root,
+                    "state_dir": state_root.display().to_string(),
+                    "launcher_runtime_paths": serde_json::Value::Null,
+                    "projection_mode": "compact_explicit_role_view_from_activation_snapshot",
+                }),
+                activation_bundle,
+                dev_team_readiness,
+            )
+        })
+        .map_err(|error| format!("Failed to spawn agent-init explicit role-view thread: {error}"))?
+        .join()
+        .map_err(|_| "Agent init explicit role-view construction panicked".to_string())?
+}
+
+fn compact_agent_init_role_view_init_from_snapshot(
+    project_root: &Path,
+    activation_bundle: &serde_json::Value,
+    project_activation_view: &serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": "vida agent-init",
+        "status": project_activation_view["status"].as_str().unwrap_or("ready"),
+        "local_runtime_surface": "vida agent-init",
+        "worker_entry_contract": "vida/config/instructions/agent-definitions/entry.worker-entry.md",
+        "worker_thinking_subset": "vida/config/instructions/instruction-contracts/role.worker-thinking.md",
+        "thinking_protocol_targets": ["instruction-contracts/role.worker-thinking"],
+        "allowed_thinking_modes": ["STC", "PR-CoT", "MAR"],
+        "mode_selection_rule": "select one worker-safe thinking mode per step inside the assigned bounded scope; do not widen into orchestrator/meta reasoning without an explicit packet trigger",
+        "reporting_contract": {
+            "required": true,
+            "scope": "worker-facing bounded status and completion reports",
+            "thinking_mode_prefix": "Thinking mode: <STC|PR-CoT|MAR>.",
+            "task_counters_prefix": "Tasks: active=<n> | in_work=<n> | blocked=<n>",
+            "agent_counters_prefix": "Agents: active=<n> | working=<n> | waiting=<n>",
+            "mode_selection_note": "the reporting label must reflect the selected worker-safe per-step thinking mode without exposing hidden reasoning",
+        },
+        "protocol_view_targets": [
+            "agent-definitions/entry.worker-entry",
+            "instruction-contracts/role.worker-thinking",
+            "system-maps/bootstrap.worker-boot-flow",
+        ],
+        "minimum_commands": [
+            "vida agent-init --role worker",
+            "vida protocol view agent-definitions/entry.worker-entry",
+            "vida protocol view instruction-contracts/role.worker-thinking",
+            "vida task show <task-id>",
+            "vida taskflow consume bundle check",
+        ],
+        "allowed_non_orchestrator_roles": agent_init_allowed_non_orchestrator_roles(activation_bundle),
+        "worker_lane_markers": [
+            "worker_lane_confirmed: true",
+            "lane_identity: worker",
+        ],
+        "project_root": project_root.display().to_string(),
+        "project_activation": project_activation_view,
+        "project_runtime_capsules_summary": {
+            "omitted_from_role_view_payload": true,
+            "reason": "explicit_role_view_uses_activation_snapshot_not_full_runtime_bundle",
+        },
+        "operator_command_map_summary": {
+            "omitted_from_role_view_payload": true,
+            "reason": "operator command families remain available through help and bundle surfaces",
+        },
+    })
+}
+
+fn agent_init_allowed_non_orchestrator_roles(activation_bundle: &serde_json::Value) -> Vec<String> {
+    let mut roles = activation_bundle["enabled_framework_roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|role| *role != "orchestrator")
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    roles.sort();
+    roles.dedup();
+    roles
+}
+
+fn emit_compact_agent_init_role_view_plain(surface_payload: &serde_json::Value) {
+    print_surface_header(RenderMode::Plain, "vida agent-init");
+    print_surface_line(
+        RenderMode::Plain,
+        "status",
+        surface_payload["init"]["status"]
+            .as_str()
+            .unwrap_or("unknown"),
+    );
+    print_surface_line(
+        RenderMode::Plain,
+        "selected role",
+        surface_payload["selection"]["selected_role"]
+            .as_str()
+            .unwrap_or("unknown"),
+    );
+    if let Some(mode) = surface_payload["selection"]["mode"].as_str() {
+        print_surface_line(RenderMode::Plain, "mode", mode);
+    }
+    if let Some(mode) = surface_payload["dispatch_mode"]["mode"].as_str() {
+        print_surface_line(RenderMode::Plain, "dispatch_mode", mode);
+    }
+    if let Some(backend) = surface_payload["backend_truth"]["selected_backend"].as_str() {
+        print_surface_line(RenderMode::Plain, "selected backend", backend);
+    }
+    if let Some(carrier_id) = surface_payload["backend_truth"]["selected_carrier_id"].as_str() {
+        print_surface_line(RenderMode::Plain, "selected carrier", carrier_id);
+    }
+    if let Some(profile_id) = surface_payload["backend_truth"]["selected_model_profile_id"].as_str()
+    {
+        print_surface_line(RenderMode::Plain, "selected model profile", profile_id);
+    }
+    print_compact_command_families(RenderMode::Plain, "vida agent-init");
+}
+
+const AGENT_INIT_ROLE_VIEW_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+fn build_agent_init_surface_payload_stack_safe(
+    project_root: PathBuf,
+    config_path: String,
+    init_view: serde_json::Value,
+    selection: serde_json::Value,
+    activation_semantics: serde_json::Value,
+    dispatch_mode: serde_json::Value,
+    runtime_bundle_summary: serde_json::Value,
+    activation_bundle: serde_json::Value,
+    dev_team_readiness: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    if !agent_init_selection_is_explicit_role(&selection) {
+        return Ok(build_agent_init_surface_payload(
+            &project_root,
+            &config_path,
+            init_view,
+            selection,
+            activation_semantics,
+            dispatch_mode,
+            runtime_bundle_summary,
+            &activation_bundle,
+            dev_team_readiness,
+        ));
+    }
+
+    std::thread::Builder::new()
+        .name("vida-agent-init-role-view-payload".to_string())
+        .stack_size(AGENT_INIT_ROLE_VIEW_STACK_BYTES)
+        .spawn(move || {
+            build_agent_init_surface_payload(
+                &project_root,
+                &config_path,
+                init_view,
+                selection,
+                activation_semantics,
+                dispatch_mode,
+                runtime_bundle_summary,
+                &activation_bundle,
+                dev_team_readiness,
+            )
+        })
+        .map_err(|error| format!("Failed to spawn agent-init role-view payload thread: {error}"))?
+        .join()
+        .map_err(|_| "Agent init role-view payload construction panicked".to_string())
+}
+
+fn render_agent_init_surface_payload_json_stack_safe(
+    surface_payload: serde_json::Value,
+    explicit_role_view: bool,
+) -> Result<String, String> {
+    if !explicit_role_view {
+        return serde_json::to_string_pretty(&surface_payload)
+            .map_err(|error| format!("Failed to render agent-init JSON: {error}"));
+    }
+
+    std::thread::Builder::new()
+        .name("vida-agent-init-role-view-json".to_string())
+        .stack_size(AGENT_INIT_ROLE_VIEW_STACK_BYTES)
+        .spawn(move || {
+            serde_json::to_string_pretty(&surface_payload)
+                .map_err(|error| format!("Failed to render agent-init JSON: {error}"))
+        })
+        .map_err(|error| format!("Failed to spawn agent-init role-view JSON thread: {error}"))?
+        .join()
+        .map_err(|_| "Agent init role-view JSON rendering panicked".to_string())?
+}
+
+fn agent_init_selection_is_explicit_role(selection: &serde_json::Value) -> bool {
+    selection.get("mode").and_then(serde_json::Value::as_str) == Some("explicit_role")
+}
+
+fn compact_agent_init_surface_init_view(
+    init_view: serde_json::Value,
+    selection: &serde_json::Value,
+) -> serde_json::Value {
+    if !agent_init_selection_is_explicit_role(selection) {
+        return init_view;
+    }
+    let Some(source) = init_view.as_object() else {
+        return init_view;
+    };
+
+    let mut compact = serde_json::Map::new();
+    for key in [
+        "surface",
+        "status",
+        "local_runtime_surface",
+        "worker_entry_contract",
+        "worker_thinking_subset",
+        "thinking_protocol_targets",
+        "allowed_thinking_modes",
+        "mode_selection_rule",
+        "reporting_contract",
+        "protocol_view_targets",
+        "minimum_commands",
+        "allowed_non_orchestrator_roles",
+        "worker_lane_markers",
+        "project_root",
+        "project_activation",
+        "source_mode_fallback_surface",
+    ] {
+        if let Some(value) = source.get(key) {
+            compact.insert(key.to_string(), value.clone());
+        }
+    }
+    if let Some(project_runtime_capsules) = source.get("project_runtime_capsules") {
+        compact.insert(
+            "project_runtime_capsules_summary".to_string(),
+            serde_json::json!({
+                "omitted_from_role_view_payload": true,
+                "reason": "explicit_role_view_uses_compact_init_context",
+                "capsule_count": project_runtime_capsules.as_array().map_or(0, Vec::len),
+            }),
+        );
+    }
+    if let Some(operator_command_map) = source.get("operator_command_map") {
+        compact.insert(
+            "operator_command_map_summary".to_string(),
+            serde_json::json!({
+                "omitted_from_role_view_payload": true,
+                "reason": "operator command families remain available through help and bundle surfaces",
+                "family_count": operator_command_map["families"].as_array().map_or(0, Vec::len),
+            }),
+        );
+    }
+
+    serde_json::Value::Object(compact)
+}
+
+fn compact_agent_init_role_view_backend_truth(
+    backend_truth: serde_json::Value,
+    selection: &serde_json::Value,
+) -> serde_json::Value {
+    if !agent_init_selection_is_explicit_role(selection) {
+        return backend_truth;
+    }
+    let serde_json::Value::Object(mut backend) = backend_truth else {
+        return backend_truth;
+    };
+
+    if let Some(runtime_assignment) = backend.get("runtime_assignment").and_then(|value| {
+        value
+            .as_object()
+            .map(compact_agent_init_runtime_assignment_for_role_view)
+    }) {
+        backend.insert("runtime_assignment".to_string(), runtime_assignment);
+    }
+
+    serde_json::Value::Object(backend)
+}
+
+fn compact_agent_init_runtime_assignment_for_role_view(
+    assignment: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+    let mut compact = serde_json::Map::new();
+    for key in [
+        "enabled",
+        "task_class",
+        "runtime_role",
+        "conversation_role",
+        "activation_agent_type",
+        "activation_runtime_role",
+        "selected_agent_id",
+        "selected_carrier_id",
+        "selected_backend_id",
+        "selected_dispatch_backend_id",
+        "selected_carrier_agent_id",
+        "selected_tier",
+        "selected_carrier_tier",
+        "selected_runtime_role",
+        "selected_model_profile_id",
+        "selected_model_ref",
+        "selected_model_provider",
+        "selected_reasoning_effort",
+        "selected_write_scope",
+        "selected_quality_tier",
+        "selected_speed_tier",
+        "selected_model_profile_readiness_status",
+        "selection_strategy",
+        "selection_rule",
+        "budget_policy",
+        "budget_scope",
+        "budget_verdict",
+        "selected_over_budget",
+        "selected_route_profile_mapping",
+        "route_profile_mapping_applied",
+    ] {
+        if let Some(value) = assignment.get(key) {
+            compact.insert(key.to_string(), value.clone());
+        }
+    }
+    compact.insert(
+        "omitted_from_role_view_payload".to_string(),
+        serde_json::Value::Bool(true),
+    );
+    compact.insert(
+        "reason".to_string(),
+        serde_json::Value::String("explicit_role_view_uses_compact_runtime_assignment".to_string()),
+    );
+    compact.insert(
+        "rejected_candidate_count".to_string(),
+        serde_json::json!(assignment
+            .get("rejected_candidates")
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, Vec::len)),
+    );
+    if let Some(value) = compact
+        .get("selected_carrier_id")
+        .cloned()
+        .or_else(|| assignment.get("selected_backend_id").cloned())
+    {
+        compact.insert("selected_backend_summary".to_string(), value);
+    }
+
+    serde_json::Value::Object(compact)
+}
+
+fn compact_agent_init_role_view_dev_team_readiness(
+    dev_team_readiness: serde_json::Value,
+    selection: &serde_json::Value,
+) -> serde_json::Value {
+    if !agent_init_selection_is_explicit_role(selection) {
+        return dev_team_readiness;
+    }
+    let Some(source) = dev_team_readiness.as_object() else {
+        return dev_team_readiness;
+    };
+
+    let mut compact = serde_json::Map::new();
+    for key in [
+        "status",
+        "configured",
+        "enabled",
+        "default_flow_id",
+        "sequence",
+        "blockers",
+        "source_paths",
+        "active_selection",
+    ] {
+        if let Some(value) = source.get(key) {
+            compact.insert(key.to_string(), value.clone());
+        }
+    }
+    compact.insert(
+        "roles_summary".to_string(),
+        serde_json::json!({
+            "omitted_from_role_view_payload": true,
+            "role_count": source.get("roles").and_then(serde_json::Value::as_array).map_or(0, Vec::len),
+        }),
+    );
+    compact.insert(
+        "flows_summary".to_string(),
+        serde_json::json!({
+            "omitted_from_role_view_payload": true,
+            "flow_count": source.get("flows").and_then(serde_json::Value::as_array).map_or(0, Vec::len),
+            "work_item_flow_binding_count": source
+                .get("work_item_flow_bindings")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len),
+        }),
+    );
+
+    serde_json::Value::Object(compact)
 }
 
 fn enrich_dev_team_readiness_with_agent_selection(
@@ -8034,6 +8672,7 @@ mod agent_init_surface_tests {
                     "definition_of_done": ["source dispatch target is preserved"],
                     "verification_command": "vida agent-init --downstream-packet packet.json --execute-dispatch",
                     "proof_target": "decoded dispatch receipt",
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
                     "stop_rules": ["stop after decode"],
                     "blocking_question": "Does the downstream packet carry previous-lane context?"
                 },
@@ -9133,10 +9772,10 @@ mod agent_init_surface_tests {
                 .contains("vida taskflow consume continue --run-id output-contract-run"))));
         assert!(next_actions.iter().all(|action| action
             .as_str()
-            .map_or(true, |value| !value.contains("--json"))));
+            .is_none_or(|value| !value.contains("--json"))));
         assert!(next_actions.iter().all(|action| action
             .as_str()
-            .map_or(true, |value| !value.contains("vida agent-init --run-id"))));
+            .is_none_or(|value| !value.contains("vida agent-init --run-id"))));
     }
 
     #[test]
