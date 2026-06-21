@@ -61,12 +61,15 @@ pub(super) fn parse_canonical_issue_type(
 #[allow(dead_code)]
 pub(super) fn task_dependency_to_canonical_edge(
     dependency: &TaskDependencyRecord,
-) -> CanonicalDependencyEdge {
-    CanonicalDependencyEdge {
-        issue_id: CanonicalTaskId::new(&dependency.issue_id),
-        depends_on_id: CanonicalTaskId::new(&dependency.depends_on_id),
+) -> Result<CanonicalDependencyEdge, StateStoreError> {
+    Ok(CanonicalDependencyEdge {
+        issue_id: canonical_task_id_from_state("dependency.issue_id", &dependency.issue_id)?,
+        depends_on_id: canonical_task_id_from_state(
+            "dependency.depends_on_id",
+            &dependency.depends_on_id,
+        )?,
         dependency_type: dependency.edge_type.clone(),
-    }
+    })
 }
 
 #[allow(dead_code)]
@@ -74,11 +77,22 @@ pub(super) fn task_record_to_canonical_snapshot_row(
     task: &TaskRecord,
 ) -> Result<CanonicalTaskRecord, StateStoreError> {
     Ok(CanonicalTaskRecord {
-        id: CanonicalTaskId::new(&task.id),
+        id: canonical_task_id_from_state("task.id", &task.id)?,
         title: task.title.clone(),
         status: parse_canonical_task_status(&task.status)?,
         issue_type: parse_canonical_issue_type(&task.issue_type)?,
         updated_at: parse_canonical_timestamp(&task.updated_at)?,
+    })
+}
+
+fn canonical_task_id_from_state(
+    field_name: &str,
+    value: &str,
+) -> Result<CanonicalTaskId, StateStoreError> {
+    CanonicalTaskId::try_new(value).map_err(|error| {
+        StateStoreError::InvalidCanonicalTaskflowExport {
+            reason: format!("{field_name} is not a valid task id: {error}"),
+        }
     })
 }
 
@@ -232,4 +246,75 @@ pub(super) fn task_records_from_canonical_snapshot_rows(
     }
 
     Ok(task_records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task_record_with_id(id: &str) -> TaskRecord {
+        TaskRecord {
+            id: id.to_string(),
+            display_id: None,
+            title: "Task".to_string(),
+            description: String::new(),
+            status: "open".to_string(),
+            priority: 0,
+            issue_type: "task".to_string(),
+            created_at: "2026-03-08T00:00:00Z".to_string(),
+            created_by: "tester".to_string(),
+            updated_at: "2026-03-08T00:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+            planner_metadata: TaskPlannerMetadata::default(),
+            provider_mapping: None,
+            dependencies: Vec::new(),
+        }
+    }
+
+    fn dependency_record(issue_id: &str, depends_on_id: &str) -> TaskDependencyRecord {
+        TaskDependencyRecord {
+            issue_id: issue_id.to_string(),
+            depends_on_id: depends_on_id.to_string(),
+            edge_type: "blocks".to_string(),
+            created_at: "2026-03-08T00:00:00Z".to_string(),
+            created_by: "tester".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn task_record_to_canonical_snapshot_row_rejects_empty_state_id_without_panic() {
+        let error = task_record_to_canonical_snapshot_row(&task_record_with_id(" \t "))
+            .expect_err("invalid persisted task id should be returned as an export error");
+
+        match error {
+            StateStoreError::InvalidCanonicalTaskflowExport { reason } => {
+                assert!(reason.contains("task.id"));
+                assert!(reason.contains("EmptyTaskId"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn task_dependency_to_canonical_edge_rejects_empty_state_ids_without_panic() {
+        let error = task_dependency_to_canonical_edge(&dependency_record("vida-task", " "))
+            .expect_err("invalid persisted dependency id should be returned as an export error");
+
+        match error {
+            StateStoreError::InvalidCanonicalTaskflowExport { reason } => {
+                assert!(reason.contains("dependency.depends_on_id"));
+                assert!(reason.contains("EmptyTaskId"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
 }
