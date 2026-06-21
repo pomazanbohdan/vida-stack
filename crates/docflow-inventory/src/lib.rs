@@ -1,8 +1,8 @@
 use docflow_contracts::RegistryRow;
 use docflow_core::ArtifactPath;
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
 pub struct InventoryScope {
@@ -27,11 +27,19 @@ pub fn build_registry(scope: &InventoryScope) -> Result<Vec<RegistryRow>, globse
     let excludes = compile_globset(&scope.exclude_globs)?;
 
     let mut rows = Vec::new();
-    for entry in WalkDir::new(&scope.root)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-    {
+    let walker = WalkBuilder::new(&scope.root)
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .parents(false)
+        .follow_links(false)
+        .build();
+    for entry in walker.filter_map(Result::ok).filter(|entry| {
+        entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+    }) {
         let relative = match entry.path().strip_prefix(&scope.root) {
             Ok(path) => path,
             Err(_) => continue,
@@ -80,7 +88,7 @@ fn path_to_string(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{InventoryScope, build_registry};
+    use super::{build_registry, InventoryScope};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -126,6 +134,23 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].artifact_path.0, "docs/process/a.md");
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn gitignore_does_not_override_inventory_scope_policy() {
+        let root = temp_root();
+        fs::create_dir_all(root.join("docs/process")).expect("process dir");
+        fs::write(root.join(".gitignore"), "docs/process/ignored.md\n").expect("write gitignore");
+        fs::write(root.join("docs/process/ignored.md"), "# still scanned\n")
+            .expect("write ignored doc");
+
+        let scope = InventoryScope::new(&root);
+        let rows = build_registry(&scope).expect("registry should build");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].artifact_path.0, "docs/process/ignored.md");
 
         fs::remove_dir_all(root).expect("temp root should be removed");
     }

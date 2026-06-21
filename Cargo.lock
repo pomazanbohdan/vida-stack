@@ -1472,6 +1472,7 @@ dependencies = [
  "docflow-relations",
  "docflow-validation",
  "globset",
+ "ignore",
  "serde",
  "serde_json",
  "time",
@@ -1532,7 +1533,6 @@ dependencies = [
  "docflow-core",
  "globset",
  "ignore",
- "walkdir",
 ]
 
 [[package]]

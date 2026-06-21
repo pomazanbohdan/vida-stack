@@ -13,6 +13,7 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 globset.workspace = true
+ignore = "0.4.26"
 time.workspace = true
 docflow-contracts = { path = "../docflow-contracts" }
 docflow-config = { path = "../docflow-config" }

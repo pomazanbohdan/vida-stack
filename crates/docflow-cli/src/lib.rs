@@ -3,14 +3,15 @@ use docflow_config::{resolve_profile_roots, resolve_scan_ignored_globs};
 use docflow_contracts::{ArtifactRelationKind, ReadinessRow, ScanRow};
 use docflow_core::{ArtifactPath, CheckedAt, ReadinessVerdict};
 use docflow_format_jsonl::encode_line;
-use docflow_inventory::{InventoryScope, build_registry};
+use docflow_inventory::{build_registry, InventoryScope};
 use docflow_operator::{
     render_artifact_impact, render_layer_status, render_overview, render_relation_summary,
     render_summary, render_task_impact,
 };
 use docflow_readiness::{issues_to_readiness_rows, summarize_verdict};
-use docflow_relations::{RelationEdge, artifact_identity_edges};
-use docflow_validation::{ValidationIssue, validate_markdown_footer};
+use docflow_relations::{artifact_identity_edges, RelationEdge};
+use docflow_validation::{validate_markdown_footer, ValidationIssue};
+use ignore::WalkBuilder;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,8 +21,8 @@ use time::format_description::well_known::Rfc3339;
 mod closeout_verdict;
 
 use closeout_verdict::{
-    DocflowCloseoutVerdict, DocflowCloseoutVerdictInput, build_docflow_closeout_verdict,
-    render_docflow_closeout_error, render_docflow_closeout_verdict,
+    build_docflow_closeout_verdict, render_docflow_closeout_error, render_docflow_closeout_verdict,
+    DocflowCloseoutVerdict, DocflowCloseoutVerdictInput,
 };
 
 #[derive(Debug, Parser)]
@@ -2608,13 +2609,22 @@ fn visit_files(
         }
         return Ok(());
     }
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            visit_files(&path, extension, output)?;
-        } else if path.extension().is_some_and(|ext| ext == extension) {
-            output.push(path);
+    for entry in WalkBuilder::new(root)
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .parents(false)
+        .follow_links(false)
+        .build()
+    {
+        let entry = entry.map_err(std::io::Error::other)?;
+        if entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+            && entry.path().extension().is_some_and(|ext| ext == extension)
+        {
+            output.push(entry.into_path());
         }
     }
     Ok(())
@@ -4759,7 +4769,7 @@ fn collect_tree_issues(
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, activation_issue_for, protocol_coverage_issue_for, run};
+    use super::{activation_issue_for, protocol_coverage_issue_for, run, Cli};
     use clap::Parser;
     use serde_json::Value;
     use std::fs;
@@ -5631,11 +5641,9 @@ mod tests {
             .expect("readiness profile error should render valid JSON");
 
         assert_eq!(value["verdict"].as_str(), Some("blocking"));
-        assert!(
-            value["error"]
-                .as_str()
-                .is_some_and(|error| error.contains(injected_profile))
-        );
+        assert!(value["error"]
+            .as_str()
+            .is_some_and(|error| error.contains(injected_profile)));
         assert!(value.get("extra").is_none());
     }
 
@@ -6025,13 +6033,11 @@ mod tests {
         );
         assert!(payload.get("instructions").is_some());
         assert!(payload.get("next_actions").is_some());
-        assert!(
-            payload
-                .get("artifact_init")
-                .and_then(|value| value.get("command"))
-                .and_then(|value| value.as_str())
-                .is_some()
-        );
+        assert!(payload
+            .get("artifact_init")
+            .and_then(|value| value.get("command"))
+            .and_then(|value| value.as_str())
+            .is_some());
     }
 
     #[test]
@@ -6188,14 +6194,12 @@ mod tests {
             validation.get("issue_count").and_then(Value::as_u64),
             Some(1)
         );
-        assert!(
-            validation
-                .get("issues")
-                .and_then(Value::as_array)
-                .expect("issues should be an array")
-                .iter()
-                .any(|issue| issue.get("code").and_then(Value::as_str) == Some("missing_footer"))
-        );
+        assert!(validation
+            .get("issues")
+            .and_then(Value::as_array)
+            .expect("issues should be an array")
+            .iter()
+            .any(|issue| issue.get("code").and_then(Value::as_str) == Some("missing_footer")));
         fs::remove_file(path).expect("temp markdown should be removed");
     }
 
@@ -6276,6 +6280,36 @@ mod tests {
         assert!(!rendered.contains("_temp/cache/ignored.md"));
         assert!(!rendered.contains("dist/package/ignored.md"));
 
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn markdown_scope_scan_uses_ignore_without_gitignore_policy() {
+        let root = temp_dir("markdown-ignore-policy");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(root.join(".gitignore"), "docs/process/ignored.md\n").expect("gitignore");
+        fs::write(root.join("docs/process/ignored.md"), "# still scanned\n").expect("markdown");
+
+        let files = super::all_markdown_files(&root).expect("markdown scan should succeed");
+
+        assert_eq!(files, vec![root.join("docs/process/ignored.md")]);
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn changelog_scope_scan_uses_ignore_without_gitignore_policy() {
+        let root = temp_dir("changelog-ignore-policy");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(root.join(".gitignore"), "docs/process/*.changelog.jsonl\n").expect("gitignore");
+        fs::write(
+            root.join("docs/process/a.changelog.jsonl"),
+            "{\"event\":\"created\"}\n",
+        )
+        .expect("changelog");
+
+        let files = super::all_changelog_files(&root).expect("changelog scan should succeed");
+
+        assert_eq!(files, vec![root.join("docs/process/a.changelog.jsonl")]);
         fs::remove_dir_all(root).expect("temp root should be removed");
     }
 
