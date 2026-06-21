@@ -96,7 +96,8 @@ impl StateStore {
             snapshot_dependencies.extend(
                 task.dependencies
                     .iter()
-                    .map(task_dependency_to_canonical_edge),
+                    .map(task_dependency_to_canonical_edge)
+                    .collect::<Result<Vec<_>, _>>()?,
             );
             snapshot_tasks.push(task_record_to_canonical_snapshot_row(&task)?);
         }
