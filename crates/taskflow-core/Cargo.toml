@@ -15,3 +15,6 @@ strum = { version = "0.28.0", features = ["derive"] }
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+proptest = "1.11.0"

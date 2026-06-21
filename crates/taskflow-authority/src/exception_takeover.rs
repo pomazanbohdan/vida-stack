@@ -44,6 +44,36 @@ mod tests {
         ExceptionTakeoverReceipt, ExceptionTakeoverRecovery, ExceptionTakeoverStateLabel,
         exception_takeover_is_lawfully_active, exception_takeover_state_label,
     };
+    use proptest::prelude::*;
+
+    fn lane_status_strategy() -> impl Strategy<Value = &'static str> {
+        prop_oneof![
+            Just(""),
+            Just("lane_exception_recorded"),
+            Just("lane_exception_takeover"),
+            Just("lane_completed"),
+            Just("unknown_lane_status"),
+        ]
+    }
+
+    fn receipt_id_strategy() -> impl Strategy<Value = Option<&'static str>> {
+        prop_oneof![
+            Just(None),
+            Just(Some("")),
+            Just(Some("   ")),
+            Just(Some("receipt-1"))
+        ]
+    }
+
+    fn recovery_gate_strategy() -> impl Strategy<Value = Option<&'static str>> {
+        prop_oneof![
+            Just(None),
+            Just(Some("")),
+            Just(Some("   ")),
+            Just(Some("blocked_open_delegated_cycle")),
+            Just(Some("delegated_cycle_clear")),
+        ]
+    }
 
     fn receipt() -> ExceptionTakeoverReceipt<'static> {
         ExceptionTakeoverReceipt {
@@ -56,6 +86,42 @@ mod tests {
     fn recovery(gate: &'static str) -> ExceptionTakeoverRecovery<'static> {
         ExceptionTakeoverRecovery {
             local_exception_takeover_gate: gate,
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn exception_takeover_authority_transition_matches_core_for_generated_receipts(
+            lane_status in lane_status_strategy(),
+            receipt_id in receipt_id_strategy(),
+            supersedes_id in receipt_id_strategy(),
+            gate in recovery_gate_strategy(),
+        ) {
+            let receipt = ExceptionTakeoverReceipt {
+                lane_status,
+                exception_path_receipt_id: receipt_id,
+                supersedes_receipt_id: supersedes_id,
+            };
+            let recovery = gate.map(|local_exception_takeover_gate| ExceptionTakeoverRecovery {
+                local_exception_takeover_gate,
+            });
+            let expected = taskflow_core::task::takeover::exception_takeover_state(
+                taskflow_core::task::takeover::ExceptionTakeoverDecisionInput {
+                    lane_status,
+                    exception_path_receipt_id: receipt_id,
+                    supersedes_receipt_id: supersedes_id,
+                    local_exception_takeover_gate: gate,
+                },
+            );
+
+            prop_assert_eq!(
+                exception_takeover_state_label(Some(&receipt), recovery.as_ref()),
+                expected
+            );
+            prop_assert_eq!(
+                exception_takeover_is_lawfully_active(Some(&receipt), recovery.as_ref()),
+                expected == Some(ExceptionTakeoverStateLabel::Active)
+            );
         }
     }
 

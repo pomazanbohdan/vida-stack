@@ -7265,6 +7265,7 @@ dependencies = [
 name = "taskflow-authority"
 version = "0.9.7"
 dependencies = [
+ "proptest",
  "runtime-path-policy",
  "serde",
  "serde_json",
@@ -7307,6 +7308,7 @@ dependencies = [
  "enum-map",
  "nutype",
  "petgraph",
+ "proptest",
  "serde",
  "serde_json",
  "strum 0.28.0",
