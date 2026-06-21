@@ -3581,6 +3581,16 @@ fn read_dispatch_packet_from_state_root(
     Ok(packet)
 }
 
+fn read_dispatch_packet_for_store(
+    store: &super::StateStore,
+    path: &str,
+) -> Result<serde_json::Value, String> {
+    match read_dispatch_packet_from_state_root(path, store.root()) {
+        Ok(packet) => Ok(packet),
+        Err(state_root_error) => read_dispatch_packet(path).map_err(|_| state_root_error),
+    }
+}
+
 pub(crate) struct ResumeInputs {
     pub(crate) dispatch_receipt: crate::state_store::RunGraphDispatchReceipt,
     pub(crate) dispatch_packet_path: String,
@@ -4763,7 +4773,7 @@ async fn maybe_resume_inputs_from_ready_downstream_packet(
     let Some(packet_path) = receipt.downstream_dispatch_packet_path.as_deref() else {
         return Ok(None);
     };
-    let packet = read_dispatch_packet(packet_path).or_else(|_| {
+    let packet = read_dispatch_packet_for_store(store, packet_path).or_else(|_| {
         dispatch_packet_json_from_current_project(packet_path)
             .ok_or_else(|| format!("Failed to read persisted dispatch packet `{packet_path}`"))
     })?;
@@ -5356,7 +5366,7 @@ async fn maybe_resume_inputs_from_rework_result(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
-    let source_packet = read_dispatch_packet(source_packet_path)?;
+    let source_packet = read_dispatch_packet_for_store(store, source_packet_path)?;
     let packet_run_id = source_packet
         .get("run_id")
         .and_then(serde_json::Value::as_str)
@@ -5467,7 +5477,7 @@ async fn maybe_resume_inputs_from_rework_result(
     );
     let rework_packet_path = super::write_runtime_dispatch_packet(&ctx)?;
     rework_receipt.dispatch_packet_path = Some(rework_packet_path.clone());
-    let rework_packet = read_dispatch_packet(&rework_packet_path)?;
+    let rework_packet = read_dispatch_packet_for_store(store, &rework_packet_path)?;
     Ok(Some(build_resume_inputs(
         rework_receipt,
         rework_packet_path,
@@ -5907,7 +5917,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     let preloaded_role_selection = receipt
         .dispatch_packet_path
         .as_deref()
-        .and_then(|path| read_dispatch_packet(path).ok())
+        .and_then(|path| read_dispatch_packet_for_store(store, path).ok())
         .and_then(|packet| decode_role_selection_from_packet(&packet, "dispatch packet").ok());
     let explicit_downstream_target =
         completed_run_explicit_downstream_target_for_resume(store, &resolved_run_id).await?;
@@ -5921,7 +5931,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         && !task_close_closure_reconcile
     {
         if let Some(packet_path) = receipt.dispatch_packet_path.as_deref() {
-            if read_dispatch_packet(packet_path)
+            if read_dispatch_packet_for_store(store, packet_path)
                 .ok()
                 .and_then(|packet| {
                     (packet["packet_kind"].as_str() == Some("runtime_downstream_dispatch_packet"))
@@ -6011,7 +6021,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
             .dispatch_packet_path
             .clone()
             .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
-        let packet = read_dispatch_packet(&packet_path)?;
+        let packet = read_dispatch_packet_for_store(store, &packet_path)?;
         let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
         let resume = closure_packet_ready_resume_from_root_receipt(
             &receipt,
@@ -6233,7 +6243,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                 .dispatch_packet_path
                 .clone()
                 .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
-            let packet = read_dispatch_packet(&packet_path)?;
+            let packet = read_dispatch_packet_for_store(store, &packet_path)?;
             validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
             let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
             terminal_closure_complete_resume_from_root_receipt(
@@ -6312,7 +6322,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         .dispatch_packet_path
         .clone()
         .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
-    let packet = read_dispatch_packet(&packet_path)?;
+    let packet = read_dispatch_packet_for_store(store, &packet_path)?;
     let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
     if (terminal_closure_complete && !explicit_task_graph_task_binding)
         || (final_lineage_closure_preview_ready && !explicit_task_graph_task_binding)
@@ -6387,7 +6397,7 @@ pub(crate) async fn resolve_runtime_consumption_resume_inputs(
     requested_downstream_packet_path: Option<&str>,
 ) -> Result<ResumeInputs, String> {
     let dispatch_packet = if let Some(packet_path) = requested_dispatch_packet_path {
-        let packet = read_dispatch_packet(packet_path)?;
+        let packet = read_dispatch_packet_for_store(store, packet_path)?;
         let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
         let run_id = packet
             .get("run_id")
