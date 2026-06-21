@@ -85,85 +85,50 @@ pub fn load_policy_profile(
     })
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Deserialize)]
 struct ParsedPolicy {
+    #[serde(default)]
+    profiles: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    scan_ignored: Vec<PolicyScanIgnoredRule>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PolicyScanIgnoredRule {
+    scope: String,
+    glob: String,
+}
+
+impl ParsedPolicy {
+    fn into_loaded(self) -> LoadedPolicy {
+        let scan_ignored_globs = self
+            .scan_ignored
+            .into_iter()
+            .filter(|rule| rule.scope == "relative_path")
+            .map(|rule| rule.glob)
+            .collect();
+        LoadedPolicy {
+            profiles: self.profiles,
+            scan_ignored_globs,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct LoadedPolicy {
     profiles: BTreeMap<String, Vec<String>>,
     scan_ignored_globs: Vec<String>,
 }
 
-fn parse_policy_profiles(input: &str) -> Result<ParsedPolicy, DocflowConfigError> {
-    let mut parsed = ParsedPolicy::default();
-    let mut in_profiles = false;
-    let mut current_profile: Option<String> = None;
-    let mut in_scan_ignored = false;
-    let mut pending_scan_ignored_scope = false;
+fn parse_policy_profiles(input: &str) -> Result<LoadedPolicy, DocflowConfigError> {
+    let parsed: ParsedPolicy = config::Config::builder()
+        .add_source(config::File::from_str(input, config::FileFormat::Yaml))
+        .build()
+        .map_err(|err| DocflowConfigError::PolicyParse(err.to_string()))?
+        .try_deserialize()
+        .map_err(|err| DocflowConfigError::PolicyParse(err.to_string()))?;
 
-    for raw_line in input.lines() {
-        let line = raw_line.trim_end();
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-
-        if !line.starts_with(' ') && trimmed == "profiles:" {
-            in_profiles = true;
-            in_scan_ignored = false;
-            current_profile = None;
-            continue;
-        }
-        if !line.starts_with(' ') && trimmed == "scan_ignored:" {
-            in_scan_ignored = true;
-            in_profiles = false;
-            current_profile = None;
-            continue;
-        }
-        if !line.starts_with(' ') {
-            in_profiles = false;
-            in_scan_ignored = false;
-            current_profile = None;
-        }
-
-        if in_scan_ignored {
-            let indent = line.len() - line.trim_start().len();
-            if indent == 2 && trimmed.starts_with("- scope:") {
-                pending_scan_ignored_scope = trimmed.ends_with("relative_path");
-                continue;
-            }
-            if indent == 4 && trimmed.starts_with("glob:") && pending_scan_ignored_scope {
-                if let Some(value) = trimmed.split_once(':').map(|(_, value)| value.trim()) {
-                    parsed
-                        .scan_ignored_globs
-                        .push(value.trim_matches('"').to_string());
-                }
-                continue;
-            }
-        }
-
-        if in_profiles {
-            let indent = line.len() - line.trim_start().len();
-            if indent == 2 && trimmed.ends_with(':') {
-                let profile = trimmed.trim_end_matches(':').to_string();
-                parsed.profiles.entry(profile.clone()).or_default();
-                current_profile = Some(profile);
-                continue;
-            }
-            if indent == 4 && trimmed.starts_with("- ") {
-                if let Some(profile) = &current_profile {
-                    parsed
-                        .profiles
-                        .entry(profile.clone())
-                        .or_default()
-                        .push(trimmed.trim_start_matches("- ").to_string());
-                } else {
-                    return Err(DocflowConfigError::PolicyParse(
-                        "profile entry encountered before profile header".into(),
-                    ));
-                }
-            }
-        }
-    }
-
-    Ok(parsed)
+    Ok(parsed.into_loaded())
 }
 
 pub fn resolve_profile_roots(
