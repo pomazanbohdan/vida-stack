@@ -10,16 +10,13 @@ $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot "vida-windows-env.ps1")
 Initialize-VidaWindowsEnvironment -NormalizeBuildTemp
-$PwshPath = Resolve-VidaCommandPath "pwsh" @(
-    "C:\Program Files\PowerShell\7\pwsh.exe",
-    "$env:ProgramFiles\PowerShell\7\pwsh.exe",
-    (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\pwsh.exe")
-) -Required
+$PwshPath = Resolve-VidaPowerShellPath -Required
 
 function Show-Help {
     @"
 Usage:
-  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-release-package.ps1 [-Version vX.Y.Z] [-Json] [-KeepArtifacts]
+  .\scripts\vida-dev-gate.cmd -Mode script-check
+  or: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/check-release-package.ps1 [-Version vX.Y.Z] [-Json] [-KeepArtifacts]
 
 Creates an isolated Windows release-bin fixture, runs scripts/build-release.ps1
 with -SkipBuild -Windows -ReleaseBinDir, and validates the generated manifest

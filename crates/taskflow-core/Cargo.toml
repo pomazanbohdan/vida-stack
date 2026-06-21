@@ -5,8 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+enum-map = "2.7.3"
+petgraph = "0.8.3"
 serde.workspace = true
 serde_json.workspace = true
+strum = "0.28.0"
 thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true

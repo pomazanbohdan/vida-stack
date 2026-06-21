@@ -5,5 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+gix = { version = "0.84.0", default-features = false, features = ["status"] }
 serde.workspace = true
 thiserror.workspace = true
+wait-timeout = "0.2.1"

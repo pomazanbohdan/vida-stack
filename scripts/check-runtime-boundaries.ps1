@@ -14,24 +14,6 @@ function Find-Ripgrep {
         return $command.Source
     }
 
-    $userRoots = @(
-        $env:USERPROFILE,
-        $HOME,
-        [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile),
-        "C:\Users\pomaz"
-    ) | Where-Object { $_ } | Select-Object -Unique
-
-    $candidates = foreach ($userRoot in $userRoots) {
-        Join-Path $userRoot ".bun\install\global\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe"
-        Join-Path $userRoot ".bun\install\global\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\codex-path\rg.exe"
-    }
-
-    foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            return $candidate
-        }
-    }
-
     return $null
 }
 
@@ -58,6 +40,45 @@ function Invoke-RgCheck {
         [string[]]$Paths,
         [string[]]$Globs = @()
     )
+
+    if (-not $script:Rg) {
+        $files = foreach ($path in $Paths) {
+            if (Test-Path -LiteralPath $path -PathType Container) {
+                Get-ChildItem -LiteralPath $path -Recurse -File -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $fullName = $_.FullName -replace "\\", "/"
+                        $fullName -notmatch "/tests/" -and
+                            $fullName -notmatch "/generated/" -and
+                            $fullName -notmatch "/adapters/"
+                    }
+            } elseif (Test-Path -LiteralPath $path -PathType Leaf) {
+                Get-Item -LiteralPath $path
+            }
+        }
+
+        $output = @(
+            $files |
+                Select-String -Pattern $Pattern -ErrorAction SilentlyContinue |
+                ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" }
+        )
+        $displayOutput = @($output | Select-Object -First 80)
+        if ($output.Count -gt $displayOutput.Count) {
+            $displayOutput += "... omitted $($output.Count - $displayOutput.Count) additional matches"
+        }
+        if ($output.Count -eq 0) {
+            return [pscustomobject]@{
+                name = $Name
+                status = "pass"
+                matches = @()
+            }
+        }
+
+        return [pscustomobject]@{
+            name = $Name
+            status = "blocked"
+            matches = $displayOutput
+        }
+    }
 
     $args = @("--color", "never", "--line-number", $Pattern)
     foreach ($path in $Paths) {
@@ -139,9 +160,6 @@ function Invoke-PathPresentCheck {
 }
 
 $script:Rg = Find-Ripgrep
-if (-not $script:Rg) {
-    throw "ripgrep executable not found. Install rg, put it on PATH, or set RG to the executable path."
-}
 
 $vidaPaths = Get-ExistingPathArgs @("crates/vida/src")
 

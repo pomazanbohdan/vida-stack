@@ -192,20 +192,82 @@ function Initialize-VidaWindowsEnvironment {
         }
     }
 
+    $powerShellPackageRoots = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $powerShellPackageRoots = @(Get-ChildItem -LiteralPath (Join-Path $env:ProgramFiles "WindowsApps") -Directory -Filter "Microsoft.PowerShell_*_x64__8wekyb3d8bbwe" -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { $_.FullName })
+    }
+
     $pathEntries = @(
         (Join-Path $windowsRoot "System32"),
         $windowsRoot,
         (Join-Path $windowsRoot "System32\Wbem"),
-        (Join-Path $windowsRoot "System32\WindowsPowerShell\v1.0"),
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"),
+        $powerShellPackageRoots,
         (Join-Path $env:ProgramFiles "PowerShell\7"),
         (Join-Path $env:ProgramFiles "WindowsApps"),
-        (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"),
+        (Join-Path $windowsRoot "System32\WindowsPowerShell\v1.0"),
         "C:\Program Files\Git\cmd",
         "C:\Program Files\Git\bin",
         (Join-Path $userProfile ".cargo\bin"),
         (Join-Path $env:LOCALAPPDATA "vida-stack\current\bin")
     )
     Add-VidaPathEntries $pathEntries
+}
+
+function Resolve-VidaPowerShellPath {
+    param(
+        [switch]$Required
+    )
+
+    $candidatePaths = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($env:VIDA_PWSH)) {
+        $candidatePaths.Add($env:VIDA_PWSH)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $candidatePaths.Add((Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\pwsh.exe"))
+    }
+
+    $pwshCommand = Get-Command "pwsh" -ErrorAction SilentlyContinue
+    if ($pwshCommand) {
+        $candidatePaths.Add($pwshCommand.Source)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $candidatePaths.Add((Join-Path $env:ProgramFiles "PowerShell\7\pwsh.exe"))
+        $packageRoot = Join-Path $env:ProgramFiles "WindowsApps"
+        if (Test-Path -LiteralPath $packageRoot) {
+            foreach ($packagePwsh in (Get-ChildItem -LiteralPath $packageRoot -Directory -Filter "Microsoft.PowerShell_*_x64__8wekyb3d8bbwe" -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending |
+                ForEach-Object { Join-Path $_.FullName "pwsh.exe" })) {
+                $candidatePaths.Add($packagePwsh)
+            }
+        }
+    }
+
+    $seen = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($candidate in $candidatePaths) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        try {
+            $fullPath = [System.IO.Path]::GetFullPath($candidate)
+        } catch {
+            $fullPath = $candidate
+        }
+        if (-not $seen.Add($fullPath)) {
+            continue
+        }
+        if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
+            return $fullPath
+        }
+    }
+
+    if ($Required) {
+        throw "[vida-windows-env] PowerShell Core pwsh.exe was not found. Install Microsoft.PowerShell with winget or set VIDA_PWSH to pwsh.exe."
+    }
+    return $null
 }
 
 function Resolve-VidaCommandPath {

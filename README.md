@@ -190,8 +190,7 @@ Windows PowerShell:
 
 ```powershell
 # Optional when the bundled Codex ripgrep is blocked by Windows app policy.
-bun add -g @vscode/ripgrep
-Copy-Item "$env:USERPROFILE\.bun\install\global\node_modules\@vscode\ripgrep\bin\rg.exe" "$env:USERPROFILE\.bun\bin\rg.exe" -Force
+winget install BurntSushi.ripgrep.MSVC
 rg --version
 
 # Fast package-scoped proof through the repo gate.
@@ -261,7 +260,7 @@ Known `v0.9.3` Windows host state from the 2026-05-01 release wave:
 1. GitHub release packaging and Windows installer smoke passed on `windows-latest`.
 2. The local Windows host installed `v0.9.3` under `%LOCALAPPDATA%\vida-stack\releases\v0.9.3`.
 3. The same local host's Smart App Control policy initially blocked newly installed `vida.exe`, `taskflow.exe`, and `docflow.exe`.
-4. A later explicit Windows installer run switched `%LOCALAPPDATA%\vida-stack\current` to `v0.9.3` and removed the stale PATH-shadowing `C:\Users\pomaz\.bun\bin\vida.exe` into a backup file.
+4. A later explicit Windows installer run switched `%LOCALAPPDATA%\vida-stack\current` to `v0.9.3` and moved the stale PATH-shadowing user-level `vida.exe` into a backup file.
 5. Smart App Control was then disabled on the local developer host by setting `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState=0` and refreshing Code Integrity with `CiTool.exe -r`.
 6. The Windows `vida.cmd`, `taskflow.cmd`, and `docflow.cmd` launchers now resolve and execute the `v0.9.3` active release.
 7. WSL on the same machine can also run `vida 0.9.3` and was used for local release proof.

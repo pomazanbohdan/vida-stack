@@ -99,8 +99,8 @@ Initialize-WindowsHostEnvironment
 function Show-Help {
     @"
 Usage:
-  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode <mode> [-Json] [-Jobs <n>] [-TestFilter <filter>]
-  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-package -SkipBuild -Windows -ReleaseBinDir <dir> [-ReleaseVersion vX.Y.Z] [-Json]
+  .\scripts\vida-dev-gate.cmd -Mode <mode> [-Json] [-Jobs <n>] [-TestFilter <filter>]
+  .\scripts\vida-dev-gate.cmd -Mode release-package -SkipBuild -Windows -ReleaseBinDir <dir> [-ReleaseVersion vX.Y.Z] [-Json]
 
 Modes:
   script-check      No-Cargo proof for diffs, runtime boundaries, and script syntax.
@@ -119,6 +119,7 @@ Modes:
 
 Notes:
   Cargo modes set CARGO_TARGET_DIR unless the caller already provided it.
+  Windows wrapper mode resolves the current PowerShell Core pwsh.exe first; set VIDA_PWSH to override.
   release-package accepts explicit -SkipBuild, -Windows, -ReleaseBinDir, -ReleaseVersion, and -ReleaseSuffix flags for packaging already-built release binaries.
   release-package also honors VIDA_RELEASE_SKIP_BUILD=1, VIDA_RELEASE_BIN_DIR=<dir>, and VIDA_RELEASE_SUFFIX=<suffix> for compatibility.
   JSON mode records operation timing and log artifact paths under .vida/data/state/command-timing.
@@ -212,11 +213,7 @@ function Resolve-CommandPath {
 
 $GitPath = Resolve-CommandPath "git" @("C:\Program Files\Git\cmd\git.exe")
 $CargoPath = Resolve-VidaCommandPath "cargo" @((Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe")) -Required
-$PwshPath = Resolve-CommandPath "pwsh" @(
-    "C:\Program Files\PowerShell\7\pwsh.exe",
-    "$env:ProgramFiles\PowerShell\7\pwsh.exe",
-    (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\pwsh.exe")
-)
+$PwshPath = Resolve-VidaPowerShellPath -Required
 $BashPath = Resolve-CommandPath "bash" @(
     "C:\Program Files\Git\bin\bash.exe",
     "$env:ProgramFiles\Git\bin\bash.exe"

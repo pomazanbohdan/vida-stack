@@ -12,17 +12,6 @@ find_rg() {
         return 0
     fi
 
-    local candidate
-    for candidate in \
-        "${HOME}/.bun/install/global/node_modules/@vscode/ripgrep-win32-x64/bin/rg.exe" \
-        "${HOME}/.bun/install/global/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-path/rg.exe"
-    do
-        if [[ -x "${candidate}" ]]; then
-            printf '%s\n' "${candidate}"
-            return 0
-        fi
-    done
-
     return 1
 }
 
