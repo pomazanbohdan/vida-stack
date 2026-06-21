@@ -253,7 +253,22 @@ host_environment:
         platform_overrides:
           windows:
             shell_environment_policy:
-              inherit: all
+              inherit: none
+              set:
+                SystemRoot: C:\Windows
+                windir: C:\Windows
+                ComSpec: C:\Windows\System32\cmd.exe
+                USERPROFILE: C:\Users\pomaz
+                LOCALAPPDATA: C:\Users\pomaz\AppData\Local
+                TEMP: C:\Users\pomaz\AppData\Local\Temp
+                TMP: C:\Users\pomaz\AppData\Local\Temp
+                PATH: C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem;C:\Users\pomaz\AppData\Local\Microsoft\WindowsApps;C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.3.0_x64__8wekyb3d8bbwe;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;C:\Users\pomaz\.cargo\bin;C:\Users\pomaz\AppData\Local\vida-stack\current\bin
+              exclude:
+                - "*_KEY"
+                - "*_SECRET"
+                - "*_TOKEN"
+                - "AWS_*"
+                - "AZURE_*"
             agent_bootstrap_instructions: |
               VIDA command resolution for Windows Codex App:
               1. Before invoking `vida`, first try `Get-Command vida -ErrorAction SilentlyContinue`.
