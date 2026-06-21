@@ -7,3 +7,6 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 taskflow-core = { path = "../taskflow-core" }
+
+[dev-dependencies]
+serde_json.workspace = true

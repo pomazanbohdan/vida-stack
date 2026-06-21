@@ -8,15 +8,18 @@ pub mod status_code;
 
 pub use artifact_kind::{ArtifactKind, UnknownArtifactKind};
 pub use blocker_code::{
-    BlockerCode, UnknownBlockerCode, canonical_blocker_code_list, canonical_blocker_code_str,
-    canonical_blocker_code_value_from_str, is_selected_lane_assignment_guard_blocked,
-    is_selected_lane_runtime_assignment_truth_missing, selected_lane_assignment_guard_blocked,
-    selected_lane_runtime_assignment_truth_missing,
+    BlockerCode, UnknownBlockerCode, blocker_code_list_preserving_legacy,
+    canonical_blocker_code_list, canonical_blocker_code_str, canonical_blocker_code_value_from_str,
+    is_selected_lane_assignment_guard_blocked, is_selected_lane_runtime_assignment_truth_missing,
+    selected_lane_assignment_guard_blocked, selected_lane_runtime_assignment_truth_missing,
 };
 pub use decision_table::{
     DECISION_TABLE_SCHEMA_VERSION, DecisionTableCondition, DecisionTableEvaluationRequest,
     DecisionTableEvaluationResponse, DecisionTableEvaluationStatus, DecisionTableInput,
     DecisionTableOperator, DecisionTableOutput, DecisionTableRule, DecisionTableValue,
+    TRANSITION_CONTRACT_SCHEMA_VERSION, TransitionContractBlocker, TransitionContractBlockerCode,
+    TransitionContractDecision, TransitionContractOutcome, TransitionContractStatus,
+    TransitionContractStatusCode,
 };
 pub use status_code::{
     ApprovalStatus, LaneStatus, Release1ContractStatus, UnknownStatusCode,

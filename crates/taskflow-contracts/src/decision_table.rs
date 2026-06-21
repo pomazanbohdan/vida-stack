@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use taskflow_core::TaskId;
 
 pub const DECISION_TABLE_SCHEMA_VERSION: u32 = 1;
+pub const TRANSITION_CONTRACT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionTableEvaluationRequest {
@@ -41,6 +42,77 @@ pub struct DecisionTableEvaluationResponse {
     pub blocker_codes: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransitionContractDecision {
+    pub schema_version: u32,
+    pub table_id: String,
+    pub task_id: Option<TaskId>,
+    pub outcome: TransitionContractOutcome,
+    pub status: TransitionContractStatus,
+    pub blocker_codes: Vec<TransitionContractBlocker>,
+    pub notes: Vec<String>,
+}
+
+impl TransitionContractDecision {
+    #[must_use]
+    pub fn admitted(
+        table_id: impl Into<String>,
+        task_id: Option<TaskId>,
+        notes: Vec<String>,
+    ) -> Self {
+        Self {
+            schema_version: TRANSITION_CONTRACT_SCHEMA_VERSION,
+            table_id: table_id.into(),
+            task_id,
+            outcome: TransitionContractOutcome::Admitted,
+            status: TransitionContractStatus::known(TransitionContractStatusCode::Admitted),
+            blocker_codes: Vec::new(),
+            notes,
+        }
+    }
+
+    #[must_use]
+    pub fn rejected(
+        table_id: impl Into<String>,
+        task_id: Option<TaskId>,
+        blocker_codes: Vec<TransitionContractBlocker>,
+    ) -> Self {
+        Self {
+            schema_version: TRANSITION_CONTRACT_SCHEMA_VERSION,
+            table_id: table_id.into(),
+            task_id,
+            outcome: TransitionContractOutcome::Rejected,
+            status: TransitionContractStatus::known(TransitionContractStatusCode::Rejected),
+            blocker_codes,
+            notes: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn blocked(
+        table_id: impl Into<String>,
+        task_id: Option<TaskId>,
+        blocker_codes: Vec<TransitionContractBlocker>,
+    ) -> Self {
+        Self {
+            schema_version: TRANSITION_CONTRACT_SCHEMA_VERSION,
+            table_id: table_id.into(),
+            task_id,
+            outcome: TransitionContractOutcome::Blocked,
+            status: TransitionContractStatus::known(TransitionContractStatusCode::Blocked),
+            blocker_codes,
+            notes: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn is_fail_closed_blocked(&self) -> bool {
+        self.outcome == TransitionContractOutcome::Blocked
+            && self.status.as_str() == TransitionContractStatusCode::Blocked.as_str()
+            && !self.blocker_codes.is_empty()
+    }
+}
+
 impl DecisionTableEvaluationResponse {
     #[must_use]
     pub fn matched(
@@ -75,6 +147,125 @@ impl DecisionTableEvaluationResponse {
             outputs: Vec::new(),
             blocker_codes,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionContractOutcome {
+    Admitted,
+    Rejected,
+    Blocked,
+}
+
+impl TransitionContractOutcome {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Admitted => "admitted",
+            Self::Rejected => "rejected",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionContractStatusCode {
+    Admitted,
+    Rejected,
+    Blocked,
+}
+
+impl TransitionContractStatusCode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Admitted => "admitted",
+            Self::Rejected => "rejected",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TransitionContractStatus {
+    value: String,
+}
+
+impl TransitionContractStatus {
+    #[must_use]
+    pub fn known(status: TransitionContractStatusCode) -> Self {
+        Self {
+            value: status.as_str().to_string(),
+        }
+    }
+
+    #[must_use]
+    pub fn legacy_passthrough(value: impl Into<String>) -> Option<Self> {
+        let value = value.into();
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed != value {
+            return None;
+        }
+        Some(Self { value })
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.value
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionContractBlockerCode {
+    MissingRequiredInput,
+    InvalidTransition,
+    StaleEvidence,
+    DuplicateEdge,
+}
+
+impl TransitionContractBlockerCode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingRequiredInput => "missing_required_input",
+            Self::InvalidTransition => "invalid_transition",
+            Self::StaleEvidence => "stale_evidence",
+            Self::DuplicateEdge => "duplicate_edge",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TransitionContractBlocker {
+    value: String,
+}
+
+impl TransitionContractBlocker {
+    #[must_use]
+    pub fn known(blocker: TransitionContractBlockerCode) -> Self {
+        Self {
+            value: blocker.as_str().to_string(),
+        }
+    }
+
+    #[must_use]
+    pub fn legacy_passthrough(value: impl Into<String>) -> Option<Self> {
+        let value = value.into();
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed != value {
+            return None;
+        }
+        Some(Self { value })
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.value
     }
 }
 
@@ -186,7 +377,11 @@ mod tests {
         DECISION_TABLE_SCHEMA_VERSION, DecisionTableCondition, DecisionTableEvaluationRequest,
         DecisionTableEvaluationResponse, DecisionTableEvaluationStatus, DecisionTableInput,
         DecisionTableOutput, DecisionTableRule, DecisionTableValue,
+        TRANSITION_CONTRACT_SCHEMA_VERSION, TransitionContractBlocker,
+        TransitionContractBlockerCode, TransitionContractDecision, TransitionContractOutcome,
+        TransitionContractStatus, TransitionContractStatusCode,
     };
+    use serde_json::json;
     use taskflow_core::TaskId;
 
     #[test]
@@ -249,5 +444,65 @@ mod tests {
         assert!(response.matched_rule_ids.is_empty());
         assert!(response.outputs.is_empty());
         assert_eq!(response.blocker_codes, vec!["missing_required_input"]);
+    }
+
+    #[test]
+    fn transition_contract_admitted_decision_has_stable_schema() {
+        let decision = TransitionContractDecision::admitted(
+            "task.lifecycle",
+            Some(TaskId::new("task-1")),
+            vec!["golden behavior preserved".to_string()],
+        );
+        let encoded = serde_json::to_value(&decision).expect("decision serializes");
+
+        assert_eq!(decision.schema_version, TRANSITION_CONTRACT_SCHEMA_VERSION);
+        assert_eq!(decision.outcome, TransitionContractOutcome::Admitted);
+        assert_eq!(decision.status.as_str(), "admitted");
+        assert!(decision.blocker_codes.is_empty());
+        assert_eq!(
+            encoded,
+            json!({
+                "schema_version": 1,
+                "table_id": "task.lifecycle",
+                "task_id": "task-1",
+                "outcome": "admitted",
+                "status": "admitted",
+                "blocker_codes": [],
+                "notes": ["golden behavior preserved"]
+            })
+        );
+    }
+
+    #[test]
+    fn transition_contract_blocked_decision_is_fail_closed() {
+        let decision = TransitionContractDecision::blocked(
+            "task.lifecycle",
+            Some(TaskId::new("task-1")),
+            vec![TransitionContractBlocker::known(
+                TransitionContractBlockerCode::MissingRequiredInput,
+            )],
+        );
+
+        assert!(decision.is_fail_closed_blocked());
+        assert_eq!(decision.outcome.as_str(), "blocked");
+        assert_eq!(decision.status.as_str(), "blocked");
+        assert_eq!(decision.blocker_codes[0].as_str(), "missing_required_input");
+    }
+
+    #[test]
+    fn transition_contract_preserves_unknown_legacy_strings() {
+        let status = TransitionContractStatus::legacy_passthrough("legacy_waiting")
+            .expect("legacy status passes through");
+        let blocker = TransitionContractBlocker::legacy_passthrough("legacy_blocker")
+            .expect("legacy blocker passes through");
+
+        assert_eq!(status.as_str(), "legacy_waiting");
+        assert_eq!(blocker.as_str(), "legacy_blocker");
+        assert!(TransitionContractStatus::legacy_passthrough(" legacy_waiting ").is_none());
+        assert!(TransitionContractBlocker::legacy_passthrough("").is_none());
+        assert_eq!(
+            TransitionContractStatus::known(TransitionContractStatusCode::Rejected).as_str(),
+            "rejected"
+        );
     }
 }

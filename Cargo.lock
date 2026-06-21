@@ -6461,6 +6461,7 @@ name = "taskflow-contracts"
 version = "0.9.7"
 dependencies = [
  "serde",
+ "serde_json",
  "taskflow-core",
 ]
 

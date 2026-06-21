@@ -231,6 +231,30 @@ where
         .collect()
 }
 
+#[must_use]
+pub fn blocker_code_list_preserving_legacy<I, S>(values: I) -> Vec<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    values
+        .into_iter()
+        .filter_map(|value| {
+            let trimmed = value.as_ref().trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(
+                    canonical_blocker_code_value_from_str(trimmed)
+                        .unwrap_or_else(|| trimmed.to_string()),
+                )
+            }
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 fn canonical_parametric_blocker_code_value(value: &str) -> Option<String> {
     if is_selected_lane_runtime_assignment_truth_missing(value)
         || is_selected_lane_assignment_guard_blocked(value)
@@ -331,5 +355,22 @@ mod tests {
     #[test]
     fn blocker_code_rejects_unknown_strings() {
         assert!(canonical_blocker_code_value_from_str("unknown_blocker").is_none());
+    }
+
+    #[test]
+    fn blocker_code_legacy_preserving_list_keeps_unknown_values() {
+        let codes = super::blocker_code_list_preserving_legacy([
+            " host_tool_capability_missing ",
+            "legacy_runtime_gate",
+            "legacy_runtime_gate",
+            "",
+        ]);
+        assert_eq!(
+            codes,
+            vec![
+                "host_tool_capability_missing".to_string(),
+                "legacy_runtime_gate".to_string()
+            ]
+        );
     }
 }
