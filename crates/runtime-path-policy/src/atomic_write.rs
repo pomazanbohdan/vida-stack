@@ -1,6 +1,6 @@
 use std::io::Write;
-use std::time::{SystemTime, UNIX_EPOCH};
 
+use atomic_write_file::AtomicWriteFile;
 use serde::Serialize;
 
 use crate::safe_path::{NewStateOutputPath, PathPolicyError};
@@ -25,57 +25,23 @@ fn write_json<T: Serialize>(path: &NewStateOutputPath, value: &T) -> Result<(), 
         path: path.path().to_path_buf(),
         source,
     })?;
-    let temp_path = temp_sibling_path(path);
-    {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .map_err(|source| PathPolicyError::Write {
-                kind: path.kind(),
-                path: temp_path.clone(),
-                source,
-            })?;
-        file.write_all(&bytes)
-            .map_err(|source| PathPolicyError::Write {
-                kind: path.kind(),
-                path: temp_path.clone(),
-                source,
-            })?;
-        file.write_all(b"\n")
-            .map_err(|source| PathPolicyError::Write {
-                kind: path.kind(),
-                path: temp_path.clone(),
-                source,
-            })?;
-        file.sync_all().map_err(|source| PathPolicyError::Write {
-            kind: path.kind(),
-            path: temp_path.clone(),
-            source,
-        })?;
-    }
-    std::fs::rename(&temp_path, path.path()).map_err(|source| {
-        let _ = std::fs::remove_file(&temp_path);
-        PathPolicyError::Write {
+    let mut file = AtomicWriteFile::open(path.path()).map_err(|source| PathPolicyError::Write {
+        kind: path.kind(),
+        path: path.path().to_path_buf(),
+        source,
+    })?;
+    file.write_all(&bytes)
+        .and_then(|_| file.write_all(b"\n"))
+        .map_err(|source| PathPolicyError::Write {
             kind: path.kind(),
             path: path.path().to_path_buf(),
             source,
-        }
+        })?;
+    file.commit().map_err(|source| PathPolicyError::Write {
+        kind: path.kind(),
+        path: path.path().to_path_buf(),
+        source,
     })
-}
-
-fn temp_sibling_path(path: &NewStateOutputPath) -> std::path::PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    let file_name = path
-        .path()
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("artifact");
-    path.path()
-        .with_file_name(format!(".{file_name}.{}.{}.tmp", std::process::id(), nanos))
 }
 
 #[cfg(test)]
@@ -96,7 +62,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("runtime-path-policy-write-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        fs_err::create_dir_all(&root).unwrap();
         let state_root = StateRoot::open(&root).unwrap();
         let output = new_output_path_under_root(
             &state_root,
@@ -108,7 +74,7 @@ mod tests {
 
         write_json_new(&output, &Payload { value: "ok" }).unwrap();
 
-        let written = std::fs::read_to_string(root.join("results").join("result.json")).unwrap();
+        let written = fs_err::read_to_string(root.join("results").join("result.json")).unwrap();
         assert!(written.contains("\"value\": \"ok\""));
     }
 }

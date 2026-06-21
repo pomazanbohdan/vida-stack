@@ -5,8 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+atomic-write-file = "0.3.0"
 camino = "1.2.3"
 cap-std = "4.0.2"
+fs-err = "3.3.0"
 pathdiff = "0.2.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
