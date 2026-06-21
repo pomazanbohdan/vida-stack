@@ -6208,9 +6208,9 @@ hierarchy: framework,contracts
             .await
             .expect("canonical snapshot export should succeed");
         assert_eq!(snapshot.tasks.len(), 3);
-        assert_eq!(snapshot.tasks[0].id.0, "vida-a");
-        assert_eq!(snapshot.tasks[1].id.0, "vida-b");
-        assert_eq!(snapshot.tasks[2].id.0, "vida-root");
+        assert_eq!(snapshot.tasks[0].id.as_str(), "vida-a");
+        assert_eq!(snapshot.tasks[1].id.as_str(), "vida-b");
+        assert_eq!(snapshot.tasks[2].id.as_str(), "vida-root");
         assert!(matches!(
             snapshot.tasks[0].status,
             CanonicalTaskStatus::InProgress
@@ -6224,9 +6224,9 @@ hierarchy: framework,contracts
             CanonicalIssueType::Bug
         ));
         assert_eq!(snapshot.dependencies.len(), 2);
-        assert_eq!(snapshot.dependencies[0].issue_id.0, "vida-a");
-        assert_eq!(snapshot.dependencies[0].depends_on_id.0, "vida-root");
-        assert_eq!(snapshot.dependencies[1].issue_id.0, "vida-b");
+        assert_eq!(snapshot.dependencies[0].issue_id.as_str(), "vida-a");
+        assert_eq!(snapshot.dependencies[0].depends_on_id.as_str(), "vida-root");
+        assert_eq!(snapshot.dependencies[1].issue_id.as_str(), "vida-b");
         assert_eq!(snapshot.dependencies[1].dependency_type, "blocks");
 
         let latest = store
@@ -6262,7 +6262,7 @@ hierarchy: framework,contracts
         let runtime_dependencies =
             taskflow_state::TaskStore::list_dependencies(&memory, &CanonicalTaskId::new("vida-b"));
         assert_eq!(runtime_dependencies.len(), 1);
-        assert_eq!(runtime_dependencies[0].depends_on_id.0, "vida-a");
+        assert_eq!(runtime_dependencies[0].depends_on_id.as_str(), "vida-a");
 
         let latest = store
             .latest_task_reconciliation_summary()
@@ -6394,7 +6394,7 @@ hierarchy: framework,contracts
             &CanonicalTaskId::new("vida-a"),
         );
         assert_eq!(restored_dependencies.len(), 1);
-        assert_eq!(restored_dependencies[0].depends_on_id.0, "vida-root");
+        assert_eq!(restored_dependencies[0].depends_on_id.as_str(), "vida-root");
 
         let mut receipt_query = store
             .db
@@ -7576,7 +7576,7 @@ hierarchy: framework,contracts
             .iter()
             .map(|task| {
                 (
-                    task.id.0.clone(),
+                    task.id.as_str().to_string(),
                     task.title.clone(),
                     canonical_task_status_label(task.status).to_string(),
                     canonical_issue_type_label(task.issue_type).to_string(),
@@ -7589,7 +7589,7 @@ hierarchy: framework,contracts
             .iter()
             .map(|task| {
                 (
-                    task.id.0.clone(),
+                    task.id.as_str().to_string(),
                     task.title.clone(),
                     canonical_task_status_label(task.status).to_string(),
                     canonical_issue_type_label(task.issue_type).to_string(),
@@ -7604,8 +7604,8 @@ hierarchy: framework,contracts
             .iter()
             .map(|dependency| {
                 (
-                    dependency.issue_id.0.clone(),
-                    dependency.depends_on_id.0.clone(),
+                    dependency.issue_id.as_str().to_string(),
+                    dependency.depends_on_id.as_str().to_string(),
                     dependency.dependency_type.clone(),
                 )
             })
@@ -7615,8 +7615,8 @@ hierarchy: framework,contracts
             .iter()
             .map(|dependency| {
                 (
-                    dependency.issue_id.0.clone(),
-                    dependency.depends_on_id.0.clone(),
+                    dependency.issue_id.as_str().to_string(),
+                    dependency.depends_on_id.as_str().to_string(),
                     dependency.dependency_type.clone(),
                 )
             })
@@ -7707,7 +7707,7 @@ hierarchy: framework,contracts
             .iter()
             .map(|task| {
                 (
-                    task.id.0.clone(),
+                    task.id.as_str().to_string(),
                     task.title.clone(),
                     canonical_task_status_label(task.status).to_string(),
                     canonical_issue_type_label(task.issue_type).to_string(),
@@ -7747,8 +7747,8 @@ hierarchy: framework,contracts
             .iter()
             .map(|dependency| {
                 (
-                    dependency.issue_id.0.clone(),
-                    dependency.depends_on_id.0.clone(),
+                    dependency.issue_id.as_str().to_string(),
+                    dependency.depends_on_id.as_str().to_string(),
                     dependency.dependency_type.clone(),
                 )
             })

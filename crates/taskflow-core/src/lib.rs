@@ -1,3 +1,4 @@
+use nutype::nutype;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -16,13 +17,54 @@ pub mod scheduling;
 /// TaskFlow task command skeletons for future core extraction.
 pub mod task;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TaskId(pub String);
+#[derive(Debug, Error)]
+pub enum TaskflowCoreError {
+    #[error("empty task identifier is not allowed")]
+    EmptyTaskId,
+}
+
+#[nutype(
+    sanitize(trim),
+    validate(not_empty),
+    derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Hash,
+        Serialize,
+        Deserialize,
+        AsRef,
+        Display
+    )
+)]
+struct ValidatedTaskId(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, derive_more::Display)]
+#[serde(transparent)]
+#[display("{}", _0)]
+pub struct TaskId(ValidatedTaskId);
 
 impl TaskId {
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        Self::try_new(value).expect("task id should be non-empty")
+    }
+
+    pub fn try_new(value: impl Into<String>) -> Result<Self, TaskflowCoreError> {
+        ValidatedTaskId::try_new(value.into())
+            .map(Self)
+            .map_err(|_| TaskflowCoreError::EmptyTaskId)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.0.into_inner()
     }
 }
 
@@ -123,19 +165,9 @@ impl Timestamp {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum TaskflowCoreError {
-    #[error("empty task identifier is not allowed")]
-    EmptyTaskId,
-}
-
 #[must_use]
 pub fn validate_task_id(id: &TaskId) -> Result<(), TaskflowCoreError> {
-    if id.0.trim().is_empty() {
-        Err(TaskflowCoreError::EmptyTaskId)
-    } else {
-        Ok(())
-    }
+    TaskId::try_new(id.as_str()).map(|_| ())
 }
 
 #[cfg(test)]
@@ -181,7 +213,17 @@ mod tests {
 
     #[test]
     fn empty_task_id_is_rejected() {
-        let id = TaskId::new("   ");
-        assert!(validate_task_id(&id).is_err());
+        assert!(TaskId::try_new("   ").is_err());
+    }
+
+    #[test]
+    fn task_id_serializes_as_public_json_string() {
+        let id = TaskId::new(" vida-rf1 ");
+        assert_eq!(id.as_str(), "vida-rf1");
+        let json = serde_json::to_string(&id).expect("task id should serialize");
+        assert_eq!(json, "\"vida-rf1\"");
+        let restored: TaskId = serde_json::from_str(&json).expect("task id should deserialize");
+        assert_eq!(restored.as_str(), "vida-rf1");
+        assert!(validate_task_id(&restored).is_ok());
     }
 }

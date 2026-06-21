@@ -101,12 +101,16 @@ impl StateStore {
             snapshot_tasks.push(task_record_to_canonical_snapshot_row(&task)?);
         }
 
-        snapshot_tasks.sort_by(|left, right| left.id.0.cmp(&right.id.0));
+        snapshot_tasks.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
         snapshot_dependencies.sort_by(|left, right| {
             left.issue_id
-                .0
-                .cmp(&right.issue_id.0)
-                .then_with(|| left.depends_on_id.0.cmp(&right.depends_on_id.0))
+                .as_str()
+                .cmp(right.issue_id.as_str())
+                .then_with(|| {
+                    left.depends_on_id
+                        .as_str()
+                        .cmp(right.depends_on_id.as_str())
+                })
                 .then_with(|| left.dependency_type.cmp(&right.dependency_type))
         });
 
