@@ -21,15 +21,16 @@ pub const PARALLEL_BLOCKER_ORDER_BUCKET_MISMATCH_OR_MISSING: &str =
 pub const PARALLEL_BLOCKER_CONFLICT_DOMAIN_COLLISION: &str = "conflict_domain_collision";
 pub const PARALLEL_BLOCKER_MISSING_CONFLICT_DOMAIN: &str = "missing_conflict_domain";
 pub const PARALLEL_BLOCKER_PARALLEL_GROUP_MISMATCH: &str = "parallel_group_mismatch";
+pub const PARALLEL_BLOCKER_OWNED_PATH_COLLISION: &str = "owned_path_collision";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParallelSafetyInput<'a> {
     pub task_id: &'a str,
     pub execution_mode: Option<&'a str>,
     pub order_bucket: Option<&'a str>,
     pub parallel_group: Option<&'a str>,
     pub conflict_domain: Option<&'a str>,
-    pub has_owned_paths: bool,
+    pub owned_paths: Vec<&'a str>,
 }
 
 pub fn parallel_blockers_against_current(
@@ -50,12 +51,17 @@ pub fn parallel_blockers_against_current(
     if current.execution_mode != Some("parallel_safe") {
         blockers.push(PARALLEL_BLOCKER_CURRENT_EXECUTION_MODE_NOT_PARALLEL_SAFE.to_string());
     }
-    if candidate.execution_mode == Some("parallel_safe") && !candidate.has_owned_paths {
+    let candidate_owned_paths = normalized_owned_paths(&candidate.owned_paths);
+    let current_owned_paths = normalized_owned_paths(&current.owned_paths);
+    if candidate.execution_mode == Some("parallel_safe") && candidate_owned_paths.is_empty() {
         blockers.push(PARALLEL_BLOCKER_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION.to_string());
     }
-    if current.execution_mode == Some("parallel_safe") && !current.has_owned_paths {
+    if current.execution_mode == Some("parallel_safe") && current_owned_paths.is_empty() {
         blockers
             .push(PARALLEL_BLOCKER_CURRENT_MISSING_OWNED_PATHS_FOR_PARALLEL_EXECUTION.to_string());
+    }
+    if owned_paths_overlap(&candidate_owned_paths, &current_owned_paths) {
+        blockers.push(PARALLEL_BLOCKER_OWNED_PATH_COLLISION.to_string());
     }
 
     match (candidate.order_bucket, current.order_bucket) {
@@ -76,6 +82,19 @@ pub fn parallel_blockers_against_current(
     }
 
     blockers
+}
+
+fn normalized_owned_paths<'a>(owned_paths: &'a [&'a str]) -> Vec<&'a str> {
+    owned_paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .collect()
+}
+
+fn owned_paths_overlap(left: &[&str], right: &[&str]) -> bool {
+    left.iter()
+        .any(|left_path| right.iter().any(|right_path| left_path == right_path))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,7 +272,7 @@ mod tests {
         order_bucket: Option<&'static str>,
         parallel_group: Option<&'static str>,
         conflict_domain: Option<&'static str>,
-        has_owned_paths: bool,
+        owned_paths: &'static [&'static str],
     ) -> ParallelSafetyInput<'static> {
         ParallelSafetyInput {
             task_id,
@@ -261,7 +280,7 @@ mod tests {
             order_bucket,
             parallel_group,
             conflict_domain,
-            has_owned_paths,
+            owned_paths: owned_paths.to_vec(),
         }
     }
 
@@ -308,7 +327,7 @@ mod tests {
                 Some("wave-a"),
                 Some("writers"),
                 Some("shared-domain"),
-                false,
+                &[],
             ),
             Some(parallel_input(
                 "current",
@@ -316,7 +335,7 @@ mod tests {
                 Some("wave-b"),
                 Some("readers"),
                 Some("shared-domain"),
-                false,
+                &[],
             )),
         );
 
@@ -330,6 +349,30 @@ mod tests {
                 PARALLEL_BLOCKER_PARALLEL_GROUP_MISMATCH,
             ]
         );
+    }
+
+    #[test]
+    fn parallel_blockers_against_current_rejects_overlapping_owned_paths() {
+        let blockers = parallel_blockers_against_current(
+            parallel_input(
+                "candidate",
+                Some("parallel_safe"),
+                Some("wave-a"),
+                Some("writers"),
+                Some("candidate-domain"),
+                &["crates/shared/src/lib.rs"],
+            ),
+            Some(parallel_input(
+                "current",
+                Some("parallel_safe"),
+                Some("wave-a"),
+                Some("writers"),
+                Some("current-domain"),
+                &[" crates/shared/src/lib.rs "],
+            )),
+        );
+
+        assert_eq!(blockers, vec![PARALLEL_BLOCKER_OWNED_PATH_COLLISION]);
     }
 
     #[test]

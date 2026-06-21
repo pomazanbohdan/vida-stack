@@ -199,13 +199,6 @@ impl StateStore {
         blockers
     }
 
-    fn task_has_owned_paths(task: &TaskRecord) -> bool {
-        task.planner_metadata
-            .owned_paths
-            .iter()
-            .any(|path| !path.trim().is_empty())
-    }
-
     fn parallel_safety_input(task: &TaskRecord) -> ParallelSafetyInput<'_> {
         ParallelSafetyInput {
             task_id: task.id.as_str(),
@@ -213,7 +206,12 @@ impl StateStore {
             order_bucket: task.execution_semantics.order_bucket.as_deref(),
             parallel_group: task.execution_semantics.parallel_group.as_deref(),
             conflict_domain: task.execution_semantics.conflict_domain.as_deref(),
-            has_owned_paths: Self::task_has_owned_paths(task),
+            owned_paths: task
+                .planner_metadata
+                .owned_paths
+                .iter()
+                .map(String::as_str)
+                .collect(),
         }
     }
 
@@ -1974,6 +1972,56 @@ mod tests {
             .parallel_candidates_after_current
             .iter()
             .all(|task| task.id != "task-empty-owned-paths"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn scheduling_projection_rejects_parallel_safe_tasks_with_overlapping_owned_paths() {
+        let root = temp_root("task-scheduling-overlapping-owned-paths");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        create_task_with_semantics_and_owned_paths(
+            &store,
+            "task-current",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            Some("writers"),
+            Some("current-domain"),
+            vec!["crates/shared/src/lib.rs".to_string()],
+        )
+        .await;
+        create_task_with_semantics_and_owned_paths(
+            &store,
+            "task-overlapping-owned-path",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            Some("writers"),
+            Some("candidate-domain"),
+            vec![" crates/shared/src/lib.rs ".to_string()],
+        )
+        .await;
+
+        let projection = store
+            .scheduling_projection_scoped(None, Some("task-current"))
+            .await
+            .expect("projection should render");
+        let candidate = projection
+            .ready
+            .iter()
+            .find(|candidate| candidate.task.id == "task-overlapping-owned-path")
+            .expect("overlapping-owned-path task should remain graph-ready");
+
+        assert!(candidate.ready_now);
+        assert!(!candidate.ready_parallel_safe);
+        assert!(candidate
+            .parallel_blockers
+            .iter()
+            .any(|value| value == scheduler_dispatch::PARALLEL_BLOCKER_OWNED_PATH_COLLISION));
+        assert!(projection
+            .parallel_candidates_after_current
+            .iter()
+            .all(|task| task.id != "task-overlapping-owned-path"));
 
         let _ = fs::remove_dir_all(root);
     }
