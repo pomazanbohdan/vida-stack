@@ -1194,13 +1194,13 @@ pub(crate) fn add_taskflow_active_work_truth(
         );
     }
 
-    if let Some(priority_summary) =
-        priority_epic_sequence_summary(summary.clone(), &taskflow_active_candidates)
-    {
-        return priority_summary;
-    }
-
     if summary_active_unit_missing {
+        if let Some(priority_summary) =
+            priority_epic_sequence_summary(summary.clone(), &taskflow_active_candidates)
+        {
+            return priority_summary;
+        }
+
         if let [candidate] = taskflow_active_candidates.as_slice() {
             if let serde_json::Value::Object(object) = &mut summary {
                 object.insert(
@@ -2416,7 +2416,7 @@ mod tests {
     }
 
     #[test]
-    fn taskflow_active_work_truth_overrides_latest_run_graph_outside_first_priority_epic() {
+    fn taskflow_active_work_truth_preserves_latest_run_graph_outside_first_priority_epic() {
         let runtime_summary = serde_json::json!({
             "status": "bound",
             "continuation_allowed": true,
@@ -2461,15 +2461,14 @@ mod tests {
         let summary = add_taskflow_active_work_truth(runtime_summary, taskflow_candidates);
 
         assert_eq!(summary["status"], "bound");
-        assert_eq!(summary["binding_source"], "taskflow_priority_epic_sequence");
+        assert_eq!(summary["binding_source"], "latest_run_graph_status");
+        assert_eq!(summary["active_bounded_unit"]["kind"], "run_graph_task");
         assert_eq!(
             summary["active_bounded_unit"]["task_id"],
-            "todo-runtime-library-validation-builders-receipt-20260621"
+            "runtime-defect-taskflow-priority-epic-binding-20260621"
         );
-        assert_eq!(
-            summary["active_bounded_unit"]["priority_epic_id"],
-            "runtime-library-adoption-epic"
-        );
+        assert_eq!(summary["binding_scope"], "run_graph_latest");
+        assert_eq!(summary["orthogonal_to_taskflow_active_work"], false);
     }
 
     #[test]
