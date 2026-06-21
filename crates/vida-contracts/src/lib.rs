@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const VIDA_CONTRACTS_SCHEMA_VERSION: &str = "vida-contracts-v1";
@@ -206,7 +207,7 @@ pub fn unsupported_operation_problem(operation_id: &str) -> VidaProblem {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct VidaOperationSpec {
     pub operation: VidaOperation,
     pub scope: VidaOperationScope,
@@ -299,14 +300,14 @@ impl VidaOperationSpec {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VidaOperationScope {
     Service,
     Project,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VidaOperationPosture {
     ReadOnly,
@@ -315,7 +316,7 @@ pub enum VidaOperationPosture {
     Admin,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VidaCapabilityScope {
     ReadStatus,
@@ -339,27 +340,27 @@ pub enum VidaCapabilityScope {
     DiagnosticDetail,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct VidaSessionId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct VidaRequestId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct VidaProjectId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct VidaOperation(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct VidaIdempotencyKey(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct VidaApplyToken(pub String);
 
@@ -379,7 +380,7 @@ pub struct VidaPlanRef(pub String);
 #[serde(transparent)]
 pub struct WizardSessionId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum VidaProjectRef {
     ProjectId { project_id: VidaProjectId },
@@ -387,7 +388,7 @@ pub enum VidaProjectRef {
     RootPath { root_path: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VidaClientKind {
     Cli,
@@ -398,7 +399,7 @@ pub enum VidaClientKind {
     Other(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum VidaClaimKind {
     Observe,
@@ -409,7 +410,8 @@ pub enum VidaClaimKind {
     Admin,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct VidaCommandEnvelope {
     pub schema_version: String,
     pub protocol_version: String,
@@ -427,6 +429,42 @@ pub struct VidaCommandEnvelope {
     pub idempotency_key: Option<VidaIdempotencyKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apply_token: Option<VidaApplyToken>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VidaContractParseError {
+    pub path: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for VidaContractParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.path, self.message)
+    }
+}
+
+impl std::error::Error for VidaContractParseError {}
+
+impl VidaContractParseError {
+    fn from_path_error(error: serde_path_to_error::Error<serde_json::Error>) -> Self {
+        Self {
+            path: error.path().to_string(),
+            message: error.inner().to_string(),
+        }
+    }
+}
+
+pub fn parse_command_envelope_json(
+    input: &[u8],
+) -> Result<VidaCommandEnvelope, VidaContractParseError> {
+    let mut deserializer = serde_json::Deserializer::from_slice(input);
+    serde_path_to_error::deserialize(&mut deserializer)
+        .map_err(VidaContractParseError::from_path_error)
+}
+
+pub fn command_envelope_schema_json() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(VidaCommandEnvelope))
+        .expect("VidaCommandEnvelope schema should serialize")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -837,6 +875,50 @@ mod tests {
         assert_fixture_round_trips::<VidaCommandEnvelope>(include_str!(
             "../fixtures/command_envelope.json"
         ));
+    }
+
+    #[test]
+    fn command_envelope_parse_error_reports_field_path() {
+        let malformed = br#"{
+          "schema_version": "vida-contracts-v1",
+          "protocol_version": "vida-command-v1",
+          "operation": "vida.wizard.schema.get",
+          "session_id": 42,
+          "request_id": "request-01",
+          "client_kind": "tui",
+          "payload": {}
+        }"#;
+
+        let error =
+            parse_command_envelope_json(malformed).expect_err("malformed field should fail");
+        assert_eq!(error.path, "session_id");
+        assert!(
+            error.message.contains("invalid type"),
+            "parse message should preserve serde detail: {error}"
+        );
+    }
+
+    #[test]
+    fn command_envelope_schema_includes_packet_boundary_properties() {
+        let schema = command_envelope_schema_json();
+        assert_eq!(schema["title"], "VidaCommandEnvelope");
+        let properties = schema["properties"]
+            .as_object()
+            .expect("schema should expose object properties");
+        for key in [
+            "schema_version",
+            "protocol_version",
+            "operation",
+            "session_id",
+            "request_id",
+            "client_kind",
+            "payload",
+        ] {
+            assert!(
+                properties.contains_key(key),
+                "schema should include `{key}`, got {schema}"
+            );
+        }
     }
 
     #[test]
