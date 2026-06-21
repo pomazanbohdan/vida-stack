@@ -3,7 +3,9 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use wait_timeout::ChildExt;
 
 use crate::DocflowCoreError;
 
@@ -123,28 +125,26 @@ fn bounded_command_output(
         output
     });
 
-    let started = Instant::now();
-    loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| DocflowCoreError::GitStatusIo(error.to_string()))?
-        {
+    match child
+        .wait_timeout(timeout)
+        .map_err(|error| DocflowCoreError::GitStatusIo(error.to_string()))?
+    {
+        Some(status) => {
             let stdout = stdout_reader.join().unwrap_or_default();
             let stderr = stderr_reader.join().unwrap_or_default();
-            return Ok(Output {
+            Ok(Output {
                 status,
                 stdout,
                 stderr,
-            });
+            })
         }
-        if started.elapsed() >= timeout {
+        None => {
             let _ = child.kill();
             let _ = child.wait();
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
-            return Err(DocflowCoreError::GitStatusTimedOut);
+            Err(DocflowCoreError::GitStatusTimedOut)
         }
-        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -160,7 +160,11 @@ fn git_null_config_path() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{SafeGitStatusInput, changed_markdown_paths, markdown_paths_from_status_stdout};
+    use super::{
+        bounded_command_output, changed_markdown_paths, markdown_paths_from_status_stdout,
+        SafeGitStatusInput,
+    };
+    use crate::DocflowCoreError;
     use std::fs;
     use std::process::Command;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -182,6 +186,14 @@ mod tests {
             markdown_paths_from_status_stdout(stdout),
             vec![" lead.md".to_string()]
         );
+    }
+
+    #[test]
+    fn bounded_command_output_times_out_and_kills_child() {
+        let error = bounded_command_output(sleep_command(), Duration::from_millis(25))
+            .expect_err("slow command should time out");
+
+        assert!(matches!(error, DocflowCoreError::GitStatusTimedOut));
     }
 
     #[test]
@@ -252,6 +264,20 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         std::env::temp_dir().join(format!("{label}-{}-{nanos}", std::process::id()))
+    }
+
+    #[cfg(windows)]
+    fn sleep_command() -> Command {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "ping -n 6 127.0.0.1 >NUL"]);
+        command
+    }
+
+    #[cfg(not(windows))]
+    fn sleep_command() -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5"]);
+        command
     }
 
     #[cfg(windows)]
