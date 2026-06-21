@@ -10,6 +10,10 @@ fn escape_toml_basic_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+fn toml_basic_string_literal(value: &str) -> String {
+    toml_edit::value(value).to_string()
+}
+
 fn escape_toml_multiline_basic_string_body(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -222,12 +226,11 @@ fn strip_toml_tables(contents: &str, tables: &[&str]) -> String {
 }
 
 fn toml_basic_string_list(values: &[serde_json::Value]) -> String {
-    values
-        .iter()
-        .filter_map(serde_json::Value::as_str)
-        .map(|value| format!("\"{}\"", escape_toml_basic_string(value)))
-        .collect::<Vec<_>>()
-        .join(", ")
+    let mut array = toml_edit::Array::default();
+    for value in values.iter().filter_map(serde_json::Value::as_str) {
+        array.push(value);
+    }
+    toml_edit::Value::Array(array).to_string()
 }
 
 fn render_shell_environment_policy(policy: Option<&serde_json::Value>) -> Option<String> {
@@ -261,13 +264,13 @@ fn render_shell_environment_policy(policy: Option<&serde_json::Value>) -> Option
         };
         if key == "inherit" {
             if let Some(inherit) = effective_inherit {
-                lines.push(format!("{key} = \"{}\"", escape_toml_basic_string(inherit)));
+                lines.push(format!("{key} = {}", toml_basic_string_literal(inherit)));
             }
             continue;
         }
         match value {
             serde_json::Value::String(text) => {
-                lines.push(format!("{key} = \"{}\"", escape_toml_basic_string(text)))
+                lines.push(format!("{key} = {}", toml_basic_string_literal(text)))
             }
             serde_json::Value::Bool(flag) => lines.push(format!("{key} = {flag}")),
             _ => {}
@@ -287,9 +290,9 @@ fn render_shell_environment_policy(policy: Option<&serde_json::Value>) -> Option
             for key in keys {
                 if let Some(value) = set.get(key).and_then(serde_json::Value::as_str) {
                     lines.push(format!(
-                        "\"{}\" = \"{}\"",
-                        escape_toml_basic_string(key),
-                        escape_toml_basic_string(value)
+                        "{} = {}",
+                        toml_basic_string_literal(key),
+                        toml_basic_string_literal(value)
                     ));
                 }
             }
@@ -417,6 +420,41 @@ fn compose_host_runtime_lane_developer_instructions(
     }
 }
 
+fn patch_host_runtime_agent_template_toml(
+    template: &str,
+    role_id: &str,
+    description: &str,
+    model: &str,
+    reasoning_effort: &str,
+    sandbox_mode: &str,
+) -> Option<String> {
+    let mut document = template.parse::<toml_edit::DocumentMut>().ok()?;
+    {
+        let table = document.as_table_mut();
+        table.insert("description", toml_edit::value(description));
+        table.insert("name", toml_edit::value(role_id));
+        table.insert("model", toml_edit::value(model));
+        table.insert("model_reasoning_effort", toml_edit::value(reasoning_effort));
+        table.insert("sandbox_mode", toml_edit::value(sandbox_mode));
+        for key in [
+            "vida_tier",
+            "vida_rate",
+            "vida_reasoning_band",
+            "vida_default_runtime_role",
+            "vida_runtime_roles",
+            "vida_task_classes",
+        ] {
+            table.remove(key);
+        }
+        table.remove("shell_environment_policy");
+    }
+    let mut rendered = document.to_string();
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    Some(rendered)
+}
+
 fn render_host_runtime_agent_toml(
     _runtime_label: &str,
     row: &serde_json::Value,
@@ -445,24 +483,35 @@ fn render_host_runtime_agent_toml(
         .filter(|value| !value.is_empty())
         .unwrap_or(role_id);
     if let Some(template) = template_contents.filter(|value| !value.trim().is_empty()) {
-        let patched = prepend_toml_scalar_line(
+        let patched = patch_host_runtime_agent_template_toml(
             template,
-            "description",
-            &format!("\"{}\"", escape_toml_basic_string(description)),
-        );
-        let patched = prepend_toml_scalar_line(
-            &patched,
-            "name",
-            &format!("\"{}\"", escape_toml_basic_string(role_id)),
-        );
-        let patched = set_toml_scalar_line(&patched, "model", &format!("\"{model}\""));
-        let patched = set_toml_scalar_line(
-            &patched,
-            "model_reasoning_effort",
-            &format!("\"{reasoning_effort}\""),
-        );
-        let patched =
-            set_toml_scalar_line(&patched, "sandbox_mode", &format!("\"{sandbox_mode}\""));
+            role_id,
+            description,
+            model,
+            reasoning_effort,
+            sandbox_mode,
+        )
+        .unwrap_or_else(|| {
+            let patched = prepend_toml_scalar_line(
+                template,
+                "description",
+                &toml_basic_string_literal(description),
+            );
+            let patched =
+                prepend_toml_scalar_line(&patched, "name", &toml_basic_string_literal(role_id));
+            let patched =
+                set_toml_scalar_line(&patched, "model", &toml_basic_string_literal(model));
+            let patched = set_toml_scalar_line(
+                &patched,
+                "model_reasoning_effort",
+                &toml_basic_string_literal(reasoning_effort),
+            );
+            set_toml_scalar_line(
+                &patched,
+                "sandbox_mode",
+                &toml_basic_string_literal(sandbox_mode),
+            )
+        });
         let template_developer_instructions =
             extract_toml_multiline_string(template, "developer_instructions");
         let patched = if let Some(instructions) = compose_host_runtime_lane_developer_instructions(

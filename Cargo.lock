@@ -8296,6 +8296,7 @@ dependencies = [
  "taskflow-state-surreal",
  "time",
  "tokio",
+ "toml_edit",
  "vida-contracts",
  "vida-test-support",
 ]

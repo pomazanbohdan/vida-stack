@@ -39,6 +39,7 @@ taskflow-state-surreal = { path = "../taskflow-state-surreal" }
 tarpc = { version = "0.37.0", features = ["serde1", "serde-transport-json", "tokio1"] }
 time = { workspace = true }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
+toml_edit = "0.25.12"
 runtime-path-policy = { path = "../runtime-path-policy" }
 vida-contracts = { path = "../vida-contracts" }
 
