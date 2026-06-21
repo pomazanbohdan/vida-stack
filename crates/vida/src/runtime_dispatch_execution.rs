@@ -952,19 +952,29 @@ fn drain_command_output_events(
 }
 
 #[cfg(windows)]
+fn trusted_taskkill_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .map(|system_root| system_root.join("System32").join("taskkill.exe"))
+        .filter(|taskkill| taskkill.is_file())
+}
+
+#[cfg(windows)]
 fn terminate_windows_process_tree(
     child: &mut std::process::Child,
     reason: &str,
 ) -> Result<(), String> {
     let pid = child.id();
-    if let Ok(status) = std::process::Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        if status.success() {
-            return Ok(());
+    if let Some(taskkill) = trusted_taskkill_path() {
+        if let Ok(status) = std::process::Command::new(taskkill)
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            if status.success() {
+                return Ok(());
+            }
         }
     }
 
