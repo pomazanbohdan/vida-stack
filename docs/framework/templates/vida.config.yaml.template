@@ -243,13 +243,11 @@ host_environment:
         platform_overrides:
           windows:
             shell_environment_policy:
-              inherit: all
-              exclude:
-                - "*_KEY"
-                - "*_SECRET"
-                - "*_TOKEN"
-                - "AWS_*"
-                - "AZURE_*"
+              inherit: none
+              set:
+                PATH: "%PATH%"
+                LOCALAPPDATA: "%LOCALAPPDATA%"
+                USERPROFILE: "%USERPROFILE%"
             agent_bootstrap_instructions: |
               VIDA command resolution for Windows Codex App:
               1. Before invoking `vida`, first try `Get-Command vida -ErrorAction SilentlyContinue`.

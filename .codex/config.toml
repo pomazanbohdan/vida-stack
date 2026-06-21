@@ -22,5 +22,9 @@ description = "Level 4 Codex lane for architecture preparation, hard escalation,
 config_file = "agents/architect.toml"
 
 [shell_environment_policy]
-inherit = "all"
-exclude = ["*_KEY", "*_SECRET", "*_TOKEN", "AWS_*", "AZURE_*"]
+inherit = "none"
+
+[shell_environment_policy.set]
+PATH = "%PATH%"
+LOCALAPPDATA = "%LOCALAPPDATA%"
+USERPROFILE = "%USERPROFILE%"
