@@ -9,6 +9,7 @@ pub mod dependencies;
 pub mod graph;
 pub mod handoff;
 pub mod import_export;
+pub mod lifecycle;
 pub mod note;
 pub mod progress;
 pub mod reconcile;
@@ -32,6 +33,7 @@ mod tests {
             "graph",
             "handoff",
             "import_export",
+            "lifecycle",
             "note",
             "progress",
             "reconcile",
@@ -42,6 +44,6 @@ mod tests {
             "verify",
         ];
 
-        assert_eq!(modules.len(), 17);
+        assert_eq!(modules.len(), 18);
     }
 }
