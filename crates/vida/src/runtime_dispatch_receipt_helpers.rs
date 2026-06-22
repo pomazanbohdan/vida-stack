@@ -135,6 +135,66 @@ pub(crate) fn dispatch_summary_has_clean_completed_lane(
     })
 }
 
+pub(crate) fn dispatch_receipt_has_pre_execution_packet_ready(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    expected_run_id: Option<&str>,
+) -> bool {
+    dispatch_fields_have_pre_execution_packet_ready(
+        &receipt.run_id,
+        expected_run_id,
+        &receipt.dispatch_kind,
+        &receipt.dispatch_status,
+        Some(receipt.lane_status.as_str()),
+        receipt.blocker_code.as_deref(),
+        receipt.dispatch_packet_path.as_deref(),
+        receipt.downstream_dispatch_status.as_deref(),
+        &receipt.downstream_dispatch_blockers,
+    )
+}
+
+pub(crate) fn stored_dispatch_has_pre_execution_packet_ready(
+    receipt: &crate::state_store::RunGraphDispatchReceiptStored,
+    expected_run_id: Option<&str>,
+) -> bool {
+    dispatch_fields_have_pre_execution_packet_ready(
+        &receipt.run_id,
+        expected_run_id,
+        &receipt.dispatch_kind,
+        &receipt.dispatch_status,
+        receipt.lane_status.as_deref(),
+        receipt.blocker_code.as_deref(),
+        receipt.dispatch_packet_path.as_deref(),
+        receipt.downstream_dispatch_status.as_deref(),
+        &receipt.downstream_dispatch_blockers,
+    )
+}
+
+fn dispatch_fields_have_pre_execution_packet_ready(
+    run_id: &str,
+    expected_run_id: Option<&str>,
+    dispatch_kind: &str,
+    dispatch_status: &str,
+    lane_status: Option<&str>,
+    blocker_code: Option<&str>,
+    dispatch_packet_path: Option<&str>,
+    downstream_dispatch_status: Option<&str>,
+    downstream_dispatch_blockers: &[String],
+) -> bool {
+    expected_run_id.is_none_or(|expected| run_id == expected)
+        && dispatch_kind == "agent_lane"
+        && dispatch_status == "routed"
+        && blocker_code.is_none_or(|value| value.trim().is_empty())
+        && matches!(
+            lane_status.map(str::trim),
+            Some("lane_open") | Some("lane_running") | Some("packet_ready") | None
+        )
+        && dispatch_packet_path
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && downstream_dispatch_status.is_none()
+        && downstream_dispatch_blockers.is_empty()
+}
+
 pub(crate) fn dispatch_summary_has_active_exception_takeover(
     receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
     expected_run_id: Option<&str>,
@@ -586,6 +646,35 @@ mod tests {
             .push("handoff_pending".to_string());
         assert!(!dispatch_summary_has_clean_completed_lane(
             Some(&summary),
+            Some("run-1")
+        ));
+    }
+
+    #[test]
+    fn pre_execution_packet_ready_requires_routed_agent_lane_and_packet_path() {
+        let mut receipt = receipt_for("run-1");
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_status = "routed".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.blocker_code = None;
+        receipt.dispatch_packet_path = Some("packet.json".to_string());
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_blockers.clear();
+
+        assert!(dispatch_receipt_has_pre_execution_packet_ready(
+            &receipt,
+            Some("run-1")
+        ));
+        assert!(!dispatch_receipt_has_pre_execution_packet_ready(
+            &receipt,
+            Some("other-run")
+        ));
+
+        receipt
+            .downstream_dispatch_blockers
+            .push("handoff_pending".to_string());
+        assert!(!dispatch_receipt_has_pre_execution_packet_ready(
+            &receipt,
             Some("run-1")
         ));
     }

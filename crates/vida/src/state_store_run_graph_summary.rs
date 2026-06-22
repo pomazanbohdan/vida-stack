@@ -145,8 +145,13 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .downstream_dispatch_blockers
             .iter()
             .any(|blocker| blocker == "missing_owned_write_scope");
+    let pre_execution_packet_ready =
+        crate::runtime_dispatch_receipt_helpers::stored_dispatch_has_pre_execution_packet_ready(
+            &receipt, None,
+        );
     let pre_execution_routed_handoff = receipt.dispatch_status == "routed"
         && receipt.blocker_code.as_deref().is_none_or(str::is_empty)
+        && receipt.dispatch_kind == "agent_lane"
         && matches!(
             receipt.lane_status.as_deref(),
             Some("lane_open") | Some("lane_running") | Some("packet_ready") | None
@@ -267,6 +272,28 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.checkpoint_kind = "none".to_string();
         status.status = "blocked".to_string();
         status.recovery_ready = false;
+        return Ok(status);
+    }
+    if pre_execution_packet_ready {
+        if let Some(selected_backend) = receipt
+            .selected_backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            status.selected_backend = selected_backend.to_string();
+        }
+        let dispatch_target = normalize_run_graph_node(&receipt.dispatch_target);
+        status.active_node = dispatch_target.clone();
+        status.next_node = Some(dispatch_target.clone());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = format!("{dispatch_target}_dispatch_ready");
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = format!("awaiting_{dispatch_target}");
+        status.resume_target = format!("dispatch.{dispatch_target}_lane");
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.recovery_ready = true;
         return Ok(status);
     }
     let closure_dispatch_completed = receipt.dispatch_target == "closure"
@@ -3405,6 +3432,16 @@ impl StateStore {
         let status =
             reconcile_run_graph_status_with_closed_task(status, task.as_ref(), receipt.as_ref());
         if missing_execution || missing_routed || missing_governance || missing_resumability {
+            let receipt_reconciled_dispatch_resume = status.recovery_ready
+                && status.resume_target.starts_with("dispatch.")
+                && status.checkpoint_kind == "execution_cursor"
+                && status.next_node.is_some()
+                && status.handoff_state.starts_with("awaiting_")
+                && status.policy_gate == "not_required";
+            if receipt_reconciled_dispatch_resume {
+                status.validate_memory_governance()?;
+                return Ok(status);
+            }
             let checkpoint_kind = if missing_execution {
                 "missing_execution_plan_state"
             } else if missing_routed {
@@ -4955,6 +4992,100 @@ mod tests {
         assert_eq!(loaded.checkpoint_kind, "missing_resumability_capsule");
         assert_eq!(loaded.resume_target, "none");
         assert!(!loaded.recovery_ready);
+    }
+
+    #[test]
+    fn routed_materialized_dispatch_receipt_reconciles_stale_status_to_recovery_ready() {
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-materialized-dispatch".to_string();
+        status.task_id = "task-materialized-dispatch".to_string();
+        status.active_node = "analyst".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analyst_blocked".to_string();
+        status.policy_gate = "stale_missing_run_graph_execution".to_string();
+        status.handoff_state = "blocked_missing_run_graph_execution".to_string();
+        status.context_state = "stale_projection".to_string();
+        status.checkpoint_kind = "missing_execution_plan_state".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+
+        let mut receipt = sample_dispatch_receipt(&status.run_id);
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.dispatch_status = "routed".to_string();
+        receipt.lane_status = "lane_open".to_string();
+        receipt.dispatch_packet_path = Some(
+            "C:/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-packets/run-materialized-dispatch.json"
+                .to_string(),
+        );
+        receipt.dispatch_result_path = None;
+        receipt.blocker_code = None;
+        receipt.downstream_dispatch_target = Some("analyst".to_string());
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_blockers.clear();
+        receipt.downstream_dispatch_status = None;
+
+        let stored_receipt = RunGraphDispatchReceiptStored::from(receipt);
+        let reconciled =
+            reconcile_run_graph_status_with_dispatch_receipt(status, Some(&stored_receipt))
+                .expect("materialized routed receipt should reconcile");
+
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.active_node, "analyst");
+        assert_eq!(reconciled.next_node.as_deref(), Some("analyst"));
+        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.handoff_state, "awaiting_analyst");
+        assert_eq!(reconciled.resume_target, "dispatch.analyst_lane");
+        assert!(reconciled.recovery_ready);
+        crate::taskflow_run_graph::validate_run_graph_resume_gate(&reconciled)
+            .expect("reconciled materialized dispatch should pass resume gate");
+    }
+
+    #[tokio::test]
+    async fn run_graph_status_preserves_receipt_reconciled_materialized_dispatch_resume() {
+        let root = temp_run_graph_root("vida-materialized-dispatch-recovery-ready");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("task-materialized-store", "in_progress"))
+            .await
+            .expect("seed task");
+        let mut receipt = sample_dispatch_receipt("run-materialized-store");
+        receipt.dispatch_target = "coach_implementation_gate".to_string();
+        receipt.dispatch_status = "routed".to_string();
+        receipt.lane_status = "lane_open".to_string();
+        receipt.dispatch_packet_path = Some(root.join("packet.json").display().to_string());
+        receipt.dispatch_result_path = None;
+        receipt.blocker_code = None;
+        receipt.downstream_dispatch_target = Some("coach_implementation_gate".to_string());
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_blockers.clear();
+        receipt.downstream_dispatch_status = None;
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("record receipt");
+
+        let status = store
+            .run_graph_status("run-materialized-store")
+            .await
+            .expect("status should reconcile from receipt");
+
+        assert_eq!(status.status, "ready");
+        assert_eq!(
+            status.next_node.as_deref(),
+            Some("coach_implementation_gate")
+        );
+        assert_eq!(status.handoff_state, "awaiting_coach_implementation_gate");
+        assert_eq!(
+            status.resume_target,
+            "dispatch.coach_implementation_gate_lane"
+        );
+        assert_eq!(status.checkpoint_kind, "execution_cursor");
+        assert!(status.recovery_ready);
+        crate::taskflow_run_graph::validate_run_graph_resume_gate(&status)
+            .expect("state-store reconciled status should pass resume gate");
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn sample_explicit_binding(

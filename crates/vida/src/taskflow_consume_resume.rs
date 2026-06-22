@@ -1048,6 +1048,20 @@ async fn validate_run_graph_resume_state(
     }
 }
 
+async fn validate_run_graph_resume_state_for_dispatch_receipt(
+    store: &super::StateStore,
+    run_id: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<(), String> {
+    if crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_pre_execution_packet_ready(
+        receipt,
+        Some(run_id),
+    ) {
+        return Ok(());
+    }
+    validate_run_graph_resume_state(store, run_id).await
+}
+
 async fn validate_run_graph_resume_state_strict(
     store: &super::StateStore,
     run_id: &str,
@@ -6437,7 +6451,7 @@ pub(crate) async fn resolve_runtime_consumption_resume_inputs(
             }
         };
         validate_receipt_packet_pair(&receipt, &packet, packet_path, "dispatch packet")?;
-        validate_run_graph_resume_state(store, run_id).await?;
+        validate_run_graph_resume_state_for_dispatch_receipt(store, run_id, &receipt).await?;
         receipt.downstream_dispatch_target = None;
         receipt.downstream_dispatch_command = None;
         receipt.downstream_dispatch_note = None;
@@ -8372,14 +8386,14 @@ mod tests {
         status.task_id = run_id.to_string();
         status.active_node = "tester".to_string();
         status.next_node = Some("tester".to_string());
-        status.status = "ready".to_string();
-        status.lifecycle_stage = "tester_active".to_string();
-        status.policy_gate = "single_task_scope_required".to_string();
-        status.handoff_state = "awaiting_tester".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "tester_blocked".to_string();
+        status.policy_gate = "stale_missing_run_graph_execution".to_string();
+        status.handoff_state = "blocked_missing_run_graph_execution".to_string();
         status.context_state = "sealed".to_string();
-        status.checkpoint_kind = "conversation_cursor".to_string();
-        status.resume_target = "dispatch.tester_lane".to_string();
-        status.recovery_ready = true;
+        status.checkpoint_kind = "missing_execution_plan_state".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
         store
             .record_run_graph_status(&status)
             .await
@@ -8436,7 +8450,7 @@ mod tests {
             packet["run_id"] = serde_json::json!(run_id);
             packet["dispatch_target"] = serde_json::json!(target);
             packet["dispatch_status"] = serde_json::json!("routed");
-            packet["lane_status"] = serde_json::json!("active");
+            packet["lane_status"] = serde_json::json!("lane_running");
             packet["role_selection_full"] =
                 serde_json::to_value(&role_selection).expect("role selection should serialize");
             fs::write(packet_path, packet.to_string()).expect("write dispatch packet");
@@ -8445,8 +8459,9 @@ mod tests {
         let mut developer_receipt =
             taskflow_consume_resume_test_receipt("configured_dev_team", "routed");
         developer_receipt.run_id = run_id.to_string();
+        developer_receipt.dispatch_kind = "agent_lane".to_string();
         developer_receipt.dispatch_target = "developer".to_string();
-        developer_receipt.lane_status = "active".to_string();
+        developer_receipt.lane_status = "lane_running".to_string();
         developer_receipt.dispatch_packet_path = Some(developer_packet_path_text.clone());
         developer_receipt.recorded_at = "2026-06-22T00:00:00Z-developer".to_string();
         store
