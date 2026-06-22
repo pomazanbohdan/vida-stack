@@ -10,6 +10,8 @@ pub mod consume;
 pub mod path_policy;
 /// TaskFlow run-graph skeletons for future core extraction.
 pub mod run_graph;
+/// Deterministic run workflow aggregate and state machine.
+pub mod run_workflow;
 /// Shared runtime packet identity and receipt pairing policy.
 pub mod runtime_packet_identity;
 /// TaskFlow scheduling skeletons for future core extraction.
