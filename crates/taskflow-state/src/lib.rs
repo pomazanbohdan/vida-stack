@@ -149,7 +149,7 @@ struct JournalAppendIdempotencyRecord {
     receipt: JournalAppendReceipt,
 }
 
-fn append_request_fingerprint(request: &JournalAppendRequest) -> String {
+pub fn append_request_fingerprint(request: &JournalAppendRequest) -> String {
     format!(
         "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         request.stream_id,
@@ -191,7 +191,7 @@ pub trait OperationalJournal {
     fn idempotency_record(&self, key: &VidaIdempotencyKey) -> Option<&JournalIdempotencyRecord>;
     fn claim_outbox_batch(&mut self, consumer_id: &str, limit: usize) -> Vec<JournalOutboxRecord>;
     fn mark_outbox_succeeded(&mut self, outbox_id: &VidaEventRef)
-    -> Result<(), TaskflowStateError>;
+        -> Result<(), TaskflowStateError>;
     fn mark_outbox_failed(
         &mut self,
         outbox_id: &VidaEventRef,
@@ -619,11 +619,9 @@ mod tests {
             record.receipt_id,
             Some(VidaReceiptId("receipt-1".to_string()))
         );
-        assert!(
-            journal
-                .record_idempotency_started(key, VidaCommandRef("command-1".to_string()))
-                .is_err()
-        );
+        assert!(journal
+            .record_idempotency_started(key, VidaCommandRef("command-1".to_string()))
+            .is_err());
     }
 
     #[test]
