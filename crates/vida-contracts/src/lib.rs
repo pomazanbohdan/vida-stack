@@ -678,6 +678,13 @@ pub fn parse_completion_outcome_json(
                 error.inner().to_string(),
             )
         })?;
+    deserializer.end().map_err(|error| {
+        VidaContractValidationError::new(
+            ".",
+            "completion_outcome_deserialize_failed",
+            error.to_string(),
+        )
+    })?;
     outcome.validate_contract()?;
     Ok(outcome)
 }
@@ -1395,6 +1402,37 @@ mod tests {
         assert_eq!(error.path, ".");
         assert_eq!(error.blocker_code, "completion_outcome_deserialize_failed");
         assert!(error.message.contains("unknown field"));
+    }
+
+    #[test]
+    fn completion_outcome_rejects_trailing_non_whitespace_after_valid_json() {
+        let cases = [
+            br#"{"outcome":"passed"} trailing text"#.as_slice(),
+            br#"{"outcome":"passed"}{"outcome":"failed","code":"contract_violation","retryable":false}"#.as_slice(),
+        ];
+
+        for payload in cases {
+            let error = parse_completion_outcome_json(payload)
+                .expect_err("completion outcome parser must reject trailing data");
+            assert_eq!(error.path, ".");
+            assert_eq!(error.blocker_code, "completion_outcome_deserialize_failed");
+            assert!(
+                error.message.contains("trailing characters"),
+                "unexpected error message: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn completion_outcome_accepts_trailing_whitespace_after_valid_json() {
+        let outcome = parse_completion_outcome_json(
+            br#"{"outcome":"passed"}
+	 "#,
+        )
+        .expect("completion outcome parser should allow JSON whitespace after the value");
+
+        assert!(matches!(outcome, CompletionOutcome::Passed { .. }));
     }
 
     #[test]
