@@ -8,9 +8,10 @@ use taskflow_contracts::{
     VidaProjectionCheckpoint, VidaProjectionRef, VidaReceiptId, VidaStreamRef, VidaStreamVersion,
 };
 use taskflow_state::{
-    append_request_fingerprint, JournalAppendReceipt, JournalAppendRequest, JournalArtifactRecord,
-    JournalEventRecord, JournalIdempotencyRecord, JournalIdempotencyState, JournalOutboxRecord,
-    JournalOutboxState, JournalProjectionFailure, OperationalJournal, TaskflowStateError,
+    JournalAppendReceipt, JournalAppendRequest, JournalArtifactRecord, JournalEventRecord,
+    JournalIdempotencyRecord, JournalIdempotencyState, JournalOutboxRecord, JournalOutboxState,
+    JournalProjectionFailure, OperationalJournal, TaskflowStateError, append_request_fingerprint,
+    validate_append_event_streams,
 };
 
 const SCHEMA_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("journal_schema");
@@ -143,6 +144,7 @@ impl OperationalJournal for RedbOperationalJournal {
         &mut self,
         request: JournalAppendRequest,
     ) -> Result<JournalAppendReceipt, TaskflowStateError> {
+        validate_append_event_streams(&request)?;
         let request_fingerprint = append_request_fingerprint(&request);
         let write = self.db.begin_write().map_err(storage_error)?;
         let result = {
@@ -515,8 +517,8 @@ fn storage_error(error: impl std::fmt::Display) -> TaskflowStateError {
 #[cfg(test)]
 mod tests {
     use super::{
-        RedbOperationalJournal, APPEND_IDEMPOTENCY_TABLE, EVENTS_BY_GLOBAL_CURSOR_TABLE,
-        EVENTS_BY_STREAM_TABLE, OUTBOX_TABLE,
+        APPEND_IDEMPOTENCY_TABLE, EVENTS_BY_GLOBAL_CURSOR_TABLE, EVENTS_BY_STREAM_TABLE,
+        OUTBOX_TABLE, RedbOperationalJournal,
     };
     use redb::{ReadableDatabase, ReadableTable, TableDefinition};
     use taskflow_contracts::{
@@ -584,6 +586,46 @@ mod tests {
                 Err(redb::TableError::TableDoesNotExist(_))
             ),
             "normalized adapter must not keep the scaffold snapshot table"
+        );
+    }
+
+    #[test]
+    fn append_rejects_event_stream_mismatch() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        journal
+            .append(append_request(0, vec![event(1)], Vec::new()))
+            .expect("victim append should pass");
+        let mut malformed = append_request(0, vec![event(2)], Vec::new());
+        malformed.stream_id = VidaStreamRef("attacker-stream".to_string());
+        malformed.idempotency_key = VidaIdempotencyKey("idem-2".to_string());
+
+        let error = journal
+            .append(malformed)
+            .expect_err("mismatched event stream must fail");
+
+        assert_eq!(
+            error,
+            TaskflowStateError::EventStreamMismatch {
+                request_stream_id: "attacker-stream".to_string(),
+                event_stream_id: "stream-1".to_string(),
+                event_id: "event-2".to_string(),
+            }
+        );
+        assert_eq!(
+            journal
+                .load_stream(&VidaStreamRef("stream-1".to_string()))
+                .len(),
+            1,
+            "mismatched append must not inject an event into the victim stream"
+        );
+        assert!(
+            journal
+                .load_stream(&VidaStreamRef("attacker-stream".to_string()))
+                .is_empty(),
+            "mismatched append must not write under the request stream either"
         );
     }
 
