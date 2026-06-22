@@ -138,6 +138,28 @@ pub fn decide_run_graph_transition(
             };
         }
 
+        if receipt.downstream_dispatch_ready
+            && receipt
+                .downstream_dispatch_target
+                .as_deref()
+                .is_some_and(|target| !target.trim().is_empty())
+            && receipt.downstream_dispatch_blockers.is_empty()
+        {
+            let target = receipt.downstream_dispatch_target.clone();
+            return RunGraphTransitionDecision {
+                kind: RunGraphTransitionKind::DownstreamReadyHandoff,
+                admitted: true,
+                active_node: status.active_node.clone(),
+                next_node: target.clone(),
+                resume_target: target
+                    .as_deref()
+                    .map(|target| format!("dispatch.{target}"))
+                    .unwrap_or_else(|| status.resume_target.clone()),
+                blocker_codes: Vec::new(),
+                next_actions: Vec::new(),
+            };
+        }
+
         if receipt.lane_status.as_deref() == Some("lane_completed") {
             return RunGraphTransitionDecision {
                 kind: RunGraphTransitionKind::CompletedLane,
@@ -159,28 +181,6 @@ pub fn decide_run_graph_transition(
                 resume_target: status.resume_target.clone(),
                 blocker_codes: vec!["lane_blocked".to_string()],
                 next_actions: vec!["inspect lane recovery evidence".to_string()],
-            };
-        }
-
-        if receipt.downstream_dispatch_ready
-            && receipt
-                .downstream_dispatch_target
-                .as_deref()
-                .is_some_and(|target| !target.trim().is_empty())
-            && receipt.downstream_dispatch_blockers.is_empty()
-        {
-            let target = receipt.downstream_dispatch_target.clone();
-            return RunGraphTransitionDecision {
-                kind: RunGraphTransitionKind::DownstreamReadyHandoff,
-                admitted: true,
-                active_node: status.active_node.clone(),
-                next_node: target.clone(),
-                resume_target: target
-                    .as_deref()
-                    .map(|target| format!("dispatch.{target}"))
-                    .unwrap_or_else(|| status.resume_target.clone()),
-                blocker_codes: Vec::new(),
-                next_actions: Vec::new(),
             };
         }
     }
@@ -218,8 +218,8 @@ fn is_blocked_lane(lane_status: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DispatchReceiptSnapshot, RunGraphStatusSnapshot, RunGraphTransitionKind,
-        TaskClosureSnapshot, decide_run_graph_transition, default_run_graph_status_fields,
+        decide_run_graph_transition, default_run_graph_status_fields, DispatchReceiptSnapshot,
+        RunGraphStatusSnapshot, RunGraphTransitionKind, TaskClosureSnapshot,
     };
 
     #[test]
@@ -331,6 +331,32 @@ mod tests {
                 dispatch_target: "developer".to_string(),
                 dispatch_status: "executed".to_string(),
                 lane_status: Some("lane_open".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_target: Some("tester".to_string()),
+                downstream_dispatch_blockers: Vec::new(),
+            }),
+            None,
+        );
+
+        assert_eq!(
+            decision.kind,
+            RunGraphTransitionKind::DownstreamReadyHandoff
+        );
+        assert!(decision.admitted);
+        assert_eq!(decision.next_node, Some("tester".to_string()));
+        assert_eq!(decision.resume_target, "dispatch.tester");
+    }
+
+    #[test]
+    fn run_graph_transition_prioritizes_completed_lane_downstream_ready_handoff() {
+        let decision = decide_run_graph_transition(
+            &status_snapshot(),
+            Some(&DispatchReceiptSnapshot {
+                dispatch_target: "developer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_completed".to_string()),
                 supersedes_receipt_id: None,
                 exception_path_receipt_id: None,
                 downstream_dispatch_ready: true,
