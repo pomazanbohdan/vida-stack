@@ -52,6 +52,15 @@ pub struct TaskCreateCommand {
     pub auto_reopened_parents: Vec<TaskAggregateTaskSnapshot>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskReparentCommand {
+    pub moved_tasks: Vec<TaskAggregateTaskSnapshot>,
+    pub from_parent_id: String,
+    pub to_parent_id: String,
+    pub occurred_at: String,
+    pub auto_closed_parents: Vec<TaskAggregateTaskSnapshot>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum TaskAggregateEvent {
@@ -79,6 +88,12 @@ pub enum TaskAggregateEvent {
     TaskCreated {
         task_id: String,
         status: String,
+        occurred_at: String,
+    },
+    TaskReparented {
+        task_id: String,
+        from_parent_id: String,
+        to_parent_id: String,
         occurred_at: String,
     },
 }
@@ -116,6 +131,11 @@ pub enum TaskAggregateMutation {
         status: String,
         updated_at: String,
         closed_at: Option<String>,
+    },
+    ReparentTask {
+        task_id: String,
+        parent_id: Option<String>,
+        updated_at: String,
     },
 }
 
@@ -265,6 +285,62 @@ pub fn plan_create_task(command: TaskCreateCommand) -> TaskMutationPlan {
     }
 }
 
+#[must_use]
+pub fn plan_reparent_tasks(command: TaskReparentCommand) -> TaskMutationPlan {
+    let mut events = Vec::new();
+    let mut mutations = Vec::new();
+    let mut touched_task_ids = Vec::new();
+
+    for task in command.moved_tasks {
+        events.push(TaskAggregateEvent::TaskReparented {
+            task_id: task.id.clone(),
+            from_parent_id: command.from_parent_id.clone(),
+            to_parent_id: command.to_parent_id.clone(),
+            occurred_at: task.updated_at.clone(),
+        });
+        mutations.push(TaskAggregateMutation::ReparentTask {
+            task_id: task.id.clone(),
+            parent_id: task.parent_id,
+            updated_at: task.updated_at,
+        });
+        touched_task_ids.push(task.id);
+    }
+    touched_task_ids.push(command.from_parent_id.clone());
+    touched_task_ids.push(command.to_parent_id);
+
+    for parent in command.auto_closed_parents {
+        let parent_reason = parent.close_reason.unwrap_or_else(|| {
+            format!(
+                "all direct child tasks moved from `{}`",
+                command.from_parent_id
+            )
+        });
+        events.push(TaskAggregateEvent::ParentAutoClosed {
+            task_id: parent.id.clone(),
+            reason: parent_reason.clone(),
+            occurred_at: parent.updated_at.clone(),
+            source_child_id: command.from_parent_id.clone(),
+        });
+        mutations.push(TaskAggregateMutation::AutoCloseParent {
+            task_id: parent.id.clone(),
+            status: "closed".to_string(),
+            updated_at: parent.updated_at.clone(),
+            closed_at: parent.closed_at.unwrap_or(parent.updated_at),
+            close_reason: parent_reason,
+        });
+        touched_task_ids.push(parent.id);
+    }
+
+    touched_task_ids.sort();
+    touched_task_ids.dedup();
+
+    TaskMutationPlan {
+        events,
+        mutations,
+        touched_task_ids,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,5 +468,48 @@ mod tests {
             ]
         );
         assert_eq!(plan.touched_task_ids, vec!["child", "parent"]);
+    }
+
+    #[test]
+    fn task_aggregate_plans_reparent_and_source_parent_auto_close_events() {
+        let mut source_parent =
+            TaskAggregateTaskSnapshot::closed("source", "103", Some("root".to_string()));
+        source_parent.close_reason =
+            Some("all direct child tasks moved from `source` to `target`".to_string());
+
+        let plan = plan_reparent_tasks(TaskReparentCommand {
+            moved_tasks: vec![TaskAggregateTaskSnapshot {
+                id: "child".to_string(),
+                status: "open".to_string(),
+                updated_at: "103".to_string(),
+                closed_at: None,
+                close_reason: None,
+                parent_id: Some("target".to_string()),
+            }],
+            from_parent_id: "source".to_string(),
+            to_parent_id: "target".to_string(),
+            occurred_at: "103".to_string(),
+            auto_closed_parents: vec![source_parent],
+        });
+
+        assert_eq!(
+            plan.events[0],
+            TaskAggregateEvent::TaskReparented {
+                task_id: "child".to_string(),
+                from_parent_id: "source".to_string(),
+                to_parent_id: "target".to_string(),
+                occurred_at: "103".to_string(),
+            }
+        );
+        assert_eq!(
+            plan.events[1],
+            TaskAggregateEvent::ParentAutoClosed {
+                task_id: "source".to_string(),
+                reason: "all direct child tasks moved from `source` to `target`".to_string(),
+                occurred_at: "103".to_string(),
+                source_child_id: "source".to_string(),
+            }
+        );
+        assert_eq!(plan.touched_task_ids, vec!["child", "source", "target"]);
     }
 }

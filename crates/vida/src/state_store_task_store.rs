@@ -11,8 +11,9 @@ use taskflow_authority::task_transition::{
     TaskLifecycleRuntimeEvidence,
 };
 use taskflow_core::task::aggregate::{
-    plan_close_task, plan_create_task, plan_update_task_status, TaskAggregateTaskSnapshot,
-    TaskCloseCommand, TaskCreateCommand, TaskStatusUpdateCommand,
+    plan_close_task, plan_create_task, plan_reparent_tasks, plan_update_task_status,
+    TaskAggregateTaskSnapshot, TaskCloseCommand, TaskCreateCommand, TaskReparentCommand,
+    TaskStatusUpdateCommand,
 };
 use taskflow_core::task::lifecycle::{TaskLifecycleEvent, TaskLifecycleInput, TaskLifecycleStatus};
 
@@ -3293,6 +3294,42 @@ impl StateStore {
                 ),
             });
         }
+
+        let reparent_plan = plan_reparent_tasks(TaskReparentCommand {
+            moved_tasks: moved_tasks
+                .iter()
+                .map(|task| TaskAggregateTaskSnapshot {
+                    id: task.id.clone(),
+                    status: task.status.clone(),
+                    updated_at: task.updated_at.clone(),
+                    closed_at: task.closed_at.clone(),
+                    close_reason: task.close_reason.clone(),
+                    parent_id: Self::parent_id_for_task(task),
+                })
+                .collect(),
+            from_parent_id: from_parent_id.to_string(),
+            to_parent_id: to_parent_id.to_string(),
+            occurred_at: now.clone(),
+            auto_closed_parents: closed_parents
+                .iter()
+                .map(|parent| TaskAggregateTaskSnapshot {
+                    id: parent.id.clone(),
+                    status: parent.status.clone(),
+                    updated_at: parent.updated_at.clone(),
+                    closed_at: parent.closed_at.clone(),
+                    close_reason: parent.close_reason.clone(),
+                    parent_id: Self::parent_id_for_task(parent),
+                })
+                .collect(),
+        });
+        debug_assert_eq!(
+            reparent_plan
+                .touched_task_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            touched_task_ids
+        );
 
         if !dry_run {
             for task in &moved_tasks {
