@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskAggregateTaskSnapshot {
@@ -88,6 +89,7 @@ pub enum TaskAggregateEvent {
     TaskCreated {
         task_id: String,
         status: String,
+        parent_id: Option<String>,
         occurred_at: String,
     },
     TaskReparented {
@@ -144,6 +146,12 @@ pub struct TaskMutationPlan {
     pub events: Vec<TaskAggregateEvent>,
     pub mutations: Vec<TaskAggregateMutation>,
     pub touched_task_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TaskAggregateProjection {
+    pub statuses: BTreeMap<String, String>,
+    pub parent_ids: BTreeMap<String, Option<String>>,
 }
 
 #[must_use]
@@ -254,6 +262,7 @@ pub fn plan_create_task(command: TaskCreateCommand) -> TaskMutationPlan {
     let mut events = vec![TaskAggregateEvent::TaskCreated {
         task_id: task_id.clone(),
         status: command.task.status.clone(),
+        parent_id: command.task.parent_id.clone(),
         occurred_at: command.occurred_at.clone(),
     }];
     let mut mutations = vec![TaskAggregateMutation::CreateTask {
@@ -283,6 +292,52 @@ pub fn plan_create_task(command: TaskCreateCommand) -> TaskMutationPlan {
         mutations,
         touched_task_ids,
     }
+}
+
+#[must_use]
+pub fn replay_task_events(events: &[TaskAggregateEvent]) -> TaskAggregateProjection {
+    let mut projection = TaskAggregateProjection::default();
+    for event in events {
+        match event {
+            TaskAggregateEvent::TaskClosed { task_id, .. }
+            | TaskAggregateEvent::ParentAutoClosed { task_id, .. } => {
+                projection
+                    .statuses
+                    .insert(task_id.clone(), "closed".to_string());
+            }
+            TaskAggregateEvent::TaskStatusUpdated {
+                task_id, status, ..
+            } => {
+                projection.statuses.insert(task_id.clone(), status.clone());
+            }
+            TaskAggregateEvent::ParentAutoReopened { task_id, .. } => {
+                projection
+                    .statuses
+                    .insert(task_id.clone(), "in_progress".to_string());
+            }
+            TaskAggregateEvent::TaskCreated {
+                task_id,
+                status,
+                parent_id,
+                ..
+            } => {
+                projection.statuses.insert(task_id.clone(), status.clone());
+                projection
+                    .parent_ids
+                    .insert(task_id.clone(), parent_id.clone());
+            }
+            TaskAggregateEvent::TaskReparented {
+                task_id,
+                to_parent_id,
+                ..
+            } => {
+                projection
+                    .parent_ids
+                    .insert(task_id.clone(), Some(to_parent_id.clone()));
+            }
+        }
+    }
+    projection
 }
 
 #[must_use]
@@ -458,6 +513,7 @@ mod tests {
                 TaskAggregateEvent::TaskCreated {
                     task_id: "child".to_string(),
                     status: "open".to_string(),
+                    parent_id: Some("parent".to_string()),
                     occurred_at: "102".to_string(),
                 },
                 TaskAggregateEvent::ParentAutoReopened {
@@ -511,5 +567,62 @@ mod tests {
             }
         );
         assert_eq!(plan.touched_task_ids, vec!["child", "source", "target"]);
+    }
+
+    #[test]
+    fn task_aggregate_replays_events_into_status_and_parent_projection() {
+        let create = plan_create_task(TaskCreateCommand {
+            task: TaskAggregateTaskSnapshot {
+                id: "child".to_string(),
+                status: "open".to_string(),
+                updated_at: "100".to_string(),
+                closed_at: None,
+                close_reason: None,
+                parent_id: Some("source".to_string()),
+            },
+            occurred_at: "100".to_string(),
+            auto_reopened_parents: Vec::new(),
+        });
+        let reparent = plan_reparent_tasks(TaskReparentCommand {
+            moved_tasks: vec![TaskAggregateTaskSnapshot {
+                id: "child".to_string(),
+                status: "open".to_string(),
+                updated_at: "101".to_string(),
+                closed_at: None,
+                close_reason: None,
+                parent_id: Some("target".to_string()),
+            }],
+            from_parent_id: "source".to_string(),
+            to_parent_id: "target".to_string(),
+            occurred_at: "101".to_string(),
+            auto_closed_parents: Vec::new(),
+        });
+        let close = plan_close_task(TaskCloseCommand {
+            task: TaskAggregateTaskSnapshot::closed(
+                "child",
+                "102",
+                Some("target".to_string()),
+            ),
+            reason: "done".to_string(),
+            occurred_at: "102".to_string(),
+            auto_closed_parents: Vec::new(),
+        });
+        let events = create
+            .events
+            .into_iter()
+            .chain(reparent.events)
+            .chain(close.events)
+            .collect::<Vec<_>>();
+
+        let projection = replay_task_events(&events);
+
+        assert_eq!(
+            projection.statuses.get("child"),
+            Some(&"closed".to_string())
+        );
+        assert_eq!(
+            projection.parent_ids.get("child"),
+            Some(&Some("target".to_string()))
+        );
     }
 }
