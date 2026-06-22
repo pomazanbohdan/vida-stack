@@ -59,6 +59,26 @@ function Add-PathEntries {
     }
 }
 
+function Resolve-SystemDrive {
+    if (-not [string]::IsNullOrWhiteSpace($env:SystemDrive)) {
+        return $env:SystemDrive.TrimEnd('\')
+    }
+    foreach ($candidate in @($env:SystemRoot, $env:windir, $env:USERPROFILE, $HOME, "C:\Windows")) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        try {
+            $root = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($candidate))
+            if (-not [string]::IsNullOrWhiteSpace($root)) {
+                return $root.TrimEnd('\')
+            }
+        } catch {
+            continue
+        }
+    }
+    return "C:"
+}
+
 function Initialize-WindowsHostEnvironment {
     if (-not (Test-IsWindowsHost)) {
         return
@@ -71,10 +91,12 @@ function Initialize-WindowsHostEnvironment {
     if ([string]::IsNullOrWhiteSpace($windowsRoot)) {
         $windowsRoot = "C:\Windows"
     }
+    $systemDrive = Resolve-SystemDrive
+    Set-EnvIfMissing "SystemDrive" $systemDrive
     Set-EnvIfMissing "SystemRoot" $windowsRoot
     Set-EnvIfMissing "windir" $windowsRoot
     Set-EnvIfMissing "ComSpec" (Join-Path $windowsRoot "System32\cmd.exe")
-    Set-EnvIfMissing "ProgramData" "C:\ProgramData"
+    Set-EnvIfMissing "ProgramData" (Join-Path $systemDrive "ProgramData")
     Set-EnvIfMissing "ProgramFiles" "C:\Program Files"
     Set-EnvIfMissing "ProgramFiles(x86)" "C:\Program Files (x86)"
 

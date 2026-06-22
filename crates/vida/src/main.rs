@@ -348,6 +348,7 @@ use time::format_description::well_known::Rfc3339;
 const CLI_RUNTIME_THREAD_STACK_BYTES: usize = 32 * 1024 * 1024;
 
 fn main() -> ExitCode {
+    bootstrap_windows_host_environment();
     let args = normalized_cli_args();
     match std::thread::Builder::new()
         .name("vida-cli-runtime".to_string())
@@ -378,6 +379,69 @@ fn main() -> ExitCode {
             eprintln!("Failed to start vida CLI runtime thread: {error}");
             ExitCode::from(1)
         }
+    }
+}
+
+fn bootstrap_windows_host_environment() {
+    #[cfg(windows)]
+    bootstrap_windows_host_environment_impl();
+}
+
+#[cfg(windows)]
+fn bootstrap_windows_host_environment_impl() {
+    let system_drive_env = env::var_os("SystemDrive");
+    let system_root_env = env::var_os("SystemRoot");
+    let windir_env = env::var_os("windir");
+    let current_exe = env::current_exe().ok();
+    let current_dir = env::current_dir().ok();
+    let system_drive = windows_system_drive_from_candidates(&[
+        system_drive_env.as_deref(),
+        system_root_env.as_deref(),
+        windir_env.as_deref(),
+        current_exe.as_ref().map(|path| path.as_os_str()),
+        current_dir.as_ref().map(|path| path.as_os_str()),
+    ]);
+
+    if env::var_os("SystemDrive")
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        env::set_var("SystemDrive", &system_drive);
+    }
+    if env::var_os("ProgramData")
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        env::set_var("ProgramData", windows_program_data_path(&system_drive));
+    }
+}
+
+#[cfg(windows)]
+fn windows_system_drive_from_candidates(candidates: &[Option<&std::ffi::OsStr>]) -> String {
+    candidates
+        .iter()
+        .filter_map(|candidate| candidate.and_then(windows_drive_from_path))
+        .next()
+        .unwrap_or_else(|| "C:".to_string())
+}
+
+#[cfg(windows)]
+fn windows_program_data_path(system_drive: &str) -> String {
+    format!("{}\\ProgramData", system_drive.trim_end_matches('\\'))
+}
+
+#[cfg(windows)]
+fn windows_drive_from_path(value: &std::ffi::OsStr) -> Option<String> {
+    use std::path::{Component, Prefix};
+
+    match std::path::Path::new(value).components().next()? {
+        Component::Prefix(prefix) => match prefix.kind() {
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+                Some(format!("{}:", char::from(letter).to_ascii_uppercase()))
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -488,6 +552,19 @@ mod tests {
             .path()
             .join("vida/config/instructions/bundles/framework-memory-source")
             .is_dir());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_host_environment_bootstrap_derives_program_data_from_system_drive() {
+        assert_eq!(
+            windows_system_drive_from_candidates(&[
+                None,
+                Some(std::ffi::OsStr::new("D:\\Windows"))
+            ]),
+            "D:"
+        );
+        assert_eq!(windows_program_data_path("D:"), "D:\\ProgramData");
     }
 
     #[test]

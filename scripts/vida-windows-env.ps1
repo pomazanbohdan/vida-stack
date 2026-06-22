@@ -43,6 +43,26 @@ function Add-VidaPathEntries {
     }
 }
 
+function Resolve-VidaSystemDrive {
+    if (-not [string]::IsNullOrWhiteSpace($env:SystemDrive)) {
+        return $env:SystemDrive.TrimEnd('\')
+    }
+    foreach ($candidate in @($env:SystemRoot, $env:windir, $env:USERPROFILE, $HOME, "C:\Windows")) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        try {
+            $root = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($candidate))
+            if (-not [string]::IsNullOrWhiteSpace($root)) {
+                return $root.TrimEnd('\')
+            }
+        } catch {
+            continue
+        }
+    }
+    return "C:"
+}
+
 function Resolve-VidaUserProfile {
     $userProfile = $env:USERPROFILE
     if (-not [string]::IsNullOrWhiteSpace($userProfile)) {
@@ -163,10 +183,12 @@ function Initialize-VidaWindowsEnvironment {
     if ([string]::IsNullOrWhiteSpace($windowsRoot)) {
         $windowsRoot = "C:\Windows"
     }
+    $systemDrive = Resolve-VidaSystemDrive
+    Set-VidaEnvIfMissing "SystemDrive" $systemDrive
     Set-VidaEnvIfMissing "SystemRoot" $windowsRoot
     Set-VidaEnvIfMissing "windir" $windowsRoot
     Set-VidaEnvIfMissing "ComSpec" (Join-Path $windowsRoot "System32\cmd.exe")
-    Set-VidaEnvIfMissing "ProgramData" "C:\ProgramData"
+    Set-VidaEnvIfMissing "ProgramData" (Join-Path $systemDrive "ProgramData")
     Set-VidaEnvIfMissing "ProgramFiles" "C:\Program Files"
     Set-VidaEnvIfMissing "ProgramFiles(x86)" "C:\Program Files (x86)"
 
