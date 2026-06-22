@@ -11,8 +11,8 @@ use taskflow_authority::task_transition::{
     TaskLifecycleRuntimeEvidence,
 };
 use taskflow_core::task::aggregate::{
-    plan_close_task, plan_update_task_status, TaskAggregateTaskSnapshot, TaskCloseCommand,
-    TaskStatusUpdateCommand,
+    plan_close_task, plan_create_task, plan_update_task_status, TaskAggregateTaskSnapshot,
+    TaskCloseCommand, TaskCreateCommand, TaskStatusUpdateCommand,
 };
 use taskflow_core::task::lifecycle::{TaskLifecycleEvent, TaskLifecycleInput, TaskLifecycleStatus};
 
@@ -2760,8 +2760,44 @@ impl StateStore {
             });
         }
 
-        for parent in reopened_parents {
-            self.persist_task_record(parent).await?;
+        let create_plan = plan_create_task(TaskCreateCommand {
+            task: TaskAggregateTaskSnapshot {
+                id: task.id.clone(),
+                status: task.status.clone(),
+                updated_at: task.updated_at.clone(),
+                closed_at: task.closed_at.clone(),
+                close_reason: task.close_reason.clone(),
+                parent_id: normalized_parent_id.clone(),
+            },
+            occurred_at: task.updated_at.clone(),
+            auto_reopened_parents: reopened_parents
+                .iter()
+                .map(|parent| TaskAggregateTaskSnapshot {
+                    id: parent.id.clone(),
+                    status: parent.status.clone(),
+                    updated_at: parent.updated_at.clone(),
+                    closed_at: parent.closed_at.clone(),
+                    close_reason: parent.close_reason.clone(),
+                    parent_id: Self::parent_id_for_task(parent),
+                })
+                .collect(),
+        });
+        let persisted_task_ids = reopened_parents
+            .iter()
+            .map(|parent| parent.id.clone())
+            .chain(std::iter::once(task.id.clone()))
+            .collect::<BTreeSet<_>>();
+        debug_assert_eq!(
+            create_plan
+                .touched_task_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            persisted_task_ids
+        );
+
+        for parent in &reopened_parents {
+            self.persist_task_record(parent.clone()).await?;
         }
         self.persist_new_task_record(task.clone()).await?;
         Ok(task)

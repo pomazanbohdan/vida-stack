@@ -45,6 +45,13 @@ pub struct TaskStatusUpdateCommand {
     pub auto_reopened_parents: Vec<TaskAggregateTaskSnapshot>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskCreateCommand {
+    pub task: TaskAggregateTaskSnapshot,
+    pub occurred_at: String,
+    pub auto_reopened_parents: Vec<TaskAggregateTaskSnapshot>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum TaskAggregateEvent {
@@ -68,6 +75,11 @@ pub enum TaskAggregateEvent {
         task_id: String,
         occurred_at: String,
         source_child_id: String,
+    },
+    TaskCreated {
+        task_id: String,
+        status: String,
+        occurred_at: String,
     },
 }
 
@@ -98,6 +110,12 @@ pub enum TaskAggregateMutation {
         task_id: String,
         status: String,
         updated_at: String,
+    },
+    CreateTask {
+        task_id: String,
+        status: String,
+        updated_at: String,
+        closed_at: Option<String>,
     },
 }
 
@@ -210,6 +228,43 @@ pub fn plan_update_task_status(command: TaskStatusUpdateCommand) -> TaskMutation
     }
 }
 
+#[must_use]
+pub fn plan_create_task(command: TaskCreateCommand) -> TaskMutationPlan {
+    let task_id = command.task.id;
+    let mut events = vec![TaskAggregateEvent::TaskCreated {
+        task_id: task_id.clone(),
+        status: command.task.status.clone(),
+        occurred_at: command.occurred_at.clone(),
+    }];
+    let mut mutations = vec![TaskAggregateMutation::CreateTask {
+        task_id: task_id.clone(),
+        status: command.task.status,
+        updated_at: command.occurred_at,
+        closed_at: command.task.closed_at,
+    }];
+    let mut touched_task_ids = vec![task_id.clone()];
+
+    for parent in command.auto_reopened_parents {
+        events.push(TaskAggregateEvent::ParentAutoReopened {
+            task_id: parent.id.clone(),
+            occurred_at: parent.updated_at.clone(),
+            source_child_id: task_id.clone(),
+        });
+        mutations.push(TaskAggregateMutation::AutoReopenParent {
+            task_id: parent.id.clone(),
+            status: parent.status,
+            updated_at: parent.updated_at,
+        });
+        touched_task_ids.push(parent.id);
+    }
+
+    TaskMutationPlan {
+        events,
+        mutations,
+        touched_task_ids,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +348,45 @@ mod tests {
                 TaskAggregateEvent::ParentAutoReopened {
                     task_id: "parent".to_string(),
                     occurred_at: "101".to_string(),
+                    source_child_id: "child".to_string(),
+                },
+            ]
+        );
+        assert_eq!(plan.touched_task_ids, vec!["child", "parent"]);
+    }
+
+    #[test]
+    fn task_aggregate_plans_create_task_and_parent_reopen_events() {
+        let mut parent =
+            TaskAggregateTaskSnapshot::closed("parent", "102", Some("root".to_string()));
+        parent.status = "in_progress".to_string();
+        parent.closed_at = None;
+        parent.close_reason = None;
+
+        let plan = plan_create_task(TaskCreateCommand {
+            task: TaskAggregateTaskSnapshot {
+                id: "child".to_string(),
+                status: "open".to_string(),
+                updated_at: "102".to_string(),
+                closed_at: None,
+                close_reason: None,
+                parent_id: Some("parent".to_string()),
+            },
+            occurred_at: "102".to_string(),
+            auto_reopened_parents: vec![parent],
+        });
+
+        assert_eq!(
+            plan.events,
+            vec![
+                TaskAggregateEvent::TaskCreated {
+                    task_id: "child".to_string(),
+                    status: "open".to_string(),
+                    occurred_at: "102".to_string(),
+                },
+                TaskAggregateEvent::ParentAutoReopened {
+                    task_id: "parent".to_string(),
+                    occurred_at: "102".to_string(),
                     source_child_id: "child".to_string(),
                 },
             ]
