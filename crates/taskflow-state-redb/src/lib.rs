@@ -786,8 +786,9 @@ mod tests {
         drop(journal);
 
         let mut reopened = RedbOperationalJournal::open(&path).expect("reopen journal");
-        let loaded =
-            RunWorkflowJournalRepository::new(&mut reopened).load("run-031-redb", "ldr-031");
+        let loaded = RunWorkflowJournalRepository::new(&mut reopened)
+            .load("run-031-redb", "ldr-031")
+            .expect("repository load should pass");
 
         assert_eq!(
             loaded.snapshot_replay_hash(),

@@ -37,6 +37,8 @@ pub enum TaskflowStateError {
     OutboxRecordNotFound(String),
     #[error("state storage error: {0}")]
     Storage(String),
+    #[error("journal payload decode error: {0}")]
+    PayloadDecode(String),
 }
 
 pub trait TaskStore {
@@ -238,12 +240,16 @@ impl<'a, J: OperationalJournal> RunWorkflowJournalRepository<'a, J> {
         Self { journal }
     }
 
-    pub fn load(&self, run_id: &str, task_id: &str) -> RunWorkflowAggregate {
+    pub fn load(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<RunWorkflowAggregate, TaskflowStateError> {
         let stream_id = run_workflow_stream_id(run_id);
         let mut aggregate = RunWorkflowAggregate::new(run_id, task_id);
         for event in self.journal.load_stream(&stream_id) {
             let event: RunWorkflowEvent = serde_json::from_value(event.payload)
-                .expect("run workflow journal payload should deserialize");
+                .map_err(|error| TaskflowStateError::PayloadDecode(error.to_string()))?;
             aggregate = RunWorkflowAggregate::from_snapshot(
                 run_id,
                 task_id,
@@ -251,7 +257,7 @@ impl<'a, J: OperationalJournal> RunWorkflowJournalRepository<'a, J> {
                 aggregate.version + 1,
             );
         }
-        aggregate
+        Ok(aggregate)
     }
 
     pub fn append(
@@ -595,7 +601,8 @@ mod tests {
         DependencyEdge, TaskRecord, VidaAggregateRef, VidaArtifactRef, VidaCommandRef,
         VidaDomainEventEnvelope, VidaEffectIntent, VidaEffectRef, VidaEventCursor, VidaEventRef,
         VidaIdempotencyKey, VidaOperation, VidaProjectionCheckpoint, VidaProjectionRef,
-        VidaReceiptId, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
+        VidaReceiptId, VidaSchemaId, VidaSchemaVersion, VidaStreamRef, VidaStreamVersion,
+        VidaTimestamp,
     };
     use taskflow_core::{
         IssueType, TaskId,
@@ -852,7 +859,9 @@ mod tests {
             receipt.stream_id,
             VidaStreamRef("run-workflow:run-031".to_string())
         );
-        let loaded = RunWorkflowJournalRepository::new(&mut journal).load("run-031", "ldr-031");
+        let loaded = RunWorkflowJournalRepository::new(&mut journal)
+            .load("run-031", "ldr-031")
+            .expect("repository load should pass");
         assert_eq!(
             loaded.state,
             RunWorkflowState::Active {
@@ -882,14 +891,50 @@ mod tests {
                 .expect("repository append should pass");
         }
 
-        let loaded =
-            RunWorkflowJournalRepository::new(&mut journal).load("run-031-hash", "ldr-031");
+        let loaded = RunWorkflowJournalRepository::new(&mut journal)
+            .load("run-031-hash", "ldr-031")
+            .expect("repository load should pass");
 
         assert_eq!(
             loaded.snapshot_replay_hash(),
             aggregate.snapshot_replay_hash()
         );
         assert_eq!(loaded.version, 2);
+    }
+
+    #[test]
+    fn run_workflow_repository_load_fails_closed_on_corrupt_payload() {
+        let mut journal = InMemoryOperationalJournal::default();
+        journal
+            .append(JournalAppendRequest {
+                stream_id: VidaStreamRef("run-workflow:run-031-corrupt".to_string()),
+                expected_stream_version: Some(VidaStreamVersion(0)),
+                command_id: VidaCommandRef("run-workflow:run-031-corrupt:1".to_string()),
+                idempotency_key: VidaIdempotencyKey("run-workflow:run-031-corrupt:1".to_string()),
+                causation_id: None,
+                correlation_id: Some("ldr-031".to_string()),
+                events: vec![VidaDomainEventEnvelope {
+                    schema_id: VidaSchemaId("taskflow.run_workflow.event".to_string()),
+                    event_version: VidaSchemaVersion(1),
+                    event_id: VidaEventRef("run-workflow:run-031-corrupt:1:event".to_string()),
+                    command_id: Some(VidaCommandRef("run-workflow:run-031-corrupt:1".to_string())),
+                    causation_id: None,
+                    stream_id: VidaStreamRef("run-workflow:run-031-corrupt".to_string()),
+                    stream_version: VidaStreamVersion(1),
+                    aggregate_id: VidaAggregateRef("run-031-corrupt".to_string()),
+                    occurred_at: VidaTimestamp("version-1".to_string()),
+                    payload: serde_json::json!({"unexpected": "shape"}),
+                    trace: serde_json::json!({}),
+                }],
+                effect_intents: Vec::new(),
+            })
+            .expect("corrupt test event should append");
+
+        let error = RunWorkflowJournalRepository::new(&mut journal)
+            .load("run-031-corrupt", "ldr-031")
+            .expect_err("corrupt payload must fail closed");
+
+        assert!(matches!(error, TaskflowStateError::PayloadDecode(_)));
     }
 
     fn append_request(
