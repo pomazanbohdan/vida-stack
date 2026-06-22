@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vida.local/schemas/completion-outcome-v2.json",
+  "$id": "https://vida.local/schemas/completion-outcome-v1.json",
   "title": "CompletionOutcome",
-  "description": "Golden schema fixture for the canonical V2 completion outcome contract. The generated schema test asserts that the live schema keeps tagged alternatives and required fields.",
+  "description": "Golden schema fixture for the canonical completion outcome contract. The generated schema test asserts that the live schema keeps tagged alternatives and required fields.",
   "required_alternatives": [
     "passed",
     "blocked",
@@ -16,7 +16,7 @@
     "code",
     "retryable"
   ],
-  "forbidden_legacy_tuple": [
+  "forbidden_wrong_variant_fields": [
     "decision",
     "verdict",
     "status"

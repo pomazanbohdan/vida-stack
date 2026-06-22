@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub const VIDA_CONTRACTS_SCHEMA_VERSION: &str = "vida-contracts-v1";
 pub const VIDA_COMMAND_PROTOCOL_VERSION: &str = "vida-command-v1";
-pub const VIDA_RUNTIME_CONTRACTS_V2_SCHEMA_VERSION: &str = "vida-runtime-contracts-v2";
+pub const VIDA_RUNTIME_CONTRACTS_V1_SCHEMA_VERSION: &str = "vida-runtime-contracts-v1";
 
 pub mod operations {
     pub const SERVICE_HELLO: &str = "vida.service.hello";
@@ -365,15 +365,15 @@ pub struct VidaIdempotencyKey(pub String);
 #[serde(transparent)]
 pub struct VidaApplyToken(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct VidaEventCursor(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct VidaJobRef(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct VidaPlanRef(pub String);
 
@@ -408,6 +408,26 @@ pub struct VidaArtifactRef(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct FlowStepRef(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaSchemaId(pub String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaSchemaVersion(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaStreamVersion(pub u64);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaTimestamp(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaReceiptId(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -451,6 +471,16 @@ pub struct VidaCommandEnvelope {
     pub operation: VidaOperation,
     pub session_id: VidaSessionId,
     pub request_id: VidaRequestId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<VidaCommandRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causation_id: Option<VidaCommandRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_stream_version: Option<VidaStreamVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consistency: Option<VidaConsistencyRequirement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<VidaTimestamp>,
     pub client_kind: VidaClientKind,
     pub project_ref: Option<VidaProjectRef>,
     pub claim_kind: Option<VidaClaimKind>,
@@ -685,6 +715,249 @@ pub fn parse_completion_outcome_json(
 pub fn completion_outcome_schema_json() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(CompletionOutcome))
         .expect("CompletionOutcome schema should serialize")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VidaConsistencyRequirement {
+    Strong,
+    Eventual,
+    Snapshot(String),
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaDomainEventEnvelope {
+    pub schema_id: VidaSchemaId,
+    pub event_version: VidaSchemaVersion,
+    pub event_id: VidaEventRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<VidaCommandRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causation_id: Option<VidaCommandRef>,
+    pub stream_id: VidaStreamRef,
+    pub stream_version: VidaStreamVersion,
+    pub aggregate_id: VidaAggregateRef,
+    pub occurred_at: VidaTimestamp,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+    #[serde(default)]
+    pub trace: serde_json::Value,
+}
+
+impl VidaDomainEventEnvelope {
+    pub fn validate_known_version(
+        &self,
+        registry: &VidaSchemaRegistrySnapshot,
+    ) -> Result<(), VidaContractValidationError> {
+        let Some(entry) = registry.event_schema(&self.schema_id) else {
+            return Err(VidaContractValidationError::new(
+                "$.schema_id",
+                "event_schema_id_unknown",
+                format!("event schema id `{}` is not registered", self.schema_id.0),
+            ));
+        };
+        if !entry.versions.contains(&self.event_version) {
+            return Err(VidaContractValidationError::new(
+                "$.event_version",
+                "event_schema_version_unknown",
+                format!(
+                    "event schema `{}` does not register version {}",
+                    self.schema_id.0, self.event_version.0
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaPlan {
+    pub plan_id: VidaPlanRef,
+    pub command_id: VidaCommandRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_stream_version: Option<VidaStreamVersion>,
+    #[serde(default)]
+    pub steps: Vec<FlowStepRef>,
+    #[serde(default)]
+    pub effects: Vec<VidaEffectIntent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaApplyRequest {
+    pub request_id: VidaRequestId,
+    pub command: VidaCommandEnvelope,
+    pub plan: VidaPlan,
+    pub idempotency_key: VidaIdempotencyKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaEffectIntent {
+    pub effect_id: VidaEffectRef,
+    pub operation: VidaOperation,
+    pub command_id: VidaCommandRef,
+    pub stream_id: VidaStreamRef,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaProjectionCheckpoint {
+    pub projection_id: VidaProjectionRef,
+    pub stream_id: VidaStreamRef,
+    pub event_cursor: VidaEventCursor,
+    pub stream_version: VidaStreamVersion,
+    pub updated_at: VidaTimestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaReceipt {
+    pub receipt_id: VidaReceiptId,
+    pub command_id: VidaCommandRef,
+    #[serde(default)]
+    pub events: Vec<VidaEventRef>,
+    #[serde(default)]
+    pub effects: Vec<VidaEffectRef>,
+    #[serde(default)]
+    pub projection_checkpoints: Vec<VidaProjectionCheckpoint>,
+    pub state_root: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaSchemaRef {
+    pub schema_id: VidaSchemaId,
+    pub version: VidaSchemaVersion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaSchemaRegistryEntry {
+    pub schema_id: VidaSchemaId,
+    pub kind: VidaSchemaKind,
+    pub versions: Vec<VidaSchemaVersion>,
+    pub latest_version: VidaSchemaVersion,
+    pub artifact_ref: VidaArtifactRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VidaSchemaKind {
+    Command,
+    Event,
+    Plan,
+    Receipt,
+    Effect,
+    Projection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaSchemaRegistrySnapshot {
+    pub schema_version: String,
+    pub entries: Vec<VidaSchemaRegistryEntry>,
+}
+
+impl VidaSchemaRegistrySnapshot {
+    pub fn event_schema(&self, schema_id: &VidaSchemaId) -> Option<&VidaSchemaRegistryEntry> {
+        self.entries
+            .iter()
+            .find(|entry| entry.kind == VidaSchemaKind::Event && entry.schema_id == *schema_id)
+    }
+}
+
+pub fn vida_runtime_schema_registry_snapshot() -> VidaSchemaRegistrySnapshot {
+    VidaSchemaRegistrySnapshot {
+        schema_version: VIDA_RUNTIME_CONTRACTS_V1_SCHEMA_VERSION.to_string(),
+        entries: vec![
+            VidaSchemaRegistryEntry {
+                schema_id: VidaSchemaId("vida.command_envelope".to_string()),
+                kind: VidaSchemaKind::Command,
+                versions: vec![VidaSchemaVersion(1)],
+                latest_version: VidaSchemaVersion(1),
+                artifact_ref: VidaArtifactRef("schema://vida.command_envelope/v1".to_string()),
+            },
+            VidaSchemaRegistryEntry {
+                schema_id: VidaSchemaId("vida.domain_event".to_string()),
+                kind: VidaSchemaKind::Event,
+                versions: vec![VidaSchemaVersion(1)],
+                latest_version: VidaSchemaVersion(1),
+                artifact_ref: VidaArtifactRef("schema://vida.domain_event/v1".to_string()),
+            },
+            VidaSchemaRegistryEntry {
+                schema_id: VidaSchemaId("vida.plan".to_string()),
+                kind: VidaSchemaKind::Plan,
+                versions: vec![VidaSchemaVersion(1)],
+                latest_version: VidaSchemaVersion(1),
+                artifact_ref: VidaArtifactRef("schema://vida.plan/v1".to_string()),
+            },
+            VidaSchemaRegistryEntry {
+                schema_id: VidaSchemaId("vida.receipt".to_string()),
+                kind: VidaSchemaKind::Receipt,
+                versions: vec![VidaSchemaVersion(1)],
+                latest_version: VidaSchemaVersion(1),
+                artifact_ref: VidaArtifactRef("schema://vida.receipt/v1".to_string()),
+            },
+        ],
+    }
+}
+
+pub fn runtime_schema_registry_snapshot_json() -> serde_json::Value {
+    serde_json::to_value(vida_runtime_schema_registry_snapshot())
+        .expect("runtime schema registry snapshot should serialize")
+}
+
+pub fn runtime_envelope_schema_bundle_json() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": VIDA_RUNTIME_CONTRACTS_V1_SCHEMA_VERSION,
+        "command_envelope": command_envelope_schema_json(),
+        "domain_event_envelope": schemars::schema_for!(VidaDomainEventEnvelope),
+        "plan": schemars::schema_for!(VidaPlan),
+        "apply_request": schemars::schema_for!(VidaApplyRequest),
+        "effect_intent": schemars::schema_for!(VidaEffectIntent),
+        "projection_checkpoint": schemars::schema_for!(VidaProjectionCheckpoint),
+        "receipt": schemars::schema_for!(VidaReceipt),
+        "registry_snapshot": runtime_schema_registry_snapshot_json()
+    })
+}
+
+pub fn validate_domain_event(
+    event: &VidaDomainEventEnvelope,
+    registry: &VidaSchemaRegistrySnapshot,
+) -> Result<(), VidaContractValidationError> {
+    event.validate_known_version(registry)?;
+    let Some(entry) = registry.event_schema(&event.schema_id) else {
+        return Err(VidaContractValidationError::new(
+            "$.schema_id",
+            "event_schema_id_unknown",
+            format!("event schema id `{}` is not registered", event.schema_id.0),
+        ));
+    };
+    if event.event_version != entry.latest_version {
+        return Err(VidaContractValidationError::new(
+            "$.event_version",
+            "event_schema_revision_not_latest",
+            format!(
+                "event schema `{}` must use latest revision {}",
+                event.schema_id.0, entry.latest_version.0
+            ),
+        ));
+    }
+    Ok(())
+}
+
+pub fn trace_links_are_conformant(
+    command: &VidaCommandEnvelope,
+    event: &VidaDomainEventEnvelope,
+    receipt: &VidaReceipt,
+) -> bool {
+    let Some(command_id) = &command.command_id else {
+        return false;
+    };
+    event.command_id.as_ref() == Some(command_id)
+        && event.causation_id.as_ref() == command.causation_id.as_ref().or(Some(command_id))
+        && receipt.command_id == *command_id
+        && receipt
+            .events
+            .iter()
+            .any(|event_id| event_id == &event.event_id)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1170,6 +1443,11 @@ mod tests {
             "operation",
             "session_id",
             "request_id",
+            "command_id",
+            "causation_id",
+            "expected_stream_version",
+            "consistency",
+            "deadline",
             "client_kind",
             "payload",
         ] {
@@ -1178,6 +1456,101 @@ mod tests {
                 "schema should include `{key}`, got {schema}"
             );
         }
+    }
+
+    #[test]
+    fn runtime_schema_registry_snapshot_matches_fixture() {
+        let fixture: VidaSchemaRegistrySnapshot = serde_json::from_str(include_str!(
+            "../fixtures/runtime_schema_registry_snapshot.json"
+        ))
+        .expect("registry snapshot fixture should deserialize");
+        assert_eq!(fixture, vida_runtime_schema_registry_snapshot());
+
+        let bundle = runtime_envelope_schema_bundle_json();
+        for key in [
+            "command_envelope",
+            "domain_event_envelope",
+            "plan",
+            "apply_request",
+            "receipt",
+            "registry_snapshot",
+        ] {
+            assert!(bundle.get(key).is_some(), "bundle should include `{key}`");
+        }
+    }
+
+    #[test]
+    fn event_replay_accepts_v1_schema() {
+        let registry = vida_runtime_schema_registry_snapshot();
+        let event: VidaDomainEventEnvelope =
+            serde_json::from_str(include_str!("../fixtures/domain_event_v1.json"))
+                .expect("event fixture should deserialize");
+
+        validate_domain_event(&event, &registry).expect("event should be registered");
+        assert_eq!(event.event_version, VidaSchemaVersion(1));
+    }
+
+    #[test]
+    fn event_replay_rejects_unknown_schema_revision() {
+        let registry = vida_runtime_schema_registry_snapshot();
+        let mut future_event: VidaDomainEventEnvelope =
+            serde_json::from_str(include_str!("../fixtures/domain_event_v1.json"))
+                .expect("event fixture should deserialize");
+        future_event.event_version = VidaSchemaVersion(99);
+
+        let error = future_event
+            .validate_known_version(&registry)
+            .expect_err("unknown event schema revision must fail closed");
+        assert_eq!(error.path, "$.event_version");
+        assert_eq!(error.blocker_code, "event_schema_version_unknown");
+    }
+
+    #[test]
+    fn trace_link_conformance_requires_command_event_receipt_chain() {
+        let command: VidaCommandEnvelope = serde_json::from_value(serde_json::json!({
+            "schema_version": "vida-contracts-v1",
+            "protocol_version": "vida-command-v1",
+            "operation": "vida.wizard.schema.get",
+            "session_id": "session-ldr-011",
+            "request_id": "request-ldr-011",
+            "command_id": "command-ldr-011-001",
+            "causation_id": "command-ldr-011-001",
+            "expected_stream_version": 1,
+            "consistency": "strong",
+            "deadline": "2026-06-22T08:00:00Z",
+            "client_kind": "tui",
+            "payload": {"task_id": "ldr-011"}
+        }))
+        .expect("command should deserialize");
+        let event: VidaDomainEventEnvelope =
+            serde_json::from_str(include_str!("../fixtures/domain_event_v1.json"))
+                .expect("event fixture should deserialize");
+        let receipt = VidaReceipt {
+            receipt_id: VidaReceiptId("receipt-ldr-011-001".to_string()),
+            command_id: VidaCommandRef("command-ldr-011-001".to_string()),
+            events: vec![VidaEventRef("event-ldr-011-001".to_string())],
+            effects: vec![VidaEffectRef("effect-ldr-011-001".to_string())],
+            projection_checkpoints: vec![VidaProjectionCheckpoint {
+                projection_id: VidaProjectionRef("projection-ldr-011".to_string()),
+                stream_id: VidaStreamRef("stream-ldr-011".to_string()),
+                event_cursor: VidaEventCursor("cursor-v1".to_string()),
+                stream_version: VidaStreamVersion(1),
+                updated_at: VidaTimestamp("2026-06-22T07:42:00Z".to_string()),
+            }],
+            state_root: "state-root-ldr-011".to_string(),
+        };
+
+        assert!(trace_links_are_conformant(&command, &event, &receipt));
+
+        let broken_receipt = VidaReceipt {
+            events: Vec::new(),
+            ..receipt
+        };
+        assert!(!trace_links_are_conformant(
+            &command,
+            &event,
+            &broken_receipt
+        ));
     }
 
     #[test]
@@ -1384,7 +1757,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_outcome_passed_rejects_legacy_blocker_field_with_exact_path() {
+    fn completion_outcome_passed_rejects_wrong_variant_blocker_field_with_exact_path() {
         let payload = br#"{
             "outcome": "passed",
             "blockers": [{"code": "should_not_exist"}]

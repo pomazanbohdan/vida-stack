@@ -28,9 +28,15 @@ pub use status_code::{
 };
 pub use vida_contracts::{
     CompletionBlocker, CompletionFailureCode, CompletionOutcome, FlowStepRef, VidaAggregateRef,
-    VidaArtifactRef, VidaCommandRef, VidaContractValidationError, VidaEffectRef, VidaEventRef,
-    VidaProjectionRef, VidaStreamRef, completion_outcome_schema_json,
-    parse_completion_outcome_json,
+    VidaApplyRequest, VidaArtifactRef, VidaCommandEnvelope, VidaCommandRef,
+    VidaConsistencyRequirement, VidaContractValidationError, VidaDomainEventEnvelope,
+    VidaEffectIntent, VidaEffectRef, VidaEventCursor, VidaEventRef, VidaPlan, VidaPlanRef,
+    VidaProjectionCheckpoint, VidaProjectionRef, VidaReceipt, VidaReceiptId, VidaSchemaId,
+    VidaSchemaKind, VidaSchemaRef, VidaSchemaRegistryEntry, VidaSchemaRegistrySnapshot,
+    VidaSchemaVersion, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
+    completion_outcome_schema_json, parse_completion_outcome_json,
+    runtime_envelope_schema_bundle_json, runtime_schema_registry_snapshot_json,
+    trace_links_are_conformant, validate_domain_event, vida_runtime_schema_registry_snapshot,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

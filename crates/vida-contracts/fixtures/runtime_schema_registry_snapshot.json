@@ -1,0 +1,33 @@
+{
+  "schema_version": "vida-runtime-contracts-v1",
+  "entries": [
+    {
+      "schema_id": "vida.command_envelope",
+      "kind": "command",
+      "versions": [1],
+      "latest_version": 1,
+      "artifact_ref": "schema://vida.command_envelope/v1"
+    },
+    {
+      "schema_id": "vida.domain_event",
+      "kind": "event",
+      "versions": [1],
+      "latest_version": 1,
+      "artifact_ref": "schema://vida.domain_event/v1"
+    },
+    {
+      "schema_id": "vida.plan",
+      "kind": "plan",
+      "versions": [1],
+      "latest_version": 1,
+      "artifact_ref": "schema://vida.plan/v1"
+    },
+    {
+      "schema_id": "vida.receipt",
+      "kind": "receipt",
+      "versions": [1],
+      "latest_version": 1,
+      "artifact_ref": "schema://vida.receipt/v1"
+    }
+  ]
+}
