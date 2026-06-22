@@ -56,6 +56,10 @@ Companion rule:
     - generated LDRK `ldr-003` current-to-target command tree
 21. [ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md](ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md)
     - generated LDRK `ldr-003` top-ten operator workflow walkthrough
+22. [local-durable-runtime-kernel-architecture-and-migration-law.md](local-durable-runtime-kernel-architecture-and-migration-law.md)
+    - accepted LDRK `ldr-004` architecture and migration law
+23. [../decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md](../decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md)
+    - accepted LDRK `ldr-004` architecture decision record
 
 ## Detailed Catalog Companions
 

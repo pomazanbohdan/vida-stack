@@ -156,6 +156,12 @@ Companion rule:
 35. [ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md](ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md)
     Config families: generated LDRK `ldr-003` top-ten operator workflow migration walkthrough and host-bridge structured completion payload example
     Registered path: `docs/product/spec/ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md`
+36. [local-durable-runtime-kernel-architecture-and-migration-law.md](local-durable-runtime-kernel-architecture-and-migration-law.md)
+    Config families: accepted LDRK `ldr-004` event journal authority, projection semantics, command pipeline, aggregate boundaries, consistency levels, effect lifecycle, adapter boundaries, migration phase gates, and state classification law
+    Registered path: `docs/product/spec/local-durable-runtime-kernel-architecture-and-migration-law.md`
+37. [../decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md](../decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md)
+    Config families: accepted LDRK `ldr-004` ADR for event journal mutation truth, no-dual-authority cutover, storage-neutral durable engine ports, owner boundaries, migration gates, and rejected alternatives
+    Registered path: `docs/product/decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md`
 30. [operational-state-and-synchronization-model.md](operational-state-and-synchronization-model.md)
     Config families: DB-first operational state, filesystem projection, Git lineage, synchronization law, conflict handling, and reactive domain routing
 31. [multi-orchestrator-session-ownership-claims-contract.md](multi-orchestrator-session-ownership-claims-contract.md)
