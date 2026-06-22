@@ -42,6 +42,66 @@ struct RedbAppendIdempotencyRecord {
     receipt: JournalAppendReceipt,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedbJournalHealth {
+    pub schema_version: String,
+    pub stream_event_count: usize,
+    pub global_event_count: usize,
+    pub append_idempotency_count: usize,
+    pub idempotency_count: usize,
+    pub outbox_pending_count: usize,
+    pub outbox_claimed_count: usize,
+    pub outbox_succeeded_count: usize,
+    pub outbox_failed_count: usize,
+    pub projection_checkpoint_count: usize,
+    pub projection_failure_count: usize,
+    pub artifact_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedbJournalBlocker {
+    pub code: &'static str,
+    pub next_action: String,
+}
+
+pub const REDB_SINGLE_WRITER_BLOCKER_CODE: &str = "redb_single_writer_lock_held";
+pub const REDB_CORRUPT_PAYLOAD_BLOCKER_CODE: &str = "redb_journal_payload_corrupt";
+
+pub fn classify_redb_journal_error(
+    error: &TaskflowStateError,
+    journal_path: impl AsRef<Path>,
+) -> Option<RedbJournalBlocker> {
+    let TaskflowStateError::Storage(reason) = error else {
+        return None;
+    };
+    let journal_path = journal_path.as_ref().display();
+    let reason_lower = reason.to_ascii_lowercase();
+    if reason_lower.contains("lock")
+        || reason_lower.contains("being used by another process")
+        || reason_lower.contains("database is already open")
+    {
+        return Some(RedbJournalBlocker {
+            code: REDB_SINGLE_WRITER_BLOCKER_CODE,
+            next_action: format!(
+                "Wait for or stop the process holding the redb journal writer lock, then retry the journal operation for `{journal_path}`."
+            ),
+        });
+    }
+    if reason_lower.contains("corrupt")
+        || reason_lower.contains("json")
+        || reason_lower.contains("expected")
+        || reason_lower.contains("eof")
+    {
+        return Some(RedbJournalBlocker {
+            code: REDB_CORRUPT_PAYLOAD_BLOCKER_CODE,
+            next_action: format!(
+                "Quarantine the redb journal at `{journal_path}`, restore from the last trusted snapshot, or rebuild projections from verified event cursor evidence."
+            ),
+        });
+    }
+    None
+}
+
 impl RedbOperationalJournal {
     pub fn create(path: impl AsRef<Path>) -> Result<Self, TaskflowStateError> {
         let db = Database::create(path).map_err(storage_error)?;
@@ -97,7 +157,7 @@ impl RedbOperationalJournal {
         let mut records = Vec::new();
         for row in table.iter().map_err(storage_error)? {
             let (_, value) = row.map_err(storage_error)?;
-            records.push(serde_json::from_slice(value.value()).map_err(storage_error)?);
+            records.push(serde_json::from_slice(value.value()).map_err(payload_decode_error)?);
         }
         Ok(records)
     }
@@ -116,8 +176,108 @@ impl RedbOperationalJournal {
         table
             .get(key)
             .map_err(storage_error)?
-            .map(|row| serde_json::from_slice(row.value()).map_err(storage_error))
+            .map(|row| serde_json::from_slice(row.value()).map_err(payload_decode_error))
             .transpose()
+    }
+
+    fn schema_version(&self) -> Result<String, TaskflowStateError> {
+        let read = self.db.begin_read().map_err(storage_error)?;
+        let table = read.open_table(SCHEMA_TABLE).map_err(storage_error)?;
+        let Some(row) = table.get(SCHEMA_VERSION_KEY).map_err(storage_error)? else {
+            return Err(TaskflowStateError::Storage(
+                "redb journal schema version is missing".to_string(),
+            ));
+        };
+        std::str::from_utf8(row.value())
+            .map(str::to_string)
+            .map_err(storage_error)
+    }
+
+    pub fn health_status(&self) -> Result<RedbJournalHealth, TaskflowStateError> {
+        let schema_version = self.schema_version()?;
+        if schema_version != SCHEMA_VERSION {
+            return Err(TaskflowStateError::Storage(format!(
+                "redb journal schema version mismatch: expected={SCHEMA_VERSION} actual={schema_version}"
+            )));
+        }
+        let stream_events: Vec<VidaDomainEventEnvelope> = self.read_all(EVENTS_BY_STREAM_TABLE)?;
+        let global_events: Vec<JournalEventRecord> =
+            self.read_all(EVENTS_BY_GLOBAL_CURSOR_TABLE)?;
+        if stream_events.len() != global_events.len() {
+            return Err(TaskflowStateError::Storage(format!(
+                "redb journal stream/global event count mismatch: stream={} global={}",
+                stream_events.len(),
+                global_events.len()
+            )));
+        }
+        for record in &global_events {
+            let event_id = &record.event.event_id;
+            if !stream_events
+                .iter()
+                .any(|event| event.event_id == *event_id)
+            {
+                return Err(TaskflowStateError::Storage(format!(
+                    "redb journal global event `{}` is missing from stream index",
+                    event_id.0
+                )));
+            }
+        }
+        let mut seen_event_ids = std::collections::BTreeSet::new();
+        let mut expected_cursor = 1usize;
+        for record in &global_events {
+            let expected = VidaEventCursor(format!("global-{expected_cursor}"));
+            if record.global_cursor != expected {
+                return Err(TaskflowStateError::Storage(format!(
+                    "redb journal global cursor gap: expected={} actual={}",
+                    expected.0, record.global_cursor.0
+                )));
+            }
+            if !seen_event_ids.insert(record.event.event_id.0.clone()) {
+                return Err(TaskflowStateError::Storage(format!(
+                    "redb journal duplicate event id `{}`",
+                    record.event.event_id.0
+                )));
+            }
+            expected_cursor += 1;
+        }
+
+        let append_idempotency: Vec<RedbAppendIdempotencyRecord> =
+            self.read_all(APPEND_IDEMPOTENCY_TABLE)?;
+        let idempotency: Vec<JournalIdempotencyRecord> = self.read_all(IDEMPOTENCY_TABLE)?;
+        let outbox: Vec<JournalOutboxRecord> = self.read_all(OUTBOX_TABLE)?;
+        let mut outbox_pending_count = 0;
+        let mut outbox_claimed_count = 0;
+        let mut outbox_succeeded_count = 0;
+        let mut outbox_failed_count = 0;
+        for record in &outbox {
+            match record.state {
+                JournalOutboxState::Pending => outbox_pending_count += 1,
+                JournalOutboxState::Claimed { .. } => outbox_claimed_count += 1,
+                JournalOutboxState::Succeeded => outbox_succeeded_count += 1,
+                JournalOutboxState::Failed { .. } => outbox_failed_count += 1,
+            }
+        }
+
+        Ok(RedbJournalHealth {
+            schema_version,
+            stream_event_count: stream_events.len(),
+            global_event_count: global_events.len(),
+            append_idempotency_count: append_idempotency.len(),
+            idempotency_count: idempotency.len(),
+            outbox_pending_count,
+            outbox_claimed_count,
+            outbox_succeeded_count,
+            outbox_failed_count,
+            projection_checkpoint_count: self
+                .read_all::<VidaProjectionCheckpoint>(PROJECTION_CHECKPOINT_TABLE)?
+                .len(),
+            projection_failure_count: self
+                .read_all::<JournalProjectionFailure>(PROJECTION_FAILURE_TABLE)?
+                .len(),
+            artifact_count: self
+                .read_all::<JournalArtifactRecord>(ARTIFACT_TABLE)?
+                .len(),
+        })
     }
 
     pub fn projection_checkpoint(
@@ -514,21 +674,30 @@ fn storage_error(error: impl std::fmt::Display) -> TaskflowStateError {
     TaskflowStateError::Storage(error.to_string())
 }
 
+fn payload_decode_error(error: impl std::fmt::Display) -> TaskflowStateError {
+    TaskflowStateError::Storage(format!("redb journal payload corrupt: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::time::Instant;
+
     use super::{
         APPEND_IDEMPOTENCY_TABLE, EVENTS_BY_GLOBAL_CURSOR_TABLE, EVENTS_BY_STREAM_TABLE,
-        OUTBOX_TABLE, RedbOperationalJournal,
+        OUTBOX_TABLE, REDB_CORRUPT_PAYLOAD_BLOCKER_CODE, REDB_SINGLE_WRITER_BLOCKER_CODE,
+        RedbOperationalJournal, classify_redb_journal_error,
     };
     use redb::{ReadableDatabase, ReadableTable, TableDefinition};
     use taskflow_contracts::{
         VidaAggregateRef, VidaCommandRef, VidaDomainEventEnvelope, VidaEffectIntent, VidaEffectRef,
-        VidaEventRef, VidaIdempotencyKey, VidaOperation, VidaReceiptId, VidaSchemaId,
-        VidaSchemaVersion, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
+        VidaEventCursor, VidaEventRef, VidaIdempotencyKey, VidaOperation, VidaProjectionCheckpoint,
+        VidaProjectionRef, VidaReceiptId, VidaSchemaId, VidaSchemaVersion, VidaStreamRef,
+        VidaStreamVersion, VidaTimestamp,
     };
     use taskflow_state::{
-        JournalAppendRequest, JournalIdempotencyState, JournalOutboxState, OperationalJournal,
-        TaskflowStateError,
+        JournalAppendRequest, JournalArtifactRecord, JournalIdempotencyState, JournalOutboxState,
+        OperationalJournal, TaskflowStateError,
     };
     use tempfile::tempdir;
 
@@ -752,11 +921,287 @@ mod tests {
         let second = RedbOperationalJournal::open(&path);
 
         if cfg!(windows) {
+            let error = second.expect_err("redb should reject a second open while writer is held");
+            let blocker =
+                classify_redb_journal_error(&error, &path).expect("lock error should classify");
+            assert_eq!(blocker.code, REDB_SINGLE_WRITER_BLOCKER_CODE);
             assert!(
-                second.is_err(),
-                "redb should reject a second open while the first writer is held"
+                blocker
+                    .next_action
+                    .contains("holding the redb journal writer lock")
             );
         }
+    }
+
+    #[test]
+    fn health_status_reports_integrity_counts_after_claim_and_reopen() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        journal
+            .append(append_request(
+                0,
+                vec![event(1), event(2), event(3)],
+                vec![effect("effect-1"), effect("effect-2")],
+            ))
+            .expect("append should pass");
+        journal.claim_outbox_batch("worker-1", 1);
+        journal.record_projection_checkpoint(projection_checkpoint(3));
+        journal.index_artifact(JournalArtifactRecord {
+            artifact_ref: taskflow_contracts::VidaArtifactRef("artifact-1".to_string()),
+            content_hash: "hash-1".to_string(),
+            path: "tests/journal/artifact-1.json".to_string(),
+        });
+        drop(journal);
+
+        let reopened = RedbOperationalJournal::open(&path).expect("open journal");
+        let health = reopened.health_status().expect("health status should pass");
+
+        assert_eq!(health.schema_version, "1");
+        assert_eq!(health.stream_event_count, 3);
+        assert_eq!(health.global_event_count, 3);
+        assert_eq!(health.append_idempotency_count, 1);
+        assert_eq!(health.outbox_pending_count, 1);
+        assert_eq!(health.outbox_claimed_count, 1);
+        assert_eq!(health.projection_checkpoint_count, 1);
+        assert_eq!(health.artifact_count, 1);
+    }
+
+    #[test]
+    fn replay_after_projection_checkpoint_resumes_from_event_cursor() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        journal
+            .append(append_request(0, (1..=5).map(event).collect(), Vec::new()))
+            .expect("append should pass");
+        journal.record_projection_checkpoint(projection_checkpoint(3));
+        let checkpoint = journal
+            .projection_checkpoint(&VidaProjectionRef("projection-1".to_string()))
+            .expect("checkpoint read should pass")
+            .expect("checkpoint should exist");
+
+        let replay = journal.read_global_after(Some(&checkpoint.event_cursor), 10);
+
+        assert_eq!(replay.len(), 2);
+        assert_eq!(
+            replay[0].event.event_id,
+            VidaEventRef("event-4".to_string())
+        );
+        assert_eq!(
+            replay[1].event.event_id,
+            VidaEventRef("event-5".to_string())
+        );
+    }
+
+    #[test]
+    fn claimed_outbox_state_survives_restart_before_execution() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("append should pass");
+        let claimed = journal.claim_outbox_batch("worker-1", 1);
+        assert!(matches!(
+            claimed[0].state,
+            JournalOutboxState::Claimed { ref consumer_id } if consumer_id == "worker-1"
+        ));
+        drop(journal);
+
+        let reopened = RedbOperationalJournal::open(&path).expect("open journal");
+        let health = reopened.health_status().expect("health should pass");
+
+        assert_eq!(health.outbox_claimed_count, 1);
+        assert_eq!(health.outbox_pending_count, 0);
+        assert_eq!(
+            reopened
+                .read_global_after(None, 10)
+                .into_iter()
+                .map(|record| record.event.event_id)
+                .collect::<Vec<_>>(),
+            vec![VidaEventRef("event-1".to_string())]
+        );
+    }
+
+    #[test]
+    fn projection_cache_wipe_rebuilds_from_event_cursor() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        journal
+            .append(append_request(0, (1..=4).map(event).collect(), Vec::new()))
+            .expect("append should pass");
+        journal.record_projection_checkpoint(projection_checkpoint(2));
+        drop(journal);
+
+        let reopened = RedbOperationalJournal::open(&path).expect("open journal");
+        let checkpoint = reopened
+            .projection_checkpoint(&VidaProjectionRef("projection-1".to_string()))
+            .expect("checkpoint read should pass")
+            .expect("checkpoint should exist");
+        let rebuilt = reopened.read_global_after(Some(&checkpoint.event_cursor), 10);
+
+        assert_eq!(
+            rebuilt
+                .iter()
+                .map(|record| record.event.event_id.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                VidaEventRef("event-3".to_string()),
+                VidaEventRef("event-4".to_string())
+            ]
+        );
+        assert_eq!(
+            rebuilt.last().expect("rebuilt events").global_cursor,
+            VidaEventCursor("global-4".to_string())
+        );
+    }
+
+    #[test]
+    fn project_roots_with_distinct_redb_files_are_isolated() {
+        let dir = tempdir().expect("tempdir");
+        let path_a = dir.path().join("project-a.redb");
+        let path_b = dir.path().join("project-b.redb");
+        let mut journal_a = RedbOperationalJournal::create(&path_a).expect("create journal a");
+        let mut journal_b = RedbOperationalJournal::create(&path_b).expect("create journal b");
+
+        journal_a
+            .append(append_request(0, vec![event(1)], Vec::new()))
+            .expect("append project a");
+        let mut request_b = append_request(0, vec![event_for_stream("stream-b", 1)], Vec::new());
+        request_b.stream_id = VidaStreamRef("stream-b".to_string());
+        request_b.idempotency_key = VidaIdempotencyKey("idem-b".to_string());
+        journal_b.append(request_b).expect("append project b");
+
+        assert_eq!(
+            journal_a
+                .load_stream(&VidaStreamRef("stream-1".to_string()))
+                .len(),
+            1
+        );
+        assert!(
+            journal_a
+                .load_stream(&VidaStreamRef("stream-b".to_string()))
+                .is_empty()
+        );
+        assert_eq!(
+            journal_b
+                .load_stream(&VidaStreamRef("stream-b".to_string()))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn health_status_fails_closed_on_corrupted_payload() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal
+            .append(append_request(0, vec![event(1)], Vec::new()))
+            .expect("append should pass");
+        drop(journal);
+        write_corrupt_record(&path, EVENTS_BY_GLOBAL_CURSOR_TABLE, "cursor-corrupt");
+
+        let reopened = RedbOperationalJournal::open(&path).expect("open journal");
+        let error = reopened
+            .health_status()
+            .expect_err("corrupted event payload must fail health status");
+
+        assert!(
+            matches!(error, TaskflowStateError::Storage(_)),
+            "corrupt persisted JSON must surface as storage failure"
+        );
+        let blocker =
+            classify_redb_journal_error(&error, &path).expect("corrupt payload should classify");
+        assert_eq!(blocker.code, REDB_CORRUPT_PAYLOAD_BLOCKER_CODE);
+        assert!(blocker.next_action.contains("rebuild projections"));
+    }
+
+    #[test]
+    fn health_status_fails_closed_on_cursor_gap() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal
+            .append(append_request(0, vec![event(1)], Vec::new()))
+            .expect("append should pass");
+        drop(journal);
+        write_global_record(&path, "00000000000000000002", "global-99", event(2));
+
+        let reopened = RedbOperationalJournal::open(&path).expect("open journal");
+        let error = reopened
+            .health_status()
+            .expect_err("cursor gap must fail health status");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("redb journal global cursor gap")
+                || message.contains("is missing from stream index")
+                || message.contains("stream/global event count mismatch")
+        );
+    }
+
+    #[test]
+    fn health_status_fails_closed_on_duplicate_event_id() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal
+            .append(append_request(0, vec![event(1)], Vec::new()))
+            .expect("append should pass");
+        drop(journal);
+        let mut duplicate = event(2);
+        duplicate.event_id = VidaEventRef("event-1".to_string());
+        write_stream_event(&path, "stream-1:00000000000000000002", duplicate.clone());
+        write_global_record(&path, "00000000000000000002", "global-2", duplicate);
+
+        let reopened = RedbOperationalJournal::open(&path).expect("open journal");
+        let error = reopened
+            .health_status()
+            .expect_err("duplicate event id must fail health status");
+
+        assert!(
+            error
+                .to_string()
+                .contains("redb journal duplicate event id")
+        );
+    }
+
+    #[test]
+    #[ignore = "proof benchmark: run explicitly for ldr-030-redb-integrity benchmark output"]
+    fn replay_10k_events_reports_timing() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        let events = (1..=10_000).map(event).collect::<Vec<_>>();
+        let append_started = Instant::now();
+        journal
+            .append(append_request(0, events, Vec::new()))
+            .expect("10k append should pass");
+        let append_elapsed = append_started.elapsed();
+
+        let replay_started = Instant::now();
+        let replayed = journal.read_global_after(None, 10_000);
+        let replay_elapsed = replay_started.elapsed();
+        let health = journal.health_status().expect("health should pass");
+
+        println!(
+            "redb_journal_10k_replay events={} append_ms={} replay_ms={} stream_events={} global_events={}",
+            replayed.len(),
+            append_elapsed.as_millis(),
+            replay_elapsed.as_millis(),
+            health.stream_event_count,
+            health.global_event_count
+        );
+        assert_eq!(replayed.len(), 10_000);
+        assert_eq!(health.stream_event_count, 10_000);
+        assert_eq!(health.global_event_count, 10_000);
     }
 
     fn append_request(
@@ -777,13 +1222,17 @@ mod tests {
     }
 
     fn event(stream_version: u64) -> VidaDomainEventEnvelope {
+        event_for_stream("stream-1", stream_version)
+    }
+
+    fn event_for_stream(stream_id: &str, stream_version: u64) -> VidaDomainEventEnvelope {
         VidaDomainEventEnvelope {
             schema_id: VidaSchemaId("schema.task.updated".to_string()),
             event_version: VidaSchemaVersion(1),
             event_id: VidaEventRef(format!("event-{stream_version}")),
             command_id: Some(VidaCommandRef("command-1".to_string())),
             causation_id: Some(VidaCommandRef("command-1".to_string())),
-            stream_id: VidaStreamRef("stream-1".to_string()),
+            stream_id: VidaStreamRef(stream_id.to_string()),
             stream_version: VidaStreamVersion(stream_version),
             aggregate_id: VidaAggregateRef("task-1".to_string()),
             occurred_at: VidaTimestamp("2026-06-22T00:00:00Z".to_string()),
@@ -800,6 +1249,68 @@ mod tests {
             stream_id: VidaStreamRef("stream-1".to_string()),
             payload: serde_json::json!({ "effect_id": effect_id }),
         }
+    }
+
+    fn projection_checkpoint(stream_version: u64) -> VidaProjectionCheckpoint {
+        VidaProjectionCheckpoint {
+            projection_id: VidaProjectionRef("projection-1".to_string()),
+            stream_id: VidaStreamRef("stream-1".to_string()),
+            event_cursor: VidaEventCursor(format!("global-{stream_version}")),
+            stream_version: VidaStreamVersion(stream_version),
+            updated_at: VidaTimestamp("2026-06-22T00:00:00Z".to_string()),
+        }
+    }
+
+    fn write_corrupt_record(
+        path: &Path,
+        table_definition: TableDefinition<&str, &[u8]>,
+        key: &str,
+    ) {
+        let db = redb::Database::open(path).expect("open redb for corruption fixture");
+        let write = db.begin_write().expect("begin corrupt fixture write");
+        {
+            let mut table = write
+                .open_table(table_definition)
+                .expect("open corruption fixture table");
+            table
+                .insert(key, b"{not-json".as_slice())
+                .expect("insert corruption fixture");
+        }
+        write.commit().expect("commit corruption fixture");
+    }
+
+    fn write_stream_event(path: &Path, key: &str, event: VidaDomainEventEnvelope) {
+        let db = redb::Database::open(path).expect("open redb for stream fixture");
+        let write = db.begin_write().expect("begin stream fixture write");
+        {
+            let mut table = write
+                .open_table(EVENTS_BY_STREAM_TABLE)
+                .expect("open stream fixture table");
+            let payload = serde_json::to_vec(&event).expect("serialize stream fixture");
+            table
+                .insert(key, payload.as_slice())
+                .expect("insert stream fixture");
+        }
+        write.commit().expect("commit stream fixture");
+    }
+
+    fn write_global_record(path: &Path, key: &str, cursor: &str, event: VidaDomainEventEnvelope) {
+        let db = redb::Database::open(path).expect("open redb for global fixture");
+        let write = db.begin_write().expect("begin global fixture write");
+        {
+            let mut table = write
+                .open_table(EVENTS_BY_GLOBAL_CURSOR_TABLE)
+                .expect("open global fixture table");
+            let record = taskflow_state::JournalEventRecord {
+                global_cursor: VidaEventCursor(cursor.to_string()),
+                event,
+            };
+            let payload = serde_json::to_vec(&record).expect("serialize global fixture");
+            table
+                .insert(key, payload.as_slice())
+                .expect("insert global fixture");
+        }
+        write.commit().expect("commit global fixture");
     }
 
     fn table_len(
