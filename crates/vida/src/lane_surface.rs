@@ -2284,6 +2284,11 @@ async fn latest_scoped_lane_summary(
     scoped_task_ids: &[String],
 ) -> Result<Option<crate::state_store::RunGraphDispatchReceiptSummary>, crate::StateStoreError> {
     for task_id in scoped_task_ids {
+        if let Some(receipt) = store.run_graph_dispatch_receipt(task_id).await? {
+            return Ok(Some(
+                crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt),
+            ));
+        }
         if let Ok(status) = store.run_graph_status(task_id).await {
             if let Some(summary) = store
                 .run_graph_dispatch_receipt_summary_for_status(&status)
@@ -4078,34 +4083,33 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-            let summary = match store
-                .latest_run_graph_dispatch_receipt_summary_for_current_session()
-                .await
-            {
+            let scoped_summary = latest_scoped_lane_summary(&store, &scoped_task_ids).await;
+            let summary = match scoped_summary {
                 Ok(Some(summary)) => Ok(Some(summary)),
-                Ok(None) => match latest_scoped_lane_summary(&store, &scoped_task_ids).await {
+                Ok(None) => match store
+                    .latest_run_graph_dispatch_receipt_summary_for_current_session()
+                    .await
+                {
                     Ok(Some(summary)) => Ok(Some(summary)),
-                    Ok(None) => {
-                        match store
-                            .latest_active_exception_takeover_dispatch_receipt()
-                            .await
-                        {
-                            Ok(Some(receipt)) => Ok(Some(
-                                crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(
-                                    receipt,
-                                ),
-                            )),
-                            Ok(None) => match latest_status.as_ref() {
-                                Some(status) => {
-                                    store
-                                        .run_graph_dispatch_receipt_summary_for_status(status)
-                                        .await
-                                }
-                                None => Ok(None),
-                            },
-                            Err(error) => Err(error),
-                        }
-                    }
+                    Ok(None) => match store
+                        .latest_active_exception_takeover_dispatch_receipt()
+                        .await
+                    {
+                        Ok(Some(receipt)) => Ok(Some(
+                            crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(
+                                receipt,
+                            ),
+                        )),
+                        Ok(None) => match latest_status.as_ref() {
+                            Some(status) => {
+                                store
+                                    .run_graph_dispatch_receipt_summary_for_status(status)
+                                    .await
+                            }
+                            None => Ok(None),
+                        },
+                        Err(error) => Err(error),
+                    },
                     Err(error) => Err(error),
                 },
                 Err(error) => Err(error),
