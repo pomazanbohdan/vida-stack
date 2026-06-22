@@ -1,5 +1,6 @@
 //! Task command module skeleton for future TaskFlow core extraction.
 
+pub mod aggregate;
 pub mod attempts;
 pub mod block;
 pub mod close;
@@ -25,6 +26,7 @@ mod tests {
     fn task_module_surface_is_present() {
         let modules = [
             "attempts",
+            "aggregate",
             "block",
             "close",
             "closure_ready",
@@ -44,6 +46,6 @@ mod tests {
             "verify",
         ];
 
-        assert_eq!(modules.len(), 18);
+        assert_eq!(modules.len(), 19);
     }
 }

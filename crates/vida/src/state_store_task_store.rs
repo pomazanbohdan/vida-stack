@@ -10,6 +10,9 @@ use taskflow_authority::task_transition::{
     admit_task_lifecycle, lifecycle_status_from_str, TaskLifecycleAdmissionStatus,
     TaskLifecycleRuntimeEvidence,
 };
+use taskflow_core::task::aggregate::{
+    plan_close_task, TaskAggregateTaskSnapshot, TaskCloseCommand,
+};
 use taskflow_core::task::lifecycle::{TaskLifecycleEvent, TaskLifecycleInput, TaskLifecycleStatus};
 
 const TASK_SNAPSHOT_META_SCHEMA_VERSION: &str = "task-snapshot-meta-v1";
@@ -3486,6 +3489,42 @@ impl StateStore {
         let closed_parents = self
             .filter_auto_closed_parents_ready_for_close(closed_parents)
             .await?;
+        let close_plan = plan_close_task(TaskCloseCommand {
+            task: TaskAggregateTaskSnapshot {
+                id: task.id.clone(),
+                status: task.status.clone(),
+                updated_at: task.updated_at.clone(),
+                closed_at: task.closed_at.clone(),
+                close_reason: task.close_reason.clone(),
+                parent_id,
+            },
+            reason: reason.to_string(),
+            occurred_at: task.updated_at.clone(),
+            auto_closed_parents: closed_parents
+                .iter()
+                .map(|parent| TaskAggregateTaskSnapshot {
+                    id: parent.id.clone(),
+                    status: parent.status.clone(),
+                    updated_at: parent.updated_at.clone(),
+                    closed_at: parent.closed_at.clone(),
+                    close_reason: parent.close_reason.clone(),
+                    parent_id: Self::parent_id_for_task(parent),
+                })
+                .collect(),
+        });
+        let persisted_task_ids = closed_parents
+            .iter()
+            .map(|parent| parent.id.clone())
+            .chain(std::iter::once(task.id.clone()))
+            .collect::<BTreeSet<_>>();
+        debug_assert_eq!(
+            close_plan
+                .touched_task_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            persisted_task_ids
+        );
         self.persist_task_record(task.clone()).await?;
         for parent in &closed_parents {
             self.persist_task_record(parent.clone()).await?;
