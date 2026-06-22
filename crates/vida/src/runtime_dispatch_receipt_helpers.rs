@@ -314,6 +314,27 @@ pub(crate) fn dispatch_receipt_downstream_blockers_superseded_by_ready_handoff(
     )
 }
 
+pub(crate) fn exception_takeover_dispatch_blocker_superseded_by_completed_node(
+    status: &crate::state_store::RunGraphStatus,
+    receipt: &crate::state_store::RunGraphDispatchReceiptStored,
+) -> bool {
+    receipt.run_id == status.run_id
+        && matches!(
+            receipt.lane_status.as_deref(),
+            Some("lane_exception_takeover") | Some("lane_exception_recorded")
+        )
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && status.status == "completed"
+        && status.active_node == receipt.dispatch_target
+}
+
 pub(crate) fn dispatch_receipt_downstream_blockers_superseded_by_ready_handoff_fields(
     run_id: &str,
     active_node: &str,
@@ -867,6 +888,30 @@ mod tests {
             resume_target: "none".to_string(),
             recovery_ready: false,
         }
+    }
+
+    #[test]
+    fn completed_same_node_supersedes_exception_takeover_blocker() {
+        let mut status = terminal_status_for("run-exception");
+        status.task_id = "task-exception".to_string();
+        status.active_node = "analyst".to_string();
+        status.lifecycle_stage = "analyst_complete".to_string();
+
+        let mut receipt =
+            crate::state_store::RunGraphDispatchReceiptStored::from(receipt_for("run-exception"));
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.lane_status = Some("lane_exception_takeover".to_string());
+        receipt.exception_path_receipt_id = Some("exception-receipt".to_string());
+        receipt.supersedes_receipt_id = Some("exception-receipt".to_string());
+
+        assert!(
+            exception_takeover_dispatch_blocker_superseded_by_completed_node(&status, &receipt)
+        );
+
+        status.active_node = "developer".to_string();
+        assert!(
+            !exception_takeover_dispatch_blocker_superseded_by_completed_node(&status, &receipt)
+        );
     }
 
     #[test]

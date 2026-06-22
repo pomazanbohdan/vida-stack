@@ -3,8 +3,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use crate::{
-    state_store::StateStore, DiagnosticsArgs, DiagnosticsCommand, DiagnosticsEvidenceCheckArgs,
-    DiagnosticsPostCommitArgs, DiagnosticsRulesCheckArgs,
+    DiagnosticsArgs, DiagnosticsCommand, DiagnosticsEvidenceCheckArgs, DiagnosticsPostCommitArgs,
+    DiagnosticsRulesCheckArgs, state_store::StateStore,
 };
 
 const DIAGNOSTICS_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
@@ -163,6 +163,19 @@ fn status_from_blockers(blockers: &[String]) -> &'static str {
 fn closed_task_active_run_projection_mismatch_next_action() -> String {
     "Run `vida task reconcile-closed-runs --limit 25` and inspect skipped runs with `vida taskflow run-graph status <run-id>`; closed tasks must not remain projected as active runtime work."
         .to_string()
+}
+
+fn post_commit_default_clear_command(payload: &serde_json::Value) -> Option<&'static str> {
+    let blocked_by_run_graph = payload["blocker_codes"].as_array().is_some_and(|blockers| {
+        blockers.iter().any(|code| {
+            matches!(
+                code.as_str(),
+                Some("closed_task_active_run_projection_mismatch")
+                    | Some("latest_run_graph_status_blocked")
+            )
+        })
+    });
+    blocked_by_run_graph.then_some("vida task reconcile-closed-runs --limit 25")
 }
 
 fn post_commit_closed_task_active_run_projection_mismatch(
@@ -673,6 +686,42 @@ async fn run_post_commit(args: DiagnosticsPostCommitArgs) -> ExitCode {
                 );
                 if let Some(blockers) = payload["blocker_codes"].as_array() {
                     println!("blocker_codes: {}", blockers.len());
+                    let blocker_names = blockers
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .collect::<Vec<_>>();
+                    if !blocker_names.is_empty() {
+                        println!("blockers: {}", blocker_names.join(", "));
+                    }
+                }
+                if payload["status"].as_str() != Some("pass") {
+                    if let Some(run_id) = payload["canonical_continuation_run_id"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        println!("run_id: {run_id}");
+                    }
+                    if let Some(command) = post_commit_default_clear_command(&payload) {
+                        println!("clear_command: {command}");
+                    }
+                }
+                if let Some(next_actions) = payload["next_actions"].as_array() {
+                    let action_names = next_actions
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .take(2)
+                        .collect::<Vec<_>>();
+                    if !action_names.is_empty() {
+                        println!("next:");
+                        for action in action_names {
+                            println!("  - {action}");
+                        }
+                    }
                 }
             }
             diagnostic_exit_code(&payload)
@@ -699,11 +748,11 @@ pub(crate) async fn run_diagnostics(args: DiagnosticsArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_evidence_check_diagnostics, build_rules_check_diagnostics,
-        closed_task_active_run_projection_mismatch_next_action,
+        POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME, build_evidence_check_diagnostics,
+        build_rules_check_diagnostics, closed_task_active_run_projection_mismatch_next_action,
         compact_host_dispatch_preflight_for_diagnostics, missing_task_actionability,
-        post_commit_closed_task_active_run_projection_mismatch, run_post_commit,
-        POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
+        post_commit_closed_task_active_run_projection_mismatch, post_commit_default_clear_command,
+        run_post_commit,
     };
     use crate::test_cli_support::guard_current_dir;
     use crate::{
@@ -799,9 +848,26 @@ mod tests {
             &closed_task_ids,
             false,
         ));
-        assert!(closed_task_active_run_projection_mismatch_next_action()
-            .contains("vida task reconcile-closed-runs --limit 25"));
+        assert!(
+            closed_task_active_run_projection_mismatch_next_action()
+                .contains("vida task reconcile-closed-runs --limit 25")
+        );
         assert!(!closed_task_active_run_projection_mismatch_next_action().contains("--json"));
+
+        let payload = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["latest_run_graph_status_blocked"],
+            "canonical_continuation_run_id": "run-1"
+        });
+        assert_eq!(
+            post_commit_default_clear_command(&payload),
+            Some("vida task reconcile-closed-runs --limit 25")
+        );
+        assert!(
+            !post_commit_default_clear_command(&payload)
+                .unwrap()
+                .contains("--json")
+        );
     }
 
     #[test]
