@@ -6894,6 +6894,7 @@ dependencies = [
  "taskflow-contracts",
  "taskflow-core",
  "taskflow-state",
+ "taskflow-state-fs",
  "tempfile",
 ]
 

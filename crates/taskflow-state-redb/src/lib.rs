@@ -4,9 +4,9 @@ use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use taskflow_contracts::{
-    VidaArtifactRef, VidaCommandRef, VidaDomainEventEnvelope, VidaEffectIntent, VidaEventCursor,
-    VidaEventRef, VidaIdempotencyKey, VidaProjectionCheckpoint, VidaProjectionRef, VidaReceiptId,
-    VidaStreamRef, VidaStreamVersion,
+    DependencyEdge, TaskRecord, VidaArtifactRef, VidaCommandRef, VidaDomainEventEnvelope,
+    VidaEffectIntent, VidaEventCursor, VidaEventRef, VidaIdempotencyKey, VidaProjectionCheckpoint,
+    VidaProjectionRef, VidaReceiptId, VidaStreamRef, VidaStreamVersion,
 };
 use taskflow_state::{
     append_request_fingerprint, validate_append_event_streams, JournalAppendReceipt,
@@ -29,6 +29,10 @@ const PROJECTION_CHECKPOINT_TABLE: TableDefinition<&str, &[u8]> =
 const PROJECTION_FAILURE_TABLE: TableDefinition<&str, &[u8]> =
     TableDefinition::new("projection_failure_by_cursor");
 const ARTIFACT_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("artifact_by_ref");
+const TASKFLOW_SNAPSHOT_TASK_TABLE: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("taskflow_snapshot_task_by_id");
+const TASKFLOW_SNAPSHOT_DEPENDENCY_TABLE: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("taskflow_snapshot_dependency_by_key");
 const SCHEMA_VERSION_KEY: &str = "schema_version";
 const SCHEMA_VERSION: &str = "1";
 
@@ -138,6 +142,15 @@ pub struct RedbArtifactReconciliationRecord {
     pub computed_content_hash: Option<String>,
     pub status: String,
     pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedbTaskflowSnapshotParity {
+    pub status: String,
+    pub task_count: usize,
+    pub dependency_count: usize,
+    pub task_hash: String,
+    pub dependency_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -262,6 +275,12 @@ impl RedbOperationalJournal {
                 .open_table(PROJECTION_FAILURE_TABLE)
                 .map_err(storage_error)?;
             let _ = write.open_table(ARTIFACT_TABLE).map_err(storage_error)?;
+            let _ = write
+                .open_table(TASKFLOW_SNAPSHOT_TASK_TABLE)
+                .map_err(storage_error)?;
+            let _ = write
+                .open_table(TASKFLOW_SNAPSHOT_DEPENDENCY_TABLE)
+                .map_err(storage_error)?;
         }
         write.commit().map_err(storage_error)
     }
@@ -547,6 +566,82 @@ impl RedbOperationalJournal {
             .into_iter()
             .map(|record| reconcile_artifact_record(record, project_root))
             .collect()
+    }
+
+    pub fn replace_taskflow_snapshot(
+        &self,
+        snapshot: &taskflow_state_fs::TaskSnapshot,
+    ) -> Result<RedbTaskflowSnapshotParity, TaskflowStateError> {
+        let normalized = normalize_taskflow_snapshot(snapshot);
+        let write = self.db.begin_write().map_err(storage_error)?;
+        {
+            let mut tasks = write
+                .open_table(TASKFLOW_SNAPSHOT_TASK_TABLE)
+                .map_err(storage_error)?;
+            let task_keys = table_keys(&tasks)?;
+            for key in task_keys {
+                tasks.remove(key.as_str()).map_err(storage_error)?;
+            }
+            for task in &normalized.tasks {
+                let payload = serde_json::to_vec(task).map_err(storage_error)?;
+                tasks
+                    .insert(task.id.as_str(), payload.as_slice())
+                    .map_err(storage_error)?;
+            }
+            drop(tasks);
+
+            let mut dependencies = write
+                .open_table(TASKFLOW_SNAPSHOT_DEPENDENCY_TABLE)
+                .map_err(storage_error)?;
+            let dependency_keys = table_keys(&dependencies)?;
+            for key in dependency_keys {
+                dependencies.remove(key.as_str()).map_err(storage_error)?;
+            }
+            for dependency in &normalized.dependencies {
+                let key = task_dependency_key(dependency);
+                let payload = serde_json::to_vec(dependency).map_err(storage_error)?;
+                dependencies
+                    .insert(key.as_str(), payload.as_slice())
+                    .map_err(storage_error)?;
+            }
+        }
+        write.commit().map_err(storage_error)?;
+        Ok(taskflow_snapshot_fingerprint(&normalized))
+    }
+
+    pub fn export_taskflow_snapshot(
+        &self,
+    ) -> Result<taskflow_state_fs::TaskSnapshot, TaskflowStateError> {
+        let tasks = self.read_all::<TaskRecord>(TASKFLOW_SNAPSHOT_TASK_TABLE)?;
+        let dependencies = self.read_all::<DependencyEdge>(TASKFLOW_SNAPSHOT_DEPENDENCY_TABLE)?;
+        Ok(normalize_taskflow_snapshot(
+            &taskflow_state_fs::TaskSnapshot {
+                tasks,
+                dependencies,
+            },
+        ))
+    }
+
+    pub fn taskflow_snapshot_parity(
+        &self,
+        expected: &taskflow_state_fs::TaskSnapshot,
+    ) -> Result<RedbTaskflowSnapshotParity, TaskflowStateError> {
+        let expected = normalize_taskflow_snapshot(expected);
+        let actual = self.export_taskflow_snapshot()?;
+        let expected_fingerprint = taskflow_snapshot_fingerprint(&expected);
+        let actual_fingerprint = taskflow_snapshot_fingerprint(&actual);
+        Ok(RedbTaskflowSnapshotParity {
+            status: if expected_fingerprint == actual_fingerprint {
+                "pass"
+            } else {
+                "mismatch"
+            }
+            .to_string(),
+            task_count: actual_fingerprint.task_count,
+            dependency_count: actual_fingerprint.dependency_count,
+            task_hash: actual_fingerprint.task_hash,
+            dependency_hash: actual_fingerprint.dependency_hash,
+        })
     }
 
     pub fn record_projection_failure_at_cursor(
@@ -1183,6 +1278,62 @@ fn decode_artifact_index_record(
     Ok(RedbArtifactIndexRecord::from_artifact(artifact, None))
 }
 
+fn normalize_taskflow_snapshot(
+    snapshot: &taskflow_state_fs::TaskSnapshot,
+) -> taskflow_state_fs::TaskSnapshot {
+    let mut tasks = snapshot.tasks.clone();
+    tasks.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+    let mut dependencies = snapshot.dependencies.clone();
+    dependencies.sort_by(|left, right| {
+        left.issue_id
+            .as_str()
+            .cmp(right.issue_id.as_str())
+            .then_with(|| {
+                left.depends_on_id
+                    .as_str()
+                    .cmp(right.depends_on_id.as_str())
+            })
+            .then_with(|| left.dependency_type.cmp(&right.dependency_type))
+    });
+    taskflow_state_fs::TaskSnapshot {
+        tasks,
+        dependencies,
+    }
+}
+
+fn taskflow_snapshot_fingerprint(
+    snapshot: &taskflow_state_fs::TaskSnapshot,
+) -> RedbTaskflowSnapshotParity {
+    let normalized = normalize_taskflow_snapshot(snapshot);
+    RedbTaskflowSnapshotParity {
+        status: "pass".to_string(),
+        task_count: normalized.tasks.len(),
+        dependency_count: normalized.dependencies.len(),
+        task_hash: stable_hash_hex(&serde_json::to_string(&normalized.tasks).unwrap_or_default()),
+        dependency_hash: stable_hash_hex(
+            &serde_json::to_string(&normalized.dependencies).unwrap_or_default(),
+        ),
+    }
+}
+
+fn task_dependency_key(dependency: &DependencyEdge) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}",
+        dependency.issue_id.as_str(),
+        dependency.depends_on_id.as_str(),
+        dependency.dependency_type
+    )
+}
+
+fn table_keys(table: &redb::Table<&str, &[u8]>) -> Result<Vec<String>, TaskflowStateError> {
+    let mut keys = Vec::new();
+    for row in table.iter().map_err(storage_error)? {
+        let (key, _) = row.map_err(storage_error)?;
+        keys.push(key.value().to_string());
+    }
+    Ok(keys)
+}
+
 fn reconcile_artifact_record(
     record: RedbArtifactIndexRecord,
     project_root: &Path,
@@ -1449,10 +1600,10 @@ mod tests {
     };
     use redb::{ReadableDatabase, ReadableTable, TableDefinition};
     use taskflow_contracts::{
-        VidaAggregateRef, VidaCommandRef, VidaDomainEventEnvelope, VidaEffectIntent, VidaEffectRef,
-        VidaEventCursor, VidaEventRef, VidaIdempotencyKey, VidaOperation, VidaProjectionCheckpoint,
-        VidaProjectionRef, VidaReceiptId, VidaSchemaId, VidaSchemaVersion, VidaStreamRef,
-        VidaStreamVersion, VidaTimestamp,
+        DependencyEdge, TaskRecord, VidaAggregateRef, VidaCommandRef, VidaDomainEventEnvelope,
+        VidaEffectIntent, VidaEffectRef, VidaEventCursor, VidaEventRef, VidaIdempotencyKey,
+        VidaOperation, VidaProjectionCheckpoint, VidaProjectionRef, VidaReceiptId, VidaSchemaId,
+        VidaSchemaVersion, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
     };
     use taskflow_state::{
         verify_run_workflow_repository_conformance,
@@ -2175,6 +2326,104 @@ mod tests {
     }
 
     #[test]
+    fn redb_shadow_imports_file_snapshot_and_proves_parity_after_reopen() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let snapshot_path = dir.path().join("taskflow-snapshot.json");
+        let snapshot = taskflow_snapshot_fixture();
+        taskflow_state_fs::write_snapshot(&snapshot_path, &snapshot).expect("write snapshot");
+        let file_snapshot =
+            taskflow_state_fs::read_snapshot(&snapshot_path).expect("read snapshot");
+
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+        let imported = journal
+            .replace_taskflow_snapshot(&file_snapshot)
+            .expect("redb shadow import should pass");
+        assert_eq!(imported.task_count, 2);
+        assert_eq!(imported.dependency_count, 1);
+        drop(journal);
+
+        let reopened = RedbOperationalJournal::open(&path).expect("reopen journal");
+        let exported = reopened
+            .export_taskflow_snapshot()
+            .expect("redb shadow export should pass");
+        assert_eq!(
+            serde_json::to_value(&exported.tasks).expect("exported tasks should serialize"),
+            serde_json::to_value(&file_snapshot.tasks).expect("file tasks should serialize")
+        );
+        assert_eq!(
+            serde_json::to_value(&exported.dependencies)
+                .expect("exported dependencies should serialize"),
+            serde_json::to_value(&file_snapshot.dependencies)
+                .expect("file dependencies should serialize")
+        );
+        let parity = reopened
+            .taskflow_snapshot_parity(&file_snapshot)
+            .expect("redb parity should pass");
+        assert_eq!(parity.status, "pass");
+        assert_eq!(parity.task_hash, imported.task_hash);
+        assert_eq!(parity.dependency_hash, imported.dependency_hash);
+    }
+
+    #[test]
+    fn redb_shadow_parity_reports_mismatch_for_different_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal
+            .replace_taskflow_snapshot(&taskflow_snapshot_fixture())
+            .expect("import should pass");
+        let expected = taskflow_state_fs::TaskSnapshot {
+            tasks: vec![TaskRecord::new(
+                taskflow_core::TaskId::new("vida-root"),
+                "Root",
+                taskflow_core::IssueType::Epic,
+            )],
+            dependencies: Vec::new(),
+        };
+
+        let parity = journal
+            .taskflow_snapshot_parity(&expected)
+            .expect("parity check should return mismatch");
+
+        assert_eq!(parity.status, "mismatch");
+        assert_eq!(parity.task_count, 2);
+        assert_eq!(parity.dependency_count, 1);
+    }
+
+    #[test]
+    fn redb_shadow_replace_removes_stale_snapshot_rows() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+        let first = taskflow_snapshot_fixture();
+        journal
+            .replace_taskflow_snapshot(&first)
+            .expect("first import should pass");
+        let replacement = taskflow_state_fs::TaskSnapshot {
+            tasks: vec![TaskRecord::new(
+                taskflow_core::TaskId::new("vida-root"),
+                "Root",
+                taskflow_core::IssueType::Epic,
+            )],
+            dependencies: Vec::new(),
+        };
+
+        let parity = journal
+            .replace_taskflow_snapshot(&replacement)
+            .expect("replacement import should pass");
+        let exported = journal
+            .export_taskflow_snapshot()
+            .expect("replacement export should pass");
+
+        assert_eq!(parity.task_count, 1);
+        assert_eq!(parity.dependency_count, 0);
+        assert_eq!(exported.tasks.len(), 1);
+        assert_eq!(exported.tasks[0].id.as_str(), "vida-root");
+        assert!(exported.dependencies.is_empty());
+    }
+
+    #[test]
     fn projection_cache_wipe_rebuilds_from_event_cursor() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("journal.redb");
@@ -2464,6 +2713,28 @@ mod tests {
             event_cursor: VidaEventCursor(format!("global-{stream_version}")),
             stream_version: VidaStreamVersion(stream_version),
             updated_at: VidaTimestamp("2026-06-22T00:00:00Z".to_string()),
+        }
+    }
+
+    fn taskflow_snapshot_fixture() -> taskflow_state_fs::TaskSnapshot {
+        taskflow_state_fs::TaskSnapshot {
+            tasks: vec![
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-child"),
+                    "Child",
+                    taskflow_core::IssueType::Task,
+                ),
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-root"),
+                    "Root",
+                    taskflow_core::IssueType::Epic,
+                ),
+            ],
+            dependencies: vec![DependencyEdge {
+                issue_id: taskflow_core::TaskId::new("vida-child"),
+                depends_on_id: taskflow_core::TaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
         }
     }
 

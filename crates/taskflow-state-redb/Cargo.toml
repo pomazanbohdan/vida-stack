@@ -10,6 +10,7 @@ serde = { workspace = true }
 serde_json.workspace = true
 taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-state = { path = "../taskflow-state" }
+taskflow-state-fs = { path = "../taskflow-state-fs" }
 
 [dev-dependencies]
 taskflow-core = { path = "../taskflow-core" }
