@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use taskflow_contracts::{
     DependencyEdge, TaskRecord, VidaArtifactRef, VidaCommandRef, VidaDomainEventEnvelope,
     VidaEffectIntent, VidaEventCursor, VidaEventRef, VidaIdempotencyKey, VidaProjectionCheckpoint,
@@ -22,6 +23,8 @@ pub enum TaskflowStateError {
     IdempotencyConflict(String),
     #[error("outbox record not found: {0}")]
     OutboxRecordNotFound(String),
+    #[error("state storage error: {0}")]
+    Storage(String),
 }
 
 pub trait TaskStore {
@@ -67,7 +70,7 @@ impl TaskStore for InMemoryTaskStore {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JournalAppendRequest {
     pub stream_id: VidaStreamRef,
     pub expected_stream_version: Option<VidaStreamVersion>,
@@ -79,7 +82,7 @@ pub struct JournalAppendRequest {
     pub effect_intents: Vec<VidaEffectIntent>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalAppendReceipt {
     pub stream_id: VidaStreamRef,
     pub first_global_cursor: Option<VidaEventCursor>,
@@ -89,20 +92,20 @@ pub struct JournalAppendReceipt {
     pub effect_intent_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JournalEventRecord {
     pub global_cursor: VidaEventCursor,
     pub event: VidaDomainEventEnvelope,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JournalIdempotencyState {
     Started,
     Completed,
     Conflicted,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalIdempotencyRecord {
     pub key: VidaIdempotencyKey,
     pub command_id: VidaCommandRef,
@@ -111,7 +114,7 @@ pub struct JournalIdempotencyRecord {
     pub conflict_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JournalOutboxState {
     Pending,
     Claimed { consumer_id: String },
@@ -119,21 +122,21 @@ pub enum JournalOutboxState {
     Failed { reason: String },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JournalOutboxRecord {
     pub outbox_id: VidaEventRef,
     pub effect: VidaEffectIntent,
     pub state: JournalOutboxState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalProjectionFailure {
     pub projection_id: VidaProjectionRef,
     pub stream_id: VidaStreamRef,
     pub error: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalArtifactRecord {
     pub artifact_ref: VidaArtifactRef,
     pub content_hash: String,

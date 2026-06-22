@@ -24,6 +24,7 @@ members = [
     "crates/taskflow-host-bridge",
     "crates/taskflow-state",
     "crates/taskflow-state-fs",
+    "crates/taskflow-state-redb",
     "crates/taskflow-state-surreal",
     "crates/runtime-path-policy",
     "crates/operator-output",
