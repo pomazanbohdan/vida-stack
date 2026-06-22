@@ -150,6 +150,11 @@ fn envelope_for_request(request: &ServiceCliRequest) -> VidaCommandEnvelope {
             family_name(&request.family),
             request.command
         )),
+        command_id: None,
+        causation_id: None,
+        expected_stream_version: None,
+        consistency: None,
+        deadline: None,
         client_kind: VidaClientKind::Cli,
         project_ref: request.project_ref.clone(),
         claim_kind: Some(VidaClaimKind::SharedRead),
