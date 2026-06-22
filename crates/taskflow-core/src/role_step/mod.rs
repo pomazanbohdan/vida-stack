@@ -137,6 +137,19 @@ pub enum RoleStepStateError {
     FlowVersionDrift { expected: String, actual: String },
     #[error("cannot transition from terminal role-step state `{0:?}`")]
     TerminalState(TaskRoleStepStatus),
+    #[error(
+        "role-step `{role_id}` must be completed before accepting the next node; current status is `{status:?}`"
+    )]
+    CurrentStepNotCompleted {
+        role_id: String,
+        status: TaskRoleStepStatus,
+    },
+    #[error("role-step `{role_id}` has unresolved blockers")]
+    UnresolvedBlockers { role_id: String },
+    #[error("allowed_next_node `{requested}` is not the immediate next step `{expected}`")]
+    NonSequentialAllowedNextNode { requested: String, expected: String },
+    #[error("role-step `{role_id}` has no next step")]
+    NoNextStep { role_id: String },
 }
 
 impl TaskRoleStepState {
@@ -235,16 +248,43 @@ impl TaskRoleStepState {
                 actual: current_flow_hash.to_string(),
             });
         }
-        let next_index = flow
-            .steps
-            .iter()
-            .position(|step| step.role_id == allowed_next_node)
-            .ok_or_else(|| {
-                RoleStepStateError::UnknownAllowedNextNode(
-                    allowed_next_node.to_string(),
-                    flow.flow_id.clone(),
-                )
-            })?;
+        if self.status == TaskRoleStepStatus::FlowVersionDrift {
+            return Err(RoleStepStateError::TerminalState(self.status));
+        }
+        if self.status != TaskRoleStepStatus::Completed {
+            return Err(RoleStepStateError::CurrentStepNotCompleted {
+                role_id: self.role_id.clone(),
+                status: self.status,
+            });
+        }
+        if !self.blockers.is_empty() {
+            return Err(RoleStepStateError::UnresolvedBlockers {
+                role_id: self.role_id.clone(),
+            });
+        }
+        let next_index = self.step_index + 1;
+        let expected_next =
+            flow.steps
+                .get(next_index)
+                .ok_or_else(|| RoleStepStateError::NoNextStep {
+                    role_id: self.role_id.clone(),
+                })?;
+        if expected_next.role_id != allowed_next_node {
+            if flow
+                .steps
+                .iter()
+                .any(|step| step.role_id == allowed_next_node)
+            {
+                return Err(RoleStepStateError::NonSequentialAllowedNextNode {
+                    requested: allowed_next_node.to_string(),
+                    expected: expected_next.role_id.clone(),
+                });
+            }
+            return Err(RoleStepStateError::UnknownAllowedNextNode(
+                allowed_next_node.to_string(),
+                flow.flow_id.clone(),
+            ));
+        }
         let mut next = Self::from_step(flow, next_index)?;
         next.status = TaskRoleStepStatus::Accepted;
         Ok(next)
@@ -335,6 +375,7 @@ mod tests {
                 .receive_result(format!("{flow_id}-receipt"), "passed")
                 .unwrap();
             state.validate().unwrap();
+            state.complete().unwrap();
             let next = state
                 .accept_next(&flow, "developer", &flow.schema_hash)
                 .unwrap();
@@ -349,7 +390,8 @@ mod tests {
     #[test]
     fn arbitrary_allowed_next_node_is_rejected() {
         let flow = flow("task");
-        let state = TaskRoleStepState::from_first_step(&flow).unwrap();
+        let mut state = TaskRoleStepState::from_first_step(&flow).unwrap();
+        state.complete().unwrap();
 
         let error = state
             .accept_next(&flow, "unconfigured_role", &flow.schema_hash)
@@ -379,6 +421,53 @@ mod tests {
                 expected: "task-hash-1".to_string(),
                 actual: "task-hash-2".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn accept_next_rejects_pending_or_skipped_role_steps() {
+        let flow = flow("task");
+        let state = TaskRoleStepState::from_first_step(&flow).unwrap();
+
+        assert_eq!(
+            state.accept_next(&flow, "developer", &flow.schema_hash),
+            Err(RoleStepStateError::CurrentStepNotCompleted {
+                role_id: "analyst".to_string(),
+                status: TaskRoleStepStatus::Pending,
+            })
+        );
+
+        let mut completed = state;
+        completed.complete().unwrap();
+        assert_eq!(
+            completed.accept_next(&flow, "tester", &flow.schema_hash),
+            Err(RoleStepStateError::NonSequentialAllowedNextNode {
+                requested: "tester".to_string(),
+                expected: "developer".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn accept_next_rejects_blocked_or_terminal_role_steps() {
+        let flow = flow("task");
+        let mut blocked = TaskRoleStepState::from_first_step(&flow).unwrap();
+        blocked.block("missing_proof").unwrap();
+        assert_eq!(
+            blocked.accept_next(&flow, "developer", &flow.schema_hash),
+            Err(RoleStepStateError::CurrentStepNotCompleted {
+                role_id: "analyst".to_string(),
+                status: TaskRoleStepStatus::Blocked,
+            })
+        );
+
+        let mut final_step = TaskRoleStepState::from_step(&flow, 2).unwrap();
+        final_step.complete().unwrap();
+        assert_eq!(
+            final_step.accept_next(&flow, "developer", &flow.schema_hash),
+            Err(RoleStepStateError::NoNextStep {
+                role_id: "tester".to_string(),
+            })
         );
     }
 }
