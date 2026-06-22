@@ -26,6 +26,7 @@ pub mod operations {
     pub const WIZARD_SESSION_UPDATE_INPUT: &str = "vida.wizard.session.update_input";
     pub const WIZARD_SESSION_VALIDATE: &str = "vida.wizard.session.validate";
     pub const WIZARD_SESSION_DIFF: &str = "vida.wizard.session.diff";
+    pub const WIZARD_SESSION_APPLY: &str = "vida.wizard.session.apply";
     pub const MATERIALIZATION_MANIFEST_GET: &str = "vida.materialization.manifest.get";
     pub const MATERIALIZATION_DRIFT_CLASSIFY: &str = "vida.materialization.drift.classify";
     pub const MATERIALIZATION_UPDATE_PLAN: &str = "vida.materialization.update.plan";
@@ -33,13 +34,22 @@ pub mod operations {
     pub const ORCHESTRATION_CONTROL_PLANE_SUMMARY_GET: &str =
         "vida.orchestration.control_plane.summary.get";
     pub const JOBS_GET: &str = "vida.jobs.get";
+    pub const TASK_APPLY: &str = "vida.task.apply";
+    pub const RUN_ADVANCE: &str = "vida.run.advance";
+    pub const COMPLETION_RECORD: &str = "vida.completion.record";
+    pub const PACKET_DISPATCH: &str = "vida.packet.dispatch";
+    pub const CLAIM_ACQUIRE: &str = "vida.claim.acquire";
+    pub const PROJECTION_REBUILD: &str = "vida.projection.rebuild";
+    pub const REPAIR_APPLY: &str = "vida.repair.apply";
+    pub const SERVICE_LIFECYCLE_APPLY: &str = "vida.service.lifecycle.apply";
 }
 
 pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
     use VidaCapabilityScope::{
-        MaterializationPlan, MaterializationRead, OrchestrationControlPlaneRead,
-        ProjectRegistryRead, ReadEvents, ReadReceipts, ReadStatus, ServiceInstallPlan, WizardPlan,
-        WizardRead,
+        ClaimWrite, CompletionRecord, MaterializationPlan, MaterializationRead,
+        OrchestrationControlPlaneRead, PacketDispatch, ProjectRegistryRead, ProjectionRebuild,
+        ReadEvents, ReadReceipts, ReadStatus, RepairApply, RunAdvance, ServiceAdmin,
+        ServiceInstallApply, ServiceInstallPlan, TaskApply, WizardApply, WizardPlan, WizardRead,
     };
     use operations::*;
     vec![
@@ -143,6 +153,11 @@ pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
             VidaOperationScope::Project,
             vec![WizardPlan],
         ),
+        VidaOperationSpec::apply_mutation(
+            WIZARD_SESSION_APPLY,
+            VidaOperationScope::Project,
+            vec![WizardApply],
+        ),
         VidaOperationSpec::read_with_capabilities(
             MATERIALIZATION_MANIFEST_GET,
             VidaOperationScope::Project,
@@ -172,6 +187,42 @@ pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
             JOBS_GET,
             VidaOperationScope::Service,
             vec![ReadEvents],
+        ),
+        VidaOperationSpec::apply_mutation(TASK_APPLY, VidaOperationScope::Project, vec![TaskApply]),
+        VidaOperationSpec::apply_mutation(
+            RUN_ADVANCE,
+            VidaOperationScope::Project,
+            vec![RunAdvance],
+        ),
+        VidaOperationSpec::apply_mutation(
+            COMPLETION_RECORD,
+            VidaOperationScope::Project,
+            vec![CompletionRecord],
+        ),
+        VidaOperationSpec::automation_mutation(
+            PACKET_DISPATCH,
+            VidaOperationScope::Project,
+            vec![PacketDispatch],
+        ),
+        VidaOperationSpec::apply_mutation(
+            CLAIM_ACQUIRE,
+            VidaOperationScope::Project,
+            vec![ClaimWrite],
+        ),
+        VidaOperationSpec::admin_mutation(
+            PROJECTION_REBUILD,
+            VidaOperationScope::Project,
+            vec![ProjectionRebuild],
+        ),
+        VidaOperationSpec::admin_mutation(
+            REPAIR_APPLY,
+            VidaOperationScope::Project,
+            vec![RepairApply],
+        ),
+        VidaOperationSpec::apply_mutation(
+            SERVICE_LIFECYCLE_APPLY,
+            VidaOperationScope::Service,
+            vec![ServiceInstallApply, ServiceAdmin],
         ),
     ]
 }
@@ -213,11 +264,16 @@ pub struct VidaOperationSpec {
     pub operation: VidaOperation,
     pub scope: VidaOperationScope,
     pub posture: VidaOperationPosture,
+    pub risk_tier: VidaRiskTier,
+    pub allowed_client_kinds: Vec<VidaClientKind>,
     pub required_claim: VidaClaimKind,
     pub requires_project_ref: bool,
     pub requires_idempotency_key: bool,
     pub requires_apply_token: bool,
     pub required_capabilities: Vec<VidaCapabilityScope>,
+    pub required_consistency: VidaConsistencyRequirement,
+    pub automation_posture: VidaAutomationPosture,
+    pub result_schema: VidaSchemaRef,
 }
 
 impl VidaOperationSpec {
@@ -237,6 +293,7 @@ impl VidaOperationSpec {
             scope,
             VidaOperationPosture::ReadOnly,
             required_capabilities,
+            VidaClaimKind::SharedRead,
             false,
             false,
         )
@@ -258,6 +315,7 @@ impl VidaOperationSpec {
             scope,
             VidaOperationPosture::PlanOnly,
             required_capabilities,
+            VidaClaimKind::SharedRead,
             false,
             false,
         )
@@ -274,9 +332,56 @@ impl VidaOperationSpec {
             scope,
             VidaOperationPosture::PlanOnly,
             required_capabilities,
+            VidaClaimKind::ExclusiveWrite,
             true,
             false,
         )
+    }
+
+    #[must_use]
+    pub fn apply_mutation(
+        operation: &str,
+        scope: VidaOperationScope,
+        required_capabilities: Vec<VidaCapabilityScope>,
+    ) -> Self {
+        Self::new(
+            operation,
+            scope,
+            VidaOperationPosture::Apply,
+            required_capabilities,
+            VidaClaimKind::ExclusiveWrite,
+            true,
+            true,
+        )
+    }
+
+    #[must_use]
+    pub fn admin_mutation(
+        operation: &str,
+        scope: VidaOperationScope,
+        required_capabilities: Vec<VidaCapabilityScope>,
+    ) -> Self {
+        Self::new(
+            operation,
+            scope,
+            VidaOperationPosture::Admin,
+            required_capabilities,
+            VidaClaimKind::Admin,
+            true,
+            true,
+        )
+    }
+
+    #[must_use]
+    pub fn automation_mutation(
+        operation: &str,
+        scope: VidaOperationScope,
+        required_capabilities: Vec<VidaCapabilityScope>,
+    ) -> Self {
+        let mut spec = Self::apply_mutation(operation, scope, required_capabilities);
+        spec.required_claim = VidaClaimKind::Dispatch;
+        spec.automation_posture = VidaAutomationPosture::Automation;
+        spec
     }
 
     #[must_use]
@@ -285,6 +390,7 @@ impl VidaOperationSpec {
         scope: VidaOperationScope,
         posture: VidaOperationPosture,
         required_capabilities: Vec<VidaCapabilityScope>,
+        required_claim: VidaClaimKind,
         requires_idempotency_key: bool,
         requires_apply_token: bool,
     ) -> Self {
@@ -292,12 +398,71 @@ impl VidaOperationSpec {
             operation: VidaOperation(operation.to_string()),
             scope,
             posture,
-            required_claim: VidaClaimKind::SharedRead,
+            risk_tier: risk_tier_for_posture(posture),
+            allowed_client_kinds: default_allowed_client_kinds(posture),
+            required_claim,
             requires_project_ref: matches!(scope, VidaOperationScope::Project),
             requires_idempotency_key,
             requires_apply_token,
             required_capabilities,
+            required_consistency: consistency_for_posture(posture),
+            automation_posture: automation_for_posture(posture),
+            result_schema: result_schema_for_posture(posture),
         }
+    }
+}
+
+fn default_allowed_client_kinds(posture: VidaOperationPosture) -> Vec<VidaClientKind> {
+    match posture {
+        VidaOperationPosture::ReadOnly | VidaOperationPosture::PlanOnly => vec![
+            VidaClientKind::Cli,
+            VidaClientKind::Tui,
+            VidaClientKind::Service,
+            VidaClientKind::Dashboard,
+            VidaClientKind::HostAgent,
+        ],
+        VidaOperationPosture::Apply | VidaOperationPosture::Admin => {
+            vec![VidaClientKind::Service, VidaClientKind::HostAgent]
+        }
+    }
+}
+
+fn risk_tier_for_posture(posture: VidaOperationPosture) -> VidaRiskTier {
+    match posture {
+        VidaOperationPosture::ReadOnly => VidaRiskTier::Low,
+        VidaOperationPosture::PlanOnly => VidaRiskTier::Medium,
+        VidaOperationPosture::Apply | VidaOperationPosture::Admin => VidaRiskTier::High,
+    }
+}
+
+fn consistency_for_posture(posture: VidaOperationPosture) -> VidaConsistencyRequirement {
+    match posture {
+        VidaOperationPosture::ReadOnly => VidaConsistencyRequirement::Eventual,
+        VidaOperationPosture::PlanOnly => VidaConsistencyRequirement::Snapshot("plan".to_string()),
+        VidaOperationPosture::Apply | VidaOperationPosture::Admin => {
+            VidaConsistencyRequirement::Strong
+        }
+    }
+}
+
+fn automation_for_posture(posture: VidaOperationPosture) -> VidaAutomationPosture {
+    match posture {
+        VidaOperationPosture::ReadOnly | VidaOperationPosture::PlanOnly => {
+            VidaAutomationPosture::HumanOrAutomation
+        }
+        VidaOperationPosture::Apply | VidaOperationPosture::Admin => VidaAutomationPosture::Human,
+    }
+}
+
+fn result_schema_for_posture(posture: VidaOperationPosture) -> VidaSchemaRef {
+    let schema_id = match posture {
+        VidaOperationPosture::ReadOnly => "vida.command_response",
+        VidaOperationPosture::PlanOnly => "vida.plan",
+        VidaOperationPosture::Apply | VidaOperationPosture::Admin => "vida.receipt",
+    };
+    VidaSchemaRef {
+        schema_id: VidaSchemaId(schema_id.to_string()),
+        version: VidaSchemaVersion(1),
     }
 }
 
@@ -315,6 +480,22 @@ pub enum VidaOperationPosture {
     PlanOnly,
     Apply,
     Admin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VidaRiskTier {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VidaAutomationPosture {
+    Human,
+    Automation,
+    HumanOrAutomation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -339,6 +520,13 @@ pub enum VidaCapabilityScope {
     ServiceInstallApply,
     ServiceAdmin,
     DiagnosticDetail,
+    TaskApply,
+    RunAdvance,
+    CompletionRecord,
+    PacketDispatch,
+    ClaimWrite,
+    ProjectionRebuild,
+    RepairApply,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -1691,6 +1879,67 @@ mod tests {
             );
         }
         assert_eq!(registry.len(), ids.len());
+    }
+
+    #[test]
+    fn mvp_registry_contains_runtime_mutation_operations() {
+        let registry = mvp_operation_registry();
+        for operation_id in [
+            operations::TASK_APPLY,
+            operations::RUN_ADVANCE,
+            operations::COMPLETION_RECORD,
+            operations::PACKET_DISPATCH,
+            operations::CLAIM_ACQUIRE,
+            operations::PROJECTION_REBUILD,
+            operations::REPAIR_APPLY,
+            operations::SERVICE_LIFECYCLE_APPLY,
+        ] {
+            assert!(
+                registry.iter().any(|spec| spec.operation.0 == operation_id),
+                "registry should include `{operation_id}`"
+            );
+        }
+    }
+
+    #[test]
+    fn mvp_registry_mutations_require_claim_and_replay_posture() {
+        for spec in mvp_operation_registry() {
+            match spec.posture {
+                VidaOperationPosture::ReadOnly => {
+                    assert_eq!(spec.required_claim, VidaClaimKind::SharedRead);
+                    assert!(!spec.requires_idempotency_key);
+                    assert!(!spec.requires_apply_token);
+                }
+                VidaOperationPosture::PlanOnly => {
+                    assert!(!spec.requires_apply_token);
+                }
+                VidaOperationPosture::Apply | VidaOperationPosture::Admin => {
+                    assert!(
+                        spec.requires_idempotency_key,
+                        "{} should require idempotency",
+                        spec.operation.0
+                    );
+                    assert!(
+                        spec.requires_apply_token,
+                        "{} should require apply token",
+                        spec.operation.0
+                    );
+                    assert!(
+                        !spec.required_capabilities.is_empty(),
+                        "{} should declare capability",
+                        spec.operation.0
+                    );
+                    assert!(
+                        spec.allowed_client_kinds.iter().all(|kind| matches!(
+                            kind,
+                            VidaClientKind::Service | VidaClientKind::HostAgent
+                        )),
+                        "{} should restrict write clients",
+                        spec.operation.0
+                    );
+                }
+            }
+        }
     }
 
     #[test]

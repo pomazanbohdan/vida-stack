@@ -3,282 +3,647 @@
     "operation": "vida.service.hello",
     "scope": "service",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "read_status"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.service.status",
     "scope": "service",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "read_status"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.service.capabilities",
     "scope": "service",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "read_status"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.service.endpoint.status",
     "scope": "service",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "read_status"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.service.lifecycle.plan",
     "scope": "service",
     "posture": "plan_only",
+    "risk_tier": "medium",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "service_install_plan"
-    ]
+    ],
+    "required_consistency": {
+      "snapshot": "plan"
+    },
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.plan",
+      "version": 1
+    }
   },
   {
     "operation": "vida.service.lifecycle.status",
     "scope": "service",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "read_status"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.events.since",
     "scope": "service",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "read_events"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.session.resolve",
     "scope": "service",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "read_status"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.project.resolve",
     "scope": "project",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "read_status"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.project.status",
     "scope": "project",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "read_status"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.project.registry.list",
     "scope": "service",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "project_registry_read"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.project.registry.get",
     "scope": "service",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "project_registry_read"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.project.registry.discover",
     "scope": "service",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "project_registry_read"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.receipts.get",
     "scope": "project",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "read_receipts"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.wizard.schema.get",
     "scope": "project",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "wizard_read"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.wizard.session.start",
     "scope": "project",
     "posture": "plan_only",
-    "required_claim": "shared_read",
+    "risk_tier": "medium",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
+    "required_claim": "exclusive_write",
     "requires_project_ref": true,
     "requires_idempotency_key": true,
     "requires_apply_token": false,
     "required_capabilities": [
       "wizard_plan"
-    ]
+    ],
+    "required_consistency": {
+      "snapshot": "plan"
+    },
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.plan",
+      "version": 1
+    }
   },
   {
     "operation": "vida.wizard.session.get",
     "scope": "project",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "wizard_read"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.wizard.session.update_input",
     "scope": "project",
     "posture": "plan_only",
-    "required_claim": "shared_read",
+    "risk_tier": "medium",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
+    "required_claim": "exclusive_write",
     "requires_project_ref": true,
     "requires_idempotency_key": true,
     "requires_apply_token": false,
     "required_capabilities": [
       "wizard_plan"
-    ]
+    ],
+    "required_consistency": {
+      "snapshot": "plan"
+    },
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.plan",
+      "version": 1
+    }
   },
   {
     "operation": "vida.wizard.session.validate",
     "scope": "project",
     "posture": "plan_only",
+    "risk_tier": "medium",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "wizard_plan"
-    ]
+    ],
+    "required_consistency": {
+      "snapshot": "plan"
+    },
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.plan",
+      "version": 1
+    }
   },
   {
     "operation": "vida.wizard.session.diff",
     "scope": "project",
     "posture": "plan_only",
+    "risk_tier": "medium",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "wizard_plan"
-    ]
+    ],
+    "required_consistency": {
+      "snapshot": "plan"
+    },
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.plan",
+      "version": 1
+    }
+  },
+  {
+    "operation": "vida.wizard.session.apply",
+    "scope": "project",
+    "posture": "apply",
+    "risk_tier": "high",
+    "allowed_client_kinds": [
+      "service",
+      "host_agent"
+    ],
+    "required_claim": "exclusive_write",
+    "requires_project_ref": true,
+    "requires_idempotency_key": true,
+    "requires_apply_token": true,
+    "required_capabilities": [
+      "wizard_apply"
+    ],
+    "required_consistency": "strong",
+    "automation_posture": "human",
+    "result_schema": {
+      "schema_id": "vida.receipt",
+      "version": 1
+    }
   },
   {
     "operation": "vida.materialization.manifest.get",
     "scope": "project",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "materialization_read"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.materialization.drift.classify",
     "scope": "project",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "materialization_read"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.materialization.update.plan",
     "scope": "project",
     "posture": "plan_only",
+    "risk_tier": "medium",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "materialization_plan"
-    ]
+    ],
+    "required_consistency": {
+      "snapshot": "plan"
+    },
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.plan",
+      "version": 1
+    }
   },
   {
     "operation": "vida.materialization.receipts.list",
     "scope": "project",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
@@ -286,30 +651,249 @@
     "required_capabilities": [
       "read_receipts",
       "materialization_read"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.orchestration.control_plane.summary.get",
     "scope": "project",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": true,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "orchestration_control_plane_read"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
   },
   {
     "operation": "vida.jobs.get",
     "scope": "service",
     "posture": "read_only",
+    "risk_tier": "low",
+    "allowed_client_kinds": [
+      "cli",
+      "tui",
+      "service",
+      "dashboard",
+      "host_agent"
+    ],
     "required_claim": "shared_read",
     "requires_project_ref": false,
     "requires_idempotency_key": false,
     "requires_apply_token": false,
     "required_capabilities": [
       "read_events"
-    ]
+    ],
+    "required_consistency": "eventual",
+    "automation_posture": "human_or_automation",
+    "result_schema": {
+      "schema_id": "vida.command_response",
+      "version": 1
+    }
+  },
+  {
+    "operation": "vida.task.apply",
+    "scope": "project",
+    "posture": "apply",
+    "risk_tier": "high",
+    "allowed_client_kinds": [
+      "service",
+      "host_agent"
+    ],
+    "required_claim": "exclusive_write",
+    "requires_project_ref": true,
+    "requires_idempotency_key": true,
+    "requires_apply_token": true,
+    "required_capabilities": [
+      "task_apply"
+    ],
+    "required_consistency": "strong",
+    "automation_posture": "human",
+    "result_schema": {
+      "schema_id": "vida.receipt",
+      "version": 1
+    }
+  },
+  {
+    "operation": "vida.run.advance",
+    "scope": "project",
+    "posture": "apply",
+    "risk_tier": "high",
+    "allowed_client_kinds": [
+      "service",
+      "host_agent"
+    ],
+    "required_claim": "exclusive_write",
+    "requires_project_ref": true,
+    "requires_idempotency_key": true,
+    "requires_apply_token": true,
+    "required_capabilities": [
+      "run_advance"
+    ],
+    "required_consistency": "strong",
+    "automation_posture": "human",
+    "result_schema": {
+      "schema_id": "vida.receipt",
+      "version": 1
+    }
+  },
+  {
+    "operation": "vida.completion.record",
+    "scope": "project",
+    "posture": "apply",
+    "risk_tier": "high",
+    "allowed_client_kinds": [
+      "service",
+      "host_agent"
+    ],
+    "required_claim": "exclusive_write",
+    "requires_project_ref": true,
+    "requires_idempotency_key": true,
+    "requires_apply_token": true,
+    "required_capabilities": [
+      "completion_record"
+    ],
+    "required_consistency": "strong",
+    "automation_posture": "human",
+    "result_schema": {
+      "schema_id": "vida.receipt",
+      "version": 1
+    }
+  },
+  {
+    "operation": "vida.packet.dispatch",
+    "scope": "project",
+    "posture": "apply",
+    "risk_tier": "high",
+    "allowed_client_kinds": [
+      "service",
+      "host_agent"
+    ],
+    "required_claim": "dispatch",
+    "requires_project_ref": true,
+    "requires_idempotency_key": true,
+    "requires_apply_token": true,
+    "required_capabilities": [
+      "packet_dispatch"
+    ],
+    "required_consistency": "strong",
+    "automation_posture": "automation",
+    "result_schema": {
+      "schema_id": "vida.receipt",
+      "version": 1
+    }
+  },
+  {
+    "operation": "vida.claim.acquire",
+    "scope": "project",
+    "posture": "apply",
+    "risk_tier": "high",
+    "allowed_client_kinds": [
+      "service",
+      "host_agent"
+    ],
+    "required_claim": "exclusive_write",
+    "requires_project_ref": true,
+    "requires_idempotency_key": true,
+    "requires_apply_token": true,
+    "required_capabilities": [
+      "claim_write"
+    ],
+    "required_consistency": "strong",
+    "automation_posture": "human",
+    "result_schema": {
+      "schema_id": "vida.receipt",
+      "version": 1
+    }
+  },
+  {
+    "operation": "vida.projection.rebuild",
+    "scope": "project",
+    "posture": "admin",
+    "risk_tier": "high",
+    "allowed_client_kinds": [
+      "service",
+      "host_agent"
+    ],
+    "required_claim": "admin",
+    "requires_project_ref": true,
+    "requires_idempotency_key": true,
+    "requires_apply_token": true,
+    "required_capabilities": [
+      "projection_rebuild"
+    ],
+    "required_consistency": "strong",
+    "automation_posture": "human",
+    "result_schema": {
+      "schema_id": "vida.receipt",
+      "version": 1
+    }
+  },
+  {
+    "operation": "vida.repair.apply",
+    "scope": "project",
+    "posture": "admin",
+    "risk_tier": "high",
+    "allowed_client_kinds": [
+      "service",
+      "host_agent"
+    ],
+    "required_claim": "admin",
+    "requires_project_ref": true,
+    "requires_idempotency_key": true,
+    "requires_apply_token": true,
+    "required_capabilities": [
+      "repair_apply"
+    ],
+    "required_consistency": "strong",
+    "automation_posture": "human",
+    "result_schema": {
+      "schema_id": "vida.receipt",
+      "version": 1
+    }
+  },
+  {
+    "operation": "vida.service.lifecycle.apply",
+    "scope": "service",
+    "posture": "apply",
+    "risk_tier": "high",
+    "allowed_client_kinds": [
+      "service",
+      "host_agent"
+    ],
+    "required_claim": "exclusive_write",
+    "requires_project_ref": false,
+    "requires_idempotency_key": true,
+    "requires_apply_token": true,
+    "required_capabilities": [
+      "service_install_apply",
+      "service_admin"
+    ],
+    "required_consistency": "strong",
+    "automation_posture": "human",
+    "result_schema": {
+      "schema_id": "vida.receipt",
+      "version": 1
+    }
   }
 ]

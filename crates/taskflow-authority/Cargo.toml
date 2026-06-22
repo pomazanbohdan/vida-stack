@@ -5,9 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cedar-policy = "4.11.1"
 runtime-path-policy = { path = "../runtime-path-policy" }
 taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-core = { path = "../taskflow-core" }
+vida-contracts = { path = "../vida-contracts" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

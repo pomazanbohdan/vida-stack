@@ -1,0 +1,42 @@
+[
+  {
+    "uid": {
+      "type": "VidaPrincipal",
+      "id": "session-ldr-012"
+    },
+    "attrs": {
+      "claim_kind": "exclusive_write",
+      "capability": "task_apply",
+      "client_kind": "host_agent",
+      "project_id": "project-ldr-012",
+      "owned_path": "crates/taskflow-authority"
+    },
+    "parents": []
+  },
+  {
+    "uid": {
+      "type": "VidaAction",
+      "id": "vida.task.apply"
+    },
+    "attrs": {
+      "operation": "vida.task.apply"
+    },
+    "parents": []
+  },
+  {
+    "uid": {
+      "type": "VidaOperation",
+      "id": "vida.task.apply"
+    },
+    "attrs": {
+      "operation": "vida.task.apply",
+      "scope": "project",
+      "required_claim": "exclusive_write",
+      "required_capability": "task_apply",
+      "allowed_client_kind": "host_agent",
+      "project_id": "project-ldr-012",
+      "owned_path": "crates/taskflow-authority"
+    },
+    "parents": []
+  }
+]
