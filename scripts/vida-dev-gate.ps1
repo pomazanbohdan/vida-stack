@@ -183,6 +183,22 @@ function Test-ModeNeedsWindowsBuildEnvironment {
     )
 }
 
+function Test-ModeNeedsBuildConcurrencyGuard {
+    param([string]$ModeName)
+
+    return $ModeName -in @(
+        "quick",
+        "focused-nextest",
+        "package-nextest",
+        "workspace-nextest",
+        "doc-test",
+        "build-debug",
+        "runtime-smoke",
+        "release-package",
+        "release-install"
+    )
+}
+
 function Resolve-InstalledVidaPath {
     if (Test-IsWindowsHost) {
         if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
@@ -560,6 +576,12 @@ if ($Help) {
     exit 0
 }
 
+$BuildGuard = $null
+if (Test-ModeNeedsBuildConcurrencyGuard $Mode) {
+    . (Join-Path $PSScriptRoot "build-concurrency-guard.ps1")
+    $BuildGuard = Enter-VidaBuildConcurrencyGuard -RootDir $RootDir -Scope "build"
+}
+
 Push-Location $RootDir
 try {
     if (Test-ModeNeedsWindowsBuildEnvironment $Mode) {
@@ -717,6 +739,9 @@ try {
     }
 } finally {
     Pop-Location
+    if ($null -ne (Get-Command Exit-VidaBuildConcurrencyGuard -ErrorAction SilentlyContinue)) {
+        Exit-VidaBuildConcurrencyGuard -Guard $BuildGuard
+    }
     if ($Json) {
         $Records | ConvertTo-Json -Depth 6
     } else {
