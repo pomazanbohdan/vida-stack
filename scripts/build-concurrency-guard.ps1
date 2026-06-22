@@ -10,9 +10,15 @@ function Enter-VidaBuildConcurrencyGuard {
     $lockDir = Join-Path $resolvedRoot ".vida\data\state\script-locks"
     $lockPath = Join-Path $lockDir "$Scope.lock"
 
+    $currentToken = $env:VIDA_BUILD_SCRIPT_LOCK_TOKEN
+    $inheritedToken = $env:VIDA_BUILD_SCRIPT_LOCK_INHERITED_TOKEN
+    $hasMatchingInheritedToken = -not [string]::IsNullOrWhiteSpace($currentToken) -and
+        -not [string]::IsNullOrWhiteSpace($inheritedToken) -and
+        $currentToken -eq $inheritedToken
+
     if ($env:VIDA_BUILD_SCRIPT_LOCK_HELD -eq "1" -and
         $env:VIDA_BUILD_SCRIPT_LOCK_PATH -eq $lockPath -and
-        $env:VIDA_BUILD_SCRIPT_LOCK_PID -eq [string]$PID) {
+        ($env:VIDA_BUILD_SCRIPT_LOCK_PID -eq [string]$PID -or $hasMatchingInheritedToken)) {
         return [pscustomobject]@{
             Reentrant = $true
             LockPath = $lockPath
@@ -54,11 +60,16 @@ function Enter-VidaBuildConcurrencyGuard {
             $previousPath = $env:VIDA_BUILD_SCRIPT_LOCK_PATH
             $previousScope = $env:VIDA_BUILD_SCRIPT_LOCK_SCOPE
             $previousPid = $env:VIDA_BUILD_SCRIPT_LOCK_PID
+            $previousToken = $env:VIDA_BUILD_SCRIPT_LOCK_TOKEN
+            $previousInheritedToken = $env:VIDA_BUILD_SCRIPT_LOCK_INHERITED_TOKEN
+            $lockToken = [guid]::NewGuid().ToString("N")
 
             $env:VIDA_BUILD_SCRIPT_LOCK_HELD = "1"
             $env:VIDA_BUILD_SCRIPT_LOCK_PATH = $lockPath
             $env:VIDA_BUILD_SCRIPT_LOCK_SCOPE = $Scope
             $env:VIDA_BUILD_SCRIPT_LOCK_PID = [string]$PID
+            $env:VIDA_BUILD_SCRIPT_LOCK_TOKEN = $lockToken
+            $env:VIDA_BUILD_SCRIPT_LOCK_INHERITED_TOKEN = $lockToken
 
             return [pscustomobject]@{
                 Reentrant = $false
@@ -68,6 +79,8 @@ function Enter-VidaBuildConcurrencyGuard {
                 PreviousPath = $previousPath
                 PreviousScope = $previousScope
                 PreviousPid = $previousPid
+                PreviousToken = $previousToken
+                PreviousInheritedToken = $previousInheritedToken
             }
         } catch [System.IO.IOException] {
             if ($TimeoutSeconds -le 0 -or (Get-Date) -ge $deadline) {
@@ -94,7 +107,9 @@ function Exit-VidaBuildConcurrencyGuard {
             @("VIDA_BUILD_SCRIPT_LOCK_HELD", $Guard.PreviousHeld),
             @("VIDA_BUILD_SCRIPT_LOCK_PATH", $Guard.PreviousPath),
             @("VIDA_BUILD_SCRIPT_LOCK_SCOPE", $Guard.PreviousScope),
-            @("VIDA_BUILD_SCRIPT_LOCK_PID", $Guard.PreviousPid)
+            @("VIDA_BUILD_SCRIPT_LOCK_PID", $Guard.PreviousPid),
+            @("VIDA_BUILD_SCRIPT_LOCK_TOKEN", $Guard.PreviousToken),
+            @("VIDA_BUILD_SCRIPT_LOCK_INHERITED_TOKEN", $Guard.PreviousInheritedToken)
         )) {
         if ($null -eq $entry[1]) {
             Remove-Item "Env:$($entry[0])" -ErrorAction SilentlyContinue
