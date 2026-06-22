@@ -66,6 +66,27 @@ fn binding_projected_task_id(
         })
 }
 
+fn recovery_summary_is_completed_terminal_closure_for_task(
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    run_id: Option<&str>,
+    task_id: &str,
+) -> bool {
+    let Some(summary) = recovery else {
+        return false;
+    };
+    let Some(run_id) = run_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    summary.run_id == run_id
+        && summary.task_id == task_id
+        && summary.lifecycle_stage == "closure_complete"
+        && summary.resume_target == "none"
+        && matches!(
+            summary.resume_status.as_str(),
+            "completed" | "closure_complete"
+        )
+}
+
 fn missing_task_actionability(
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     binding: Option<&crate::state_store::RunGraphContinuationBinding>,
@@ -114,6 +135,17 @@ fn missing_task_actionability(
     }
     if task_ids.iter().any(|id| id == &task_id) {
         if closed_task_ids.iter().any(|id| id == &task_id) {
+            if recovery_summary_is_completed_terminal_closure_for_task(recovery, run_id, &task_id) {
+                return serde_json::json!({
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "checked_task_id": task_id,
+                    "checked_source": source,
+                    "task_status": "closed",
+                    "terminal_closure_recovery": true,
+                });
+            }
             return serde_json::json!({
                 "status": "blocked",
                 "blocker_codes": ["closed_task_active_run_projection_mismatch"],
@@ -1137,6 +1169,62 @@ mod tests {
         assert_eq!(payload["checked_task_id"], "runtime-vida-taskflow-codex");
         assert_eq!(payload["checked_source"], "run_graph_recovery");
         assert_eq!(payload["terminal_runtime_run_without_task"], true);
+    }
+
+    #[test]
+    fn diagnostics_allows_explicit_binding_to_closed_task_when_recovery_is_terminal_closure() {
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "closed-run".to_string(),
+            task_id: "closed-task".to_string(),
+            active_node: "closure".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            handoff_state: "none".to_string(),
+            checkpoint_kind: "none".to_string(),
+            policy_gate: "closed_task_stale_run_retired".to_string(),
+            resume_status: "completed".to_string(),
+            resume_target: "none".to_string(),
+            resume_node: None,
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "closure".to_string(),
+                lifecycle_stage: "closure_complete".to_string(),
+                delegated_cycle_open: false,
+                delegated_cycle_state: "clear".to_string(),
+                local_exception_takeover_gate: "delegated_cycle_clear".to_string(),
+                blocker_code: None,
+                reporting_pause_gate: "closure_candidate".to_string(),
+                continuation_signal: "continue_after_reports".to_string(),
+            },
+        };
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "closed-run".to_string(),
+            task_id: "closed-task".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "run_id": "closed-run",
+                "task_id": "closed-task",
+                "task_status": "closed"
+            }),
+            binding_source: "task_close_reconcile".to_string(),
+            why_this_unit: "test terminal closure binding".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: None,
+            recorded_at: "2026-06-22T16:00:00Z".to_string(),
+        };
+
+        let payload = missing_task_actionability(
+            Some(&recovery),
+            Some(&binding),
+            &["closed-task".to_string()],
+            &["closed-task".to_string()],
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["checked_task_id"], "closed-task");
+        assert_eq!(payload["checked_source"], "explicit_continuation_binding");
+        assert_eq!(payload["terminal_closure_recovery"], true);
     }
 
     #[test]
