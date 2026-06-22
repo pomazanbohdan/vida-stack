@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use redb::{Database, ReadableDatabase, TableDefinition};
+use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use taskflow_contracts::{
     VidaArtifactRef, VidaDomainEventEnvelope, VidaEventCursor, VidaEventRef, VidaIdempotencyKey,
@@ -58,25 +58,25 @@ impl RedbOperationalJournal {
         serde_json::from_slice(row.value()).map_err(storage_error)
     }
 
-    fn write_snapshot(&self, snapshot: &JournalSnapshot) -> Result<(), TaskflowStateError> {
-        let payload = serde_json::to_vec(snapshot).map_err(storage_error)?;
-        let write = self.db.begin_write().map_err(storage_error)?;
-        {
-            let mut table = write.open_table(JOURNAL_TABLE).map_err(storage_error)?;
-            table
-                .insert(SNAPSHOT_KEY, payload.as_slice())
-                .map_err(storage_error)?;
-        }
-        write.commit().map_err(storage_error)
-    }
-
     fn with_snapshot<T>(
         &self,
         mutate: impl FnOnce(&mut JournalSnapshot) -> Result<T, TaskflowStateError>,
     ) -> Result<T, TaskflowStateError> {
-        let mut snapshot = self.read_snapshot()?;
-        let result = mutate(&mut snapshot)?;
-        self.write_snapshot(&snapshot)?;
+        let write = self.db.begin_write().map_err(storage_error)?;
+        let result = {
+            let mut table = write.open_table(JOURNAL_TABLE).map_err(storage_error)?;
+            let mut snapshot = match table.get(SNAPSHOT_KEY).map_err(storage_error)? {
+                Some(row) => serde_json::from_slice(row.value()).map_err(storage_error)?,
+                None => JournalSnapshot::default(),
+            };
+            let result = mutate(&mut snapshot)?;
+            let payload = serde_json::to_vec(&snapshot).map_err(storage_error)?;
+            table
+                .insert(SNAPSHOT_KEY, payload.as_slice())
+                .map_err(storage_error)?;
+            result
+        };
+        write.commit().map_err(storage_error)?;
         Ok(result)
     }
 
