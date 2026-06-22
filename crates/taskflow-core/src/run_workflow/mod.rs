@@ -4,6 +4,8 @@ use statig::{
     blocking::{IntoStateMachine, IntoStateMachineExt, State, Superstate},
 };
 
+use crate::role_step::TaskRoleStep;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunWorkflowAggregate {
     pub run_id: String,
@@ -40,25 +42,25 @@ impl RunWorkflowAggregate {
 
     #[must_use]
     pub fn handle(&mut self, command: RunWorkflowCommand) -> RunWorkflowEvent {
-        let before = self.state;
+        let before = self.state.clone();
         if before.is_terminal() && !matches!(command, RunWorkflowCommand::RepairReopen { .. }) {
             return RunWorkflowEvent {
                 command,
-                state_before: before,
+                state_before: before.clone(),
                 state_after: before,
                 effect_intents: vec![RunWorkflowEffectIntent::RejectMutation],
                 blocker_code: Some("terminal_state_mutation_rejected".to_string()),
             };
         }
 
-        let after = transition_with_statig(before, &command);
+        let after = transition_with_statig(before.clone(), &command);
         if after != before {
-            self.state = after;
+            self.state = after.clone();
             self.version += 1;
         }
 
         RunWorkflowEvent {
-            effect_intents: effect_intents_for(&command, before, after),
+            effect_intents: effect_intents_for(&command, &before, &after),
             command,
             state_before: before,
             state_after: after,
@@ -67,14 +69,11 @@ impl RunWorkflowAggregate {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunWorkflowState {
     Idle,
-    Planning,
-    Developer,
-    Tester,
-    Closure,
+    Active { step: TaskRoleStep },
     ApprovalBlocked,
     LaneBlocked,
     RecoveryBlocked,
@@ -84,46 +83,31 @@ pub enum RunWorkflowState {
 
 impl RunWorkflowState {
     #[must_use]
-    pub fn is_terminal(self) -> bool {
+    pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Completed | Self::Failed)
     }
 
     #[must_use]
-    pub fn canonical_name(self) -> &'static str {
+    pub fn canonical_name(&self) -> String {
         match self {
-            Self::Idle => "idle",
-            Self::Planning => "planning",
-            Self::Developer => "developer",
-            Self::Tester => "tester",
-            Self::Closure => "closure",
-            Self::ApprovalBlocked => "approval_blocked",
-            Self::LaneBlocked => "lane_blocked",
-            Self::RecoveryBlocked => "recovery_blocked",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
+            Self::Idle => "idle".to_string(),
+            Self::Active { step } => step.state_name(),
+            Self::ApprovalBlocked => "approval_blocked".to_string(),
+            Self::LaneBlocked => "lane_blocked".to_string(),
+            Self::RecoveryBlocked => "recovery_blocked".to_string(),
+            Self::Completed => "completed".to_string(),
+            Self::Failed => "failed".to_string(),
         }
     }
 
-    fn from_role_step(role: RoleStep) -> Self {
-        match role {
-            RoleStep::Planning => Self::Planning,
-            RoleStep::Developer => Self::Developer,
-            RoleStep::Tester => Self::Tester,
-            RoleStep::Closure => Self::Closure,
-        }
+    fn from_role_step(step: TaskRoleStep) -> Self {
+        Self::Active { step }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RoleStep {
-    Planning,
-    Developer,
-    Tester,
-    Closure,
-}
+pub type RoleStep = TaskRoleStep;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockReason {
     Approval,
@@ -178,38 +162,38 @@ pub fn transition_matrix() -> Vec<TransitionMatrixRow> {
         (
             RunWorkflowState::Idle,
             RunWorkflowCommand::Start {
-                first_step: RoleStep::Planning,
+                first_step: RoleStep::planning(),
             },
             "start",
         ),
         (
-            RunWorkflowState::Planning,
+            RunWorkflowState::from_role_step(RoleStep::planning()),
             RunWorkflowCommand::Dispatch {
-                target: RoleStep::Developer,
+                target: RoleStep::developer(),
             },
             "dispatch_developer",
         ),
         (
-            RunWorkflowState::Developer,
+            RunWorkflowState::from_role_step(RoleStep::developer()),
             RunWorkflowCommand::CompleteLane {
-                next: Some(RoleStep::Tester),
+                next: Some(RoleStep::tester()),
             },
             "complete_developer",
         ),
         (
-            RunWorkflowState::Tester,
+            RunWorkflowState::from_role_step(RoleStep::tester()),
             RunWorkflowCommand::CompleteLane {
-                next: Some(RoleStep::Closure),
+                next: Some(RoleStep::closure()),
             },
             "complete_tester",
         ),
         (
-            RunWorkflowState::Closure,
+            RunWorkflowState::from_role_step(RoleStep::closure()),
             RunWorkflowCommand::Close,
             "close",
         ),
         (
-            RunWorkflowState::Developer,
+            RunWorkflowState::from_role_step(RoleStep::developer()),
             RunWorkflowCommand::Block {
                 reason: BlockReason::Lane,
             },
@@ -218,12 +202,12 @@ pub fn transition_matrix() -> Vec<TransitionMatrixRow> {
         (
             RunWorkflowState::LaneBlocked,
             RunWorkflowCommand::Recover {
-                target: RoleStep::Developer,
+                target: RoleStep::developer(),
             },
             "recover",
         ),
         (
-            RunWorkflowState::Planning,
+            RunWorkflowState::from_role_step(RoleStep::planning()),
             RunWorkflowCommand::Fail {
                 code: "failed".to_string(),
                 retryable: false,
@@ -233,14 +217,14 @@ pub fn transition_matrix() -> Vec<TransitionMatrixRow> {
         (
             RunWorkflowState::Completed,
             RunWorkflowCommand::Dispatch {
-                target: RoleStep::Developer,
+                target: RoleStep::developer(),
             },
             "terminal_reject",
         ),
         (
             RunWorkflowState::Completed,
             RunWorkflowCommand::RepairReopen {
-                target: RoleStep::Developer,
+                target: RoleStep::developer(),
             },
             "repair_reopen",
         ),
@@ -249,7 +233,7 @@ pub fn transition_matrix() -> Vec<TransitionMatrixRow> {
     cases
         .into_iter()
         .map(|(from, command, name)| {
-            let mut aggregate = RunWorkflowAggregate::from_snapshot("run", "task", from, 0);
+            let mut aggregate = RunWorkflowAggregate::from_snapshot("run", "task", from.clone(), 0);
             let event = aggregate.handle(command);
             TransitionMatrixRow {
                 from,
@@ -306,7 +290,7 @@ pub struct StatusMappingCase {
     pub decision: StatusMappingDecision,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StatusMappingDecision {
     State(RunWorkflowState),
@@ -320,17 +304,29 @@ pub fn status_mapping_corpus() -> Vec<StatusMappingCase> {
         status_case(
             "developer_dispatch_ready",
             "ready",
-            RunWorkflowState::Planning,
+            RunWorkflowState::from_role_step(RoleStep::planning()),
         ),
-        status_case("developer_running", "running", RunWorkflowState::Developer),
+        status_case(
+            "developer_running",
+            "running",
+            RunWorkflowState::from_role_step(RoleStep::developer()),
+        ),
         status_case(
             "tester_dispatch_ready",
             "ready",
-            RunWorkflowState::Developer,
+            RunWorkflowState::from_role_step(RoleStep::developer()),
         ),
-        status_case("tester_running", "running", RunWorkflowState::Tester),
+        status_case(
+            "tester_running",
+            "running",
+            RunWorkflowState::from_role_step(RoleStep::tester()),
+        ),
         status_case("tester_blocked", "blocked", RunWorkflowState::LaneBlocked),
-        status_case("closure_active", "running", RunWorkflowState::Closure),
+        status_case(
+            "closure_active",
+            "running",
+            RunWorkflowState::from_role_step(RoleStep::closure()),
+        ),
         status_case("closure_complete", "completed", RunWorkflowState::Completed),
         status_case("failed_terminal", "failed", RunWorkflowState::Failed),
         StatusMappingCase {
@@ -360,16 +356,16 @@ fn transition_with_statig(
     command: &RunWorkflowCommand,
 ) -> RunWorkflowState {
     let mut uninitialized = RunWorkflowMachine.uninitialized_state_machine();
-    *uninitialized.state_mut() = current;
+    *uninitialized.state_mut() = current.clone();
     let mut machine = uninitialized.init();
     machine.handle(command);
-    *machine.state()
+    machine.state().clone()
 }
 
 fn effect_intents_for(
     command: &RunWorkflowCommand,
-    before: RunWorkflowState,
-    after: RunWorkflowState,
+    before: &RunWorkflowState,
+    after: &RunWorkflowState,
 ) -> Vec<RunWorkflowEffectIntent> {
     if before == after {
         return vec![RunWorkflowEffectIntent::PersistSnapshot];
@@ -419,26 +415,27 @@ impl State<RunWorkflowMachine> for RunWorkflowState {
         event: &RunWorkflowCommand,
         _: &mut (),
     ) -> statig::Outcome<Self> {
-        match (*self, event) {
-            (Self::Idle, RunWorkflowCommand::Start { first_step }) => {
-                Transition(Self::from_role_step(*first_step))
+        match event {
+            RunWorkflowCommand::Start { first_step } if matches!(self, Self::Idle) => {
+                Transition(Self::from_role_step(first_step.clone()))
             }
-            (_, RunWorkflowCommand::Dispatch { target }) if self.is_active() => {
-                Transition(Self::from_role_step(*target))
+            RunWorkflowCommand::Dispatch { target } if self.is_active() => {
+                Transition(Self::from_role_step(target.clone()))
             }
-            (_, RunWorkflowCommand::CompleteLane { next }) if self.is_active() => next
+            RunWorkflowCommand::CompleteLane { next } if self.is_active() => next
+                .clone()
                 .map(Self::from_role_step)
                 .map_or(Transition(Self::Completed), Transition),
-            (_, RunWorkflowCommand::Block { reason }) if self.is_active() => {
-                Transition(blocked_state(*reason))
+            RunWorkflowCommand::Block { reason } if self.is_active() => {
+                Transition(blocked_state(reason.clone()))
             }
-            (_, RunWorkflowCommand::Recover { target }) if self.is_blocked() => {
-                Transition(Self::from_role_step(*target))
+            RunWorkflowCommand::Recover { target } if self.is_blocked() => {
+                Transition(Self::from_role_step(target.clone()))
             }
-            (Self::Closure, RunWorkflowCommand::Close) => Transition(Self::Completed),
-            (_, RunWorkflowCommand::Fail { .. }) if !self.is_terminal() => Transition(Self::Failed),
-            (_, RunWorkflowCommand::RepairReopen { target }) if self.is_terminal() => {
-                Transition(Self::from_role_step(*target))
+            RunWorkflowCommand::Close if self.is_closure_step() => Transition(Self::Completed),
+            RunWorkflowCommand::Fail { .. } if !self.is_terminal() => Transition(Self::Failed),
+            RunWorkflowCommand::RepairReopen { target } if self.is_terminal() => {
+                Transition(Self::from_role_step(target.clone()))
             }
             _ => Super,
         }
@@ -479,18 +476,19 @@ where
 }
 
 impl RunWorkflowState {
-    fn is_active(self) -> bool {
-        matches!(
-            self,
-            Self::Planning | Self::Developer | Self::Tester | Self::Closure
-        )
+    fn is_active(&self) -> bool {
+        matches!(self, Self::Active { .. })
     }
 
-    fn is_blocked(self) -> bool {
+    fn is_blocked(&self) -> bool {
         matches!(
             self,
             Self::ApprovalBlocked | Self::LaneBlocked | Self::RecoveryBlocked
         )
+    }
+
+    fn is_closure_step(&self) -> bool {
+        matches!(self, Self::Active { step } if step.closes_workflow)
     }
 }
 
@@ -516,16 +514,16 @@ mod tests {
     fn happy_path_commands() -> Vec<RunWorkflowCommand> {
         vec![
             RunWorkflowCommand::Start {
-                first_step: RoleStep::Planning,
+                first_step: RoleStep::planning(),
             },
             RunWorkflowCommand::Dispatch {
-                target: RoleStep::Developer,
+                target: RoleStep::developer(),
             },
             RunWorkflowCommand::CompleteLane {
-                next: Some(RoleStep::Tester),
+                next: Some(RoleStep::tester()),
             },
             RunWorkflowCommand::CompleteLane {
-                next: Some(RoleStep::Closure),
+                next: Some(RoleStep::closure()),
             },
             RunWorkflowCommand::Close,
         ]
@@ -543,7 +541,7 @@ mod tests {
         );
         assert!(matrix.iter().any(|row| !row.admitted));
         assert!(diagram.starts_with("stateDiagram-v2"));
-        assert!(diagram.contains("developer --> lane_blocked: block_lane"));
+        assert!(diagram.contains("role_developer --> lane_blocked: block_lane"));
         assert!(diagram.contains("completed --> completed: terminal_reject rejected"));
     }
 
@@ -569,7 +567,7 @@ mod tests {
             9,
         );
         let rejected = aggregate.handle(RunWorkflowCommand::Dispatch {
-            target: RoleStep::Developer,
+            target: RoleStep::developer(),
         });
 
         assert_eq!(aggregate.state, RunWorkflowState::Completed);
@@ -584,9 +582,12 @@ mod tests {
         );
 
         let reopened = aggregate.handle(RunWorkflowCommand::RepairReopen {
-            target: RoleStep::Developer,
+            target: RoleStep::developer(),
         });
-        assert_eq!(reopened.state_after, RunWorkflowState::Developer);
+        assert_eq!(
+            reopened.state_after,
+            RunWorkflowState::from_role_step(RoleStep::developer())
+        );
         assert_eq!(aggregate.version, 10);
     }
 
@@ -612,7 +613,7 @@ mod tests {
     fn aggregate_actions_emit_effect_intents_without_io_payloads() {
         let mut aggregate = RunWorkflowAggregate::new("run-020", "ldr-020");
         let event = aggregate.handle(RunWorkflowCommand::Start {
-            first_step: RoleStep::Planning,
+            first_step: RoleStep::planning(),
         });
 
         assert_eq!(
@@ -622,6 +623,74 @@ mod tests {
                 RunWorkflowEffectIntent::DispatchRole
             ]
         );
-        assert_eq!(aggregate.state, RunWorkflowState::Planning);
+        assert_eq!(
+            aggregate.state,
+            RunWorkflowState::from_role_step(RoleStep::planning())
+        );
+    }
+
+    #[test]
+    fn configured_dev_team_role_steps_replay_in_declared_order() {
+        let analyst = RoleStep::new(
+            "analyst",
+            "business_analyst",
+            "specification",
+            "design_gate",
+        );
+        let developer = RoleStep::new("developer", "worker", "implementation", "implementation");
+        let coach = RoleStep::new(
+            "coach_implementation_gate",
+            "coach",
+            "coach",
+            "implementation_gate",
+        );
+        let tester = RoleStep::new("tester", "verifier", "verification", "verification");
+        let prover =
+            RoleStep::new("prover", "prover", "release_readiness", "release_readiness").closing();
+
+        let commands = vec![
+            RunWorkflowCommand::Start {
+                first_step: analyst.clone(),
+            },
+            RunWorkflowCommand::CompleteLane {
+                next: Some(developer.clone()),
+            },
+            RunWorkflowCommand::CompleteLane {
+                next: Some(coach.clone()),
+            },
+            RunWorkflowCommand::CompleteLane {
+                next: Some(tester.clone()),
+            },
+            RunWorkflowCommand::CompleteLane {
+                next: Some(prover.clone()),
+            },
+            RunWorkflowCommand::Close,
+        ];
+
+        let (aggregate, events) =
+            replay_events(RunWorkflowAggregate::new("run-022", "ldr-022"), &commands);
+
+        assert_eq!(
+            events[0].state_after,
+            RunWorkflowState::from_role_step(analyst)
+        );
+        assert_eq!(
+            events[1].state_after,
+            RunWorkflowState::from_role_step(developer)
+        );
+        assert_eq!(
+            events[2].state_after,
+            RunWorkflowState::from_role_step(coach)
+        );
+        assert_eq!(
+            events[3].state_after,
+            RunWorkflowState::from_role_step(tester)
+        );
+        assert_eq!(
+            events[4].state_after,
+            RunWorkflowState::from_role_step(prover)
+        );
+        assert_eq!(aggregate.state, RunWorkflowState::Completed);
+        assert_eq!(aggregate.version, 6);
     }
 }
