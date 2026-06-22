@@ -2220,29 +2220,23 @@ fn read_cached_lane_show_projection(state_dir: &Path, projection_name: &str) -> 
 
 fn current_session_task_claim_ids(operator_session_projection: &serde_json::Value) -> Vec<String> {
     let mut task_ids = Vec::new();
-    for field in [
-        "current_session_task_claims",
-        "active_task_claim_blockers",
-        "claim_conflicts",
-    ] {
-        let Some(claims) = operator_session_projection
-            .get(field)
-            .and_then(serde_json::Value::as_array)
+    let Some(claims) = operator_session_projection
+        .get("current_session_task_claims")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return task_ids;
+    };
+    for claim in claims {
+        let Some(task_id) = claim
+            .get("task_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
         else {
             continue;
         };
-        for claim in claims {
-            let Some(task_id) = claim
-                .get("task_id")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
-                continue;
-            };
-            if !task_ids.iter().any(|known| known == task_id) {
-                task_ids.push(task_id.to_string());
-            }
+        if !task_ids.iter().any(|known| known == task_id) {
+            task_ids.push(task_id.to_string());
         }
     }
     task_ids
@@ -2284,11 +2278,6 @@ async fn latest_scoped_lane_summary(
     scoped_task_ids: &[String],
 ) -> Result<Option<crate::state_store::RunGraphDispatchReceiptSummary>, crate::StateStoreError> {
     for task_id in scoped_task_ids {
-        if let Some(receipt) = store.run_graph_dispatch_receipt(task_id).await? {
-            return Ok(Some(
-                crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt),
-            ));
-        }
         if let Ok(status) = store.run_graph_status(task_id).await {
             if let Some(summary) = store
                 .run_graph_dispatch_receipt_summary_for_status(&status)
@@ -4097,13 +4086,12 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-            let scoped_summary = latest_scoped_lane_summary(&store, &scoped_task_ids).await;
-            let summary = match scoped_summary {
+            let current_session_summary = store
+                .latest_run_graph_dispatch_receipt_summary_for_current_session()
+                .await;
+            let summary = match current_session_summary {
                 Ok(Some(summary)) => Ok(Some(summary)),
-                Ok(None) => match store
-                    .latest_run_graph_dispatch_receipt_summary_for_current_session()
-                    .await
-                {
+                Ok(None) => match latest_scoped_lane_summary(&store, &scoped_task_ids).await {
                     Ok(Some(summary)) => Ok(Some(summary)),
                     Ok(None) => match store
                         .latest_active_exception_takeover_dispatch_receipt()
@@ -5750,9 +5738,13 @@ mod tests {
     }
 
     #[test]
-    fn current_session_task_claim_ids_accepts_claim_blocker_task_evidence() {
+    fn current_session_task_claim_ids_excludes_foreign_blocker_and_conflict_evidence() {
         let projection = serde_json::json!({
-            "current_session_task_claims": [],
+            "current_session_task_claims": [
+                {"task_id": " current-task "},
+                {"task_id": "current-task"},
+                {"task_id": ""}
+            ],
             "active_task_claim_blockers": [
                 {"task_id": "blocked-active-task"}
             ],
@@ -5764,10 +5756,7 @@ mod tests {
 
         assert_eq!(
             current_session_task_claim_ids(&projection),
-            vec![
-                "blocked-active-task".to_string(),
-                "conflict-active-task".to_string()
-            ]
+            vec!["current-task".to_string()]
         );
     }
 
@@ -5833,8 +5822,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lane_show_latest_prefers_active_task_ancestor_exception_takeover() {
+    async fn lane_show_latest_prefers_current_session_active_task_ancestor_exception_takeover() {
         let _guard = acquire_lane_surface_test_lock();
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "lane-show-latest-current-session");
+        }
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -5887,6 +5880,27 @@ mod tests {
             })
             .await
             .expect("create active child task");
+        store
+            .acquire_orchestrator_claim(
+                crate::state_store_orchestrator_claim::AcquireOrchestratorClaimRequest {
+                    claim_id: "lane-show-latest-current-task-claim".to_string(),
+                    state_root_id: root.display().to_string(),
+                    worktree_environment_id: root.display().to_string(),
+                    orchestrator_session_id: "lane-show-latest-current-session".to_string(),
+                    process_id: Some(std::process::id()),
+                    task_id: Some(active_child_id.to_string()),
+                    run_id: None,
+                    lane_id: None,
+                    claim_kind: "active_task_session_claim".to_string(),
+                    conflict_domain: Some(format!("task:{active_child_id}")),
+                    owned_paths: Vec::new(),
+                    read_only_paths: Vec::new(),
+                    lease_mode: crate::state_store_orchestrator_claim::LeaseMode::Observe,
+                    lease_seconds: 3600,
+                },
+            )
+            .await
+            .expect("claim active child for current session");
 
         let mut scoped_status = crate::taskflow_run_graph::default_run_graph_status(
             parent_run_id,
@@ -5965,6 +5979,10 @@ mod tests {
         assert_eq!(cached_json["lane_status"], "lane_exception_takeover");
 
         let _ = std::fs::remove_dir_all(&root);
+        match saved_session_id {
+            Some(value) => unsafe { std::env::set_var("VIDA_SESSION_ID", value) },
+            None => unsafe { std::env::remove_var("VIDA_SESSION_ID") },
+        }
     }
 
     #[test]
