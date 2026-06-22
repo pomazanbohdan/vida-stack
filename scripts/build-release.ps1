@@ -372,10 +372,8 @@ if ($Help) {
 }
 
 try {
-    if ($env:VIDA_BUILD_SCRIPT_LOCK_HELD -ne "1") {
-        . (Join-Path $PSScriptRoot "build-concurrency-guard.ps1")
-        $BuildGuard = Enter-VidaBuildConcurrencyGuard -RootDir $RootDir -Scope "build"
-    }
+    . (Join-Path $PSScriptRoot "build-concurrency-guard.ps1")
+    $BuildGuard = Enter-VidaBuildConcurrencyGuard -RootDir $RootDir -Scope "build"
 
     if (-not $SkipBuild -and (Test-Truthy $env:VIDA_RELEASE_SKIP_BUILD)) {
         $SkipBuild = $true
