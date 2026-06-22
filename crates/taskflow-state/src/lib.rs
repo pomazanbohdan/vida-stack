@@ -143,6 +143,25 @@ pub struct JournalArtifactRecord {
     pub path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct JournalAppendIdempotencyRecord {
+    request_fingerprint: String,
+    receipt: JournalAppendReceipt,
+}
+
+fn append_request_fingerprint(request: &JournalAppendRequest) -> String {
+    format!(
+        "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        request.stream_id,
+        request.command_id,
+        request.idempotency_key,
+        request.causation_id,
+        request.correlation_id,
+        request.events,
+        request.effect_intents
+    )
+}
+
 pub trait OperationalJournal {
     fn append(
         &mut self,
@@ -188,6 +207,7 @@ pub struct InMemoryOperationalJournal {
     streams: HashMap<String, Vec<VidaDomainEventEnvelope>>,
     global_events: Vec<JournalEventRecord>,
     idempotency: HashMap<String, JournalIdempotencyRecord>,
+    append_idempotency: HashMap<String, JournalAppendIdempotencyRecord>,
     outbox: Vec<JournalOutboxRecord>,
     projection_checkpoints: HashMap<String, VidaProjectionCheckpoint>,
     projection_failures: Vec<JournalProjectionFailure>,
@@ -219,6 +239,16 @@ impl OperationalJournal for InMemoryOperationalJournal {
         &mut self,
         request: JournalAppendRequest,
     ) -> Result<JournalAppendReceipt, TaskflowStateError> {
+        let idempotency_key = request.idempotency_key.clone();
+        let command_id = request.command_id.clone();
+        let request_fingerprint = append_request_fingerprint(&request);
+        if let Some(record) = self.append_idempotency.get(&idempotency_key.0) {
+            if record.request_fingerprint == request_fingerprint {
+                return Ok(record.receipt.clone());
+            }
+            return Err(TaskflowStateError::IdempotencyConflict(idempotency_key.0));
+        }
+
         let key = request.stream_id.0.clone();
         let stream = self.streams.entry(key.clone()).or_default();
         let actual_version = stream.len() as u64;
@@ -258,7 +288,7 @@ impl OperationalJournal for InMemoryOperationalJournal {
         }
 
         let last_index = self.global_events.len().saturating_sub(1);
-        Ok(JournalAppendReceipt {
+        let receipt = JournalAppendReceipt {
             stream_id: request.stream_id,
             first_global_cursor: self
                 .global_events
@@ -271,7 +301,25 @@ impl OperationalJournal for InMemoryOperationalJournal {
             stream_version: VidaStreamVersion(stream.len() as u64),
             event_count,
             effect_intent_count,
-        })
+        };
+        self.idempotency.insert(
+            idempotency_key.0.clone(),
+            JournalIdempotencyRecord {
+                key: idempotency_key.clone(),
+                command_id: command_id.clone(),
+                state: JournalIdempotencyState::Completed,
+                receipt_id: Some(VidaReceiptId(format!("append:{}", command_id.0))),
+                conflict_reason: None,
+            },
+        );
+        self.append_idempotency.insert(
+            idempotency_key.0,
+            JournalAppendIdempotencyRecord {
+                request_fingerprint,
+                receipt: receipt.clone(),
+            },
+        );
+        Ok(receipt)
     }
 
     fn load_stream(&self, stream_id: &VidaStreamRef) -> Vec<VidaDomainEventEnvelope> {
@@ -496,15 +544,60 @@ mod tests {
 
         let conflict = journal
             .append(append_request(0, vec![event(2)], Vec::new()))
-            .expect_err("stale expected version must fail");
+            .expect_err("changed payload with duplicate idempotency key must fail");
         assert_eq!(
             conflict,
-            TaskflowStateError::StreamVersionConflict {
-                stream_id: "stream-1".to_string(),
-                expected: Some(0),
-                actual: 1,
-            }
+            TaskflowStateError::IdempotencyConflict("idem-1".to_string())
         );
+    }
+
+    #[test]
+    fn operational_journal_returns_cached_receipt_for_same_payload_retry() {
+        let mut journal = InMemoryOperationalJournal::default();
+
+        let receipt = journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("first append should pass");
+        let exact_retry = journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("same payload retry should return cached receipt");
+        let updated_version_retry = journal
+            .append(append_request(1, vec![event(1)], vec![effect("effect-1")]))
+            .expect("same payload retry with updated precondition should return cached receipt");
+
+        assert_eq!(exact_retry, receipt);
+        assert_eq!(updated_version_retry, receipt);
+        assert_eq!(
+            journal
+                .load_stream(&VidaStreamRef("stream-1".to_string()))
+                .len(),
+            1
+        );
+        assert_eq!(journal.claim_outbox_batch("worker-1", 10).len(), 1);
+    }
+
+    #[test]
+    fn operational_journal_rejects_changed_payload_for_same_idempotency_key() {
+        let mut journal = InMemoryOperationalJournal::default();
+
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("first append should pass");
+        let replay = journal
+            .append(append_request(1, vec![event(2)], vec![effect("effect-2")]))
+            .expect_err("changed payload with same idempotency key must fail");
+
+        assert_eq!(
+            replay,
+            TaskflowStateError::IdempotencyConflict("idem-1".to_string())
+        );
+        assert_eq!(
+            journal
+                .load_stream(&VidaStreamRef("stream-1".to_string()))
+                .len(),
+            1
+        );
+        assert_eq!(journal.claim_outbox_batch("worker-1", 10).len(), 1);
     }
 
     #[test]
