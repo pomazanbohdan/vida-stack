@@ -37,6 +37,14 @@ pub struct TaskCloseCommand {
     pub auto_closed_parents: Vec<TaskAggregateTaskSnapshot>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskStatusUpdateCommand {
+    pub task: TaskAggregateTaskSnapshot,
+    pub occurred_at: String,
+    pub auto_closed_parents: Vec<TaskAggregateTaskSnapshot>,
+    pub auto_reopened_parents: Vec<TaskAggregateTaskSnapshot>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum TaskAggregateEvent {
@@ -48,6 +56,16 @@ pub enum TaskAggregateEvent {
     ParentAutoClosed {
         task_id: String,
         reason: String,
+        occurred_at: String,
+        source_child_id: String,
+    },
+    TaskStatusUpdated {
+        task_id: String,
+        status: String,
+        occurred_at: String,
+    },
+    ParentAutoReopened {
+        task_id: String,
         occurred_at: String,
         source_child_id: String,
     },
@@ -68,6 +86,18 @@ pub enum TaskAggregateMutation {
         updated_at: String,
         closed_at: String,
         close_reason: String,
+    },
+    SetTaskStatus {
+        task_id: String,
+        status: String,
+        updated_at: String,
+        closed_at: Option<String>,
+        close_reason: Option<String>,
+    },
+    AutoReopenParent {
+        task_id: String,
+        status: String,
+        updated_at: String,
     },
 }
 
@@ -111,6 +141,64 @@ pub fn plan_close_task(command: TaskCloseCommand) -> TaskMutationPlan {
             updated_at: parent.updated_at.clone(),
             closed_at: parent.closed_at.unwrap_or(parent.updated_at),
             close_reason: parent_reason,
+        });
+        touched_task_ids.push(parent.id);
+    }
+
+    TaskMutationPlan {
+        events,
+        mutations,
+        touched_task_ids,
+    }
+}
+
+#[must_use]
+pub fn plan_update_task_status(command: TaskStatusUpdateCommand) -> TaskMutationPlan {
+    let task_id = command.task.id;
+    let mut events = vec![TaskAggregateEvent::TaskStatusUpdated {
+        task_id: task_id.clone(),
+        status: command.task.status.clone(),
+        occurred_at: command.occurred_at.clone(),
+    }];
+    let mut mutations = vec![TaskAggregateMutation::SetTaskStatus {
+        task_id: task_id.clone(),
+        status: command.task.status,
+        updated_at: command.occurred_at,
+        closed_at: command.task.closed_at,
+        close_reason: command.task.close_reason,
+    }];
+    let mut touched_task_ids = vec![task_id.clone()];
+
+    for parent in command.auto_closed_parents {
+        let parent_reason = parent
+            .close_reason
+            .unwrap_or_else(|| format!("all direct child tasks closed after closing `{task_id}`"));
+        events.push(TaskAggregateEvent::ParentAutoClosed {
+            task_id: parent.id.clone(),
+            reason: parent_reason.clone(),
+            occurred_at: parent.updated_at.clone(),
+            source_child_id: task_id.clone(),
+        });
+        mutations.push(TaskAggregateMutation::AutoCloseParent {
+            task_id: parent.id.clone(),
+            status: "closed".to_string(),
+            updated_at: parent.updated_at.clone(),
+            closed_at: parent.closed_at.unwrap_or(parent.updated_at),
+            close_reason: parent_reason,
+        });
+        touched_task_ids.push(parent.id);
+    }
+
+    for parent in command.auto_reopened_parents {
+        events.push(TaskAggregateEvent::ParentAutoReopened {
+            task_id: parent.id.clone(),
+            occurred_at: parent.updated_at.clone(),
+            source_child_id: task_id.clone(),
+        });
+        mutations.push(TaskAggregateMutation::AutoReopenParent {
+            task_id: parent.id.clone(),
+            status: parent.status,
+            updated_at: parent.updated_at,
         });
         touched_task_ids.push(parent.id);
     }
@@ -168,6 +256,46 @@ mod tests {
                 occurred_at: "100".to_string(),
                 source_child_id: "child".to_string(),
             }
+        );
+        assert_eq!(plan.touched_task_ids, vec!["child", "parent"]);
+    }
+
+    #[test]
+    fn task_aggregate_plans_status_update_and_parent_reopen_events() {
+        let mut parent =
+            TaskAggregateTaskSnapshot::closed("parent", "101", Some("root".to_string()));
+        parent.status = "in_progress".to_string();
+        parent.closed_at = None;
+        parent.close_reason = None;
+
+        let plan = plan_update_task_status(TaskStatusUpdateCommand {
+            task: TaskAggregateTaskSnapshot {
+                id: "child".to_string(),
+                status: "in_progress".to_string(),
+                updated_at: "101".to_string(),
+                closed_at: None,
+                close_reason: None,
+                parent_id: Some("parent".to_string()),
+            },
+            occurred_at: "101".to_string(),
+            auto_closed_parents: Vec::new(),
+            auto_reopened_parents: vec![parent],
+        });
+
+        assert_eq!(
+            plan.events,
+            vec![
+                TaskAggregateEvent::TaskStatusUpdated {
+                    task_id: "child".to_string(),
+                    status: "in_progress".to_string(),
+                    occurred_at: "101".to_string(),
+                },
+                TaskAggregateEvent::ParentAutoReopened {
+                    task_id: "parent".to_string(),
+                    occurred_at: "101".to_string(),
+                    source_child_id: "child".to_string(),
+                },
+            ]
         );
         assert_eq!(plan.touched_task_ids, vec!["child", "parent"]);
     }

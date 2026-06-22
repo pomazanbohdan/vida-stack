@@ -11,7 +11,8 @@ use taskflow_authority::task_transition::{
     TaskLifecycleRuntimeEvidence,
 };
 use taskflow_core::task::aggregate::{
-    plan_close_task, TaskAggregateTaskSnapshot, TaskCloseCommand,
+    plan_close_task, plan_update_task_status, TaskAggregateTaskSnapshot, TaskCloseCommand,
+    TaskStatusUpdateCommand,
 };
 use taskflow_core::task::lifecycle::{TaskLifecycleEvent, TaskLifecycleInput, TaskLifecycleStatus};
 
@@ -2848,6 +2849,7 @@ impl StateStore {
             planner_metadata,
         } = request;
         let mut task = self.show_task(task_id).await?;
+        let mut status_update_requested = false;
         if let Some(title) = title {
             let trimmed = title.trim();
             if trimmed.is_empty() {
@@ -2858,6 +2860,7 @@ impl StateStore {
             task.title = trimmed.to_string();
         }
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
+            status_update_requested = true;
             let current_status =
                 Self::task_lifecycle_status_for_authority(task_id, &task.status).ok();
             let requested_lifecycle_status =
@@ -3052,12 +3055,61 @@ impl StateStore {
                 ),
             });
         }
-        for parent in reopened_parents {
-            self.persist_task_record(parent).await?;
-        }
         let closed_parents = self
             .filter_auto_closed_parents_ready_for_close(closed_parents)
             .await?;
+        if status_update_requested {
+            let status_plan = plan_update_task_status(TaskStatusUpdateCommand {
+                task: TaskAggregateTaskSnapshot {
+                    id: task.id.clone(),
+                    status: task.status.clone(),
+                    updated_at: task.updated_at.clone(),
+                    closed_at: task.closed_at.clone(),
+                    close_reason: task.close_reason.clone(),
+                    parent_id: Self::parent_id_for_task(&task),
+                },
+                occurred_at: task.updated_at.clone(),
+                auto_closed_parents: closed_parents
+                    .iter()
+                    .map(|parent| TaskAggregateTaskSnapshot {
+                        id: parent.id.clone(),
+                        status: parent.status.clone(),
+                        updated_at: parent.updated_at.clone(),
+                        closed_at: parent.closed_at.clone(),
+                        close_reason: parent.close_reason.clone(),
+                        parent_id: Self::parent_id_for_task(parent),
+                    })
+                    .collect(),
+                auto_reopened_parents: reopened_parents
+                    .iter()
+                    .map(|parent| TaskAggregateTaskSnapshot {
+                        id: parent.id.clone(),
+                        status: parent.status.clone(),
+                        updated_at: parent.updated_at.clone(),
+                        closed_at: parent.closed_at.clone(),
+                        close_reason: parent.close_reason.clone(),
+                        parent_id: Self::parent_id_for_task(parent),
+                    })
+                    .collect(),
+            });
+            let persisted_task_ids = reopened_parents
+                .iter()
+                .map(|parent| parent.id.clone())
+                .chain(closed_parents.iter().map(|parent| parent.id.clone()))
+                .chain(std::iter::once(task.id.clone()))
+                .collect::<BTreeSet<_>>();
+            debug_assert_eq!(
+                status_plan
+                    .touched_task_ids
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+                persisted_task_ids
+            );
+        }
+        for parent in &reopened_parents {
+            self.persist_task_record(parent.clone()).await?;
+        }
         self.persist_task_record(task.clone()).await?;
         for parent in &closed_parents {
             self.persist_task_record(parent.clone()).await?;
