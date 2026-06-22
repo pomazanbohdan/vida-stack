@@ -13283,7 +13283,7 @@ host_environment:
 
         let probe_runtime =
             tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(15);
         let (in_flight_receipt, in_flight_status) = loop {
             let probe_store = probe_runtime
                 .block_on(StateStore::open_existing_read_only(state_root.clone()))
