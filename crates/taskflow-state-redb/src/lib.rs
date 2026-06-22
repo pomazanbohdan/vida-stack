@@ -1,12 +1,12 @@
-use std::path::Path;
+use std::path::{Component, Path};
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use taskflow_contracts::{
-    VidaArtifactRef, VidaCommandRef, VidaDomainEventEnvelope, VidaEventCursor, VidaEventRef,
-    VidaIdempotencyKey, VidaProjectionCheckpoint, VidaProjectionRef, VidaReceiptId, VidaStreamRef,
-    VidaStreamVersion,
+    VidaArtifactRef, VidaCommandRef, VidaDomainEventEnvelope, VidaEffectIntent, VidaEventCursor,
+    VidaEventRef, VidaIdempotencyKey, VidaProjectionCheckpoint, VidaProjectionRef, VidaReceiptId,
+    VidaStreamRef, VidaStreamVersion,
 };
 use taskflow_state::{
     append_request_fingerprint, validate_append_event_streams, JournalAppendReceipt,
@@ -100,6 +100,44 @@ pub struct RedbProjectionFailureRecord {
     pub retry_after: Option<String>,
     pub repair_plan_ref: Option<String>,
     pub content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RedbOutboxEffectRecord {
+    pub outbox_id: VidaEventRef,
+    pub effect: VidaEffectIntent,
+    pub state: JournalOutboxState,
+    pub source_stream_id: VidaStreamRef,
+    pub source_event_cursor: Option<VidaEventCursor>,
+    pub command_id: VidaCommandRef,
+    pub effect_hash: String,
+    pub attempt_count: u64,
+    pub claimed_by: Option<String>,
+    pub failure_reason: Option<String>,
+    pub schema_version: String,
+    pub lifecycle_state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedbArtifactIndexRecord {
+    pub artifact_ref: VidaArtifactRef,
+    pub content_hash: String,
+    pub path: String,
+    pub producer_event_cursor: Option<VidaEventCursor>,
+    pub lifecycle_state: String,
+    pub reconciliation_status: String,
+    pub path_hash: String,
+    pub schema_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedbArtifactReconciliationRecord {
+    pub artifact_ref: VidaArtifactRef,
+    pub path: String,
+    pub expected_content_hash: String,
+    pub computed_content_hash: Option<String>,
+    pub status: String,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -328,7 +366,7 @@ impl RedbOperationalJournal {
         let append_idempotency: Vec<RedbAppendIdempotencyRecord> =
             self.read_all(APPEND_IDEMPOTENCY_TABLE)?;
         let idempotency: Vec<JournalIdempotencyRecord> = self.read_all(IDEMPOTENCY_TABLE)?;
-        let outbox: Vec<JournalOutboxRecord> = self.read_all(OUTBOX_TABLE)?;
+        let outbox = self.outbox_effect_records()?;
         let mut outbox_pending_count = 0;
         let mut outbox_claimed_count = 0;
         let mut outbox_succeeded_count = 0;
@@ -352,15 +390,9 @@ impl RedbOperationalJournal {
             outbox_claimed_count,
             outbox_succeeded_count,
             outbox_failed_count,
-            projection_checkpoint_count: self
-                .read_all::<RedbProjectionCheckpointRecord>(PROJECTION_CHECKPOINT_TABLE)?
-                .len(),
-            projection_failure_count: self
-                .read_all::<RedbProjectionFailureRecord>(PROJECTION_FAILURE_TABLE)?
-                .len(),
-            artifact_count: self
-                .read_all::<JournalArtifactRecord>(ARTIFACT_TABLE)?
-                .len(),
+            projection_checkpoint_count: self.projection_checkpoint_records()?.len(),
+            projection_failure_count: self.projection_failure_records()?.len(),
+            artifact_count: self.artifact_index_records()?.len(),
         })
     }
 
@@ -398,6 +430,23 @@ impl RedbOperationalJournal {
             .transpose()
     }
 
+    pub fn projection_checkpoint_records(
+        &self,
+    ) -> Result<Vec<RedbProjectionCheckpointRecord>, TaskflowStateError> {
+        let read = self.db.begin_read().map_err(storage_error)?;
+        let table = match read.open_table(PROJECTION_CHECKPOINT_TABLE) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(storage_error(error)),
+        };
+        let mut records = Vec::new();
+        for row in table.iter().map_err(storage_error)? {
+            let (_, value) = row.map_err(storage_error)?;
+            records.push(decode_projection_checkpoint_record(value.value())?);
+        }
+        Ok(records)
+    }
+
     pub fn projection_failure_records(
         &self,
     ) -> Result<Vec<RedbProjectionFailureRecord>, TaskflowStateError> {
@@ -419,7 +468,85 @@ impl RedbOperationalJournal {
         &self,
         artifact_ref: &VidaArtifactRef,
     ) -> Result<Option<JournalArtifactRecord>, TaskflowStateError> {
-        self.read_one(ARTIFACT_TABLE, &artifact_ref.0)
+        self.artifact_index_record(artifact_ref)
+            .map(|record| record.map(RedbArtifactIndexRecord::into_artifact))
+    }
+
+    pub fn outbox_effect_record(
+        &self,
+        outbox_id: &VidaEventRef,
+    ) -> Result<Option<RedbOutboxEffectRecord>, TaskflowStateError> {
+        let read = self.db.begin_read().map_err(storage_error)?;
+        let table = match read.open_table(OUTBOX_TABLE) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(error) => return Err(storage_error(error)),
+        };
+        table
+            .get(outbox_id.0.as_str())
+            .map_err(storage_error)?
+            .map(|row| decode_outbox_effect_record(row.value()))
+            .transpose()
+    }
+
+    pub fn outbox_effect_records(&self) -> Result<Vec<RedbOutboxEffectRecord>, TaskflowStateError> {
+        let read = self.db.begin_read().map_err(storage_error)?;
+        let table = match read.open_table(OUTBOX_TABLE) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(storage_error(error)),
+        };
+        let mut records = Vec::new();
+        for row in table.iter().map_err(storage_error)? {
+            let (_, value) = row.map_err(storage_error)?;
+            records.push(decode_outbox_effect_record(value.value())?);
+        }
+        Ok(records)
+    }
+
+    pub fn artifact_index_record(
+        &self,
+        artifact_ref: &VidaArtifactRef,
+    ) -> Result<Option<RedbArtifactIndexRecord>, TaskflowStateError> {
+        let read = self.db.begin_read().map_err(storage_error)?;
+        let table = match read.open_table(ARTIFACT_TABLE) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(error) => return Err(storage_error(error)),
+        };
+        table
+            .get(artifact_ref.0.as_str())
+            .map_err(storage_error)?
+            .map(|row| decode_artifact_index_record(row.value()))
+            .transpose()
+    }
+
+    pub fn artifact_index_records(
+        &self,
+    ) -> Result<Vec<RedbArtifactIndexRecord>, TaskflowStateError> {
+        let read = self.db.begin_read().map_err(storage_error)?;
+        let table = match read.open_table(ARTIFACT_TABLE) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(storage_error(error)),
+        };
+        let mut records = Vec::new();
+        for row in table.iter().map_err(storage_error)? {
+            let (_, value) = row.map_err(storage_error)?;
+            records.push(decode_artifact_index_record(value.value())?);
+        }
+        Ok(records)
+    }
+
+    pub fn reconcile_artifact_hashes(
+        &self,
+        project_root: impl AsRef<Path>,
+    ) -> Result<Vec<RedbArtifactReconciliationRecord>, TaskflowStateError> {
+        let project_root = project_root.as_ref();
+        self.artifact_index_records()?
+            .into_iter()
+            .map(|record| reconcile_artifact_record(record, project_root))
+            .collect()
     }
 
     pub fn record_projection_failure_at_cursor(
@@ -586,6 +713,11 @@ impl OperationalJournal for RedbOperationalJournal {
                 }
                 drop(events_by_stream);
                 drop(events_by_global);
+                let source_event_cursor = if event_count > 0 {
+                    Some(VidaEventCursor(format!("global-{next_global_index}")))
+                } else {
+                    None
+                };
 
                 let mut outbox = write.open_table(OUTBOX_TABLE).map_err(storage_error)?;
                 let mut outbox_len = 0;
@@ -600,9 +732,13 @@ impl OperationalJournal for RedbOperationalJournal {
                         effect,
                         state: JournalOutboxState::Pending,
                     };
-                    let payload = serde_json::to_vec(&record).map_err(storage_error)?;
+                    let durable = RedbOutboxEffectRecord::from_outbox_record(
+                        record,
+                        source_event_cursor.clone(),
+                    );
+                    let payload = serde_json::to_vec(&durable).map_err(storage_error)?;
                     outbox
-                        .insert(record.outbox_id.0.as_str(), payload.as_slice())
+                        .insert(durable.outbox_id.0.as_str(), payload.as_slice())
                         .map_err(storage_error)?;
                 }
                 drop(outbox);
@@ -783,8 +919,7 @@ impl OperationalJournal for RedbOperationalJournal {
                 let mut records = Vec::new();
                 for row in table.iter().map_err(storage_error)? {
                     let (key, value) = row.map_err(storage_error)?;
-                    let record: JournalOutboxRecord =
-                        serde_json::from_slice(value.value()).map_err(storage_error)?;
+                    let record = decode_outbox_effect_record(value.value())?;
                     records.push((key.value().to_string(), record));
                 }
                 for (key, mut record) in records {
@@ -794,7 +929,11 @@ impl OperationalJournal for RedbOperationalJournal {
                     record.state = JournalOutboxState::Claimed {
                         consumer_id: consumer_id.to_string(),
                     };
-                    claimed.push(record.clone());
+                    record.attempt_count += 1;
+                    record.claimed_by = Some(consumer_id.to_string());
+                    record.failure_reason = None;
+                    record.lifecycle_state = outbox_lifecycle_state(&record.state);
+                    claimed.push(record.clone().into_outbox_record());
                     let payload = serde_json::to_vec(&record).map_err(storage_error)?;
                     table
                         .insert(key.as_str(), payload.as_slice())
@@ -816,6 +955,9 @@ impl OperationalJournal for RedbOperationalJournal {
     ) -> Result<(), TaskflowStateError> {
         self.update_outbox(outbox_id, |record| {
             record.state = JournalOutboxState::Succeeded;
+            record.claimed_by = None;
+            record.failure_reason = None;
+            record.lifecycle_state = outbox_lifecycle_state(&record.state);
         })
     }
 
@@ -825,7 +967,12 @@ impl OperationalJournal for RedbOperationalJournal {
         reason: String,
     ) -> Result<(), TaskflowStateError> {
         self.update_outbox(outbox_id, |record| {
-            record.state = JournalOutboxState::Failed { reason };
+            record.state = JournalOutboxState::Failed {
+                reason: reason.clone(),
+            };
+            record.claimed_by = None;
+            record.failure_reason = Some(reason);
+            record.lifecycle_state = outbox_lifecycle_state(&record.state);
         })
     }
 
@@ -843,7 +990,8 @@ impl OperationalJournal for RedbOperationalJournal {
     }
 
     fn index_artifact(&mut self, artifact: JournalArtifactRecord) {
-        let _ = self.write_record(ARTIFACT_TABLE, &artifact.artifact_ref.0, &artifact);
+        let record = RedbArtifactIndexRecord::from_artifact(artifact, self.latest_global_cursor());
+        let _ = self.write_record(ARTIFACT_TABLE, &record.artifact_ref.0, &record);
     }
 }
 
@@ -868,18 +1016,18 @@ impl RedbOperationalJournal {
     fn update_outbox(
         &self,
         outbox_id: &VidaEventRef,
-        update: impl FnOnce(&mut JournalOutboxRecord),
+        update: impl FnOnce(&mut RedbOutboxEffectRecord),
     ) -> Result<(), TaskflowStateError> {
         let write = self.db.begin_write().map_err(storage_error)?;
         {
             let mut table = write.open_table(OUTBOX_TABLE).map_err(storage_error)?;
-            let mut record: JournalOutboxRecord = {
+            let mut record = {
                 let Some(row) = table.get(outbox_id.0.as_str()).map_err(storage_error)? else {
                     return Err(TaskflowStateError::OutboxRecordNotFound(
                         outbox_id.0.clone(),
                     ));
                 };
-                serde_json::from_slice(row.value()).map_err(storage_error)?
+                decode_outbox_effect_record(row.value())?
             };
             update(&mut record);
             let payload = serde_json::to_vec(&record).map_err(storage_error)?;
@@ -927,6 +1075,166 @@ impl RedbProjectionCheckpointRecord {
             updated_at: self.updated_at,
         }
     }
+}
+
+impl RedbOutboxEffectRecord {
+    fn from_outbox_record(
+        record: JournalOutboxRecord,
+        source_event_cursor: Option<VidaEventCursor>,
+    ) -> Self {
+        let effect_hash =
+            stable_hash_hex(&serde_json::to_string(&record.effect).unwrap_or_default());
+        let claimed_by = claimed_by_from_outbox_state(&record.state);
+        let failure_reason = failure_reason_from_outbox_state(&record.state);
+        let lifecycle_state = outbox_lifecycle_state(&record.state);
+        Self {
+            outbox_id: record.outbox_id,
+            source_stream_id: record.effect.stream_id.clone(),
+            command_id: record.effect.command_id.clone(),
+            effect: record.effect,
+            state: record.state,
+            source_event_cursor,
+            effect_hash,
+            attempt_count: if claimed_by.is_some() { 1 } else { 0 },
+            claimed_by,
+            failure_reason,
+            schema_version: SCHEMA_VERSION.to_string(),
+            lifecycle_state,
+        }
+    }
+
+    fn into_outbox_record(self) -> JournalOutboxRecord {
+        JournalOutboxRecord {
+            outbox_id: self.outbox_id,
+            effect: self.effect,
+            state: self.state,
+        }
+    }
+}
+
+fn decode_outbox_effect_record(value: &[u8]) -> Result<RedbOutboxEffectRecord, TaskflowStateError> {
+    if let Ok(record) = serde_json::from_slice::<RedbOutboxEffectRecord>(value) {
+        return Ok(record);
+    }
+    let record: JournalOutboxRecord =
+        serde_json::from_slice(value).map_err(payload_decode_error)?;
+    Ok(RedbOutboxEffectRecord::from_outbox_record(record, None))
+}
+
+fn outbox_lifecycle_state(state: &JournalOutboxState) -> String {
+    match state {
+        JournalOutboxState::Pending => "pending",
+        JournalOutboxState::Claimed { .. } => "claimed",
+        JournalOutboxState::Succeeded => "succeeded",
+        JournalOutboxState::Failed { .. } => "failed",
+    }
+    .to_string()
+}
+
+fn claimed_by_from_outbox_state(state: &JournalOutboxState) -> Option<String> {
+    match state {
+        JournalOutboxState::Claimed { consumer_id } => Some(consumer_id.clone()),
+        _ => None,
+    }
+}
+
+fn failure_reason_from_outbox_state(state: &JournalOutboxState) -> Option<String> {
+    match state {
+        JournalOutboxState::Failed { reason } => Some(reason.clone()),
+        _ => None,
+    }
+}
+
+impl RedbArtifactIndexRecord {
+    fn from_artifact(
+        artifact: JournalArtifactRecord,
+        producer_event_cursor: Option<VidaEventCursor>,
+    ) -> Self {
+        let path_hash = stable_hash_hex(&artifact.path);
+        Self {
+            artifact_ref: artifact.artifact_ref,
+            content_hash: artifact.content_hash,
+            path: artifact.path,
+            producer_event_cursor,
+            lifecycle_state: "indexed".to_string(),
+            reconciliation_status: "pending_reconciliation".to_string(),
+            path_hash,
+            schema_version: SCHEMA_VERSION.to_string(),
+        }
+    }
+
+    fn into_artifact(self) -> JournalArtifactRecord {
+        JournalArtifactRecord {
+            artifact_ref: self.artifact_ref,
+            content_hash: self.content_hash,
+            path: self.path,
+        }
+    }
+}
+
+fn decode_artifact_index_record(
+    value: &[u8],
+) -> Result<RedbArtifactIndexRecord, TaskflowStateError> {
+    if let Ok(record) = serde_json::from_slice::<RedbArtifactIndexRecord>(value) {
+        return Ok(record);
+    }
+    let artifact: JournalArtifactRecord =
+        serde_json::from_slice(value).map_err(payload_decode_error)?;
+    Ok(RedbArtifactIndexRecord::from_artifact(artifact, None))
+}
+
+fn reconcile_artifact_record(
+    record: RedbArtifactIndexRecord,
+    project_root: &Path,
+) -> Result<RedbArtifactReconciliationRecord, TaskflowStateError> {
+    let artifact_path = Path::new(&record.path);
+    let invalid_path = artifact_path.is_absolute()
+        || artifact_path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        });
+    if invalid_path {
+        return Ok(RedbArtifactReconciliationRecord {
+            artifact_ref: record.artifact_ref,
+            path: record.path,
+            expected_content_hash: record.content_hash,
+            computed_content_hash: None,
+            status: "out_of_root".to_string(),
+            detail: Some("artifact path must be relative to the project root".to_string()),
+        });
+    }
+
+    let materialized_path = project_root.join(&record.path);
+    let content = match std::fs::read(&materialized_path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RedbArtifactReconciliationRecord {
+                artifact_ref: record.artifact_ref,
+                path: record.path,
+                expected_content_hash: record.content_hash,
+                computed_content_hash: None,
+                status: "missing".to_string(),
+                detail: Some("artifact path is not materialized".to_string()),
+            });
+        }
+        Err(error) => return Err(storage_error(error)),
+    };
+    let computed = content_hash_for_expected(&record.content_hash, &content);
+    let status = if computed == record.content_hash {
+        "pass"
+    } else {
+        "mismatch"
+    };
+    Ok(RedbArtifactReconciliationRecord {
+        artifact_ref: record.artifact_ref,
+        path: record.path,
+        expected_content_hash: record.content_hash,
+        computed_content_hash: Some(computed),
+        status: status.to_string(),
+        detail: None,
+    })
 }
 
 fn decode_projection_checkpoint_record(
@@ -1009,27 +1317,135 @@ fn append_receipt_ref(key: &VidaIdempotencyKey, receipt: &JournalAppendReceipt) 
 }
 
 fn stable_hash_hex(input: &str) -> String {
+    stable_hash_bytes_hex(input.as_bytes())
+}
+
+fn content_hash_for_expected(expected: &str, content: &[u8]) -> String {
+    if expected.starts_with("sha256:") {
+        format!("sha256:{}", sha256_hex(content))
+    } else if expected.len() == 64 && expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        sha256_hex(content)
+    } else {
+        stable_hash_bytes_hex(content)
+    }
+}
+
+fn stable_hash_bytes_hex(input: &[u8]) -> String {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
     let mut hash = FNV_OFFSET;
-    for byte in input.as_bytes() {
+    for byte in input {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(FNV_PRIME);
     }
     format!("{hash:016x}")
 }
 
+fn sha256_hex(input: &[u8]) -> String {
+    const H0: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    let mut message = input.to_vec();
+    let bit_len = (message.len() as u64) * 8;
+    message.push(0x80);
+    while (message.len() % 64) != 56 {
+        message.push(0);
+    }
+    message.extend_from_slice(&bit_len.to_be_bytes());
+
+    let mut h = H0;
+    let mut words = [0u32; 64];
+    for chunk in message.chunks(64) {
+        for index in 0..16 {
+            let offset = index * 4;
+            words[index] = u32::from_be_bytes([
+                chunk[offset],
+                chunk[offset + 1],
+                chunk[offset + 2],
+                chunk[offset + 3],
+            ]);
+        }
+        for index in 16..64 {
+            let s0 = words[index - 15].rotate_right(7)
+                ^ words[index - 15].rotate_right(18)
+                ^ (words[index - 15] >> 3);
+            let s1 = words[index - 2].rotate_right(17)
+                ^ words[index - 2].rotate_right(19)
+                ^ (words[index - 2] >> 10);
+            words[index] = words[index - 16]
+                .wrapping_add(s0)
+                .wrapping_add(words[index - 7])
+                .wrapping_add(s1);
+        }
+
+        let mut a = h[0];
+        let mut b = h[1];
+        let mut c = h[2];
+        let mut d = h[3];
+        let mut e = h[4];
+        let mut f = h[5];
+        let mut g = h[6];
+        let mut h_work = h[7];
+        for index in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h_work
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[index])
+                .wrapping_add(words[index]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+            h_work = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+        h[5] = h[5].wrapping_add(f);
+        h[6] = h[6].wrapping_add(g);
+        h[7] = h[7].wrapping_add(h_work);
+    }
+
+    h.iter().map(|word| format!("{word:08x}")).collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
     use std::time::Instant;
 
     use super::{
         classify_redb_journal_error, redb_journal_blocker_operator_payload,
         redb_projection_health_operator_payload, RedbAppendIdempotencyRecord,
-        RedbOperationalJournal, APPEND_IDEMPOTENCY_TABLE, EVENTS_BY_GLOBAL_CURSOR_TABLE,
-        EVENTS_BY_STREAM_TABLE, OUTBOX_TABLE, REDB_CORRUPT_PAYLOAD_BLOCKER_CODE,
-        REDB_PROJECTION_FAILURE_BLOCKER_CODE, REDB_SINGLE_WRITER_BLOCKER_CODE,
+        RedbOperationalJournal, APPEND_IDEMPOTENCY_TABLE, ARTIFACT_TABLE,
+        EVENTS_BY_GLOBAL_CURSOR_TABLE, EVENTS_BY_STREAM_TABLE, OUTBOX_TABLE,
+        REDB_CORRUPT_PAYLOAD_BLOCKER_CODE, REDB_PROJECTION_FAILURE_BLOCKER_CODE,
+        REDB_SINGLE_WRITER_BLOCKER_CODE,
     };
     use redb::{ReadableDatabase, ReadableTable, TableDefinition};
     use taskflow_contracts::{
@@ -1531,6 +1947,231 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![VidaEventRef("event-1".to_string())]
         );
+    }
+
+    #[test]
+    fn redb_outbox_record_tracks_attempt_failure_and_restart() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("append should pass");
+        let pending = journal
+            .outbox_effect_records()
+            .expect("outbox records should read");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0].source_event_cursor,
+            Some(VidaEventCursor("global-1".to_string()))
+        );
+        assert_eq!(
+            pending[0].source_stream_id,
+            VidaStreamRef("stream-1".to_string())
+        );
+        assert_eq!(pending[0].attempt_count, 0);
+        assert_eq!(pending[0].lifecycle_state, "pending");
+        assert!(!pending[0].effect_hash.is_empty());
+
+        let claimed = journal.claim_outbox_batch("worker-1", 1);
+        assert_eq!(claimed.len(), 1);
+        let claimed_id = claimed[0].outbox_id.clone();
+        drop(journal);
+
+        let mut reopened = RedbOperationalJournal::open(&path).expect("open journal");
+        let durable_claim = reopened
+            .outbox_effect_record(&claimed_id)
+            .expect("claimed outbox read")
+            .expect("claimed outbox row");
+        assert_eq!(durable_claim.attempt_count, 1);
+        assert_eq!(durable_claim.claimed_by.as_deref(), Some("worker-1"));
+        assert_eq!(durable_claim.lifecycle_state, "claimed");
+
+        reopened
+            .mark_outbox_failed(&claimed_id, "transport failure".to_string())
+            .expect("mark failed should pass");
+        let failed = reopened
+            .outbox_effect_record(&claimed_id)
+            .expect("failed outbox read")
+            .expect("failed outbox row");
+        assert_eq!(failed.attempt_count, 1);
+        assert_eq!(failed.lifecycle_state, "failed");
+        assert_eq!(failed.failure_reason.as_deref(), Some("transport failure"));
+        assert!(matches!(
+            failed.state,
+            JournalOutboxState::Failed { ref reason } if reason == "transport failure"
+        ));
+        let health = reopened.health_status().expect("health should pass");
+        assert_eq!(health.outbox_failed_count, 1);
+        assert_eq!(health.outbox_claimed_count, 0);
+        drop(reopened);
+
+        let reopened_after_failure = RedbOperationalJournal::open(&path).expect("reopen journal");
+        let failed_after_restart = reopened_after_failure
+            .outbox_effect_record(&claimed_id)
+            .expect("failed outbox read after restart")
+            .expect("failed outbox row after restart");
+        assert_eq!(failed_after_restart.attempt_count, 1);
+        assert_eq!(failed_after_restart.lifecycle_state, "failed");
+        assert_eq!(
+            failed_after_restart.failure_reason.as_deref(),
+            Some("transport failure")
+        );
+    }
+
+    #[test]
+    fn artifact_hash_reconciliation_reports_sha256_pass_and_mismatch() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let artifact_dir = dir.path().join("artifacts");
+        fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+        let artifact_path = artifact_dir.join("snapshot.json");
+        let initial_content = b"{\"status\":\"ready\"}\n";
+        fs::write(&artifact_path, initial_content).expect("write artifact");
+
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal
+            .append(append_request(0, vec![event(1)], Vec::new()))
+            .expect("append should pass");
+        journal.index_artifact(JournalArtifactRecord {
+            artifact_ref: taskflow_contracts::VidaArtifactRef("artifact-1".to_string()),
+            content_hash: "sha256:682c055ddf7d0afe32b7b2646e1635ab3c83f65884a37aecdc8549e7031a3417"
+                .to_string(),
+            path: "artifacts/snapshot.json".to_string(),
+        });
+
+        let indexed = journal
+            .artifact_index_record(&taskflow_contracts::VidaArtifactRef(
+                "artifact-1".to_string(),
+            ))
+            .expect("artifact index read")
+            .expect("artifact index row");
+        assert_eq!(
+            indexed.producer_event_cursor,
+            Some(VidaEventCursor("global-1".to_string()))
+        );
+        assert_eq!(indexed.lifecycle_state, "indexed");
+        assert_eq!(indexed.reconciliation_status, "pending_reconciliation");
+        assert!(!indexed.path_hash.is_empty());
+
+        let pass = journal
+            .reconcile_artifact_hashes(dir.path())
+            .expect("artifact reconcile pass");
+        assert_eq!(pass.len(), 1);
+        assert_eq!(pass[0].status, "pass");
+        assert_eq!(
+            pass[0].computed_content_hash.as_deref(),
+            Some(indexed.content_hash.as_str())
+        );
+
+        fs::write(&artifact_path, b"{\"status\":\"changed\"}\n").expect("modify artifact");
+        let mismatch = journal
+            .reconcile_artifact_hashes(dir.path())
+            .expect("artifact reconcile mismatch");
+        assert_eq!(mismatch[0].status, "mismatch");
+        assert_ne!(
+            mismatch[0].computed_content_hash.as_deref(),
+            Some(indexed.content_hash.as_str())
+        );
+    }
+
+    #[test]
+    fn sha256_hash_helper_matches_known_digest() {
+        assert_eq!(
+            super::sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn old_outbox_and_artifact_rows_remain_readable_after_record_upgrade() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal
+            .write_record(
+                OUTBOX_TABLE,
+                "outbox-old",
+                &taskflow_state::JournalOutboxRecord {
+                    outbox_id: VidaEventRef("outbox-old".to_string()),
+                    effect: effect("effect-old"),
+                    state: JournalOutboxState::Pending,
+                },
+            )
+            .expect("old outbox row should write");
+        journal
+            .write_record(
+                ARTIFACT_TABLE,
+                "artifact-old",
+                &JournalArtifactRecord {
+                    artifact_ref: taskflow_contracts::VidaArtifactRef("artifact-old".to_string()),
+                    content_hash: "hash-old".to_string(),
+                    path: "artifacts/old.json".to_string(),
+                },
+            )
+            .expect("old artifact row should write");
+
+        drop(journal);
+
+        let reopened = RedbOperationalJournal::open(&path).expect("reopen journal");
+        let outbox = reopened
+            .outbox_effect_record(&VidaEventRef("outbox-old".to_string()))
+            .expect("old outbox row should decode")
+            .expect("old outbox row");
+        assert_eq!(outbox.lifecycle_state, "pending");
+        assert_eq!(outbox.source_event_cursor, None);
+        assert!(!outbox.effect_hash.is_empty());
+
+        let artifact = reopened
+            .artifact_index_record(&taskflow_contracts::VidaArtifactRef(
+                "artifact-old".to_string(),
+            ))
+            .expect("old artifact row should decode")
+            .expect("old artifact row");
+        assert_eq!(artifact.content_hash, "hash-old");
+        assert_eq!(artifact.producer_event_cursor, None);
+        assert_eq!(artifact.reconciliation_status, "pending_reconciliation");
+        assert!(!artifact.path_hash.is_empty());
+    }
+
+    #[test]
+    fn health_status_counts_old_projection_rows_with_compat_decode() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal
+            .write_record(
+                super::PROJECTION_CHECKPOINT_TABLE,
+                "projection-old",
+                &VidaProjectionCheckpoint {
+                    projection_id: VidaProjectionRef("projection-old".to_string()),
+                    stream_id: VidaStreamRef("stream-1".to_string()),
+                    event_cursor: VidaEventCursor("global-7".to_string()),
+                    stream_version: VidaStreamVersion(7),
+                    updated_at: VidaTimestamp("2026-06-22T00:00:00Z".to_string()),
+                },
+            )
+            .expect("old checkpoint row should write");
+        journal
+            .write_record(
+                super::PROJECTION_FAILURE_TABLE,
+                "projection-old:stream-1:error",
+                &JournalProjectionFailure {
+                    projection_id: VidaProjectionRef("projection-old".to_string()),
+                    stream_id: VidaStreamRef("stream-1".to_string()),
+                    error: "old projector error".to_string(),
+                },
+            )
+            .expect("old failure row should write");
+        drop(journal);
+
+        let reopened = RedbOperationalJournal::open(&path).expect("reopen journal");
+        let health = reopened
+            .health_status()
+            .expect("health should compat decode");
+        assert_eq!(health.projection_checkpoint_count, 1);
+        assert_eq!(health.projection_failure_count, 1);
     }
 
     #[test]
