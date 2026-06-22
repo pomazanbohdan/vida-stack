@@ -7805,6 +7805,7 @@ dependencies = [
  "time",
  "tokio",
  "toml_edit",
+ "tower",
  "vida-contracts",
  "vida-test-support",
 ]

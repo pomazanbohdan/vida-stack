@@ -1,3 +1,5 @@
+#[path = "../src/command_pipeline.rs"]
+mod command_pipeline;
 #[path = "../src/vida_client.rs"]
 mod vida_client;
 #[path = "../src/vida_client_fixture.rs"]
@@ -13,7 +15,7 @@ mod vida_tui_shell;
 use ratatui::{backend::TestBackend, Terminal};
 use vida_client::VidaClient;
 use vida_contracts::{
-    operations, VidaClaimKind, VidaClientKind, VidaCommandEnvelope, VidaIdempotencyKey,
+    operation_spec, operations, VidaClientKind, VidaCommandEnvelope, VidaIdempotencyKey,
     VidaOperation, VidaRequestId, VidaResponseStatus, VidaSessionId, VIDA_COMMAND_PROTOCOL_VERSION,
     VIDA_CONTRACTS_SCHEMA_VERSION,
 };
@@ -102,7 +104,7 @@ fn service_envelope(operation: &str) -> VidaCommandEnvelope {
         deadline: None,
         client_kind: VidaClientKind::Tui,
         project_ref: None,
-        claim_kind: Some(VidaClaimKind::Observe),
+        claim_kind: operation_spec(operation).map(|spec| spec.required_claim),
         payload: serde_json::json!({}),
         correlation: None,
         idempotency_key: Some(VidaIdempotencyKey(format!("tui-live-idem-{operation}"))),

@@ -1,3 +1,5 @@
+#[path = "../src/command_pipeline.rs"]
+mod command_pipeline;
 #[path = "../src/vida_client.rs"]
 mod vida_client;
 #[path = "../src/vida_client_fixture.rs"]
@@ -10,10 +12,11 @@ use vida_client::VidaClient;
 use vida_client_fixture::FixtureVidaClient;
 use vida_client_inprocess::InProcessVidaClient;
 use vida_contracts::{
-    mvp_operation_registry, operations, VidaClaimKind, VidaClientKind, VidaCommandEnvelope,
-    VidaCommandResponse, VidaIdempotencyKey, VidaOperation, VidaOperationPosture,
-    VidaOperationScope, VidaProjectId, VidaProjectRef, VidaRequestId, VidaResponseStatus,
-    VidaSessionId, VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
+    mvp_operation_registry, operation_spec, operations, VidaApplyToken, VidaClientKind,
+    VidaCommandEnvelope, VidaCommandResponse, VidaIdempotencyKey, VidaOperation,
+    VidaOperationPosture, VidaOperationScope, VidaProjectId, VidaProjectRef, VidaRequestId,
+    VidaResponseStatus, VidaSessionId, VIDA_COMMAND_PROTOCOL_VERSION,
+    VIDA_CONTRACTS_SCHEMA_VERSION,
 };
 
 fn envelope(operation: &str) -> VidaCommandEnvelope {
@@ -30,12 +33,83 @@ fn envelope(operation: &str) -> VidaCommandEnvelope {
         deadline: None,
         client_kind: VidaClientKind::Cli,
         project_ref: None,
-        claim_kind: Some(VidaClaimKind::Observe),
+        claim_kind: operation_spec(operation).map(|spec| spec.required_claim),
         payload: json!({}),
         correlation: None,
         idempotency_key: Some(VidaIdempotencyKey(format!("idem-{operation}"))),
         apply_token: None,
     }
+}
+
+#[test]
+fn canonical_command_pipeline_layer_order_is_fixed() {
+    use command_pipeline::CommandPipelineLayer::*;
+
+    assert_eq!(
+        command_pipeline::VidaCommandPipeline::<FixtureVidaClient>::layer_order(),
+        &[
+            Trace,
+            Deadline,
+            SchemaProtocol,
+            OperationLookup,
+            ProjectRouting,
+            AuthorizationAdmission,
+            Idempotency,
+            Concurrency,
+            Handler,
+            ResponseMapping,
+        ]
+    );
+}
+
+#[test]
+fn canonical_command_pipeline_trace_names_are_stable() {
+    assert_eq!(
+        command_pipeline::VidaCommandPipeline::<FixtureVidaClient>::trace_names(),
+        vec![
+            "trace",
+            "deadline",
+            "schema_protocol",
+            "operation_lookup",
+            "project_routing",
+            "authorization_admission",
+            "idempotency",
+            "concurrency",
+            "handler",
+            "response_mapping"
+        ]
+    );
+}
+
+#[test]
+fn command_pipeline_blocks_schema_protocol_mismatch_before_handler() {
+    let mut command = envelope(operations::SERVICE_STATUS);
+    command.schema_version = "wrong-schema".to_string();
+    let response = InProcessVidaClient::new_ready().execute(command);
+    assert_eq!(response.status, VidaResponseStatus::Blocked);
+    assert_eq!(response.blockers[0].code, "schema_version_mismatch");
+    assert!(response.result.is_none());
+}
+
+#[test]
+fn command_pipeline_blocks_apply_operation_without_idempotency_and_apply_token() {
+    let mut command = envelope(operations::SERVICE_LIFECYCLE_APPLY);
+    command.client_kind = VidaClientKind::Service;
+    command.idempotency_key = None;
+    command.apply_token = None;
+    let response = InProcessVidaClient::new_ready().execute(command);
+    assert_eq!(response.status, VidaResponseStatus::Blocked);
+    assert_eq!(response.blockers[0].code, "idempotency_key_required");
+}
+
+#[test]
+fn command_pipeline_blocks_apply_operation_without_apply_token_after_idempotency() {
+    let mut command = envelope(operations::SERVICE_LIFECYCLE_APPLY);
+    command.client_kind = VidaClientKind::Service;
+    command.apply_token = None;
+    let response = InProcessVidaClient::new_ready().execute(command);
+    assert_eq!(response.status, VidaResponseStatus::Blocked);
+    assert_eq!(response.blockers[0].code, "apply_token_required");
 }
 
 fn envelope_with_payload(operation: &str, payload: serde_json::Value) -> VidaCommandEnvelope {
@@ -308,9 +382,13 @@ fn service_capabilities_and_endpoints_are_read_only() {
         .expect("required capabilities array")
         .iter()
         .any(|capability| capability == "orchestration_control_plane_read"));
-    assert!(endpoint_rows
+    let lifecycle_apply = endpoint_rows
         .iter()
-        .all(|row| row["posture"] != "apply" && row["posture"] != "admin"));
+        .find(|row| row["operation"] == operations::SERVICE_LIFECYCLE_APPLY)
+        .expect("service lifecycle apply endpoint row");
+    assert_eq!(lifecycle_apply["scope"], "service");
+    assert_eq!(lifecycle_apply["posture"], "apply");
+    assert_eq!(lifecycle_apply["requires_apply_token"], true);
 }
 
 #[test]
@@ -333,24 +411,26 @@ fn session_resolve_reports_active_session_status() {
 }
 
 #[test]
-fn service_home_registry_exposes_no_mutation_capable_apply_operations() {
+fn service_home_registry_exposes_apply_operations_as_token_gated() {
     let service_specs: Vec<_> = mvp_operation_registry()
         .into_iter()
         .filter(|spec| spec.scope == VidaOperationScope::Service)
         .collect();
     assert!(!service_specs.is_empty());
-    assert!(service_specs.iter().all(|spec| {
-        spec.posture != VidaOperationPosture::Apply
-            && spec.posture != VidaOperationPosture::Admin
-            && !spec.requires_apply_token
-    }));
+    let apply_spec = service_specs
+        .iter()
+        .find(|spec| spec.operation.0 == operations::SERVICE_LIFECYCLE_APPLY)
+        .expect("service lifecycle apply operation spec");
+    assert_eq!(apply_spec.posture, VidaOperationPosture::Apply);
+    assert!(apply_spec.requires_idempotency_key);
+    assert!(apply_spec.requires_apply_token);
 
-    let response = assert_same_response("vida.service.apply");
+    let mut request = envelope(operations::SERVICE_LIFECYCLE_APPLY);
+    request.client_kind = VidaClientKind::Service;
+    request.apply_token = None;
+    let response = InProcessVidaClient::new_ready().execute(request);
     assert_eq!(response.status, VidaResponseStatus::Blocked);
-    assert_eq!(
-        response.error.expect("unsupported apply operation").code,
-        "unsupported_operation"
-    );
+    assert_eq!(response.blockers[0].code, "apply_token_required");
 }
 
 #[test]
@@ -693,17 +773,35 @@ fn wizard_diff_stale_revision_blocks_update_and_diff() {
 }
 
 #[test]
-fn wizard_apply_remains_unsupported_and_unregistered() {
-    assert!(mvp_operation_registry()
-        .iter()
-        .all(|spec| spec.operation.0 != "vida.wizard.session.apply"));
+fn wizard_apply_is_registered_but_apply_token_gated() {
+    let spec = mvp_operation_registry()
+        .into_iter()
+        .find(|spec| spec.operation.0 == operations::WIZARD_SESSION_APPLY)
+        .expect("wizard apply operation spec");
+    assert_eq!(spec.posture, VidaOperationPosture::Apply);
+    assert!(spec.requires_idempotency_key);
+    assert!(spec.requires_apply_token);
 
-    let response = assert_same_response("vida.wizard.session.apply");
+    let mut request = envelope_with_project_ref(
+        operations::WIZARD_SESSION_APPLY,
+        VidaProjectRef::ProjectId {
+            project_id: VidaProjectId("vida-stack".to_string()),
+        },
+    );
+    request.client_kind = VidaClientKind::Service;
+    request.apply_token = Some(VidaApplyToken("fixture-apply-token".to_string()));
+    let response = FixtureVidaClient::new_ready().execute(request.clone());
     assert_eq!(response.status, VidaResponseStatus::Blocked);
     assert_eq!(
         response.error.expect("unsupported wizard apply").code,
         "unsupported_operation"
     );
+    let gated = InProcessVidaClient::new_ready().execute({
+        request.apply_token = None;
+        request
+    });
+    assert_eq!(gated.status, VidaResponseStatus::Blocked);
+    assert_eq!(gated.blockers[0].code, "apply_token_required");
 }
 
 #[test]

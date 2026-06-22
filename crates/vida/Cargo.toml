@@ -40,6 +40,7 @@ tarpc = { version = "0.37.0", features = ["serde1", "serde-transport-json", "tok
 time = { workspace = true }
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
 toml_edit = "0.25.12"
+tower = "0.5.3"
 runtime-path-policy = { path = "../runtime-path-policy" }
 vida-contracts = { path = "../vida-contracts" }
 

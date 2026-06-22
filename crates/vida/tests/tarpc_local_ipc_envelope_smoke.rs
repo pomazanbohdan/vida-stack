@@ -1,3 +1,5 @@
+#[path = "../src/command_pipeline.rs"]
+mod command_pipeline;
 #[path = "../src/vida_client.rs"]
 mod vida_client;
 #[path = "../src/vida_client_fixture.rs"]
@@ -11,7 +13,7 @@ use serde_json::json;
 use vida_client::VidaClient;
 use vida_client_inprocess::InProcessVidaClient;
 use vida_contracts::{
-    operations, VidaClaimKind, VidaClientKind, VidaCommandEnvelope, VidaIdempotencyKey,
+    operation_spec, operations, VidaClientKind, VidaCommandEnvelope, VidaIdempotencyKey,
     VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId, VidaResponseStatus, VidaSessionId,
     VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
 };
@@ -31,7 +33,7 @@ fn envelope(operation: &str) -> VidaCommandEnvelope {
         deadline: None,
         client_kind: VidaClientKind::Service,
         project_ref: None,
-        claim_kind: Some(VidaClaimKind::Observe),
+        claim_kind: operation_spec(operation).map(|spec| spec.required_claim),
         payload: json!({}),
         correlation: None,
         idempotency_key: Some(VidaIdempotencyKey(format!("tarpc-smoke-idem-{operation}"))),
@@ -163,9 +165,11 @@ async fn tarpc_interprocess_transport_matches_inprocess_conformance_matrix() {
         .result
         .expect("endpoint status result");
     let endpoint_rows = endpoints["endpoints"].as_array().expect("endpoint rows");
-    assert!(endpoint_rows
-        .iter()
-        .all(|row| row["posture"] != "apply" && row["posture"] != "admin"));
+    assert!(endpoint_rows.iter().any(|row| {
+        row["operation"] == operations::SERVICE_LIFECYCLE_APPLY
+            && row["posture"] == "apply"
+            && row["requires_apply_token"] == true
+    }));
     assert!(endpoint_rows.iter().any(|row| {
         row["operation"] == operations::ORCHESTRATION_CONTROL_PLANE_SUMMARY_GET
             && row["scope"] == "project"

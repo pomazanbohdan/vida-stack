@@ -5,7 +5,7 @@ use ratatui::{
 };
 use serde_json::json;
 use vida_contracts::{
-    operations, VidaClaimKind, VidaClientKind, VidaCommandEnvelope, VidaIdempotencyKey,
+    operation_spec, operations, VidaClientKind, VidaCommandEnvelope, VidaIdempotencyKey,
     VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId, VidaResponseStatus, VidaSessionId,
     VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
 };
@@ -268,7 +268,7 @@ fn envelope(operation: &str) -> VidaCommandEnvelope {
         deadline: None,
         client_kind: VidaClientKind::Tui,
         project_ref: None,
-        claim_kind: Some(VidaClaimKind::Observe),
+        claim_kind: operation_spec(operation).map(|spec| spec.required_claim),
         payload: json!({}),
         correlation: None,
         idempotency_key: Some(VidaIdempotencyKey(format!("tui-idem-{operation}"))),

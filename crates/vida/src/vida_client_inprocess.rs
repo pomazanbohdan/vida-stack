@@ -1,22 +1,23 @@
+use crate::command_pipeline::VidaCommandPipeline;
 use crate::vida_client::VidaClient;
 use crate::vida_client_fixture::FixtureVidaClient;
 use vida_contracts::{VidaCommandEnvelope, VidaCommandResponse};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct InProcessVidaClient {
-    fixture: FixtureVidaClient,
+    pipeline: VidaCommandPipeline<FixtureVidaClient>,
 }
 
 impl InProcessVidaClient {
     pub(crate) fn new_ready() -> Self {
         Self {
-            fixture: FixtureVidaClient::new_ready(),
+            pipeline: VidaCommandPipeline::new(FixtureVidaClient::new_ready()),
         }
     }
 }
 
 impl VidaClient for InProcessVidaClient {
     fn execute(&self, envelope: VidaCommandEnvelope) -> VidaCommandResponse {
-        self.fixture.execute(envelope)
+        self.pipeline.execute(envelope)
     }
 }
