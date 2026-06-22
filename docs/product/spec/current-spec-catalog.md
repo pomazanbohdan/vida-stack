@@ -192,6 +192,9 @@ Companion rule:
 41. [vida-service-tui-wizard-execution-spec.md](vida-service-tui-wizard-execution-spec.md)
     Config families: service/TUI/wizard command envelope, `vida-contracts`, operation catalog, project registry, wizard state machine, service-home coordination state, fixture/in-process client proof, and staged TUI/transport rollout
     Registered path: `docs/product/spec/vida-service-tui-wizard-execution-spec.md`
+42. [tower-based-canonical-command-pipeline-phase-design.md](tower-based-canonical-command-pipeline-phase-design.md)
+    Config families: `VidaCommandEnvelope`, `VidaCommandResponse`, service-client execution, command pipeline middleware order, operation metadata admission, idempotency, and runtime dispatch receipt boundaries for LDRK `ldr-040`
+    Registered path: `docs/product/spec/tower-based-canonical-command-pipeline-phase-design.md`
 
 ### Project And Packaging
 

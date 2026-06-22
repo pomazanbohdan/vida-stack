@@ -60,6 +60,8 @@ Companion rule:
     - accepted LDRK `ldr-004` architecture and migration law
 23. [../decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md](../decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md)
     - accepted LDRK `ldr-004` architecture decision record
+24. [tower-based-canonical-command-pipeline-phase-design.md](tower-based-canonical-command-pipeline-phase-design.md)
+    - proposed LDRK `ldr-040` Tower-based canonical command pipeline phase design
 
 ## Detailed Catalog Companions
 
