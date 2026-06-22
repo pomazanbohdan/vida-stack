@@ -608,6 +608,46 @@ mod tests {
         }
     }
 
+    async fn seed_approval_task(store: &StateStore) {
+        let labels: Vec<String> = Vec::new();
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "approval-test-parent",
+                title: "Approval test parent",
+                display_id: None,
+                description: "approval surface fixture parent",
+                issue_type: "epic",
+                status: "open",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("seed approval fixture parent");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "approval-test",
+                title: "Approval test",
+                display_id: None,
+                description: "approval surface fixture task",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 0,
+                parent_id: Some("approval-test-parent"),
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("seed approval fixture task");
+    }
+
     #[test]
     fn parse_approval_show_latest_supports_json() {
         let args = vec![
@@ -638,11 +678,16 @@ mod tests {
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
         let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        seed_approval_task(&store).await;
         let status = sample_run_graph_status();
         store
             .record_run_graph_status(&status)
             .await
             .expect("persist approval wait run graph status");
+        store.close().await;
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after approval wait status write");
 
         let latest_status = store
             .latest_run_graph_status()
@@ -697,6 +742,7 @@ mod tests {
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
         let status = sample_run_graph_status();
+        seed_approval_task(&store).await;
         store
             .record_run_graph_status(&status)
             .await
@@ -750,6 +796,7 @@ mod tests {
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
         let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        seed_approval_task(&store).await;
         let mut awaiting_approval = sample_run_graph_status();
         store
             .record_run_graph_status(&awaiting_approval)

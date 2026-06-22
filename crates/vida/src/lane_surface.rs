@@ -5956,7 +5956,11 @@ mod tests {
         assert!(truth
             .next_actions
             .iter()
-            .any(|action| action.contains("vida taskflow recovery status run-lane-test --json")));
+            .any(|action| action.contains("vida taskflow recovery status run-lane-test")));
+        assert!(truth
+            .next_actions
+            .iter()
+            .all(|action| !action.contains("--json")));
     }
 
     #[test]
@@ -6036,7 +6040,11 @@ mod tests {
         assert!(truth
             .next_actions
             .iter()
-            .any(|action| action.contains("vida taskflow recovery status run-lane-test --json")));
+            .any(|action| action.contains("vida taskflow recovery status run-lane-test")));
+        assert!(truth
+            .next_actions
+            .iter()
+            .all(|action| !action.contains("--json")));
     }
 
     #[test]

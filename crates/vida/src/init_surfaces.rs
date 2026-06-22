@@ -2826,7 +2826,13 @@ mod tests {
             serde_json::to_string_pretty(&json!({
                 "packet_kind": "runtime_dispatch_packet",
                 "packet_template_kind": "coach_review_packet",
-                "coach_review_packet": {},
+                "coach_review_packet": {
+                    "review_goal": "review dispatch packet decoding",
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["dispatch packet decodes without store"],
+                    "proof_target": "decoded dispatch receipt",
+                    "blocking_question": "Can the dispatch packet decode without state store?"
+                },
                 "run_id": "run-fast-dispatch",
                 "dispatch_target": "coach",
                 "dispatch_status": "packet_ready",
@@ -8031,6 +8037,7 @@ mod agent_init_surface_tests {
                 "delivery_task_packet": {
                     "goal": "Verify downstream source context",
                     "scope_in": ["downstream packet resume"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
                     "definition_of_done": ["source dispatch target is preserved"],
                     "verification_command": "vida agent-init --downstream-packet packet.json --execute-dispatch",
                     "proof_target": "decoded dispatch receipt",
@@ -8085,7 +8092,11 @@ mod agent_init_surface_tests {
                 "coach_review_packet": {
                     "packet_id": "run-blocked-source::review_b::review",
                     "reviewed_dispatch_target": "writer_a",
-                    "review_goal": "review only after source evidence"
+                    "review_goal": "review only after source evidence",
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["source evidence is ready before review"],
+                    "proof_target": "blocked source lane prevents downstream execution",
+                    "blocking_question": "Is the source lane ready for downstream review?"
                 },
                 "activation_runtime_role": "reviewer",
                 "activation_agent_type": "middle",

@@ -5699,7 +5699,11 @@ mod tests {
         assert!(payload["host_bridge"]["completion_command"]
             .as_str()
             .expect("completion command")
-            .contains("--decision pass --verdict implemented"));
+            .contains("--host-bridge-summary"));
+        assert!(!payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--decision"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
