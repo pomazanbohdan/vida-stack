@@ -138,6 +138,15 @@ Companion rule:
 29. [execution-preparation-and-developer-handoff-model.md](execution-preparation-and-developer-handoff-model.md)
     Config families: `solution_architect`, execution preparation, architecture-preparation reports, developer handoff packets, change-boundary shaping, dependency-impact summaries, artifact registry query surfaces, and fail-closed pre-execution gating for code-shaped work
     Registered path: `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
+30. [ldrk-baseline/execution-preparation.md](ldrk-baseline/execution-preparation.md)
+    Config families: LDRK `ldr-001` runtime mutation inventory, drift-map baseline, deletion candidates, generated baseline JSON, and execution-preparation artifact packet under `docs/product/spec/ldrk-baseline/**`
+    Registered path: `docs/product/spec/ldrk-baseline/execution-preparation.md`
+31. [ldrk-baseline/drift-map.md](ldrk-baseline/drift-map.md)
+    Config families: generated LDRK `ldr-001` runtime mutation, classifier, command, and host-bridge drift-map evidence under `docs/product/spec/ldrk-baseline/**`
+    Registered path: `docs/product/spec/ldrk-baseline/drift-map.md`
+32. [ldrk-baseline/deletion-candidates.md](ldrk-baseline/deletion-candidates.md)
+    Config families: generated LDRK `ldr-001` deletion and reduction candidate evidence under `docs/product/spec/ldrk-baseline/**`
+    Registered path: `docs/product/spec/ldrk-baseline/deletion-candidates.md`
 30. [operational-state-and-synchronization-model.md](operational-state-and-synchronization-model.md)
     Config families: DB-first operational state, filesystem projection, Git lineage, synchronization law, conflict handling, and reactive domain routing
 31. [multi-orchestrator-session-ownership-claims-contract.md](multi-orchestrator-session-ownership-claims-contract.md)

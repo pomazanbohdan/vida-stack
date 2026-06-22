@@ -44,6 +44,12 @@ Companion rule:
     - DocFlow and documentation operator-command map
 15. [typed-transition-state-store-extraction-contract.md](typed-transition-state-store-extraction-contract.md)
     - typed transition/state-store extraction design contract for the active shared extraction epic
+16. [ldrk-baseline/execution-preparation.md](ldrk-baseline/execution-preparation.md)
+    - LDRK `ldr-001` baseline inventory execution-preparation packet
+17. [ldrk-baseline/drift-map.md](ldrk-baseline/drift-map.md)
+    - generated LDRK `ldr-001` runtime mutation, classifier, and host-bridge drift baseline
+18. [ldrk-baseline/deletion-candidates.md](ldrk-baseline/deletion-candidates.md)
+    - generated LDRK `ldr-001` command, classifier, and direct-mutation deletion candidate baseline
 
 ## Detailed Catalog Companions
 
