@@ -55,6 +55,35 @@ pub(crate) struct SpecFirstDevHandoffGate {
     pub(crate) dev_task_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskChildStatusEvidence {
+    id: String,
+    status: String,
+    updated_at: String,
+    closed_at: Option<String>,
+}
+
+impl TaskChildStatusEvidence {
+    fn from_task(task: &TaskRecord) -> Self {
+        Self {
+            id: task.id.clone(),
+            status: task.status.clone(),
+            updated_at: task.updated_at.clone(),
+            closed_at: task.closed_at.clone(),
+        }
+    }
+
+    fn render_compact(&self) -> String {
+        format!(
+            "{}(status={}, updated_at={}, closed_at={})",
+            self.id,
+            self.status,
+            self.updated_at,
+            self.closed_at.as_deref().unwrap_or("none")
+        )
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct ClosedTaskRunReconciliationSummary {
     pub(crate) scanned_count: usize,
@@ -123,16 +152,20 @@ impl StateStore {
     fn ensure_task_lifecycle_admitted(
         task_id: &str,
         admission: taskflow_authority::task_transition::TaskLifecycleAdmission,
-        active_child_ids: &[String],
+        active_children: &[TaskChildStatusEvidence],
     ) -> Result<(), StateStoreError> {
         if admission.status == TaskLifecycleAdmissionStatus::Admitted {
             return Ok(());
         }
-        if !active_child_ids.is_empty() {
+        if !active_children.is_empty() {
+            let evidence = active_children
+                .iter()
+                .map(TaskChildStatusEvidence::render_compact)
+                .collect::<Vec<_>>()
+                .join(", ");
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
-                    "cannot close task `{task_id}` while non-closed child tasks exist: {}",
-                    active_child_ids.join(", ")
+                    "cannot close task `{task_id}` while non-closed child tasks exist: {evidence}"
                 ),
             });
         }
@@ -144,7 +177,10 @@ impl StateStore {
         })
     }
 
-    fn non_closed_child_ids_for_task(tasks: &[TaskRecord], task_id: &str) -> Vec<String> {
+    fn non_closed_child_status_evidence_for_task(
+        tasks: &[TaskRecord],
+        task_id: &str,
+    ) -> Vec<TaskChildStatusEvidence> {
         tasks
             .iter()
             .filter(|candidate| {
@@ -155,8 +191,35 @@ impl StateStore {
                             && dependency.depends_on_id == task_id
                     })
             })
-            .map(|candidate| candidate.id.clone())
+            .map(TaskChildStatusEvidence::from_task)
             .collect()
+    }
+
+    pub(crate) async fn non_closed_child_status_evidence_for_task_live(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskChildStatusEvidence>, StateStoreError> {
+        let all_tasks = self.all_tasks().await?;
+        let child_ids: Vec<String> = all_tasks
+            .iter()
+            .filter(|candidate| {
+                candidate.id != task_id
+                    && candidate.dependencies.iter().any(|dependency| {
+                        dependency.edge_type == "parent-child"
+                            && dependency.depends_on_id == task_id
+                    })
+            })
+            .map(|candidate| candidate.id.clone())
+            .collect();
+
+        let mut non_closed = Vec::new();
+        for child_id in child_ids {
+            let child_task = self.show_task(&child_id).await?;
+            if !Self::task_status_is_closed_like(&child_task.status) {
+                non_closed.push(TaskChildStatusEvidence::from_task(&child_task));
+            }
+        }
+        Ok(non_closed)
     }
 
     pub(crate) async fn run_graph_terminal_closure_has_task_close_truth(
@@ -2799,8 +2862,9 @@ impl StateStore {
             let requested_status_is_closed =
                 requested_lifecycle_status == TaskLifecycleStatus::Closed;
             if requested_status_is_closed {
-                let tasks = self.all_tasks().await?;
-                let non_closed_children = Self::non_closed_child_ids_for_task(&tasks, task_id);
+                let non_closed_children = self
+                    .non_closed_child_status_evidence_for_task_live(task_id)
+                    .await?;
                 Self::ensure_task_lifecycle_admitted(
                     task_id,
                     Self::admit_task_lifecycle_for_store(
@@ -3362,8 +3426,10 @@ impl StateStore {
         task_id: &str,
         reason: &str,
     ) -> Result<TaskRecord, StateStoreError> {
+        let non_closed_children = self
+            .non_closed_child_status_evidence_for_task_live(task_id)
+            .await?;
         let tasks = self.all_tasks().await?;
-        let non_closed_children = Self::non_closed_child_ids_for_task(&tasks, task_id);
 
         let mut task = self.show_task(task_id).await?;
         let current_status = Self::task_lifecycle_status_for_authority(task_id, &task.status).ok();
@@ -4038,6 +4104,9 @@ mod tests {
         assert!(error.to_string().contains(
             "cannot close task `parent-with-open-child` while non-closed child tasks exist"
         ));
+        assert!(error.to_string().contains("still-open-child(status=open"));
+        assert!(error.to_string().contains("updated_at="));
+        assert!(error.to_string().contains("closed_at=none"));
         let parent = store
             .show_task("parent-with-open-child")
             .await

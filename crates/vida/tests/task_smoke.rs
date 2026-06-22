@@ -2928,7 +2928,9 @@ fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
     let close_parent_stderr = String::from_utf8_lossy(&close_parent.stderr);
     assert!(
         close_parent_stderr.contains("non-closed child tasks exist")
-            && close_parent_stderr.contains("sandbox-child"),
+            && close_parent_stderr.contains("sandbox-child(status=open")
+            && close_parent_stderr.contains("updated_at=")
+            && close_parent_stderr.contains("closed_at=none"),
         "{close_parent_stderr}"
     );
 
@@ -4791,7 +4793,10 @@ fn taskflow_defect_loop_routes_repair_and_gates_parent_closure() {
     let rejected_parent_close_stderr = String::from_utf8_lossy(&rejected_parent_close.stderr);
     assert!(
         rejected_parent_close_stderr.contains("non-closed child tasks exist")
-            && rejected_parent_close_stderr.contains(defect_task_id),
+            && rejected_parent_close_stderr
+                .contains(&format!("{defect_task_id}(status=in_progress"))
+            && rejected_parent_close_stderr.contains("updated_at=")
+            && rejected_parent_close_stderr.contains("closed_at=none"),
         "{rejected_parent_close_stderr}"
     );
 
