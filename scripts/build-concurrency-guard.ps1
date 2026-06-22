@@ -11,7 +11,8 @@ function Enter-VidaBuildConcurrencyGuard {
     $lockPath = Join-Path $lockDir "$Scope.lock"
 
     if ($env:VIDA_BUILD_SCRIPT_LOCK_HELD -eq "1" -and
-        $env:VIDA_BUILD_SCRIPT_LOCK_PATH -eq $lockPath) {
+        $env:VIDA_BUILD_SCRIPT_LOCK_PATH -eq $lockPath -and
+        $env:VIDA_BUILD_SCRIPT_LOCK_PID -eq [string]$PID) {
         return [pscustomobject]@{
             Reentrant = $true
             LockPath = $lockPath
