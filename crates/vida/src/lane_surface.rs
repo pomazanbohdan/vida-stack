@@ -3671,6 +3671,7 @@ fn materialize_host_bridge_completion_evidence(
     receipt_id: &str,
     host_agent_id: Option<&str>,
     summary: Option<&str>,
+    allowed_next_node: Option<&str>,
     taskflow_evidence: HostBridgeTaskflowImplementationEvidence,
     authoritative_owned_paths: &[String],
     replace_existing_evidence: bool,
@@ -3861,8 +3862,21 @@ fn materialize_host_bridge_completion_evidence(
     blocker_codes.dedup();
     let blocker_code = blocker_codes.first().cloned();
     let verdict = host_bridge_completion_verdict(&blocker_codes);
-    let result_verdict =
-        host_bridge_result_verdict_fields_for_gate(dispatch_target, &blocker_codes, None);
+    let effective_allowed_next_node = allowed_next_node
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            persisted_receipt
+                .downstream_dispatch_target
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
+    let result_verdict = host_bridge_result_verdict_fields_for_gate(
+        dispatch_target,
+        &blocker_codes,
+        effective_allowed_next_node,
+    );
     let result = serde_json::json!({
         "artifact_kind": "host_tool_bridge_result",
         "schema_version": 1,
@@ -4721,6 +4735,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     receipt_id,
                     host_agent_id,
                     host_bridge_summary,
+                    allowed_next_node,
                     taskflow_artifacts,
                     &authoritative_owned_paths,
                     retrying_summary_guard || retrying_request_guard,
@@ -12656,6 +12671,7 @@ mod tests {
             "host-bridge-no-request-redirect",
             Some("verifier-1"),
             Some("internal agent completed"),
+            None,
             HostBridgeTaskflowImplementationEvidence::default(),
             &[],
             false,
@@ -12776,6 +12792,7 @@ mod tests {
             "receipt-custom",
             None,
             None,
+            None,
             HostBridgeTaskflowImplementationEvidence::default(),
             &[],
             false,
@@ -12857,6 +12874,7 @@ mod tests {
             "implementer",
             &receipt,
             "receipt-guard",
+            None,
             None,
             None,
             HostBridgeTaskflowImplementationEvidence::default(),

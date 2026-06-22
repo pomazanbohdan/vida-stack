@@ -422,12 +422,16 @@ pub fn host_bridge_result_verdict_fields_for_gate(
     rework_target: Option<&str>,
 ) -> HostBridgeResultVerdictFields {
     if blocker_codes.is_empty() {
+        let allowed_next_node = rework_target
+            .map(str::trim)
+            .filter(|target| !target.is_empty())
+            .unwrap_or("next");
         HostBridgeResultVerdictFields {
             decision: "approve".to_string(),
             verdict: Release1ContractStatus::Pass.as_str().to_string(),
             blocker_codes: Vec::new(),
             rework_target: None,
-            allowed_next_node: "next".to_string(),
+            allowed_next_node: allowed_next_node.to_string(),
         }
     } else {
         let transition = host_bridge_quality_gate_transition(completed_target)
@@ -828,6 +832,12 @@ mod tests {
             assert_eq!(pass_fields.blocker_codes, Vec::<String>::new(), "{gate}");
             assert_eq!(pass_fields.rework_target, None, "{gate}");
             assert_eq!(pass_fields.allowed_next_node, "next", "{gate}");
+            let targeted_pass_fields =
+                host_bridge_result_verdict_fields_for_gate(gate, &[], Some(allowed_next_node));
+            assert_eq!(
+                targeted_pass_fields.allowed_next_node, allowed_next_node,
+                "{gate}"
+            );
 
             assert_eq!(
                 host_bridge_lane_completion_summary_blocker_code(gate, Some(blocked_summary)),
