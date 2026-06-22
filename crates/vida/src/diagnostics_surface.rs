@@ -198,16 +198,13 @@ fn closed_task_active_run_projection_mismatch_next_action() -> String {
 }
 
 fn post_commit_default_clear_command(payload: &serde_json::Value) -> Option<&'static str> {
-    let blocked_by_run_graph = payload["blocker_codes"].as_array().is_some_and(|blockers| {
-        blockers.iter().any(|code| {
-            matches!(
-                code.as_str(),
-                Some("closed_task_active_run_projection_mismatch")
-                    | Some("latest_run_graph_status_blocked")
-            )
-        })
-    });
-    blocked_by_run_graph.then_some("vida task reconcile-closed-runs --limit 25")
+    let blocked_by_closed_task_projection =
+        payload["blocker_codes"].as_array().is_some_and(|blockers| {
+            blockers
+                .iter()
+                .any(|code| code.as_str() == Some("closed_task_active_run_projection_mismatch"))
+        });
+    blocked_by_closed_task_projection.then_some("vida task reconcile-closed-runs --limit 25")
 }
 
 fn post_commit_closed_task_active_run_projection_mismatch(
@@ -518,8 +515,19 @@ async fn build_post_commit_diagnostics(
         .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
         .map_err(|error| format!("read latest explicit continuation binding: {error}"))?;
+    let explicit_binding_run_graph_recovery = match latest_explicit_binding.as_ref() {
+        Some(binding) => store
+            .run_graph_status(&binding.run_id)
+            .await
+            .ok()
+            .map(crate::state_store::RunGraphRecoverySummary::from_status),
+        None => None,
+    };
+    let target_actionability_recovery = explicit_binding_run_graph_recovery
+        .as_ref()
+        .or(latest_run_graph_recovery.as_ref());
     let target_actionability = missing_task_actionability(
-        latest_run_graph_recovery.as_ref(),
+        target_actionability_recovery,
         latest_explicit_binding.as_ref(),
         &task_ids,
         &closed_task_ids,
@@ -891,6 +899,12 @@ mod tests {
             "blocker_codes": ["latest_run_graph_status_blocked"],
             "canonical_continuation_run_id": "run-1"
         });
+        assert_eq!(post_commit_default_clear_command(&payload), None);
+        let payload = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["closed_task_active_run_projection_mismatch"],
+            "canonical_continuation_run_id": "run-1"
+        });
         assert_eq!(
             post_commit_default_clear_command(&payload),
             Some("vida task reconcile-closed-runs --limit 25")
@@ -1225,6 +1239,64 @@ mod tests {
         assert_eq!(payload["checked_task_id"], "closed-task");
         assert_eq!(payload["checked_source"], "explicit_continuation_binding");
         assert_eq!(payload["terminal_closure_recovery"], true);
+    }
+
+    #[test]
+    fn diagnostics_blocks_closed_binding_when_recovery_belongs_to_other_run() {
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "other-run".to_string(),
+            task_id: "closed-task".to_string(),
+            active_node: "closure".to_string(),
+            lifecycle_stage: "closure_complete".to_string(),
+            handoff_state: "none".to_string(),
+            checkpoint_kind: "none".to_string(),
+            policy_gate: "closed_task_stale_run_retired".to_string(),
+            resume_status: "completed".to_string(),
+            resume_target: "none".to_string(),
+            resume_node: None,
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "closure".to_string(),
+                lifecycle_stage: "closure_complete".to_string(),
+                delegated_cycle_open: false,
+                delegated_cycle_state: "clear".to_string(),
+                local_exception_takeover_gate: "delegated_cycle_clear".to_string(),
+                blocker_code: None,
+                reporting_pause_gate: "closure_candidate".to_string(),
+                continuation_signal: "continue_after_reports".to_string(),
+            },
+        };
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "closed-run".to_string(),
+            task_id: "closed-task".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "run_id": "closed-run",
+                "task_id": "closed-task",
+                "task_status": "closed"
+            }),
+            binding_source: "task_close_reconcile".to_string(),
+            why_this_unit: "test mismatched recovery".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: None,
+            recorded_at: "2026-06-22T16:40:00Z".to_string(),
+        };
+
+        let payload = missing_task_actionability(
+            Some(&recovery),
+            Some(&binding),
+            &["closed-task".to_string()],
+            &["closed-task".to_string()],
+        );
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"][0],
+            "closed_task_active_run_projection_mismatch"
+        );
+        assert!(payload.get("terminal_closure_recovery").is_none());
     }
 
     #[test]
