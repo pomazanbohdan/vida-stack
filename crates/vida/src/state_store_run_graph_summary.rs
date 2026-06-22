@@ -321,9 +321,9 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
     }
     if run_graph_authority_transition_kind(&status, &receipt)
         == Some(CoreRunGraphTransitionKind::DownstreamReadyHandoff)
-        && downstream_handoff_ready_from_completion_evidence(&run_graph_completion_evidence(
-            &receipt,
-        ))
+        && downstream_handoff_ready_from_completion_evidence(
+            &run_graph_downstream_handoff_evidence(&receipt),
+        )
     {
         let completed_target = receipt.dispatch_target.trim();
         let lifecycle_target = normalize_run_graph_node(completed_target);
@@ -436,6 +436,21 @@ fn run_graph_completion_evidence(
     }
 }
 
+fn run_graph_downstream_handoff_evidence(
+    receipt: &RunGraphDispatchReceiptStored,
+) -> RunGraphCompletionEvidence {
+    RunGraphCompletionEvidence {
+        dispatch_target: receipt.dispatch_target.clone(),
+        dispatch_status: receipt.dispatch_status.clone(),
+        blocker_code: receipt.blocker_code.clone(),
+        rework: None,
+        source_lane: None,
+        downstream_dispatch_ready: receipt.downstream_dispatch_ready,
+        downstream_dispatch_target: receipt.downstream_dispatch_target.clone(),
+        downstream_dispatch_blockers: receipt.downstream_dispatch_blockers.clone(),
+    }
+}
+
 fn downstream_rework_evidence_from_completion_result(
     receipt: &RunGraphDispatchReceiptStored,
 ) -> Option<RunGraphReworkEvidence> {
@@ -454,12 +469,31 @@ fn downstream_rework_evidence_from_completion_result(
 fn blocked_source_lane_from_downstream_dispatch_packet(
     receipt: &RunGraphDispatchReceiptStored,
 ) -> Option<RunGraphBlockedSourceLane> {
+    if !matches!(
+        receipt.dispatch_status.as_str(),
+        "bridge_request_pending" | "blocked"
+    ) {
+        return None;
+    }
     let packet = downstream_packet_evidence_from_receipt(receipt)?;
     blocked_source_lane_from_packet_evidence(
         &receipt.dispatch_target,
         &receipt.dispatch_status,
         packet,
     )
+}
+
+fn path_is_under_vida_state_dir(path: &std::path::Path) -> bool {
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    components
+        .windows(3)
+        .any(|window| window == [".vida", "data", "state"])
 }
 
 fn downstream_packet_evidence_from_receipt(
@@ -470,6 +504,14 @@ fn downstream_packet_evidence_from_receipt(
         return None;
     }
     let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
+    if !path_is_under_vida_state_dir(&packet_path) {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(&packet_path).ok()?;
+    if !metadata.file_type().is_file() || metadata.len() > MAX_RECONCILED_PACK_DISPATCH_PACKET_BYTES
+    {
+        return None;
+    }
     let raw = std::fs::read_to_string(packet_path).ok()?;
     let packet: serde_json::Value = serde_json::from_str(&raw).ok()?;
     let source_dispatch_target = packet
@@ -5142,6 +5184,45 @@ mod tests {
             selected_backend: Some("middle".to_string()),
             recorded_at: "2026-05-21T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    fn downstream_handoff_evidence_uses_receipt_fields_without_packet_read() {
+        let mut receipt = RunGraphDispatchReceiptStored::from(sample_dispatch_receipt(
+            "run-ready-no-packet-read",
+        ));
+        receipt.dispatch_status = "executed".to_string();
+        receipt.dispatch_packet_path = Some("/dev/zero".to_string());
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_target = Some("verification".to_string());
+
+        let evidence = run_graph_downstream_handoff_evidence(&receipt);
+
+        assert!(downstream_handoff_ready_from_completion_evidence(&evidence));
+        assert!(evidence.rework.is_none());
+        assert!(evidence.source_lane.is_none());
+    }
+
+    #[test]
+    fn blocked_source_lane_skips_packet_read_for_ineligible_receipt_status() {
+        let mut receipt = RunGraphDispatchReceiptStored::from(sample_dispatch_receipt(
+            "run-ineligible-no-packet-read",
+        ));
+        receipt.dispatch_status = "executed".to_string();
+        receipt.dispatch_packet_path = Some("/dev/zero".to_string());
+
+        assert!(blocked_source_lane_from_downstream_dispatch_packet(&receipt).is_none());
+    }
+
+    #[test]
+    fn downstream_packet_evidence_rejects_non_regular_packet_path() {
+        let mut receipt = RunGraphDispatchReceiptStored::from(sample_dispatch_receipt(
+            "run-device-rejected",
+        ));
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.dispatch_packet_path = Some("/dev/zero".to_string());
+
+        assert!(downstream_packet_evidence_from_receipt(&receipt).is_none());
     }
 
     #[test]
