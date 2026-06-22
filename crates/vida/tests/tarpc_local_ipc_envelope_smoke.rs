@@ -2,8 +2,6 @@
 mod command_pipeline;
 #[path = "../src/vida_client.rs"]
 mod vida_client;
-#[path = "../src/vida_client_fixture.rs"]
-mod vida_client_fixture;
 #[path = "../src/vida_client_inprocess.rs"]
 mod vida_client_inprocess;
 #[path = "../src/vida_transport_tarpc.rs"]
@@ -13,9 +11,9 @@ use serde_json::json;
 use vida_client::VidaClient;
 use vida_client_inprocess::InProcessVidaClient;
 use vida_contracts::{
-    operation_spec, operations, VidaClientKind, VidaCommandEnvelope, VidaIdempotencyKey,
-    VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId, VidaResponseStatus, VidaSessionId,
-    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
+    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaClientKind,
+    VidaCommandEnvelope, VidaIdempotencyKey, VidaOperation, VidaProjectId, VidaProjectRef,
+    VidaRequestId, VidaResponseStatus, VidaSessionId, operation_spec, operations,
 };
 use vida_transport_tarpc::TarpcLocalIpcVidaClient;
 
@@ -181,16 +179,20 @@ async fn tarpc_interprocess_transport_matches_inprocess_conformance_matrix() {
 fn tarpc_endpoint_metadata_prefers_local_ipc_and_keeps_tcp_token_secret() {
     let metadata = vida_transport_tarpc::local_socket_endpoint_metadata();
 
-    assert!(metadata["preferred_local_ipc"]
-        .as_array()
-        .expect("preferred local IPC entries")
-        .iter()
-        .any(|entry| entry == "windows_named_pipe"));
-    assert!(metadata["preferred_local_ipc"]
-        .as_array()
-        .expect("preferred local IPC entries")
-        .iter()
-        .any(|entry| entry == "unix_domain_socket"));
+    assert!(
+        metadata["preferred_local_ipc"]
+            .as_array()
+            .expect("preferred local IPC entries")
+            .iter()
+            .any(|entry| entry == "windows_named_pipe")
+    );
+    assert!(
+        metadata["preferred_local_ipc"]
+            .as_array()
+            .expect("preferred local IPC entries")
+            .iter()
+            .any(|entry| entry == "unix_domain_socket")
+    );
     assert_eq!(metadata["fallback"]["kind"], "loopback_tcp");
     assert_eq!(metadata["fallback"]["requires_token"], true);
     assert_eq!(metadata["fallback"]["token_value_exposed"], false);

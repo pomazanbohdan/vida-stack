@@ -197,6 +197,7 @@ mod temp_state;
 #[cfg(test)]
 mod test_cli_support;
 mod vida_client;
+#[cfg(test)]
 mod vida_client_fixture;
 mod vida_client_inprocess;
 mod vida_transport_tarpc;

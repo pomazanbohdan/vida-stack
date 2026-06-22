@@ -2,8 +2,6 @@
 mod command_pipeline;
 #[path = "../src/vida_client.rs"]
 mod vida_client;
-#[path = "../src/vida_client_fixture.rs"]
-mod vida_client_fixture;
 #[path = "../src/vida_client_inprocess.rs"]
 mod vida_client_inprocess;
 #[allow(dead_code)]
@@ -12,15 +10,15 @@ mod vida_transport_tarpc;
 #[path = "../src/vida_tui_shell.rs"]
 mod vida_tui_shell;
 
-use ratatui::{backend::TestBackend, Terminal};
+use ratatui::{Terminal, backend::TestBackend};
 use vida_client::VidaClient;
 use vida_contracts::{
-    operation_spec, operations, VidaClientKind, VidaCommandEnvelope, VidaIdempotencyKey,
-    VidaOperation, VidaRequestId, VidaResponseStatus, VidaSessionId, VIDA_COMMAND_PROTOCOL_VERSION,
-    VIDA_CONTRACTS_SCHEMA_VERSION,
+    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaClientKind,
+    VidaCommandEnvelope, VidaIdempotencyKey, VidaOperation, VidaRequestId, VidaResponseStatus,
+    VidaSessionId, operation_spec, operations,
 };
 use vida_transport_tarpc::TarpcLocalIpcVidaClient;
-use vida_tui_shell::{render_app_shell, VidaTuiShellSnapshot};
+use vida_tui_shell::{VidaTuiShellSnapshot, render_app_shell};
 
 struct BlockingTarpcVidaClient {
     runtime: tokio::runtime::Runtime,
@@ -59,14 +57,14 @@ fn ratatui_live_attach_renders_operator_console_from_tarpc_local_socket() {
     let snapshot = VidaTuiShellSnapshot::from_client(&client);
     assert_eq!(snapshot.service_status, "ready");
     assert_eq!(snapshot.active_session, "active");
-    assert_eq!(snapshot.project_count, 2);
+    assert_eq!(snapshot.project_count, 1);
     assert_eq!(snapshot.project_id, "vida-stack");
     assert_eq!(snapshot.wizard_step, "inspect");
-    assert_eq!(snapshot.wizard_validation_findings, 1);
-    assert_eq!(snapshot.wizard_diff_change_count, 4);
+    assert_eq!(snapshot.wizard_validation_findings, 0);
+    assert_eq!(snapshot.wizard_diff_change_count, 0);
     assert_eq!(snapshot.job_status, "completed");
     assert_eq!(snapshot.event_count, 1);
-    assert_eq!(snapshot.receipt_count, 3);
+    assert_eq!(snapshot.receipt_count, 1);
     assert_eq!(snapshot.lifecycle_state, "ready");
     assert!(snapshot.orchestration_tui_projection);
 
@@ -79,15 +77,17 @@ fn ratatui_live_attach_renders_operator_console_from_tarpc_local_socket() {
     let rendered = buffer_text(terminal.backend().buffer());
     assert!(rendered.contains("VIDA Operator Console"));
     assert!(rendered.contains("Service: ready | Session: active"));
-    assert!(rendered
-        .contains("Projects: count=2 | active=vida-stack | Worktree: worktree-vida-stack-main"));
-    assert!(rendered.contains(
-        "Wizard: step=inspect | validation_findings=1 | diff_changes=4 | apply_supported=false"
-    ));
-    assert!(rendered.contains("Jobs/Events/Receipts: job_status=completed | events=1 | receipts=3"));
     assert!(
-        rendered.contains("Lifecycle: state=ready | binary_fingerprint=fixture-binary-fingerprint")
+        rendered
+            .contains("Projects: count=1 | active=vida-stack | Worktree: C:\\project\\vida-stack")
     );
+    assert!(rendered.contains(
+        "Wizard: step=inspect | validation_findings=0 | diff_changes=0 | apply_supported=false"
+    ));
+    assert!(
+        rendered.contains("Jobs/Events/Receipts: job_status=completed | events=1 | receipts=1")
+    );
+    assert!(rendered.contains("Lifecycle: state=ready | binary_fingerprint=local-runtime"));
 }
 
 fn service_envelope(operation: &str) -> VidaCommandEnvelope {
