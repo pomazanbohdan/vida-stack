@@ -272,11 +272,25 @@ pub(crate) fn write_json_projection(
         }
     }
     let mut payload = payload.clone();
+    let source_event_cursor = task_snapshot_marker_value(state_dir);
     if let serde_json::Value::Object(object) = &mut payload {
         object.insert(
             "projection_cache_dependencies".to_string(),
             serde_json::json!({
-                "task_snapshot_marker": task_snapshot_marker_value(state_dir)
+                "task_snapshot_marker": source_event_cursor
+            }),
+        );
+    }
+    let content_hash = serde_json::to_string(&payload)
+        .map(|body| stable_hash_hex(&body))
+        .unwrap_or_default();
+    if let serde_json::Value::Object(object) = &mut payload {
+        object.insert(
+            "projection_metadata".to_string(),
+            serde_json::json!({
+                "authority": "redb_operational_journal",
+                "source_event_cursor": source_event_cursor,
+                "content_hash": content_hash,
             }),
         );
     }
@@ -688,6 +702,17 @@ fn annotate_projection_cache_with_status(
         }),
     );
     serde_json::to_string_pretty(&payload).ok()
+}
+
+fn stable_hash_hex(input: &str) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET;
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
 }
 
 fn latest_state_mutation_marker(state_dir: &Path) -> std::io::Result<SystemTime> {
@@ -1418,6 +1443,33 @@ mod tests {
         write_json_projection(&root, "status-full-latest", &payload);
         assert!(read_fresh_json_projection(&root, "agent-dispatch-next-latest").is_some());
         assert!(read_fresh_json_projection(&root, "status-full-latest").is_some());
+        let cached = serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(
+                root.join("operator-projections")
+                    .join("status-full-latest.json"),
+            )
+            .expect("projection should be readable"),
+        )
+        .expect("projection should be json");
+        assert_eq!(
+            cached
+                .get("projection_metadata")
+                .and_then(|metadata| metadata.get("authority"))
+                .and_then(serde_json::Value::as_str),
+            Some("redb_operational_journal")
+        );
+        assert_eq!(
+            cached
+                .get("projection_metadata")
+                .and_then(|metadata| metadata.get("source_event_cursor"))
+                .and_then(serde_json::Value::as_str),
+            Some("task-marker-1")
+        );
+        assert!(cached
+            .get("projection_metadata")
+            .and_then(|metadata| metadata.get("content_hash"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|hash| !hash.is_empty()));
 
         fs::write(&marker, "task-marker-2").expect("task marker should update");
         assert!(

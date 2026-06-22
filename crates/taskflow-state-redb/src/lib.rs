@@ -9,10 +9,10 @@ use taskflow_contracts::{
     VidaStreamVersion,
 };
 use taskflow_state::{
-    JournalAppendReceipt, JournalAppendRequest, JournalArtifactRecord, JournalEventRecord,
-    JournalIdempotencyRecord, JournalIdempotencyState, JournalOutboxRecord, JournalOutboxState,
-    JournalProjectionFailure, OperationalJournal, TaskflowStateError, append_request_fingerprint,
-    validate_append_event_streams,
+    append_request_fingerprint, validate_append_event_streams, JournalAppendReceipt,
+    JournalAppendRequest, JournalArtifactRecord, JournalEventRecord, JournalIdempotencyRecord,
+    JournalIdempotencyState, JournalOutboxRecord, JournalOutboxState, JournalProjectionFailure,
+    OperationalJournal, TaskflowStateError,
 };
 
 const SCHEMA_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("journal_schema");
@@ -77,6 +77,31 @@ pub struct RedbJournalHealth {
     pub artifact_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedbProjectionCheckpointRecord {
+    pub projection_id: VidaProjectionRef,
+    pub stream_id: VidaStreamRef,
+    pub last_global_cursor: VidaEventCursor,
+    pub last_stream_version: VidaStreamVersion,
+    pub input_hash: String,
+    pub output_hash: String,
+    pub schema_version: String,
+    pub projector_version: String,
+    pub updated_at: taskflow_contracts::VidaTimestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedbProjectionFailureRecord {
+    pub projection_id: VidaProjectionRef,
+    pub stream_id: VidaStreamRef,
+    pub source_event_cursor: Option<VidaEventCursor>,
+    pub failure_kind: String,
+    pub failure_message: String,
+    pub retry_after: Option<String>,
+    pub repair_plan_ref: Option<String>,
+    pub content_hash: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RedbJournalBlocker {
     pub code: &'static str,
@@ -85,6 +110,7 @@ pub struct RedbJournalBlocker {
 
 pub const REDB_SINGLE_WRITER_BLOCKER_CODE: &str = "redb_single_writer_lock_held";
 pub const REDB_CORRUPT_PAYLOAD_BLOCKER_CODE: &str = "redb_journal_payload_corrupt";
+pub const REDB_PROJECTION_FAILURE_BLOCKER_CODE: &str = "redb_projection_failure_recorded";
 
 pub fn classify_redb_journal_error(
     error: &TaskflowStateError,
@@ -131,6 +157,31 @@ pub fn redb_journal_blocker_operator_payload(
         "next_actions": [blocker.next_action],
         "artifact_refs": {
             "journal_path": journal_path.as_ref().display().to_string(),
+        }
+    })
+}
+
+pub fn redb_projection_health_operator_payload(
+    health: &RedbJournalHealth,
+    failures: &[RedbProjectionFailureRecord],
+) -> serde_json::Value {
+    let blocked = !failures.is_empty();
+    serde_json::json!({
+        "status": if blocked { "blocked" } else { "pass" },
+        "blocker_codes": if blocked {
+            vec![REDB_PROJECTION_FAILURE_BLOCKER_CODE]
+        } else {
+            Vec::<&str>::new()
+        },
+        "next_actions": if blocked {
+            vec!["Inspect redb projection failure records, repair the projector or source event payload, then rebuild projections from the recorded source_event_cursor."]
+        } else {
+            Vec::<&str>::new()
+        },
+        "artifact_refs": {
+            "projection_checkpoint_count": health.projection_checkpoint_count,
+            "projection_failure_count": health.projection_failure_count,
+            "latest_projection_failure_hash": failures.last().map(|failure| failure.content_hash.clone()),
         }
     })
 }
@@ -302,10 +353,10 @@ impl RedbOperationalJournal {
             outbox_succeeded_count,
             outbox_failed_count,
             projection_checkpoint_count: self
-                .read_all::<VidaProjectionCheckpoint>(PROJECTION_CHECKPOINT_TABLE)?
+                .read_all::<RedbProjectionCheckpointRecord>(PROJECTION_CHECKPOINT_TABLE)?
                 .len(),
             projection_failure_count: self
-                .read_all::<JournalProjectionFailure>(PROJECTION_FAILURE_TABLE)?
+                .read_all::<RedbProjectionFailureRecord>(PROJECTION_FAILURE_TABLE)?
                 .len(),
             artifact_count: self
                 .read_all::<JournalArtifactRecord>(ARTIFACT_TABLE)?
@@ -317,11 +368,51 @@ impl RedbOperationalJournal {
         &self,
         projection_id: &VidaProjectionRef,
     ) -> Result<Option<VidaProjectionCheckpoint>, TaskflowStateError> {
-        self.read_one(PROJECTION_CHECKPOINT_TABLE, &projection_id.0)
+        self.projection_checkpoint_record(projection_id)
+            .map(|record| record.map(RedbProjectionCheckpointRecord::into_checkpoint))
     }
 
     pub fn projection_failures(&self) -> Result<Vec<JournalProjectionFailure>, TaskflowStateError> {
-        self.read_all(PROJECTION_FAILURE_TABLE)
+        self.projection_failure_records().map(|records| {
+            records
+                .into_iter()
+                .map(RedbProjectionFailureRecord::into_failure)
+                .collect()
+        })
+    }
+
+    pub fn projection_checkpoint_record(
+        &self,
+        projection_id: &VidaProjectionRef,
+    ) -> Result<Option<RedbProjectionCheckpointRecord>, TaskflowStateError> {
+        let read = self.db.begin_read().map_err(storage_error)?;
+        let table = match read.open_table(PROJECTION_CHECKPOINT_TABLE) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(error) => return Err(storage_error(error)),
+        };
+        table
+            .get(projection_id.0.as_str())
+            .map_err(storage_error)?
+            .map(|row| decode_projection_checkpoint_record(row.value()))
+            .transpose()
+    }
+
+    pub fn projection_failure_records(
+        &self,
+    ) -> Result<Vec<RedbProjectionFailureRecord>, TaskflowStateError> {
+        let read = self.db.begin_read().map_err(storage_error)?;
+        let table = match read.open_table(PROJECTION_FAILURE_TABLE) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(storage_error(error)),
+        };
+        let mut records = Vec::new();
+        for row in table.iter().map_err(storage_error)? {
+            let (_, value) = row.map_err(storage_error)?;
+            records.push(decode_projection_failure_record(value.value())?);
+        }
+        Ok(records)
     }
 
     pub fn artifact(
@@ -329,6 +420,19 @@ impl RedbOperationalJournal {
         artifact_ref: &VidaArtifactRef,
     ) -> Result<Option<JournalArtifactRecord>, TaskflowStateError> {
         self.read_one(ARTIFACT_TABLE, &artifact_ref.0)
+    }
+
+    pub fn record_projection_failure_at_cursor(
+        &mut self,
+        failure: JournalProjectionFailure,
+        source_event_cursor: Option<VidaEventCursor>,
+    ) -> Result<(), TaskflowStateError> {
+        let record = RedbProjectionFailureRecord::from_failure(failure, source_event_cursor);
+        let key = format!(
+            "{}:{}:{}",
+            record.projection_id.0, record.stream_id.0, record.content_hash
+        );
+        self.write_record(PROJECTION_FAILURE_TABLE, &key, &record)
     }
 }
 
@@ -726,19 +830,16 @@ impl OperationalJournal for RedbOperationalJournal {
     }
 
     fn record_projection_checkpoint(&mut self, checkpoint: VidaProjectionCheckpoint) {
+        let record = RedbProjectionCheckpointRecord::from_checkpoint(checkpoint);
         let _ = self.write_record(
             PROJECTION_CHECKPOINT_TABLE,
-            &checkpoint.projection_id.0,
-            &checkpoint,
+            &record.projection_id.0,
+            &record,
         );
     }
 
     fn record_projection_failure(&mut self, failure: JournalProjectionFailure) {
-        let key = format!(
-            "{}:{}:{}",
-            failure.projection_id.0, failure.stream_id.0, failure.error
-        );
-        let _ = self.write_record(PROJECTION_FAILURE_TABLE, &key, &failure);
+        let _ = self.record_projection_failure_at_cursor(failure, self.latest_global_cursor());
     }
 
     fn index_artifact(&mut self, artifact: JournalArtifactRecord) {
@@ -788,6 +889,104 @@ impl RedbOperationalJournal {
         }
         write.commit().map_err(storage_error)
     }
+
+    fn latest_global_cursor(&self) -> Option<VidaEventCursor> {
+        let mut records: Vec<JournalEventRecord> =
+            self.read_all(EVENTS_BY_GLOBAL_CURSOR_TABLE).ok()?;
+        records.sort_by_key(|record| global_cursor_number(&record.global_cursor));
+        records.last().map(|record| record.global_cursor.clone())
+    }
+}
+
+impl RedbProjectionCheckpointRecord {
+    fn from_checkpoint(checkpoint: VidaProjectionCheckpoint) -> Self {
+        let input_hash = stable_hash_hex(&format!(
+            "{}:{}:{}",
+            checkpoint.projection_id.0, checkpoint.stream_id.0, checkpoint.event_cursor.0
+        ));
+        let output_hash = stable_hash_hex(&serde_json::to_string(&checkpoint).unwrap_or_default());
+        Self {
+            projection_id: checkpoint.projection_id,
+            stream_id: checkpoint.stream_id,
+            last_global_cursor: checkpoint.event_cursor,
+            last_stream_version: checkpoint.stream_version,
+            input_hash,
+            output_hash,
+            schema_version: SCHEMA_VERSION.to_string(),
+            projector_version: "redb-operational-journal-projection".to_string(),
+            updated_at: checkpoint.updated_at,
+        }
+    }
+
+    fn into_checkpoint(self) -> VidaProjectionCheckpoint {
+        VidaProjectionCheckpoint {
+            projection_id: self.projection_id,
+            stream_id: self.stream_id,
+            event_cursor: self.last_global_cursor,
+            stream_version: self.last_stream_version,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+fn decode_projection_checkpoint_record(
+    value: &[u8],
+) -> Result<RedbProjectionCheckpointRecord, TaskflowStateError> {
+    if let Ok(record) = serde_json::from_slice::<RedbProjectionCheckpointRecord>(value) {
+        return Ok(record);
+    }
+    let checkpoint: VidaProjectionCheckpoint =
+        serde_json::from_slice(value).map_err(payload_decode_error)?;
+    Ok(RedbProjectionCheckpointRecord::from_checkpoint(checkpoint))
+}
+
+impl RedbProjectionFailureRecord {
+    fn from_failure(
+        failure: JournalProjectionFailure,
+        source_event_cursor: Option<VidaEventCursor>,
+    ) -> Self {
+        let content_hash = stable_hash_hex(&format!(
+            "{}:{}:{:?}:{}",
+            failure.projection_id.0, failure.stream_id.0, source_event_cursor, failure.error
+        ));
+        Self {
+            projection_id: failure.projection_id,
+            stream_id: failure.stream_id,
+            source_event_cursor,
+            failure_kind: "projection_rebuild_failed".to_string(),
+            failure_message: failure.error,
+            retry_after: None,
+            repair_plan_ref: Some("redb-projection-repair-plan".to_string()),
+            content_hash,
+        }
+    }
+
+    fn into_failure(self) -> JournalProjectionFailure {
+        JournalProjectionFailure {
+            projection_id: self.projection_id,
+            stream_id: self.stream_id,
+            error: self.failure_message,
+        }
+    }
+}
+
+fn decode_projection_failure_record(
+    value: &[u8],
+) -> Result<RedbProjectionFailureRecord, TaskflowStateError> {
+    if let Ok(record) = serde_json::from_slice::<RedbProjectionFailureRecord>(value) {
+        return Ok(record);
+    }
+    let failure: JournalProjectionFailure =
+        serde_json::from_slice(value).map_err(payload_decode_error)?;
+    Ok(RedbProjectionFailureRecord::from_failure(failure, None))
+}
+
+fn global_cursor_number(cursor: &VidaEventCursor) -> usize {
+    cursor
+        .0
+        .strip_prefix("global-")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0)
 }
 
 fn storage_error(error: impl std::fmt::Display) -> TaskflowStateError {
@@ -809,16 +1008,28 @@ fn append_receipt_ref(key: &VidaIdempotencyKey, receipt: &JournalAppendReceipt) 
     ))
 }
 
+fn stable_hash_hex(input: &str) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET;
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
     use std::time::Instant;
 
     use super::{
-        APPEND_IDEMPOTENCY_TABLE, EVENTS_BY_GLOBAL_CURSOR_TABLE, EVENTS_BY_STREAM_TABLE,
-        OUTBOX_TABLE, REDB_CORRUPT_PAYLOAD_BLOCKER_CODE, REDB_SINGLE_WRITER_BLOCKER_CODE,
-        RedbAppendIdempotencyRecord, RedbOperationalJournal, classify_redb_journal_error,
-        redb_journal_blocker_operator_payload,
+        classify_redb_journal_error, redb_journal_blocker_operator_payload,
+        redb_projection_health_operator_payload, RedbAppendIdempotencyRecord,
+        RedbOperationalJournal, APPEND_IDEMPOTENCY_TABLE, EVENTS_BY_GLOBAL_CURSOR_TABLE,
+        EVENTS_BY_STREAM_TABLE, OUTBOX_TABLE, REDB_CORRUPT_PAYLOAD_BLOCKER_CODE,
+        REDB_PROJECTION_FAILURE_BLOCKER_CODE, REDB_SINGLE_WRITER_BLOCKER_CODE,
     };
     use redb::{ReadableDatabase, ReadableTable, TableDefinition};
     use taskflow_contracts::{
@@ -828,10 +1039,11 @@ mod tests {
         VidaStreamVersion, VidaTimestamp,
     };
     use taskflow_state::{
-        JournalAppendRequest, JournalArtifactRecord, JournalIdempotencyState, JournalOutboxState,
-        OperationalJournal, RunWorkflowJournalRepository, TaskflowStateError,
         verify_run_workflow_repository_conformance,
-        verify_run_workflow_repository_corrupt_payload_fails_closed,
+        verify_run_workflow_repository_corrupt_payload_fails_closed, JournalAppendRequest,
+        JournalArtifactRecord, JournalIdempotencyState, JournalOutboxState,
+        JournalProjectionFailure, OperationalJournal, RunWorkflowJournalRepository,
+        TaskflowStateError,
     };
     use tempfile::tempdir;
 
@@ -1118,12 +1330,10 @@ mod tests {
         let payload = serde_json::to_value(&blocker).expect("blocker should serialize");
 
         assert_eq!(payload["code"], REDB_CORRUPT_PAYLOAD_BLOCKER_CODE);
-        assert!(
-            payload["next_action"]
-                .as_str()
-                .expect("next action")
-                .contains(path.to_string_lossy().as_ref())
-        );
+        assert!(payload["next_action"]
+            .as_str()
+            .expect("next action")
+            .contains(path.to_string_lossy().as_ref()));
         let operator_payload = redb_journal_blocker_operator_payload(&blocker, &path);
         assert_eq!(operator_payload["status"], "blocked");
         assert_eq!(
@@ -1191,11 +1401,9 @@ mod tests {
             let blocker =
                 classify_redb_journal_error(&error, &path).expect("lock error should classify");
             assert_eq!(blocker.code, REDB_SINGLE_WRITER_BLOCKER_CODE);
-            assert!(
-                blocker
-                    .next_action
-                    .contains("holding the redb journal writer lock")
-            );
+            assert!(blocker
+                .next_action
+                .contains("holding the redb journal writer lock"));
         }
     }
 
@@ -1214,6 +1422,16 @@ mod tests {
             .expect("append should pass");
         journal.claim_outbox_batch("worker-1", 1);
         journal.record_projection_checkpoint(projection_checkpoint(3));
+        journal
+            .record_projection_failure_at_cursor(
+                JournalProjectionFailure {
+                    projection_id: VidaProjectionRef("projection-1".to_string()),
+                    stream_id: VidaStreamRef("stream-1".to_string()),
+                    error: "projector failed".to_string(),
+                },
+                Some(VidaEventCursor("global-2".to_string())),
+            )
+            .expect("projection failure should persist");
         journal.index_artifact(JournalArtifactRecord {
             artifact_ref: taskflow_contracts::VidaArtifactRef("artifact-1".to_string()),
             content_hash: "hash-1".to_string(),
@@ -1231,7 +1449,29 @@ mod tests {
         assert_eq!(health.outbox_pending_count, 1);
         assert_eq!(health.outbox_claimed_count, 1);
         assert_eq!(health.projection_checkpoint_count, 1);
+        assert_eq!(health.projection_failure_count, 1);
         assert_eq!(health.artifact_count, 1);
+        let failures = reopened
+            .projection_failure_records()
+            .expect("projection failure records");
+        assert_eq!(failures.len(), 1);
+        assert_eq!(
+            failures[0].source_event_cursor,
+            Some(VidaEventCursor("global-2".to_string()))
+        );
+        assert_eq!(failures[0].failure_kind, "projection_rebuild_failed");
+        assert!(failures[0].repair_plan_ref.is_some());
+        assert!(!failures[0].content_hash.is_empty());
+        let operator_payload = redb_projection_health_operator_payload(&health, &failures);
+        assert_eq!(operator_payload["status"], "blocked");
+        assert_eq!(
+            operator_payload["blocker_codes"][0],
+            REDB_PROJECTION_FAILURE_BLOCKER_CODE
+        );
+        assert_eq!(
+            operator_payload["artifact_refs"]["projection_failure_count"],
+            1
+        );
     }
 
     #[test]
@@ -1326,6 +1566,69 @@ mod tests {
             rebuilt.last().expect("rebuilt events").global_cursor,
             VidaEventCursor("global-4".to_string())
         );
+        let checkpoint_record = reopened
+            .projection_checkpoint_record(&VidaProjectionRef("projection-1".to_string()))
+            .expect("checkpoint record read")
+            .expect("checkpoint record");
+        assert_eq!(
+            checkpoint_record.last_global_cursor,
+            VidaEventCursor("global-2".to_string())
+        );
+        assert_eq!(checkpoint_record.last_stream_version, VidaStreamVersion(2));
+        assert_eq!(checkpoint_record.schema_version, "1");
+        assert!(!checkpoint_record.input_hash.is_empty());
+        assert!(!checkpoint_record.output_hash.is_empty());
+    }
+
+    #[test]
+    fn old_projection_rows_remain_readable_after_record_upgrade() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal
+            .write_record(
+                super::PROJECTION_CHECKPOINT_TABLE,
+                "projection-old",
+                &VidaProjectionCheckpoint {
+                    projection_id: VidaProjectionRef("projection-old".to_string()),
+                    stream_id: VidaStreamRef("stream-1".to_string()),
+                    event_cursor: VidaEventCursor("global-7".to_string()),
+                    stream_version: VidaStreamVersion(7),
+                    updated_at: VidaTimestamp("2026-06-22T00:00:00Z".to_string()),
+                },
+            )
+            .expect("old checkpoint row should write");
+        journal
+            .write_record(
+                super::PROJECTION_FAILURE_TABLE,
+                "projection-old:stream-1:error",
+                &JournalProjectionFailure {
+                    projection_id: VidaProjectionRef("projection-old".to_string()),
+                    stream_id: VidaStreamRef("stream-1".to_string()),
+                    error: "old projector error".to_string(),
+                },
+            )
+            .expect("old failure row should write");
+
+        let checkpoint = journal
+            .projection_checkpoint_record(&VidaProjectionRef("projection-old".to_string()))
+            .expect("checkpoint row should decode")
+            .expect("checkpoint row");
+        assert_eq!(
+            checkpoint.last_global_cursor,
+            VidaEventCursor("global-7".to_string())
+        );
+        assert_eq!(checkpoint.last_stream_version, VidaStreamVersion(7));
+        assert!(!checkpoint.input_hash.is_empty());
+        assert!(!checkpoint.output_hash.is_empty());
+
+        let failures = journal
+            .projection_failure_records()
+            .expect("failure rows should decode");
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].failure_message, "old projector error");
+        assert_eq!(failures[0].source_event_cursor, None);
+        assert!(!failures[0].content_hash.is_empty());
     }
 
     #[test]
@@ -1350,11 +1653,9 @@ mod tests {
                 .len(),
             1
         );
-        assert!(
-            journal_a
-                .load_stream(&VidaStreamRef("stream-b".to_string()))
-                .is_empty()
-        );
+        assert!(journal_a
+            .load_stream(&VidaStreamRef("stream-b".to_string()))
+            .is_empty());
         assert_eq!(
             journal_b
                 .load_stream(&VidaStreamRef("stream-b".to_string()))
@@ -1432,11 +1733,9 @@ mod tests {
             .health_status()
             .expect_err("duplicate event id must fail health status");
 
-        assert!(
-            error
-                .to_string()
-                .contains("redb journal duplicate event id")
-        );
+        assert!(error
+            .to_string()
+            .contains("redb journal duplicate event id"));
     }
 
     #[test]
