@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 
-use taskflow_contracts::{DependencyEdge, TaskRecord};
+use taskflow_contracts::{
+    DependencyEdge, TaskRecord, VidaArtifactRef, VidaCommandRef, VidaDomainEventEnvelope,
+    VidaEffectIntent, VidaEventCursor, VidaEventRef, VidaIdempotencyKey, VidaProjectionCheckpoint,
+    VidaProjectionRef, VidaReceiptId, VidaStreamRef, VidaStreamVersion,
+};
 use taskflow_core::TaskId;
 use thiserror::Error;
 
@@ -8,6 +12,16 @@ use thiserror::Error;
 pub enum TaskflowStateError {
     #[error("task not found: {0}")]
     TaskNotFound(String),
+    #[error("stream version conflict for {stream_id}: expected {expected:?}, actual {actual}")]
+    StreamVersionConflict {
+        stream_id: String,
+        expected: Option<u64>,
+        actual: u64,
+    },
+    #[error("idempotency conflict: {0}")]
+    IdempotencyConflict(String),
+    #[error("outbox record not found: {0}")]
+    OutboxRecordNotFound(String),
 }
 
 pub trait TaskStore {
@@ -53,10 +67,360 @@ impl TaskStore for InMemoryTaskStore {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct JournalAppendRequest {
+    pub stream_id: VidaStreamRef,
+    pub expected_stream_version: Option<VidaStreamVersion>,
+    pub command_id: VidaCommandRef,
+    pub idempotency_key: VidaIdempotencyKey,
+    pub causation_id: Option<VidaCommandRef>,
+    pub correlation_id: Option<String>,
+    pub events: Vec<VidaDomainEventEnvelope>,
+    pub effect_intents: Vec<VidaEffectIntent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalAppendReceipt {
+    pub stream_id: VidaStreamRef,
+    pub first_global_cursor: Option<VidaEventCursor>,
+    pub last_global_cursor: Option<VidaEventCursor>,
+    pub stream_version: VidaStreamVersion,
+    pub event_count: usize,
+    pub effect_intent_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JournalEventRecord {
+    pub global_cursor: VidaEventCursor,
+    pub event: VidaDomainEventEnvelope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JournalIdempotencyState {
+    Started,
+    Completed,
+    Conflicted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalIdempotencyRecord {
+    pub key: VidaIdempotencyKey,
+    pub command_id: VidaCommandRef,
+    pub state: JournalIdempotencyState,
+    pub receipt_id: Option<VidaReceiptId>,
+    pub conflict_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum JournalOutboxState {
+    Pending,
+    Claimed { consumer_id: String },
+    Succeeded,
+    Failed { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JournalOutboxRecord {
+    pub outbox_id: VidaEventRef,
+    pub effect: VidaEffectIntent,
+    pub state: JournalOutboxState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalProjectionFailure {
+    pub projection_id: VidaProjectionRef,
+    pub stream_id: VidaStreamRef,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalArtifactRecord {
+    pub artifact_ref: VidaArtifactRef,
+    pub content_hash: String,
+    pub path: String,
+}
+
+pub trait OperationalJournal {
+    fn append(
+        &mut self,
+        request: JournalAppendRequest,
+    ) -> Result<JournalAppendReceipt, TaskflowStateError>;
+    fn load_stream(&self, stream_id: &VidaStreamRef) -> Vec<VidaDomainEventEnvelope>;
+    fn read_global_after(
+        &self,
+        cursor: Option<&VidaEventCursor>,
+        limit: usize,
+    ) -> Vec<JournalEventRecord>;
+    fn record_idempotency_started(
+        &mut self,
+        key: VidaIdempotencyKey,
+        command_id: VidaCommandRef,
+    ) -> Result<(), TaskflowStateError>;
+    fn record_idempotency_completed(
+        &mut self,
+        key: &VidaIdempotencyKey,
+        receipt_id: VidaReceiptId,
+    ) -> Result<(), TaskflowStateError>;
+    fn record_idempotency_conflicted(
+        &mut self,
+        key: &VidaIdempotencyKey,
+        reason: String,
+    ) -> Result<(), TaskflowStateError>;
+    fn idempotency_record(&self, key: &VidaIdempotencyKey) -> Option<&JournalIdempotencyRecord>;
+    fn claim_outbox_batch(&mut self, consumer_id: &str, limit: usize) -> Vec<JournalOutboxRecord>;
+    fn mark_outbox_succeeded(&mut self, outbox_id: &VidaEventRef)
+    -> Result<(), TaskflowStateError>;
+    fn mark_outbox_failed(
+        &mut self,
+        outbox_id: &VidaEventRef,
+        reason: String,
+    ) -> Result<(), TaskflowStateError>;
+    fn record_projection_checkpoint(&mut self, checkpoint: VidaProjectionCheckpoint);
+    fn record_projection_failure(&mut self, failure: JournalProjectionFailure);
+    fn index_artifact(&mut self, artifact: JournalArtifactRecord);
+}
+
+#[derive(Debug, Default)]
+pub struct InMemoryOperationalJournal {
+    streams: HashMap<String, Vec<VidaDomainEventEnvelope>>,
+    global_events: Vec<JournalEventRecord>,
+    idempotency: HashMap<String, JournalIdempotencyRecord>,
+    outbox: Vec<JournalOutboxRecord>,
+    projection_checkpoints: HashMap<String, VidaProjectionCheckpoint>,
+    projection_failures: Vec<JournalProjectionFailure>,
+    artifacts: HashMap<String, JournalArtifactRecord>,
+}
+
+impl InMemoryOperationalJournal {
+    #[must_use]
+    pub fn projection_checkpoint(
+        &self,
+        projection_id: &VidaProjectionRef,
+    ) -> Option<&VidaProjectionCheckpoint> {
+        self.projection_checkpoints.get(&projection_id.0)
+    }
+
+    #[must_use]
+    pub fn projection_failures(&self) -> &[JournalProjectionFailure] {
+        &self.projection_failures
+    }
+
+    #[must_use]
+    pub fn artifact(&self, artifact_ref: &VidaArtifactRef) -> Option<&JournalArtifactRecord> {
+        self.artifacts.get(&artifact_ref.0)
+    }
+}
+
+impl OperationalJournal for InMemoryOperationalJournal {
+    fn append(
+        &mut self,
+        request: JournalAppendRequest,
+    ) -> Result<JournalAppendReceipt, TaskflowStateError> {
+        let key = request.stream_id.0.clone();
+        let stream = self.streams.entry(key.clone()).or_default();
+        let actual_version = stream.len() as u64;
+        if request
+            .expected_stream_version
+            .as_ref()
+            .map(|version| version.0)
+            != Some(actual_version)
+        {
+            return Err(TaskflowStateError::StreamVersionConflict {
+                stream_id: key,
+                expected: request
+                    .expected_stream_version
+                    .as_ref()
+                    .map(|version| version.0),
+                actual: actual_version,
+            });
+        }
+
+        let first_index = self.global_events.len();
+        let event_count = request.events.len();
+        let effect_intent_count = request.effect_intents.len();
+        for event in request.events {
+            let cursor = VidaEventCursor(format!("global-{}", self.global_events.len() + 1));
+            stream.push(event.clone());
+            self.global_events.push(JournalEventRecord {
+                global_cursor: cursor,
+                event,
+            });
+        }
+        for effect in request.effect_intents {
+            self.outbox.push(JournalOutboxRecord {
+                outbox_id: VidaEventRef(format!("outbox-{}", self.outbox.len() + 1)),
+                effect,
+                state: JournalOutboxState::Pending,
+            });
+        }
+
+        let last_index = self.global_events.len().saturating_sub(1);
+        Ok(JournalAppendReceipt {
+            stream_id: request.stream_id,
+            first_global_cursor: self
+                .global_events
+                .get(first_index)
+                .map(|record| record.global_cursor.clone()),
+            last_global_cursor: self
+                .global_events
+                .get(last_index)
+                .map(|record| record.global_cursor.clone()),
+            stream_version: VidaStreamVersion(stream.len() as u64),
+            event_count,
+            effect_intent_count,
+        })
+    }
+
+    fn load_stream(&self, stream_id: &VidaStreamRef) -> Vec<VidaDomainEventEnvelope> {
+        self.streams.get(&stream_id.0).cloned().unwrap_or_default()
+    }
+
+    fn read_global_after(
+        &self,
+        cursor: Option<&VidaEventCursor>,
+        limit: usize,
+    ) -> Vec<JournalEventRecord> {
+        let start = cursor
+            .and_then(|cursor| {
+                self.global_events
+                    .iter()
+                    .position(|record| record.global_cursor == *cursor)
+                    .map(|index| index + 1)
+            })
+            .unwrap_or(0);
+        self.global_events
+            .iter()
+            .skip(start)
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    fn record_idempotency_started(
+        &mut self,
+        key: VidaIdempotencyKey,
+        command_id: VidaCommandRef,
+    ) -> Result<(), TaskflowStateError> {
+        if self.idempotency.contains_key(&key.0) {
+            return Err(TaskflowStateError::IdempotencyConflict(key.0));
+        }
+        self.idempotency.insert(
+            key.0.clone(),
+            JournalIdempotencyRecord {
+                key,
+                command_id,
+                state: JournalIdempotencyState::Started,
+                receipt_id: None,
+                conflict_reason: None,
+            },
+        );
+        Ok(())
+    }
+
+    fn record_idempotency_completed(
+        &mut self,
+        key: &VidaIdempotencyKey,
+        receipt_id: VidaReceiptId,
+    ) -> Result<(), TaskflowStateError> {
+        let record = self
+            .idempotency
+            .get_mut(&key.0)
+            .ok_or_else(|| TaskflowStateError::IdempotencyConflict(key.0.clone()))?;
+        record.state = JournalIdempotencyState::Completed;
+        record.receipt_id = Some(receipt_id);
+        Ok(())
+    }
+
+    fn record_idempotency_conflicted(
+        &mut self,
+        key: &VidaIdempotencyKey,
+        reason: String,
+    ) -> Result<(), TaskflowStateError> {
+        let record = self
+            .idempotency
+            .get_mut(&key.0)
+            .ok_or_else(|| TaskflowStateError::IdempotencyConflict(key.0.clone()))?;
+        record.state = JournalIdempotencyState::Conflicted;
+        record.conflict_reason = Some(reason);
+        Ok(())
+    }
+
+    fn idempotency_record(&self, key: &VidaIdempotencyKey) -> Option<&JournalIdempotencyRecord> {
+        self.idempotency.get(&key.0)
+    }
+
+    fn claim_outbox_batch(&mut self, consumer_id: &str, limit: usize) -> Vec<JournalOutboxRecord> {
+        let mut claimed = Vec::new();
+        for record in self.outbox.iter_mut() {
+            if !matches!(record.state, JournalOutboxState::Pending) {
+                continue;
+            }
+            record.state = JournalOutboxState::Claimed {
+                consumer_id: consumer_id.to_string(),
+            };
+            claimed.push(record.clone());
+            if claimed.len() == limit {
+                break;
+            }
+        }
+        claimed
+    }
+
+    fn mark_outbox_succeeded(
+        &mut self,
+        outbox_id: &VidaEventRef,
+    ) -> Result<(), TaskflowStateError> {
+        let record = self
+            .outbox
+            .iter_mut()
+            .find(|record| record.outbox_id == *outbox_id)
+            .ok_or_else(|| TaskflowStateError::OutboxRecordNotFound(outbox_id.0.clone()))?;
+        record.state = JournalOutboxState::Succeeded;
+        Ok(())
+    }
+
+    fn mark_outbox_failed(
+        &mut self,
+        outbox_id: &VidaEventRef,
+        reason: String,
+    ) -> Result<(), TaskflowStateError> {
+        let record = self
+            .outbox
+            .iter_mut()
+            .find(|record| record.outbox_id == *outbox_id)
+            .ok_or_else(|| TaskflowStateError::OutboxRecordNotFound(outbox_id.0.clone()))?;
+        record.state = JournalOutboxState::Failed { reason };
+        Ok(())
+    }
+
+    fn record_projection_checkpoint(&mut self, checkpoint: VidaProjectionCheckpoint) {
+        self.projection_checkpoints
+            .insert(checkpoint.projection_id.0.clone(), checkpoint);
+    }
+
+    fn record_projection_failure(&mut self, failure: JournalProjectionFailure) {
+        self.projection_failures.push(failure);
+    }
+
+    fn index_artifact(&mut self, artifact: JournalArtifactRecord) {
+        self.artifacts
+            .insert(artifact.artifact_ref.0.clone(), artifact);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{InMemoryTaskStore, TaskStore, TaskflowStateError};
-    use taskflow_contracts::{DependencyEdge, TaskRecord};
+    use super::{
+        InMemoryOperationalJournal, InMemoryTaskStore, JournalAppendRequest, JournalArtifactRecord,
+        JournalIdempotencyState, JournalOutboxState, JournalProjectionFailure, OperationalJournal,
+        TaskStore, TaskflowStateError,
+    };
+    use taskflow_contracts::{
+        DependencyEdge, TaskRecord, VidaAggregateRef, VidaArtifactRef, VidaCommandRef,
+        VidaDomainEventEnvelope, VidaEffectIntent, VidaEffectRef, VidaEventCursor, VidaEventRef,
+        VidaIdempotencyKey, VidaOperation, VidaProjectionCheckpoint, VidaProjectionRef,
+        VidaReceiptId, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
+    };
     use taskflow_core::{IssueType, TaskId};
 
     #[test]
@@ -102,5 +466,164 @@ mod tests {
         let rows = store.list_dependencies(&TaskId::new("vida-rf1-taskflow-state"));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].depends_on_id.as_str(), "vida-rf1-taskflow-core");
+    }
+
+    #[test]
+    fn operational_journal_appends_and_reads_with_expected_version() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let request = append_request(0, vec![event(1)], vec![effect("effect-1")]);
+
+        let receipt = journal.append(request).expect("append should pass");
+
+        assert_eq!(receipt.stream_id, VidaStreamRef("stream-1".to_string()));
+        assert_eq!(receipt.stream_version, VidaStreamVersion(1));
+        assert_eq!(receipt.event_count, 1);
+        assert_eq!(receipt.effect_intent_count, 1);
+        assert_eq!(
+            receipt.first_global_cursor,
+            Some(VidaEventCursor("global-1".to_string()))
+        );
+        assert_eq!(
+            journal
+                .load_stream(&VidaStreamRef("stream-1".to_string()))
+                .len(),
+            1
+        );
+        assert_eq!(journal.read_global_after(None, 10).len(), 1);
+
+        let conflict = journal
+            .append(append_request(0, vec![event(2)], Vec::new()))
+            .expect_err("stale expected version must fail");
+        assert_eq!(
+            conflict,
+            TaskflowStateError::StreamVersionConflict {
+                stream_id: "stream-1".to_string(),
+                expected: Some(0),
+                actual: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn operational_journal_tracks_idempotency_lifecycle() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let key = VidaIdempotencyKey("idem-1".to_string());
+        journal
+            .record_idempotency_started(key.clone(), VidaCommandRef("command-1".to_string()))
+            .expect("start should pass");
+        journal
+            .record_idempotency_completed(&key, VidaReceiptId("receipt-1".to_string()))
+            .expect("complete should pass");
+
+        let record = journal
+            .idempotency_record(&key)
+            .expect("idempotency record should exist");
+        assert_eq!(record.state, JournalIdempotencyState::Completed);
+        assert_eq!(
+            record.receipt_id,
+            Some(VidaReceiptId("receipt-1".to_string()))
+        );
+        assert!(
+            journal
+                .record_idempotency_started(key, VidaCommandRef("command-1".to_string()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn operational_journal_claims_outbox_and_records_projection_artifacts() {
+        let mut journal = InMemoryOperationalJournal::default();
+        journal
+            .append(append_request(0, Vec::new(), vec![effect("effect-1")]))
+            .expect("append should pass");
+
+        let claimed = journal.claim_outbox_batch("worker-1", 1);
+        assert_eq!(claimed.len(), 1);
+        assert!(matches!(
+            claimed[0].state,
+            JournalOutboxState::Claimed { ref consumer_id } if consumer_id == "worker-1"
+        ));
+        journal
+            .mark_outbox_succeeded(&claimed[0].outbox_id)
+            .expect("mark succeeded should pass");
+
+        let checkpoint = projection_checkpoint(1);
+        journal.record_projection_checkpoint(checkpoint.clone());
+        assert_eq!(
+            journal.projection_checkpoint(&VidaProjectionRef("projection-1".to_string())),
+            Some(&checkpoint)
+        );
+
+        let failure = JournalProjectionFailure {
+            projection_id: VidaProjectionRef("projection-1".to_string()),
+            stream_id: VidaStreamRef("stream-1".to_string()),
+            error: "projection failed".to_string(),
+        };
+        journal.record_projection_failure(failure.clone());
+        assert_eq!(journal.projection_failures(), &[failure]);
+
+        let artifact = JournalArtifactRecord {
+            artifact_ref: VidaArtifactRef("artifact-1".to_string()),
+            content_hash: "sha256:abc".to_string(),
+            path: "artifacts/artifact-1.json".to_string(),
+        };
+        journal.index_artifact(artifact.clone());
+        assert_eq!(
+            journal.artifact(&VidaArtifactRef("artifact-1".to_string())),
+            Some(&artifact)
+        );
+    }
+
+    fn append_request(
+        expected_stream_version: u64,
+        events: Vec<VidaDomainEventEnvelope>,
+        effect_intents: Vec<VidaEffectIntent>,
+    ) -> JournalAppendRequest {
+        JournalAppendRequest {
+            stream_id: VidaStreamRef("stream-1".to_string()),
+            expected_stream_version: Some(VidaStreamVersion(expected_stream_version)),
+            command_id: VidaCommandRef("command-1".to_string()),
+            idempotency_key: VidaIdempotencyKey("idem-1".to_string()),
+            causation_id: Some(VidaCommandRef("command-1".to_string())),
+            correlation_id: Some("correlation-1".to_string()),
+            events,
+            effect_intents,
+        }
+    }
+
+    fn event(stream_version: u64) -> VidaDomainEventEnvelope {
+        VidaDomainEventEnvelope {
+            schema_id: taskflow_contracts::VidaSchemaId("schema.task.updated".to_string()),
+            event_version: taskflow_contracts::VidaSchemaVersion(1),
+            event_id: VidaEventRef(format!("event-{stream_version}")),
+            command_id: Some(VidaCommandRef("command-1".to_string())),
+            causation_id: Some(VidaCommandRef("command-1".to_string())),
+            stream_id: VidaStreamRef("stream-1".to_string()),
+            stream_version: VidaStreamVersion(stream_version),
+            aggregate_id: VidaAggregateRef("task-1".to_string()),
+            occurred_at: VidaTimestamp("2026-06-22T00:00:00Z".to_string()),
+            payload: serde_json::json!({ "stream_version": stream_version }),
+            trace: serde_json::json!({ "correlation_id": "correlation-1" }),
+        }
+    }
+
+    fn effect(effect_id: &str) -> VidaEffectIntent {
+        VidaEffectIntent {
+            effect_id: VidaEffectRef(effect_id.to_string()),
+            operation: VidaOperation("vida.effect.dispatch".to_string()),
+            command_id: VidaCommandRef("command-1".to_string()),
+            stream_id: VidaStreamRef("stream-1".to_string()),
+            payload: serde_json::json!({ "effect_id": effect_id }),
+        }
+    }
+
+    fn projection_checkpoint(stream_version: u64) -> VidaProjectionCheckpoint {
+        VidaProjectionCheckpoint {
+            projection_id: VidaProjectionRef("projection-1".to_string()),
+            stream_id: VidaStreamRef("stream-1".to_string()),
+            event_cursor: VidaEventCursor(format!("global-{stream_version}")),
+            stream_version: VidaStreamVersion(stream_version),
+            updated_at: VidaTimestamp("2026-06-22T00:00:00Z".to_string()),
+        }
     }
 }

@@ -6856,6 +6856,7 @@ dependencies = [
 name = "taskflow-state"
 version = "0.9.7"
 dependencies = [
+ "serde_json",
  "taskflow-contracts",
  "taskflow-core",
  "thiserror 2.0.18",

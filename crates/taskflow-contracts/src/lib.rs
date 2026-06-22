@@ -10,37 +10,37 @@ pub use vida_contracts::operations;
 
 pub use artifact_kind::{ArtifactKind, UnknownArtifactKind};
 pub use blocker_code::{
-    blocker_code_list_preserving_legacy, canonical_blocker_code_list, canonical_blocker_code_str,
-    canonical_blocker_code_value_from_str, is_selected_lane_assignment_guard_blocked,
-    is_selected_lane_runtime_assignment_truth_missing, selected_lane_assignment_guard_blocked,
-    selected_lane_runtime_assignment_truth_missing, BlockerCode, UnknownBlockerCode,
+    BlockerCode, UnknownBlockerCode, blocker_code_list_preserving_legacy,
+    canonical_blocker_code_list, canonical_blocker_code_str, canonical_blocker_code_value_from_str,
+    is_selected_lane_assignment_guard_blocked, is_selected_lane_runtime_assignment_truth_missing,
+    selected_lane_assignment_guard_blocked, selected_lane_runtime_assignment_truth_missing,
 };
 pub use decision_table::{
-    DecisionTableCondition, DecisionTableEvaluationRequest, DecisionTableEvaluationResponse,
-    DecisionTableEvaluationStatus, DecisionTableInput, DecisionTableOperator, DecisionTableOutput,
-    DecisionTableRule, DecisionTableValue, TransitionContractBlocker,
-    TransitionContractBlockerCode, TransitionContractDecision, TransitionContractOutcome,
-    TransitionContractStatus, TransitionContractStatusCode, DECISION_TABLE_SCHEMA_VERSION,
-    TRANSITION_CONTRACT_SCHEMA_VERSION,
+    DECISION_TABLE_SCHEMA_VERSION, DecisionTableCondition, DecisionTableEvaluationRequest,
+    DecisionTableEvaluationResponse, DecisionTableEvaluationStatus, DecisionTableInput,
+    DecisionTableOperator, DecisionTableOutput, DecisionTableRule, DecisionTableValue,
+    TRANSITION_CONTRACT_SCHEMA_VERSION, TransitionContractBlocker, TransitionContractBlockerCode,
+    TransitionContractDecision, TransitionContractOutcome, TransitionContractStatus,
+    TransitionContractStatusCode,
 };
 pub use status_code::{
+    ApprovalStatus, LaneStatus, Release1ContractStatus, UnknownStatusCode,
     canonical_approval_status_str, canonical_lane_status_str,
-    canonical_release1_contract_status_str, release1_contract_status_str, ApprovalStatus,
-    LaneStatus, Release1ContractStatus, UnknownStatusCode,
+    canonical_release1_contract_status_str, release1_contract_status_str,
 };
 pub use vida_contracts::{
-    completion_outcome_schema_json, mvp_operation_registry, operation_spec,
-    parse_completion_outcome_json, runtime_envelope_schema_bundle_json,
-    runtime_schema_registry_snapshot_json, trace_links_are_conformant, validate_domain_event,
-    vida_runtime_schema_registry_snapshot, CompletionBlocker, CompletionFailureCode,
-    CompletionOutcome, FlowStepRef, VidaAggregateRef, VidaApplyRequest, VidaApplyToken,
-    VidaArtifactRef, VidaAutomationPosture, VidaCapabilityScope, VidaClaimKind, VidaClientKind,
-    VidaCommandEnvelope, VidaCommandRef, VidaConsistencyRequirement, VidaContractValidationError,
-    VidaDomainEventEnvelope, VidaEffectIntent, VidaEffectRef, VidaEventCursor, VidaEventRef,
-    VidaIdempotencyKey, VidaOperationPosture, VidaOperationScope, VidaOperationSpec, VidaPlan,
-    VidaPlanRef, VidaProjectionCheckpoint, VidaProjectionRef, VidaReceipt, VidaReceiptId,
-    VidaRiskTier, VidaSchemaId, VidaSchemaKind, VidaSchemaRef, VidaSchemaRegistryEntry,
-    VidaSchemaRegistrySnapshot, VidaSchemaVersion, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
+    CompletionBlocker, CompletionFailureCode, CompletionOutcome, FlowStepRef, VidaAggregateRef,
+    VidaApplyRequest, VidaApplyToken, VidaArtifactRef, VidaAutomationPosture, VidaCapabilityScope,
+    VidaClaimKind, VidaClientKind, VidaCommandEnvelope, VidaCommandRef, VidaConsistencyRequirement,
+    VidaContractValidationError, VidaDomainEventEnvelope, VidaEffectIntent, VidaEffectRef,
+    VidaEventCursor, VidaEventRef, VidaIdempotencyKey, VidaOperation, VidaOperationPosture,
+    VidaOperationScope, VidaOperationSpec, VidaPlan, VidaPlanRef, VidaProjectionCheckpoint,
+    VidaProjectionRef, VidaReceipt, VidaReceiptId, VidaRiskTier, VidaSchemaId, VidaSchemaKind,
+    VidaSchemaRef, VidaSchemaRegistryEntry, VidaSchemaRegistrySnapshot, VidaSchemaVersion,
+    VidaStreamRef, VidaStreamVersion, VidaTimestamp, completion_outcome_schema_json,
+    mvp_operation_registry, operation_spec, parse_completion_outcome_json,
+    runtime_envelope_schema_bundle_json, runtime_schema_registry_snapshot_json,
+    trace_links_are_conformant, validate_domain_event, vida_runtime_schema_registry_snapshot,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

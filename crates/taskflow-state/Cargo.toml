@@ -8,3 +8,6 @@ license.workspace = true
 taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-core = { path = "../taskflow-core" }
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
