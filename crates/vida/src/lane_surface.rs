@@ -3861,10 +3861,15 @@ fn materialize_host_bridge_completion_evidence(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
         });
+    let pass_allowed_next_node = if blocker_codes.is_empty() {
+        effective_allowed_next_node
+    } else {
+        None
+    };
     let result_verdict = host_bridge_result_verdict_fields_for_gate(
         dispatch_target,
         &blocker_codes,
-        effective_allowed_next_node,
+        pass_allowed_next_node,
     );
     let result = serde_json::json!({
         "artifact_kind": "host_tool_bridge_result",
@@ -12509,6 +12514,8 @@ mod tests {
             bridge_result["blocker_code"],
             "verification_rework_required"
         );
+        assert_eq!(bridge_result["rework_target"], "developer");
+        assert_eq!(bridge_result["allowed_next_node"], "developer_rework");
         assert_eq!(bridge_result["execution_evidence"]["receipt_backed"], true);
 
         let completion_result_path = after
