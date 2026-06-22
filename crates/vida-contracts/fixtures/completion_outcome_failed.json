@@ -1,0 +1,8 @@
+{
+  "outcome": "failed",
+  "code": "contract_violation",
+  "retryable": false,
+  "evidence_refs": [
+    "artifact://proof/failure"
+  ]
+}

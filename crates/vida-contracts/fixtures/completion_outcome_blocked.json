@@ -1,0 +1,19 @@
+{
+  "outcome": "blocked",
+  "blockers": [
+    {
+      "code": "missing_required_proof_artifacts",
+      "scope": "ldr-010",
+      "evidence_refs": [
+        "artifact://proof/blocker"
+      ],
+      "next_actions": [
+        "attach proof artifacts"
+      ]
+    }
+  ],
+  "rework_target": "developer_rework",
+  "evidence_refs": [
+    "artifact://host-bridge/receipt"
+  ]
+}

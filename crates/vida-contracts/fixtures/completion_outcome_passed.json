@@ -1,0 +1,7 @@
+{
+  "outcome": "passed",
+  "evidence_refs": [
+    "artifact://proof/pass"
+  ],
+  "reported_next_step": "flow.step.review"
+}

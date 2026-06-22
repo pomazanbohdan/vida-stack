@@ -26,6 +26,12 @@ pub use status_code::{
     canonical_approval_status_str, canonical_lane_status_str,
     canonical_release1_contract_status_str, release1_contract_status_str,
 };
+pub use vida_contracts::{
+    CompletionBlocker, CompletionFailureCode, CompletionOutcome, FlowStepRef, VidaAggregateRef,
+    VidaArtifactRef, VidaCommandRef, VidaContractValidationError, VidaEffectRef, VidaEventRef,
+    VidaProjectionRef, VidaStreamRef, completion_outcome_schema_json,
+    parse_completion_outcome_json,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRecord {

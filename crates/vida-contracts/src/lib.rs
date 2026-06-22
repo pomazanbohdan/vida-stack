@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub const VIDA_CONTRACTS_SCHEMA_VERSION: &str = "vida-contracts-v1";
 pub const VIDA_COMMAND_PROTOCOL_VERSION: &str = "vida-command-v1";
+pub const VIDA_RUNTIME_CONTRACTS_V2_SCHEMA_VERSION: &str = "vida-runtime-contracts-v2";
 
 pub mod operations {
     pub const SERVICE_HELLO: &str = "vida.service.hello";
@@ -376,6 +377,38 @@ pub struct VidaJobRef(pub String);
 #[serde(transparent)]
 pub struct VidaPlanRef(pub String);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaCommandRef(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaEventRef(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaStreamRef(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaAggregateRef(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaProjectionRef(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaEffectRef(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct VidaArtifactRef(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct FlowStepRef(pub String);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct WizardSessionId(pub String);
@@ -454,6 +487,39 @@ impl VidaContractParseError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VidaContractValidationError {
+    pub path: String,
+    pub blocker_code: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for VidaContractValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}: {} ({})",
+            self.path, self.message, self.blocker_code
+        )
+    }
+}
+
+impl std::error::Error for VidaContractValidationError {}
+
+impl VidaContractValidationError {
+    fn new(
+        path: impl Into<String>,
+        blocker_code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            blocker_code: blocker_code.into(),
+            message: message.into(),
+        }
+    }
+}
+
 pub fn parse_command_envelope_json(
     input: &[u8],
 ) -> Result<VidaCommandEnvelope, VidaContractParseError> {
@@ -465,6 +531,160 @@ pub fn parse_command_envelope_json(
 pub fn command_envelope_schema_json() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(VidaCommandEnvelope))
         .expect("VidaCommandEnvelope schema should serialize")
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, typed_builder::TypedBuilder,
+)]
+pub struct CompletionBlocker {
+    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option))]
+    pub scope: Option<String>,
+    #[serde(default)]
+    #[builder(default)]
+    pub evidence_refs: Vec<VidaArtifactRef>,
+    #[serde(default)]
+    #[builder(default)]
+    pub next_actions: Vec<String>,
+}
+
+impl CompletionBlocker {
+    fn validate_at(&self, path: &str) -> Result<(), VidaContractValidationError> {
+        if self.code.trim().is_empty() {
+            return Err(VidaContractValidationError::new(
+                format!("{path}.code"),
+                "completion_blocker_code_empty",
+                "completion blocker code must be non-empty",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionFailureCode {
+    ContractViolation,
+    ExecutionFailed,
+    Timeout,
+    Cancelled,
+    Unknown,
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CompletionOutcome {
+    Passed {
+        #[serde(default)]
+        evidence_refs: Vec<VidaArtifactRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reported_next_step: Option<FlowStepRef>,
+    },
+    Blocked {
+        blockers: Vec<CompletionBlocker>,
+        rework_target: FlowStepRef,
+        #[serde(default)]
+        evidence_refs: Vec<VidaArtifactRef>,
+    },
+    Failed {
+        code: CompletionFailureCode,
+        retryable: bool,
+        #[serde(default)]
+        evidence_refs: Vec<VidaArtifactRef>,
+    },
+}
+
+impl CompletionOutcome {
+    pub fn passed(
+        evidence_refs: Vec<VidaArtifactRef>,
+        reported_next_step: Option<FlowStepRef>,
+    ) -> Self {
+        Self::Passed {
+            evidence_refs,
+            reported_next_step,
+        }
+    }
+
+    pub fn blocked(
+        blockers: Vec<CompletionBlocker>,
+        rework_target: FlowStepRef,
+        evidence_refs: Vec<VidaArtifactRef>,
+    ) -> Result<Self, VidaContractValidationError> {
+        let outcome = Self::Blocked {
+            blockers,
+            rework_target,
+            evidence_refs,
+        };
+        outcome.validate_contract()?;
+        Ok(outcome)
+    }
+
+    pub fn failed(
+        code: CompletionFailureCode,
+        retryable: bool,
+        evidence_refs: Vec<VidaArtifactRef>,
+    ) -> Self {
+        Self::Failed {
+            code,
+            retryable,
+            evidence_refs,
+        }
+    }
+
+    pub fn validate_contract(&self) -> Result<(), VidaContractValidationError> {
+        match self {
+            Self::Passed { .. } => Ok(()),
+            Self::Blocked {
+                blockers,
+                rework_target,
+                ..
+            } => {
+                if blockers.is_empty() {
+                    return Err(VidaContractValidationError::new(
+                        "$.blockers",
+                        "completion_blocked_requires_blockers",
+                        "blocked completion outcome requires at least one blocker",
+                    ));
+                }
+                if rework_target.0.trim().is_empty() {
+                    return Err(VidaContractValidationError::new(
+                        "$.rework_target",
+                        "completion_rework_target_empty",
+                        "blocked completion outcome requires a rework target",
+                    ));
+                }
+                for (index, blocker) in blockers.iter().enumerate() {
+                    blocker.validate_at(&format!("$.blockers[{index}]"))?;
+                }
+                Ok(())
+            }
+            Self::Failed { .. } => Ok(()),
+        }
+    }
+}
+
+pub fn parse_completion_outcome_json(
+    input: &[u8],
+) -> Result<CompletionOutcome, VidaContractValidationError> {
+    let mut deserializer = serde_json::Deserializer::from_slice(input);
+    let outcome: CompletionOutcome =
+        serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
+            VidaContractValidationError::new(
+                error.path().to_string(),
+                "completion_outcome_deserialize_failed",
+                error.inner().to_string(),
+            )
+        })?;
+    outcome.validate_contract()?;
+    Ok(outcome)
+}
+
+pub fn completion_outcome_schema_json() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(CompletionOutcome))
+        .expect("CompletionOutcome schema should serialize")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1108,5 +1328,118 @@ mod tests {
         assert_eq!(problem.severity, VidaProblemSeverity::Error);
         assert!(!problem.retryable);
         assert_eq!(problem.blockers[0].code, "operation_not_registered");
+    }
+
+    #[test]
+    fn completion_outcome_builders_validate_blocked_invariants() {
+        let blocker = CompletionBlocker::builder()
+            .code("missing_required_input".to_string())
+            .scope("ldr-010".to_string())
+            .build();
+        let blocked = CompletionOutcome::blocked(
+            vec![blocker],
+            FlowStepRef("developer_rework".to_string()),
+            vec![VidaArtifactRef("artifact://receipt".to_string())],
+        )
+        .expect("blocked outcome with blocker should validate");
+
+        assert!(matches!(blocked, CompletionOutcome::Blocked { .. }));
+
+        let error = CompletionOutcome::blocked(
+            Vec::new(),
+            FlowStepRef("developer_rework".to_string()),
+            vec![],
+        )
+        .expect_err("blocked outcome without blockers must fail");
+        assert_eq!(error.path, "$.blockers");
+        assert_eq!(error.blocker_code, "completion_blocked_requires_blockers");
+    }
+
+    #[test]
+    fn completion_outcome_rejects_empty_blocker_with_json_path() {
+        let payload = br#"{
+            "outcome": "blocked",
+            "blockers": [{"code": ""}],
+            "rework_target": "developer_rework"
+        }"#;
+        let error = parse_completion_outcome_json(payload)
+            .expect_err("empty blocker code must fail validation");
+
+        assert_eq!(error.path, "$.blockers[0].code");
+        assert_eq!(error.blocker_code, "completion_blocker_code_empty");
+    }
+
+    #[test]
+    fn completion_outcome_rejects_blocked_with_empty_blockers_after_deserialization() {
+        let payload = br#"{
+            "outcome": "blocked",
+            "blockers": [],
+            "rework_target": "developer_rework"
+        }"#;
+        let error = parse_completion_outcome_json(payload)
+            .expect_err("blocked outcome with empty blockers must fail");
+
+        assert_eq!(error.path, "$.blockers");
+        assert_eq!(error.blocker_code, "completion_blocked_requires_blockers");
+    }
+
+    #[test]
+    fn completion_outcome_passed_rejects_legacy_blocker_field_with_exact_path() {
+        let payload = br#"{
+            "outcome": "passed",
+            "blockers": [{"code": "should_not_exist"}]
+        }"#;
+        let error = parse_completion_outcome_json(payload)
+            .expect_err("passed outcome must not accept blockers");
+
+        assert_eq!(error.path, ".");
+        assert_eq!(error.blocker_code, "completion_outcome_deserialize_failed");
+        assert!(error.message.contains("unknown field"));
+    }
+
+    #[test]
+    fn completion_outcome_round_trips_all_variants() {
+        let cases = [
+            include_str!("../fixtures/completion_outcome_passed.json"),
+            include_str!("../fixtures/completion_outcome_blocked.json"),
+            include_str!("../fixtures/completion_outcome_failed.json"),
+        ];
+
+        for case in cases {
+            let outcome = parse_completion_outcome_json(case.as_bytes())
+                .expect("fixture should parse and validate");
+            let encoded = serde_json::to_vec(&outcome).expect("outcome should serialize");
+            let decoded = parse_completion_outcome_json(&encoded)
+                .expect("serialized outcome should parse and validate");
+            assert_eq!(outcome, decoded);
+        }
+    }
+
+    #[test]
+    fn completion_outcome_schema_expresses_tagged_alternatives() {
+        let schema = completion_outcome_schema_json();
+        let schema_text = serde_json::to_string(&schema).expect("schema should serialize");
+        let golden: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/completion_outcome.schema.json"))
+                .expect("golden schema metadata should parse");
+
+        for alternative in golden["required_alternatives"]
+            .as_array()
+            .expect("alternatives should be an array")
+        {
+            assert!(schema_text.contains(alternative.as_str().unwrap()));
+        }
+        for field in golden["blocked_required_fields"]
+            .as_array()
+            .expect("blocked fields should be an array")
+        {
+            assert!(schema_text.contains(field.as_str().unwrap()));
+        }
+        for field in golden["failed_required_fields"]
+            .as_array()
+            .expect("failed fields should be an array")
+        {
+            assert!(schema_text.contains(field.as_str().unwrap()));
+        }
     }
 }
