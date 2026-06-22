@@ -1,4 +1,7 @@
-use std::str::FromStr;
+use std::{
+    path::{Component, Path},
+    str::FromStr,
+};
 
 use cedar_policy::{Authorizer, Context, Decision, Entities, EntityUid, PolicySet, Request};
 use serde_json::json;
@@ -234,10 +237,35 @@ fn owned_write_scope_contains(input: &OperationAuthorizationInput) -> bool {
     let Some(owned_path) = input.owned_path.as_deref() else {
         return false;
     };
-    input
-        .owned_write_scopes
-        .iter()
-        .any(|scope| owned_path == scope || owned_path.starts_with(&format!("{scope}/")))
+    let Some(owned_components) = safe_relative_components(owned_path) else {
+        return false;
+    };
+
+    input.owned_write_scopes.iter().any(|scope| {
+        let Some(scope_components) = safe_relative_components(scope) else {
+            return false;
+        };
+        owned_components == scope_components
+            || (owned_components.len() > scope_components.len()
+                && owned_components.starts_with(&scope_components))
+    })
+}
+
+fn safe_relative_components(path: &str) -> Option<Vec<&str>> {
+    let mut components = Vec::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(value) => components.push(value.to_str()?),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    if components.is_empty() {
+        None
+    } else {
+        Some(components)
+    }
 }
 
 fn claim_kind(value: &VidaClaimKind) -> &'static str {
@@ -422,6 +450,56 @@ mod tests {
             operation,
             resource_project_id: Some(VidaProjectId("project-ldr-012".to_string())),
             owned_path: Some("crates/vida/src/cli.rs".to_string()),
+            owned_write_scopes: vec!["crates/taskflow-authority".to_string()],
+            idempotency_key_present: true,
+            apply_token_present: true,
+        });
+
+        assert!(!decision.allowed);
+        assert_eq!(
+            decision.blocker_codes,
+            vec!["operation_owned_write_scope_denied"]
+        );
+    }
+
+    #[test]
+    fn denies_traversal_out_of_owned_write_scope() {
+        let operation =
+            operation_spec(operations::TASK_APPLY).expect("task apply operation should exist");
+        let decision = authorize_operation(&OperationAuthorizationInput {
+            session_id: "session-ldr-012".to_string(),
+            project_id: Some(VidaProjectId("project-ldr-012".to_string())),
+            client_kind: VidaClientKind::HostAgent,
+            claim_kind: operation.required_claim.clone(),
+            capability: VidaCapabilityScope::TaskApply,
+            operation,
+            resource_project_id: Some(VidaProjectId("project-ldr-012".to_string())),
+            owned_path: Some("crates/taskflow-authority/../vida/src/lib.rs".to_string()),
+            owned_write_scopes: vec!["crates/taskflow-authority".to_string()],
+            idempotency_key_present: true,
+            apply_token_present: true,
+        });
+
+        assert!(!decision.allowed);
+        assert_eq!(
+            decision.blocker_codes,
+            vec!["operation_owned_write_scope_denied"]
+        );
+    }
+
+    #[test]
+    fn denies_sibling_prefix_write_scope_match() {
+        let operation =
+            operation_spec(operations::TASK_APPLY).expect("task apply operation should exist");
+        let decision = authorize_operation(&OperationAuthorizationInput {
+            session_id: "session-ldr-012".to_string(),
+            project_id: Some(VidaProjectId("project-ldr-012".to_string())),
+            client_kind: VidaClientKind::HostAgent,
+            claim_kind: operation.required_claim.clone(),
+            capability: VidaCapabilityScope::TaskApply,
+            operation,
+            resource_project_id: Some(VidaProjectId("project-ldr-012".to_string())),
+            owned_path: Some("crates/taskflow-authority-extra/src/lib.rs".to_string()),
             owned_write_scopes: vec!["crates/taskflow-authority".to_string()],
             idempotency_key_present: true,
             apply_token_present: true,
