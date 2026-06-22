@@ -21,6 +21,14 @@ pub enum TaskflowStateError {
     },
     #[error("idempotency conflict: {0}")]
     IdempotencyConflict(String),
+    #[error(
+        "event {event_id} belongs to stream {event_stream_id}, not append stream {request_stream_id}"
+    )]
+    EventStreamMismatch {
+        request_stream_id: String,
+        event_stream_id: String,
+        event_id: String,
+    },
     #[error("outbox record not found: {0}")]
     OutboxRecordNotFound(String),
     #[error("state storage error: {0}")]
@@ -162,6 +170,21 @@ pub fn append_request_fingerprint(request: &JournalAppendRequest) -> String {
     )
 }
 
+pub fn validate_append_event_streams(
+    request: &JournalAppendRequest,
+) -> Result<(), TaskflowStateError> {
+    for event in &request.events {
+        if event.stream_id != request.stream_id {
+            return Err(TaskflowStateError::EventStreamMismatch {
+                request_stream_id: request.stream_id.0.clone(),
+                event_stream_id: event.stream_id.0.clone(),
+                event_id: event.event_id.0.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub trait OperationalJournal {
     fn append(
         &mut self,
@@ -191,7 +214,7 @@ pub trait OperationalJournal {
     fn idempotency_record(&self, key: &VidaIdempotencyKey) -> Option<&JournalIdempotencyRecord>;
     fn claim_outbox_batch(&mut self, consumer_id: &str, limit: usize) -> Vec<JournalOutboxRecord>;
     fn mark_outbox_succeeded(&mut self, outbox_id: &VidaEventRef)
-        -> Result<(), TaskflowStateError>;
+    -> Result<(), TaskflowStateError>;
     fn mark_outbox_failed(
         &mut self,
         outbox_id: &VidaEventRef,
@@ -239,6 +262,8 @@ impl OperationalJournal for InMemoryOperationalJournal {
         &mut self,
         request: JournalAppendRequest,
     ) -> Result<JournalAppendReceipt, TaskflowStateError> {
+        validate_append_event_streams(&request)?;
+
         let idempotency_key = request.idempotency_key.clone();
         let command_id = request.command_id.clone();
         let request_fingerprint = append_request_fingerprint(&request);
@@ -552,6 +577,42 @@ mod tests {
     }
 
     #[test]
+    fn operational_journal_rejects_event_stream_mismatch() {
+        let mut journal = InMemoryOperationalJournal::default();
+
+        journal
+            .append(append_request(0, vec![event(1)], Vec::new()))
+            .expect("victim append should pass");
+        let mut malformed = append_request(0, vec![event(2)], Vec::new());
+        malformed.stream_id = VidaStreamRef("attacker-stream".to_string());
+        malformed.idempotency_key = VidaIdempotencyKey("idem-2".to_string());
+
+        let error = journal
+            .append(malformed)
+            .expect_err("mismatched event stream must fail");
+
+        assert_eq!(
+            error,
+            TaskflowStateError::EventStreamMismatch {
+                request_stream_id: "attacker-stream".to_string(),
+                event_stream_id: "stream-1".to_string(),
+                event_id: "event-2".to_string(),
+            }
+        );
+        assert_eq!(
+            journal
+                .load_stream(&VidaStreamRef("stream-1".to_string()))
+                .len(),
+            1
+        );
+        assert!(
+            journal
+                .load_stream(&VidaStreamRef("attacker-stream".to_string()))
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn operational_journal_returns_cached_receipt_for_same_payload_retry() {
         let mut journal = InMemoryOperationalJournal::default();
 
@@ -619,9 +680,11 @@ mod tests {
             record.receipt_id,
             Some(VidaReceiptId("receipt-1".to_string()))
         );
-        assert!(journal
-            .record_idempotency_started(key, VidaCommandRef("command-1".to_string()))
-            .is_err());
+        assert!(
+            journal
+                .record_idempotency_started(key, VidaCommandRef("command-1".to_string()))
+                .is_err()
+        );
     }
 
     #[test]
