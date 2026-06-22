@@ -3771,7 +3771,7 @@ impl StateStore {
         let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
         for latest in rows {
             if self
-                .run_graph_latest_receipt_row_supersedes_lane(&latest.run_id)
+                .run_graph_latest_receipt_row_supersedes_current_session_lane(&latest.run_id)
                 .await?
             {
                 continue;
@@ -6858,6 +6858,86 @@ mod tests {
             .expect("requested task status should resolve");
         assert_eq!(status.run_id, "run-requested-task");
         assert_eq!(status.task_id, "task-requested");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_status_for_task_keeps_active_exception_takeover_run() {
+        let root = temp_run_graph_root("vida-run-graph-task-scoped-exception-takeover");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "task-requested-exception-takeover",
+                title: "Requested exception takeover task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create requested exception takeover task");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-requested-exception-takeover".to_string();
+        status.task_id = "task-requested-exception-takeover".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "implementer_blocked".to_string();
+        status.handoff_state = "bridge_request_pending".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist requested exception takeover status");
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-requested-exception-takeover".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_exception_takeover".to_string(),
+                supersedes_receipt_id: Some("exception-takeover-receipt".to_string()),
+                exception_path_receipt_id: Some("exception-takeover-receipt".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: Some("host_tool_bridge_adapter_required".to_string()),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("implementer".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-13T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist active exception takeover receipt");
+
+        let scoped = store
+            .latest_run_graph_status_for_task("task-requested-exception-takeover")
+            .await
+            .expect("read task-scoped latest")
+            .expect("active exception takeover status should resolve by task id");
+        assert_eq!(scoped.run_id, "run-requested-exception-takeover");
+        assert_eq!(scoped.task_id, "task-requested-exception-takeover");
 
         let _ = fs::remove_dir_all(root);
     }
