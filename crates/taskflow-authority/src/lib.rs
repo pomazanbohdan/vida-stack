@@ -1,4 +1,5 @@
 pub mod authority_chain;
+pub mod claims;
 pub mod continuation_binding;
 pub mod continuation_transition;
 pub mod errors;
@@ -24,6 +25,7 @@ mod tests {
     fn public_authority_modules_are_registered() {
         let modules = [
             crate::authority_chain::MODULE,
+            crate::claims::MODULE,
             crate::terminal_closure::MODULE,
             crate::stale_guard::MODULE,
             crate::exception_takeover::MODULE,
@@ -41,8 +43,9 @@ mod tests {
             crate::task_transition::MODULE,
         ];
 
-        assert_eq!(modules.len(), 16);
+        assert_eq!(modules.len(), 17);
         assert!(modules.contains(&"authority_chain"));
+        assert!(modules.contains(&"claims"));
         assert!(modules.contains(&"terminal_closure"));
         assert!(modules.contains(&"stale_guard"));
         assert!(modules.contains(&"exception_takeover"));

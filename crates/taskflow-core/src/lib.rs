@@ -6,6 +6,8 @@ use uuid::Uuid;
 
 /// TaskFlow consume/resume skeletons for future core extraction.
 pub mod consume;
+/// Storage-neutral deterministic side-effect intent model.
+pub mod effects;
 /// Shared TaskFlow path normalization and ownership policy.
 pub mod path_policy;
 /// Compiled role-step state for configured development-team flows.
