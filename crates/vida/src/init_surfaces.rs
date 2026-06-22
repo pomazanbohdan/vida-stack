@@ -1918,6 +1918,50 @@ fn agent_init_auto_dispatch_lineage_task_ids(
     ids.into_iter().collect()
 }
 
+fn agent_init_auto_dispatch_binding_task_id(
+    binding: &crate::state_store::RunGraphContinuationBinding,
+) -> Option<String> {
+    if binding.status != "bound" {
+        return None;
+    }
+    binding
+        .active_bounded_unit
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| Some(binding.task_id.as_str()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+async fn agent_init_auto_dispatch_active_task_ids(
+    store: &state_store::StateStore,
+) -> Result<Vec<String>, String> {
+    if let Some(binding) = store
+        .latest_explicit_run_graph_continuation_binding_for_current_session()
+        .await
+        .map_err(|error| format!("Failed to read explicit continuation binding: {error}"))?
+        .as_ref()
+        .and_then(agent_init_auto_dispatch_binding_task_id)
+    {
+        return Ok(vec![binding]);
+    }
+
+    store
+        .list_tasks(Some("in_progress"), false)
+        .await
+        .map_err(|error| format!("Failed to read active task state for auto dispatch: {error}"))
+        .map(|tasks| {
+            tasks
+                .into_iter()
+                .filter(|task| {
+                    !crate::state_store::work_item_is_program_container(&task.issue_type)
+                })
+                .map(|task| task.id)
+                .collect()
+        })
+}
+
 fn validate_agent_init_auto_dispatch_active_unit_ids(
     active_task_ids: Vec<String>,
     lineage_task_ids: Vec<String>,
@@ -1964,20 +2008,15 @@ async fn validate_agent_init_auto_dispatch_active_unit(
     store: &state_store::StateStore,
     resume_inputs: &super::taskflow_consume_resume::ResumeInputs,
 ) -> Result<(), AgentInitAutoDispatchActiveUnitError> {
-    let active_task_ids = store
-        .list_tasks(Some("in_progress"), false)
+    let active_task_ids = agent_init_auto_dispatch_active_task_ids(store)
         .await
         .map_err(|error| AgentInitAutoDispatchActiveUnitError {
             blocker_code: "auto_dispatch_packet_active_unit_unavailable",
-            detail: format!("Failed to read active task state for auto dispatch: {error}"),
+            detail: error,
             active_task_id: None,
             resolved_run_id: resume_inputs.dispatch_receipt.run_id.clone(),
             lineage_task_ids: agent_init_auto_dispatch_lineage_task_ids(resume_inputs),
-        })?
-        .into_iter()
-        .filter(|task| !crate::state_store::work_item_is_program_container(&task.issue_type))
-        .map(|task| task.id)
-        .collect::<Vec<_>>();
+        })?;
     validate_agent_init_auto_dispatch_active_unit_ids(
         active_task_ids,
         agent_init_auto_dispatch_lineage_task_ids(resume_inputs),
@@ -2031,6 +2070,25 @@ fn agent_init_auto_dispatch_active_unit_blocked_payload(
             "artifact_refs": artifact_refs
         }
     })
+}
+
+fn emit_agent_init_auto_dispatch_active_unit_blocked_plain(
+    error: &AgentInitAutoDispatchActiveUnitError,
+) {
+    eprintln!("{}", error.detail);
+    eprintln!("blocker_code: {}", error.blocker_code);
+    eprintln!(
+        "next action: vida taskflow run-graph status {}",
+        error.resolved_run_id
+    );
+    if let Some(active_task_id) = error.active_task_id.as_deref() {
+        eprintln!(
+            "next action: vida taskflow continuation bind {} --task-id {}",
+            error.resolved_run_id, active_task_id
+        );
+    } else {
+        eprintln!("next action: vida taskflow recovery latest");
+    }
 }
 
 fn emit_agent_init_execute_dispatch_missing_packet(args: &AgentInitArgs) -> ExitCode {
@@ -6062,7 +6120,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                 ),
                             );
                         } else {
-                            eprintln!("{}", error.detail);
+                            emit_agent_init_auto_dispatch_active_unit_blocked_plain(&error);
                         }
                         return ExitCode::from(1);
                     }
@@ -6319,7 +6377,9 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                                 ),
                                             );
                                         } else {
-                                            eprintln!("{}", error.detail);
+                                            emit_agent_init_auto_dispatch_active_unit_blocked_plain(
+                                                &error,
+                                            );
                                         }
                                         return ExitCode::from(1);
                                     }
@@ -7759,6 +7819,31 @@ mod agent_init_surface_tests {
         );
         assert_eq!(error.active_task_id.as_deref(), Some("active-task"));
         assert_eq!(error.resolved_run_id, "stale-run");
+    }
+
+    #[test]
+    fn agent_init_auto_dispatch_binding_task_id_uses_explicit_active_unit() {
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "stale-run".to_string(),
+            task_id: "fallback-task".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "task_id": "active-task",
+                "run_id": "active-task"
+            }),
+            binding_source: "explicit_continuation_bind".to_string(),
+            why_this_unit: "test".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+            request_text: None,
+            recorded_at: "2026-06-22T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            agent_init_auto_dispatch_binding_task_id(&binding).as_deref(),
+            Some("active-task")
+        );
     }
 
     #[test]
