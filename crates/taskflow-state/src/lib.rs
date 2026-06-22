@@ -2,11 +2,15 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use taskflow_contracts::{
-    DependencyEdge, TaskRecord, VidaArtifactRef, VidaCommandRef, VidaDomainEventEnvelope,
-    VidaEffectIntent, VidaEventCursor, VidaEventRef, VidaIdempotencyKey, VidaProjectionCheckpoint,
-    VidaProjectionRef, VidaReceiptId, VidaStreamRef, VidaStreamVersion,
+    DependencyEdge, TaskRecord, VidaAggregateRef, VidaArtifactRef, VidaCommandRef,
+    VidaDomainEventEnvelope, VidaEffectIntent, VidaEffectRef, VidaEventCursor, VidaEventRef,
+    VidaIdempotencyKey, VidaOperation, VidaProjectionCheckpoint, VidaProjectionRef, VidaReceiptId,
+    VidaSchemaId, VidaSchemaVersion, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
 };
-use taskflow_core::TaskId;
+use taskflow_core::{
+    TaskId,
+    run_workflow::{RunWorkflowAggregate, RunWorkflowEffectIntent, RunWorkflowEvent},
+};
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -223,6 +227,102 @@ pub trait OperationalJournal {
     fn record_projection_checkpoint(&mut self, checkpoint: VidaProjectionCheckpoint);
     fn record_projection_failure(&mut self, failure: JournalProjectionFailure);
     fn index_artifact(&mut self, artifact: JournalArtifactRecord);
+}
+
+pub struct RunWorkflowJournalRepository<'a, J: OperationalJournal> {
+    journal: &'a mut J,
+}
+
+impl<'a, J: OperationalJournal> RunWorkflowJournalRepository<'a, J> {
+    pub fn new(journal: &'a mut J) -> Self {
+        Self { journal }
+    }
+
+    pub fn load(&self, run_id: &str, task_id: &str) -> RunWorkflowAggregate {
+        let stream_id = run_workflow_stream_id(run_id);
+        let mut aggregate = RunWorkflowAggregate::new(run_id, task_id);
+        for event in self.journal.load_stream(&stream_id) {
+            let event: RunWorkflowEvent = serde_json::from_value(event.payload)
+                .expect("run workflow journal payload should deserialize");
+            aggregate = RunWorkflowAggregate::from_snapshot(
+                run_id,
+                task_id,
+                event.state_after,
+                aggregate.version + 1,
+            );
+        }
+        aggregate
+    }
+
+    pub fn append(
+        &mut self,
+        aggregate_before: &RunWorkflowAggregate,
+        event: RunWorkflowEvent,
+    ) -> Result<JournalAppendReceipt, TaskflowStateError> {
+        let next_version = aggregate_before.version + 1;
+        let stream_id = run_workflow_stream_id(&aggregate_before.run_id);
+        let command_id = VidaCommandRef(format!(
+            "run-workflow:{}:{}",
+            aggregate_before.run_id, next_version
+        ));
+        self.journal.append(JournalAppendRequest {
+            stream_id: stream_id.clone(),
+            expected_stream_version: Some(VidaStreamVersion(aggregate_before.version)),
+            command_id: command_id.clone(),
+            idempotency_key: VidaIdempotencyKey(format!("{}:{}", command_id.0, next_version)),
+            causation_id: None,
+            correlation_id: Some(aggregate_before.task_id.clone()),
+            events: vec![VidaDomainEventEnvelope {
+                schema_id: VidaSchemaId("taskflow.run_workflow.event".to_string()),
+                event_version: VidaSchemaVersion(1),
+                event_id: VidaEventRef(format!("{}:event", command_id.0)),
+                command_id: Some(command_id.clone()),
+                causation_id: None,
+                stream_id,
+                stream_version: VidaStreamVersion(next_version),
+                aggregate_id: VidaAggregateRef(aggregate_before.run_id.clone()),
+                occurred_at: VidaTimestamp(format!("version-{next_version}")),
+                payload: serde_json::to_value(event.clone())
+                    .expect("run workflow event should serialize"),
+                trace: serde_json::json!({
+                    "task_id": aggregate_before.task_id,
+                    "snapshot_hash": aggregate_before.snapshot_replay_hash()
+                }),
+            }],
+            effect_intents: event_effects_to_journal_effects(
+                &command_id,
+                &aggregate_before.run_id,
+                next_version,
+                &event.effect_intents,
+            ),
+        })
+    }
+}
+
+fn run_workflow_stream_id(run_id: &str) -> VidaStreamRef {
+    VidaStreamRef(format!("run-workflow:{run_id}"))
+}
+
+fn event_effects_to_journal_effects(
+    command_id: &VidaCommandRef,
+    run_id: &str,
+    version: u64,
+    intents: &[RunWorkflowEffectIntent],
+) -> Vec<VidaEffectIntent> {
+    intents
+        .iter()
+        .enumerate()
+        .map(|(index, intent)| VidaEffectIntent {
+            effect_id: VidaEffectRef(format!("{}:effect:{index}", command_id.0)),
+            operation: VidaOperation(format!("taskflow.run_workflow.effect.{intent:?}")),
+            command_id: command_id.clone(),
+            stream_id: run_workflow_stream_id(run_id),
+            payload: serde_json::json!({
+                "intent": format!("{intent:?}"),
+                "stream_version": version
+            }),
+        })
+        .collect()
 }
 
 #[derive(Debug, Default)]
@@ -489,7 +589,7 @@ mod tests {
     use super::{
         InMemoryOperationalJournal, InMemoryTaskStore, JournalAppendRequest, JournalArtifactRecord,
         JournalIdempotencyState, JournalOutboxState, JournalProjectionFailure, OperationalJournal,
-        TaskStore, TaskflowStateError,
+        RunWorkflowJournalRepository, TaskStore, TaskflowStateError,
     };
     use taskflow_contracts::{
         DependencyEdge, TaskRecord, VidaAggregateRef, VidaArtifactRef, VidaCommandRef,
@@ -497,7 +597,11 @@ mod tests {
         VidaIdempotencyKey, VidaOperation, VidaProjectionCheckpoint, VidaProjectionRef,
         VidaReceiptId, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
     };
-    use taskflow_core::{IssueType, TaskId};
+    use taskflow_core::{
+        IssueType, TaskId,
+        role_step::TaskRoleStep,
+        run_workflow::{RunWorkflowAggregate, RunWorkflowCommand, RunWorkflowState},
+    };
 
     #[test]
     fn in_memory_store_round_trips_task_records() {
@@ -729,6 +833,63 @@ mod tests {
             journal.artifact(&VidaArtifactRef("artifact-1".to_string())),
             Some(&artifact)
         );
+    }
+
+    #[test]
+    fn run_workflow_repository_appends_and_replays_from_journal() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let mut aggregate = RunWorkflowAggregate::new("run-031", "ldr-031");
+        let initial_hash = aggregate.snapshot_replay_hash();
+        let event = aggregate.handle(RunWorkflowCommand::Start {
+            first_step: TaskRoleStep::planning(),
+        });
+
+        let receipt = RunWorkflowJournalRepository::new(&mut journal)
+            .append(&RunWorkflowAggregate::new("run-031", "ldr-031"), event)
+            .expect("repository append should pass");
+
+        assert_eq!(
+            receipt.stream_id,
+            VidaStreamRef("run-workflow:run-031".to_string())
+        );
+        let loaded = RunWorkflowJournalRepository::new(&mut journal).load("run-031", "ldr-031");
+        assert_eq!(
+            loaded.state,
+            RunWorkflowState::Active {
+                step: TaskRoleStep::planning()
+            }
+        );
+        assert_eq!(loaded.version, 1);
+        assert_ne!(initial_hash, loaded.snapshot_replay_hash());
+    }
+
+    #[test]
+    fn run_workflow_repository_snapshot_replay_hash_matches_journal_replay() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let mut aggregate = RunWorkflowAggregate::new("run-031-hash", "ldr-031");
+        for command in [
+            RunWorkflowCommand::Start {
+                first_step: TaskRoleStep::planning(),
+            },
+            RunWorkflowCommand::Dispatch {
+                target: TaskRoleStep::developer(),
+            },
+        ] {
+            let before = aggregate.clone();
+            let event = aggregate.handle(command);
+            RunWorkflowJournalRepository::new(&mut journal)
+                .append(&before, event)
+                .expect("repository append should pass");
+        }
+
+        let loaded =
+            RunWorkflowJournalRepository::new(&mut journal).load("run-031-hash", "ldr-031");
+
+        assert_eq!(
+            loaded.snapshot_replay_hash(),
+            aggregate.snapshot_replay_hash()
+        );
+        assert_eq!(loaded.version, 2);
     }
 
     fn append_request(

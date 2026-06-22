@@ -697,7 +697,7 @@ mod tests {
     };
     use taskflow_state::{
         JournalAppendRequest, JournalArtifactRecord, JournalIdempotencyState, JournalOutboxState,
-        OperationalJournal, TaskflowStateError,
+        OperationalJournal, RunWorkflowJournalRepository, TaskflowStateError,
     };
     use tempfile::tempdir;
 
@@ -755,6 +755,50 @@ mod tests {
                 Err(redb::TableError::TableDoesNotExist(_))
             ),
             "normalized adapter must not keep the scaffold snapshot table"
+        );
+    }
+
+    #[test]
+    fn run_workflow_repository_replays_snapshot_hash_after_reopen() {
+        use taskflow_core::{
+            role_step::TaskRoleStep,
+            run_workflow::{RunWorkflowAggregate, RunWorkflowCommand},
+        };
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        let mut aggregate = RunWorkflowAggregate::new("run-031-redb", "ldr-031");
+        for command in [
+            RunWorkflowCommand::Start {
+                first_step: TaskRoleStep::planning(),
+            },
+            RunWorkflowCommand::Dispatch {
+                target: TaskRoleStep::developer(),
+            },
+        ] {
+            let before = aggregate.clone();
+            let event = aggregate.handle(command);
+            RunWorkflowJournalRepository::new(&mut journal)
+                .append(&before, event)
+                .expect("repository append should pass");
+        }
+        drop(journal);
+
+        let mut reopened = RedbOperationalJournal::open(&path).expect("reopen journal");
+        let loaded =
+            RunWorkflowJournalRepository::new(&mut reopened).load("run-031-redb", "ldr-031");
+
+        assert_eq!(
+            loaded.snapshot_replay_hash(),
+            aggregate.snapshot_replay_hash()
+        );
+        assert_eq!(
+            reopened
+                .health_status()
+                .expect("journal health")
+                .stream_event_count,
+            2
         );
     }
 

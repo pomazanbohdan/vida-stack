@@ -12,4 +12,5 @@ taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-state = { path = "../taskflow-state" }
 
 [dev-dependencies]
+taskflow-core = { path = "../taskflow-core" }
 tempfile = "3.27.0"

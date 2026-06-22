@@ -67,6 +67,12 @@ impl RunWorkflowAggregate {
             blocker_code: None,
         }
     }
+
+    #[must_use]
+    pub fn snapshot_replay_hash(&self) -> String {
+        serde_json::to_string(&(&self.run_id, &self.task_id, &self.state, self.version))
+            .expect("run workflow aggregate snapshot should serialize")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -556,6 +562,24 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.0.state, RunWorkflowState::Completed);
         assert_eq!(first.0.version, 5);
+    }
+
+    #[test]
+    fn snapshot_replay_hash_matches_event_replay() {
+        let commands = happy_path_commands();
+        let initial = RunWorkflowAggregate::new("run-031", "ldr-031");
+        let (replayed, _) = replay_events(initial, &commands);
+        let snapshot = RunWorkflowAggregate::from_snapshot(
+            "run-031",
+            "ldr-031",
+            replayed.state.clone(),
+            replayed.version,
+        );
+
+        assert_eq!(
+            snapshot.snapshot_replay_hash(),
+            replayed.snapshot_replay_hash()
+        );
     }
 
     #[test]

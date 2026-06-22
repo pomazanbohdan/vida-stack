@@ -6892,6 +6892,7 @@ dependencies = [
  "serde",
  "serde_json",
  "taskflow-contracts",
+ "taskflow-core",
  "taskflow-state",
  "tempfile",
 ]
