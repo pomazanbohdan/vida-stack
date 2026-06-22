@@ -142,6 +142,18 @@ pub fn decide_run_graph_transition(
             };
         }
 
+        if is_blocked_lane(receipt.lane_status.as_deref()) {
+            return RunGraphTransitionDecision {
+                kind: RunGraphTransitionKind::BlockedLane,
+                admitted: false,
+                active_node: status.active_node.clone(),
+                next_node: status.next_node.clone(),
+                resume_target: status.resume_target.clone(),
+                blocker_codes: vec!["lane_blocked".to_string()],
+                next_actions: vec!["inspect lane recovery evidence".to_string()],
+            };
+        }
+
         if receipt.downstream_dispatch_ready
             && receipt
                 .downstream_dispatch_target
@@ -186,18 +198,6 @@ pub fn decide_run_graph_transition(
                 resume_target: status.resume_target.clone(),
                 blocker_codes: Vec::new(),
                 next_actions: Vec::new(),
-            };
-        }
-
-        if is_blocked_lane(receipt.lane_status.as_deref()) {
-            return RunGraphTransitionDecision {
-                kind: RunGraphTransitionKind::BlockedLane,
-                admitted: false,
-                active_node: status.active_node.clone(),
-                next_node: status.next_node.clone(),
-                resume_target: status.resume_target.clone(),
-                blocker_codes: vec!["lane_blocked".to_string()],
-                next_actions: vec!["inspect lane recovery evidence".to_string()],
             };
         }
     }
@@ -411,6 +411,38 @@ mod tests {
         assert!(decision.admitted);
         assert_eq!(decision.next_node, Some("tester".to_string()));
         assert_eq!(decision.resume_target, "dispatch.tester");
+    }
+
+    #[test]
+    fn run_graph_transition_rejects_blocked_downstream_ready_handoffs() {
+        let status = active_developer_status_snapshot();
+
+        for lane_status in ["lane_blocked", "lane_failed", "lane_exception_recorded"] {
+            let decision = decide_run_graph_transition(
+                &status,
+                Some(&DispatchReceiptSnapshot {
+                    dispatch_target: "developer".to_string(),
+                    dispatch_status: "executed".to_string(),
+                    lane_status: Some(lane_status.to_string()),
+                    supersedes_receipt_id: None,
+                    exception_path_receipt_id: None,
+                    downstream_dispatch_ready: true,
+                    downstream_dispatch_target: Some("tester".to_string()),
+                    downstream_dispatch_blockers: Vec::new(),
+                }),
+                None,
+            );
+
+            assert_eq!(
+                decision.kind,
+                RunGraphTransitionKind::BlockedLane,
+                "{lane_status} must fail closed before downstream handoff admission"
+            );
+            assert!(!decision.admitted, "{lane_status} must not be admitted");
+            assert_eq!(decision.next_node, Some("tester".to_string()));
+            assert_eq!(decision.resume_target, "dispatch.tester");
+            assert_eq!(decision.blocker_codes, vec!["lane_blocked"]);
+        }
     }
 
     #[test]

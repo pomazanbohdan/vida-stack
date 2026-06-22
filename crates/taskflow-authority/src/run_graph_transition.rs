@@ -74,6 +74,36 @@ mod run_graph_tests {
     }
 
     #[test]
+    fn run_graph_authority_rejects_blocked_downstream_ready_handoff() {
+        let mut status = status();
+        status.active_node = "developer".to_string();
+        status.next_node = Some("tester".to_string());
+        status.resume_target = "dispatch.tester".to_string();
+
+        let decision = admit_run_graph_transition(RunGraphAuthorityInput {
+            status,
+            receipt: Some(DispatchReceiptSnapshot {
+                dispatch_target: "developer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_failed".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_target: Some("tester".to_string()),
+                downstream_dispatch_blockers: Vec::new(),
+            }),
+            closure: None,
+        });
+
+        assert_eq!(decision.decision.kind, RunGraphTransitionKind::BlockedLane);
+        assert!(!decision.decision.admitted);
+        assert_eq!(
+            decision.next_actions,
+            vec![RUN_GRAPH_NEXT_ACTION_INSPECT_LANE]
+        );
+    }
+
+    #[test]
     fn run_graph_authority_marks_stalled_lane_actionable() {
         let decision = admit_run_graph_transition(RunGraphAuthorityInput {
             status: status(),
