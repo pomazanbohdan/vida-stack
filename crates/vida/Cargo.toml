@@ -13,20 +13,20 @@ name = "vida"
 path = "src/main.rs"
 
 [dependencies]
-blake3 = "1.8.2"
-clap = { version = "4.5.38", features = ["derive", "env"] }
+blake3 = "1.8.5"
+clap = { version = "4.6.1", features = ["derive", "env"] }
 docflow-cli = { path = "../docflow-cli" }
 docflow-contracts = { path = "../docflow-contracts" }
 fs2 = "0.4.3"
-futures = "0.3.31"
+futures = "0.3.32"
 interprocess = { version = "2.4.2", features = ["tokio"] }
-libc = "0.2"
+libc = "0.2.186"
 operator-output = { path = "../operator-output" }
-ratatui = "0.30.0"
+ratatui = "0.30.2"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
+serde_json = "1.0.150"
 serde_yaml = "0.9.34"
-surrealdb = { version = "3.0.2", features = ["kv-surrealkv"] }
+surrealdb = { version = "3.1.5", features = ["kv-surrealkv"] }
 taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-authority = { path = "../taskflow-authority" }
 taskflow-cli = { path = "../taskflow-cli" }
@@ -38,7 +38,7 @@ taskflow-state-fs = { path = "../taskflow-state-fs" }
 taskflow-state-surreal = { path = "../taskflow-state-surreal" }
 tarpc = { version = "0.37.0", features = ["serde1", "serde-transport-json", "tokio1"] }
 time = { workspace = true }
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
 toml_edit = "0.25.12"
 runtime-path-policy = { path = "../runtime-path-policy" }
 vida-contracts = { path = "../vida-contracts" }
