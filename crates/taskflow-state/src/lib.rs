@@ -238,6 +238,27 @@ impl OperationalJournal for InMemoryOperationalJournal {
             });
         }
 
+        let idempotency_key = request.idempotency_key.clone();
+        let command_id = request.command_id.clone();
+        match self.idempotency.get(&idempotency_key.0) {
+            Some(record)
+                if record.state == JournalIdempotencyState::Started
+                    && record.command_id == command_id => {}
+            Some(_) => return Err(TaskflowStateError::IdempotencyConflict(idempotency_key.0)),
+            None => {
+                self.idempotency.insert(
+                    idempotency_key.0.clone(),
+                    JournalIdempotencyRecord {
+                        key: idempotency_key.clone(),
+                        command_id: command_id.clone(),
+                        state: JournalIdempotencyState::Started,
+                        receipt_id: None,
+                        conflict_reason: None,
+                    },
+                );
+            }
+        }
+
         let first_index = self.global_events.len();
         let event_count = request.events.len();
         let effect_intent_count = request.effect_intents.len();
@@ -258,7 +279,7 @@ impl OperationalJournal for InMemoryOperationalJournal {
         }
 
         let last_index = self.global_events.len().saturating_sub(1);
-        Ok(JournalAppendReceipt {
+        let receipt = JournalAppendReceipt {
             stream_id: request.stream_id,
             first_global_cursor: self
                 .global_events
@@ -271,7 +292,12 @@ impl OperationalJournal for InMemoryOperationalJournal {
             stream_version: VidaStreamVersion(stream.len() as u64),
             event_count,
             effect_intent_count,
-        })
+        };
+        if let Some(record) = self.idempotency.get_mut(&idempotency_key.0) {
+            record.state = JournalIdempotencyState::Completed;
+            record.receipt_id = Some(VidaReceiptId(format!("append:{}", command_id.0)));
+        }
+        Ok(receipt)
     }
 
     fn load_stream(&self, stream_id: &VidaStreamRef) -> Vec<VidaDomainEventEnvelope> {
@@ -505,6 +531,31 @@ mod tests {
                 actual: 1,
             }
         );
+    }
+
+    #[test]
+    fn operational_journal_rejects_idempotent_replay_before_duplicate_effects() {
+        let mut journal = InMemoryOperationalJournal::default();
+
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("first append should pass");
+
+        let replay = journal
+            .append(append_request(1, vec![event(2)], vec![effect("effect-1")]))
+            .expect_err("same idempotency key must not append twice");
+        assert_eq!(
+            replay,
+            TaskflowStateError::IdempotencyConflict("idem-1".to_string())
+        );
+        assert_eq!(
+            journal
+                .load_stream(&VidaStreamRef("stream-1".to_string()))
+                .len(),
+            1
+        );
+        let claimed = journal.claim_outbox_batch("worker-1", 10);
+        assert_eq!(claimed.len(), 1);
     }
 
     #[test]
