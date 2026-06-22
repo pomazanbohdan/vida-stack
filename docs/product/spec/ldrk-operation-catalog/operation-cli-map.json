@@ -1,0 +1,1662 @@
+{
+  "baseline_counts": {
+    "canonical_cli_leaf_command_candidates": 160,
+    "command_specific_option_candidates": 527,
+    "direct_surface_mutation_candidates": 1566,
+    "duplicate_classifier_candidates": 1596,
+    "targeted_production_loc": 280664
+  },
+  "completion_outcome_contract": {
+    "allowed_outcomes": [
+      "Passed{evidence_refs, reported_next_step?}",
+      "Blocked{non_empty blockers, rework_target, evidence_refs}",
+      "Failed{code, retryable, evidence_refs}"
+    ],
+    "forbidden_duplicate_cli_fields": [
+      "--decision",
+      "--verdict",
+      "--blocker-code",
+      "--blocker-codes",
+      "--rework-target",
+      "--allowed-next-node as independent semantic flags after cutover"
+    ],
+    "host_bridge_completion": "single structured outcome payload"
+  },
+  "current_leaf_mappings": [
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida init",
+      "current_command_specific_options": [
+        "--framework-memory-source-root",
+        "--instruction-source-root",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "BootArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida boot",
+      "current_command_specific_options": [
+        "--framework-memory-source-root",
+        "--instruction-source-root",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "BootArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.plan",
+      "current_command": "vida orchestrator-init",
+      "current_command_specific_options": [
+        "--fields",
+        "--full",
+        "--json",
+        "--state-dir",
+        "--view"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "InitArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.plan",
+      "current_command": "vida agent-init",
+      "current_command_specific_options": [
+        "--auto-dispatch-packet",
+        "--dispatch-packet",
+        "--downstream-packet",
+        "--execute-dispatch",
+        "--json",
+        "--role",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "AgentInitArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida agent dispatch-next",
+      "current_command_specific_options": [
+        "--current-task-id",
+        "--dev-team",
+        "--json",
+        "--lanes",
+        "--materialize-packets",
+        "--scope",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "AgentDispatchNextArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida agent select",
+      "current_command_specific_options": [
+        "--conversation-role",
+        "--json",
+        "--runtime-role",
+        "--state-dir",
+        "--task-class"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "AgentSelectArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida agent host-bridge",
+      "current_command_specific_options": [
+        "--allowed-next-node",
+        "--artifact-kind",
+        "--attach-artifact",
+        "--attempt-id",
+        "--blocker-code",
+        "--blocker-codes",
+        "--changed-file",
+        "--complete",
+        "--consolidation-receipt",
+        "--decision",
+        "--host-agent-id",
+        "--host-bridge-result-file",
+        "--json",
+        "--receipt-id",
+        "--request",
+        "--rework-target",
+        "--state-dir",
+        "--summary",
+        "--verdict"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "AgentHostBridgeArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida agent status",
+      "current_command_specific_options": [
+        "--compact",
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "AgentStatusArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida coder capabilities",
+      "current_command_specific_options": [
+        "--json"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "CoderCapabilitiesArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida coder provider-check",
+      "current_command_specific_options": [
+        "--json",
+        "--provider"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "CoderProviderCheckArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida coder run",
+      "current_command_specific_options": [
+        "--json",
+        "--provider",
+        "--request"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "CoderRunArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida protocol view",
+      "current_command_specific_options": [
+        "--json"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "ProtocolViewArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.plan",
+      "current_command": "vida project-activator",
+      "current_command_specific_options": [
+        "--documentation-language",
+        "--host-cli-system",
+        "--json",
+        "--language",
+        "--project-id",
+        "--project-name",
+        "--reasoning-language",
+        "--repair",
+        "--state-dir",
+        "--todo-protocol-language",
+        "--user-communication-language"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "ProjectActivatorArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida agent-feedback",
+      "current_command_specific_options": [
+        "--agent-id",
+        "--json",
+        "--notes",
+        "--outcome",
+        "--score",
+        "--task-class"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "AgentFeedbackArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task help",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskHelpArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task import",
+      "current_command_specific_options": [
+        "--acceptance-target",
+        "--conflict-domain",
+        "--created-by",
+        "--dry-run",
+        "--execution-mode",
+        "--file",
+        "--format",
+        "--json",
+        "--labels",
+        "--order-bucket",
+        "--owned-path",
+        "--parallel-group",
+        "--parent-id",
+        "--priority",
+        "--proof-target",
+        "--render",
+        "--state-dir",
+        "--status",
+        "--type"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskBulkImportArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task import-jsonl",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskImportJsonlArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task replace-jsonl",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskReplaceJsonlArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task export-jsonl",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskExportJsonlArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task list",
+      "current_command_specific_options": [
+        "--all",
+        "--fields",
+        "--issue-type",
+        "--json",
+        "--limit",
+        "--parent-id",
+        "--query",
+        "--render",
+        "--state-dir",
+        "--status",
+        "--summary",
+        "--view"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskListArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task search",
+      "current_command_specific_options": [
+        "--all",
+        "--fields",
+        "--issue-type",
+        "--json",
+        "--limit",
+        "--parent-id",
+        "--render",
+        "--state-dir",
+        "--status",
+        "--view"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskSearchArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task show",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskShowArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task progress",
+      "current_command_specific_options": [
+        "--all",
+        "--basis",
+        "--counts-only",
+        "--epic",
+        "--epics",
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskProgressArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task closure-ready",
+      "current_command_specific_options": [
+        "--basis",
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskClosureReadyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task proof status",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskProofStatusArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task proof attach-browser",
+      "current_command_specific_options": [
+        "--evidence",
+        "--expect",
+        "--json",
+        "--render",
+        "--result",
+        "--route",
+        "--screenshot",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskProofAttachBrowserArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task ready",
+      "current_command_specific_options": [
+        "--fields",
+        "--json",
+        "--render",
+        "--scope",
+        "--state-dir",
+        "--view"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskReadyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task next",
+      "current_command_specific_options": [
+        "--json",
+        "--scope",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskNextArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task next-lawful",
+      "current_command_specific_options": [
+        "--explain",
+        "--json",
+        "--render",
+        "--scope",
+        "--select",
+        "--state-dir",
+        "--strategy"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskNextLawfulArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task next-display-id",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskNextDisplayIdArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task create",
+      "current_command_specific_options": [
+        "--acceptance-target",
+        "--auto-display-from",
+        "--conflict-domain",
+        "--description",
+        "--display-id",
+        "--execution-mode",
+        "--json",
+        "--labels",
+        "--notes",
+        "--notes-file",
+        "--order-bucket",
+        "--owned-path",
+        "--parallel-group",
+        "--parent-display-id",
+        "--parent-id",
+        "--priority",
+        "--proof-target",
+        "--render",
+        "--state-dir",
+        "--status",
+        "--title",
+        "--type"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskCreateArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task ensure",
+      "current_command_specific_options": [
+        "--acceptance-target",
+        "--auto-display-from",
+        "--conflict-domain",
+        "--description",
+        "--display-id",
+        "--execution-mode",
+        "--json",
+        "--labels",
+        "--notes",
+        "--notes-file",
+        "--order-bucket",
+        "--owned-path",
+        "--parallel-group",
+        "--parent-display-id",
+        "--parent-id",
+        "--priority",
+        "--proof-target",
+        "--render",
+        "--state-dir",
+        "--status",
+        "--title",
+        "--type"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskCreateArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task update",
+      "current_command_specific_options": [
+        "--acceptance-target",
+        "--add-label",
+        "--clear-conflict-domain",
+        "--clear-execution-mode",
+        "--clear-order-bucket",
+        "--clear-parallel-group",
+        "--clear-parent-id",
+        "--conflict-domain",
+        "--description",
+        "--execution-mode",
+        "--json",
+        "--notes",
+        "--notes-file",
+        "--order-bucket",
+        "--owned-path",
+        "--parallel-group",
+        "--parent-id",
+        "--priority",
+        "--proof-target",
+        "--remove-label",
+        "--render",
+        "--set-labels",
+        "--state-dir",
+        "--status",
+        "--title"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskUpdateArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task note append",
+      "current_command_specific_options": [
+        "--json",
+        "--message",
+        "--message-file",
+        "--render",
+        "--separator",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskNoteAppendArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task block",
+      "current_command_specific_options": [
+        "--blocker",
+        "--evidence",
+        "--json",
+        "--next-action",
+        "--reason",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskBlockArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task verify",
+      "current_command_specific_options": [
+        "--evidence",
+        "--json",
+        "--proof-blocked",
+        "--proof-blocker",
+        "--render",
+        "--source-fixed",
+        "--state-dir",
+        "--tests-green"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskVerifyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.plan",
+      "current_command": "vida task attempt dispatch",
+      "current_command_specific_options": [
+        "--attempt-id",
+        "--backend",
+        "--isolation",
+        "--json",
+        "--model-profile",
+        "--policy",
+        "--render",
+        "--stage-id",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskAttemptDispatchArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.plan",
+      "current_command": "vida task attempt status",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--stage-id",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskAttemptStatusArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task attempt collect",
+      "current_command_specific_options": [
+        "--artifact-ref",
+        "--attempt-id",
+        "--consolidation-receipt",
+        "--json",
+        "--render",
+        "--stage-id",
+        "--state-dir",
+        "--status"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskAttemptCollectArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task attempt consolidate",
+      "current_command_specific_options": [
+        "--cap-limited-attempt-id",
+        "--conflict",
+        "--consolidation-receipt",
+        "--consolidator-profile",
+        "--fact",
+        "--hypothesis",
+        "--json",
+        "--merge-policy",
+        "--partial-attempt-id",
+        "--render",
+        "--stage-id",
+        "--state-dir",
+        "--timeout-attempt-id"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskAttemptConsolidateArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task attempt record",
+      "current_command_specific_options": [
+        "--artifact-ref",
+        "--attempt-id",
+        "--backend",
+        "--consolidation-receipt",
+        "--freshness",
+        "--isolation",
+        "--json",
+        "--model-profile",
+        "--render",
+        "--stage-id",
+        "--state-dir",
+        "--status"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskAttemptRecordArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task attempt transition",
+      "current_command_specific_options": [
+        "--artifact-ref",
+        "--consolidation-receipt",
+        "--json",
+        "--render",
+        "--stage-id",
+        "--state-dir",
+        "--status",
+        "--task-id"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskAttemptTransitionArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task attempt summary",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--stage-id",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskAttemptSummaryArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task stage status",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--stage-id",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskStageStatusArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task owned-status",
+      "current_command_specific_options": [
+        "--file",
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskOwnedStatusArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task handoff accept",
+      "current_command_specific_options": [
+        "--agent",
+        "--blocker",
+        "--file",
+        "--json",
+        "--next-action",
+        "--proof",
+        "--render",
+        "--state-dir",
+        "--status"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskHandoffAcceptArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task takeover status",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--run-id",
+        "--state-dir",
+        "--task-id"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskTakeoverStatusArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task close",
+      "current_command_specific_options": [
+        "--commit",
+        "--commit-file",
+        "--commit-message",
+        "--include-global-progress",
+        "--install",
+        "--install-root",
+        "--install-target",
+        "--json",
+        "--push",
+        "--reason",
+        "--reason-file",
+        "--release",
+        "--render",
+        "--skip-release-build",
+        "--source",
+        "--source-binary",
+        "--stage-owned",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskCloseArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task reconcile",
+      "current_command_specific_options": [
+        "--close-if-complete",
+        "--dry-run",
+        "--epics",
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskReconcileArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task reconcile-closed-runs",
+      "current_command_specific_options": [
+        "--json",
+        "--limit",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskReconcileClosedRunsArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task prune-closed-epics",
+      "current_command_specific_options": [
+        "--apply",
+        "--archive-dir",
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskPruneClosedEpicsArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task split",
+      "current_command_specific_options": [
+        "--child",
+        "--dry-run",
+        "--json",
+        "--reason",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskSplitArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task spawn-blocker",
+      "current_command_specific_options": [
+        "--description",
+        "--dry-run",
+        "--json",
+        "--labels",
+        "--priority",
+        "--reason",
+        "--render",
+        "--state-dir",
+        "--status",
+        "--type"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskSpawnBlockerArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.plan",
+      "current_command": "vida task adaptive-preview",
+      "current_command_specific_options": [
+        "--finding-file",
+        "--finding-json",
+        "--json",
+        "--render"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskAdaptivePreviewArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task deps",
+      "current_command_specific_options": [
+        "--fields",
+        "--full",
+        "--json",
+        "--render",
+        "--state-dir",
+        "--view"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskDepsArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task reverse-deps",
+      "current_command_specific_options": [
+        "--fields",
+        "--full",
+        "--json",
+        "--render",
+        "--state-dir",
+        "--view"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskDepsArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task blocked",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir",
+        "--summary"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskBlockedArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task children",
+      "current_command_specific_options": [
+        "--fields",
+        "--full",
+        "--json",
+        "--render",
+        "--state-dir",
+        "--view"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskDepsArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task reparent-children",
+      "current_command_specific_options": [
+        "--child-id",
+        "--dry-run",
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskBulkReparentArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task defect-batch-rehome",
+      "current_command_specific_options": [
+        "--child-id",
+        "--dry-run",
+        "--json",
+        "--pause-task-id",
+        "--render",
+        "--start-task-id",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskDefectBatchRehomeArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida task tree",
+      "current_command_specific_options": [
+        "--fields",
+        "--full",
+        "--json",
+        "--render",
+        "--state-dir",
+        "--view"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskDepsArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task validate-graph",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir",
+        "--summary"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskBlockedArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task dep add",
+      "current_command_specific_options": [
+        "--created-by",
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskDependencyMutationCommandArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task dep ensure",
+      "current_command_specific_options": [
+        "--created-by",
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskDependencyMutationCommandArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task dep add-bulk",
+      "current_command_specific_options": [
+        "--created-by",
+        "--dry-run",
+        "--edge",
+        "--edge-file",
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskDependencyBulkAddCommandArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida task dep remove",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "TaskDependencyTargetCommandArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.plan",
+      "current_command": "vida task critical-path",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir",
+        "--summary"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "TaskBlockedArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida memory",
+      "current_command_specific_options": [
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "MemoryArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida status",
+      "current_command_specific_options": [
+        "--fields",
+        "--json",
+        "--render",
+        "--state-dir",
+        "--summary",
+        "--view"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "StatusArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida state reset",
+      "current_command_specific_options": [
+        "--archive",
+        "--json",
+        "--reinit",
+        "--render",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "StateResetArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida runtime web status",
+      "current_command_specific_options": [
+        "--include-edge-proxy",
+        "--json",
+        "--scope"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "RuntimeWebStatusArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.plan",
+      "current_command": "vida runtime web restart",
+      "current_command_specific_options": [
+        "--dry-run",
+        "--include-edge-proxy",
+        "--json",
+        "--scope"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "RuntimeWebRestartArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida doctor",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir",
+        "--summary"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "DoctorArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida diagnostics post-commit",
+      "current_command_specific_options": [
+        "--json",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "DiagnosticsPostCommitArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida diagnostics evidence-check",
+      "current_command_specific_options": [
+        "--evidence-ref",
+        "--json",
+        "--state-dir",
+        "--task-id"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "DiagnosticsEvidenceCheckArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida diagnostics rules-check",
+      "current_command_specific_options": [
+        "--changed-path",
+        "--json",
+        "--protocol-id",
+        "--state-dir",
+        "--task-id"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "DiagnosticsRulesCheckArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida proof browser",
+      "current_command_specific_options": [
+        "--expect",
+        "--json",
+        "--route"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "ProofBrowserArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.service",
+      "current_command": "vida service",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "service lifecycle payload or direct offline/service exception",
+      "source_arg_type": "ProxyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.service",
+      "current_command": "vida project",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "service lifecycle payload or direct offline/service exception",
+      "source_arg_type": "ProxyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.service",
+      "current_command": "vida wizard",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "service lifecycle payload or direct offline/service exception",
+      "source_arg_type": "ProxyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.service",
+      "current_command": "vida job",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "service lifecycle payload or direct offline/service exception",
+      "source_arg_type": "ProxyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.service",
+      "current_command": "vida receipt",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "service lifecycle payload or direct offline/service exception",
+      "source_arg_type": "ProxyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida docs update",
+      "current_command_specific_options": [
+        "--json"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "DocsUpdateArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida orchestrator-session show",
+      "current_command_specific_options": [
+        "--json",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "OrchestratorSessionShowArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida orchestrator-session reclaim",
+      "current_command_specific_options": [
+        "--json",
+        "--state-dir"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "OrchestratorSessionReclaimArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida orchestrator-session transfer",
+      "current_command_specific_options": [
+        "--json",
+        "--state-dir",
+        "--to-current"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "OrchestratorSessionTransferArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.plan",
+      "current_command": "vida session triage",
+      "current_command_specific_options": [
+        "--json",
+        "--render",
+        "--state-dir",
+        "--task"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "SessionTriageArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.get",
+      "current_command": "vida quality gate",
+      "current_command_specific_options": [
+        "--advise",
+        "--coverage-file",
+        "--coverage-threshold",
+        "--json",
+        "--prepush",
+        "--project-root",
+        "--render"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "read/query options become payload selectors or global context",
+      "source_arg_type": "QualityGateArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.repair",
+      "current_command": "vida consume",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "ProxyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.repair",
+      "current_command": "vida lane",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "ProxyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.repair",
+      "current_command": "vida approval",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "ProxyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.repair",
+      "current_command": "vida recovery",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "ProxyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.repair",
+      "current_command": "vida route",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "ProxyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.apply",
+      "current_command": "vida release install",
+      "current_command_specific_options": [
+        "--install-root",
+        "--json",
+        "--skip-build",
+        "--source-binary",
+        "--target"
+      ],
+      "deletion_rationale": null,
+      "disposition": "canonical_operation",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "ReleaseInstallArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.repair",
+      "current_command": "vida taskflow",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "ProxyArgs"
+    },
+    {
+      "alias_lifetime": "compatibility alias until LDRK cutover removes legacy writer for this operation",
+      "canonical_operation": "vida.repair",
+      "current_command": "vida docflow",
+      "current_command_specific_options": [],
+      "deletion_rationale": null,
+      "disposition": "adapter_alias_family",
+      "payload_policy": "command-specific flags become typed payload fields; no status/verdict/decision duplication allowed",
+      "source_arg_type": "ProxyArgs"
+    }
+  ],
+  "delegated_proxy_coverage": {
+    "baseline_leaf_command_candidates": 160,
+    "families": [
+      "vida taskflow",
+      "vida docflow",
+      "vida consume",
+      "vida lane",
+      "vida approval",
+      "vida recovery",
+      "vida route",
+      "vida service",
+      "vida project",
+      "vida wizard",
+      "vida job",
+      "vida receipt"
+    ],
+    "remaining_candidates": "delegated proxy/external command families are mapped at family boundary to vida.service or vida.repair until their generated command tree is materialized by the owning family runtime",
+    "source_parser_first_class_leaves": 96
+  },
+  "generated_at": "2026-06-22",
+  "source_files": [
+    "crates/vida/src/cli.rs",
+    "docs/product/spec/ldrk-baseline/baseline.json"
+  ],
+  "source_parser_counts": {
+    "enum_count": 25,
+    "first_class_root_leaf_commands": 96,
+    "struct_with_subcommand_count": 23
+  },
+  "source_sha256": {
+    "crates/vida/src/cli.rs": "584974f4aa54df290050d020bc8cf284447036f68750f2029da86b8ff0226bf0",
+    "docs/product/spec/ldrk-baseline/baseline.json": "64502d795bc8450da8daa6b3b0e3ac1847730f7bfff9941fba4789394639f571"
+  },
+  "target_catalog": {
+    "canonical_command_families": [
+      "vida get",
+      "vida plan",
+      "vida apply",
+      "vida watch",
+      "vida service",
+      "vida repair"
+    ],
+    "global_options": [
+      "--project",
+      "--session",
+      "--format",
+      "--endpoint",
+      "--offline",
+      "--state-dir",
+      "--render",
+      "--json"
+    ],
+    "leaf_reduction_from_baseline": {
+      "after": 6,
+      "before": 160,
+      "reduction_percent": 96.25
+    },
+    "option_reduction_from_baseline": {
+      "after": 0,
+      "before": 527,
+      "reduction_percent": 100.0,
+      "required_minimum_percent": 50.0
+    },
+    "target_command_specific_option_count": 0,
+    "target_leaf_command_count": 6
+  },
+  "task_id": "ldr-003"
+}

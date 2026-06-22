@@ -147,6 +147,15 @@ Companion rule:
 32. [ldrk-baseline/deletion-candidates.md](ldrk-baseline/deletion-candidates.md)
     Config families: generated LDRK `ldr-001` deletion and reduction candidate evidence under `docs/product/spec/ldrk-baseline/**`
     Registered path: `docs/product/spec/ldrk-baseline/deletion-candidates.md`
+33. [ldrk-operation-catalog/operation-cli-map.json](ldrk-operation-catalog/operation-cli-map.json)
+    Config families: generated LDRK `ldr-003` machine-readable command-to-operation catalog, baseline reduction counts, host-bridge outcome payload law, and compatibility alias policy
+    Registered path: `docs/product/spec/ldrk-operation-catalog/operation-cli-map.json`
+34. [ldrk-operation-catalog/before-after-command-tree.md](ldrk-operation-catalog/before-after-command-tree.md)
+    Config families: generated LDRK `ldr-003` before/after command tree, canonical six-family target tree, command leaf reduction proof, and command-specific option reduction proof
+    Registered path: `docs/product/spec/ldrk-operation-catalog/before-after-command-tree.md`
+35. [ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md](ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md)
+    Config families: generated LDRK `ldr-003` top-ten operator workflow migration walkthrough and host-bridge structured completion payload example
+    Registered path: `docs/product/spec/ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md`
 30. [operational-state-and-synchronization-model.md](operational-state-and-synchronization-model.md)
     Config families: DB-first operational state, filesystem projection, Git lineage, synchronization law, conflict handling, and reactive domain routing
 31. [multi-orchestrator-session-ownership-claims-contract.md](multi-orchestrator-session-ownership-claims-contract.md)

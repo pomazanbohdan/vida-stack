@@ -50,6 +50,12 @@ Companion rule:
     - generated LDRK `ldr-001` runtime mutation, classifier, and host-bridge drift baseline
 18. [ldrk-baseline/deletion-candidates.md](ldrk-baseline/deletion-candidates.md)
     - generated LDRK `ldr-001` command, classifier, and direct-mutation deletion candidate baseline
+19. [ldrk-operation-catalog/operation-cli-map.json](ldrk-operation-catalog/operation-cli-map.json)
+    - generated LDRK `ldr-003` canonical operation-to-CLI map
+20. [ldrk-operation-catalog/before-after-command-tree.md](ldrk-operation-catalog/before-after-command-tree.md)
+    - generated LDRK `ldr-003` current-to-target command tree
+21. [ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md](ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md)
+    - generated LDRK `ldr-003` top-ten operator workflow walkthrough
 
 ## Detailed Catalog Companions
 
