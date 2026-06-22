@@ -1591,7 +1591,10 @@ pub(crate) struct TaskProofArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum TaskProofCommand {
-    #[command(about = "show configured proof targets and close-evidence coverage for one task")]
+    #[command(
+        about = "show configured proof targets and close-evidence coverage for one task",
+        after_help = "Output:\n  Default output is compact TOON/plain and includes proof_targets[n]{target,status,evidence_source,artifact_status,next_action} rows.\n  Use --json only when the machine-readable proof_targets array is required.\n\nExamples:\n  vida task proof status task-1\n  vida task proof status task-1 --json"
+    )]
     Status(TaskProofStatusArgs),
     #[command(
         about = "attach browser proof artifact evidence to one task",
@@ -1601,7 +1604,7 @@ pub(crate) enum TaskProofCommand {
     #[command(
         name = "attach-evidence",
         about = "attach structured proof evidence to one task",
-        after_help = "Examples:\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --evidence \"test log\" --json\n\nOptions:\n  --proof-target <text> Proof target this evidence satisfies\n  --result <result>     Proof result: pass, fail, or blocked\n  --command <command>   Command or artifact command equivalent; defaults to --proof-target\n  --artifact-ref <path> Receipt, log, screenshot, or artifact path\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
+        after_help = "Examples:\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --evidence \"test log\"\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --json\n\nOptions:\n  --proof-target <text> Proof target this evidence satisfies\n  --result <result>     Proof result: pass, fail, or blocked\n  --command <command>   Command or artifact command equivalent; defaults to --proof-target\n  --artifact-ref <path> Receipt, log, screenshot, or artifact path\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
     )]
     AttachEvidence(TaskProofAttachEvidenceArgs),
 }

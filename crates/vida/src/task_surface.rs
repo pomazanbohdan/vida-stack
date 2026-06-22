@@ -1169,7 +1169,7 @@ fn task_proof_status_payload(
         format!(
             "Run or attach missing proof evidence, then inspect again with `{}`.",
             operator_output::command_text::human_command(&format!(
-                "vida task proof status {} --json",
+                "vida task proof status {}",
                 quoted_task_id
             ))
         )
@@ -1310,6 +1310,41 @@ fn print_task_proof_status(
     task: &state_store::TaskRecord,
     payload: &serde_json::Value,
 ) {
+    if matches!(render, crate::RenderMode::Plain) {
+        let rows = payload["proof_targets"]
+            .as_array()
+            .map(|targets| {
+                targets
+                    .iter()
+                    .map(|target| {
+                        serde_json::json!({
+                            "target": target["target"].as_str().unwrap_or(""),
+                            "status": target["status"].as_str().unwrap_or("unknown"),
+                            "evidence_source": target["evidence_source"].as_str().unwrap_or("unknown"),
+                            "artifact_status": target["artifact_status"].as_str().unwrap_or("unknown"),
+                            "next_action": target["next_action"].as_str().unwrap_or(""),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let value = serde_json::json!({
+            "task": task.id,
+            "task_status": task.status,
+            "configured_proof_target_count": payload["configured_proof_target_count"],
+            "satisfied_count": payload["satisfied_count"],
+            "missing_count": payload["missing_count"],
+            "runtime_blocked_count": payload["runtime_blocked_count"],
+            "proof_blocked_by_runtime": payload["proof_blocked_by_runtime"],
+            "proof_targets": rows,
+            "next_required_command": payload["next_required_command"].as_str().unwrap_or(""),
+        });
+        println!(
+            "{}",
+            taskflow_format_toon::render_value_section("vida task proof status", &value)
+        );
+        return;
+    }
     print_surface_header(render, "vida task proof status");
     print_surface_line(render, "task", &task.id);
     print_surface_line(render, "task status", &task.status);

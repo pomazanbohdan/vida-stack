@@ -6829,10 +6829,21 @@ fn task_proof_status_uses_default_human_commands_without_json_bias() {
     );
     let default_missing_target =
         run_and_assert_success(&["task", "proof", "status", &task_id], &state_dir);
+    assert!(default_missing_target
+        .contains("proof_targets[1]{target,status,evidence_source,artifact_status,next_action}:"));
+    assert!(default_missing_target.contains(
+        "\"cargo test -p vida --test task_smoke proof_target\",pending,planner_metadata.proof_targets,not_recorded"
+    ));
     assert!(
         !default_missing_target.contains("--json"),
         "proof status default missing-target output should not suggest JSON-first commands: {default_missing_target}"
     );
+    let status_help = run_and_assert_success(&["task", "proof", "status", "--help"], &state_dir);
+    assert!(status_help.contains(
+        "Default output is compact TOON/plain and includes proof_targets[n]{target,status,evidence_source,artifact_status,next_action} rows."
+    ));
+    assert!(status_help
+        .contains("Use --json only when the machine-readable proof_targets array is required."));
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -7130,8 +7141,13 @@ fn task_browser_proof_progress_close_golden_workflow_satisfies_schema() {
 
     let default_status = run_and_assert_success(&["task", "proof", "status", &task_id], &state_dir);
     assert!(default_status.starts_with("vida task proof status\n"));
-    assert!(default_status.contains("satisfied: 1"));
-    assert!(default_status.contains("missing: 0"));
+    assert!(default_status.contains("satisfied_count: 1"));
+    assert!(default_status.contains("missing_count: 0"));
+    assert!(default_status
+        .contains("proof_targets[1]{target,status,evidence_source,artifact_status,next_action}:"));
+    assert!(default_status.contains(&format!(
+        "\"{proof_target}\",satisfied,task_proof_evidence_registry,recorded"
+    )));
     assert!(!default_status.trim_start().starts_with('{'));
 
     let satisfied_progress =
