@@ -31,6 +31,7 @@ Purpose: make current VIDA product law discoverable through bootstrap-tracked ma
 5. Process/tooling route from the product side: [../process/documentation-tooling-map.md](../process/documentation-tooling-map.md)
 6. Runtime layer route: [spec/canonical-runtime-layer-matrix.md](spec/canonical-runtime-layer-matrix.md)
 7. Documentation/inventory route: [spec/canonical-documentation-and-inventory-layer-matrix.md](spec/canonical-documentation-and-inventory-layer-matrix.md)
+8. Runtime dependency decisions: [decisions/ldr-002-redb-operational-journal-adr.md](decisions/ldr-002-redb-operational-journal-adr.md)
 
 ## Repository Project Split
 

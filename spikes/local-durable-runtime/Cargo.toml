@@ -1,0 +1,10 @@
+[package]
+name = "vida-local-durable-runtime-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+redb = "4.1.0"
