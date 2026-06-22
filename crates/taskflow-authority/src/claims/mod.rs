@@ -2,9 +2,11 @@ use crate::scheduler_claim::{
     OrchestratorClaimActiveInput, OrchestratorClaimRequestInput, claim_is_expired,
     decide_orchestrator_claim_conflict, validate_orchestrator_claim_request,
 };
+use time::{Duration, OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
 pub const MODULE: &str = "claims";
 pub const CLAIM_AGGREGATE_SCHEMA_VERSION: u32 = 1;
+const DEFAULT_ACQUIRE_LEASE_SECONDS: i64 = 300;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaimLeaseCommand {
@@ -135,10 +137,23 @@ fn decide_acquire(
         }
     }
 
+    let Ok(lease_expires_at) = acquire_lease_expires_at(now) else {
+        return ClaimLeaseDecision::rejected(request.claim_id, "orchestrator_claim_invalid_now");
+    };
+
     ClaimLeaseDecision::admitted(vec![ClaimLeaseEvent::Acquired {
         claim_id: request.claim_id,
-        lease_expires_at: now.to_string(),
+        lease_expires_at,
     }])
+}
+
+fn acquire_lease_expires_at(now: &str) -> Result<String, ()> {
+    let expires_at = OffsetDateTime::parse(now, &Rfc3339).map_err(|_| ())?
+        + Duration::seconds(DEFAULT_ACQUIRE_LEASE_SECONDS);
+    expires_at
+        .to_offset(UtcOffset::UTC)
+        .format(&Rfc3339)
+        .map_err(|_| ())
 }
 
 #[cfg(test)]
@@ -186,8 +201,95 @@ mod tests {
             decision.events,
             vec![ClaimLeaseEvent::Acquired {
                 claim_id: "claim-2".to_string(),
-                lease_expires_at: "2026-06-22T00:00:00Z".to_string(),
+                lease_expires_at: "2026-06-22T00:05:00Z".to_string(),
             }]
+        );
+    }
+
+    #[test]
+    fn acquired_claim_remains_active_at_acquire_timestamp() {
+        let request = claim_request("claim-1", "exclusive", "task-1", "run-1", "domain-a");
+        let decision = decide_claim_lease(
+            ClaimLeaseCommand::Acquire { request },
+            &[],
+            "2026-06-22T00:00:00Z",
+        );
+
+        assert!(decision.admitted);
+        assert_eq!(
+            decision.events,
+            vec![ClaimLeaseEvent::Acquired {
+                claim_id: "claim-1".to_string(),
+                lease_expires_at: "2026-06-22T00:05:00Z".to_string(),
+            }]
+        );
+
+        let mut acquired = claim("claim-1", "exclusive", "task-1", "run-1", "domain-a");
+        acquired.lease_expires_at = "2026-06-22T00:05:00Z".to_string();
+        let conflicting_request =
+            claim_request("claim-2", "exclusive", "task-1", "run-1", "domain-b");
+
+        let conflicting_decision = decide_claim_lease(
+            ClaimLeaseCommand::Acquire {
+                request: conflicting_request,
+            },
+            &[acquired],
+            "2026-06-22T00:00:00Z",
+        );
+
+        assert!(!conflicting_decision.admitted);
+        assert_eq!(
+            conflicting_decision.blocker_codes,
+            vec!["orchestrator_claim_conflict_task"]
+        );
+    }
+
+    #[test]
+    fn acquired_claim_lease_expiry_is_normalized_to_utc() {
+        let request = claim_request("claim-1", "exclusive", "task-1", "run-1", "domain-a");
+        let decision = decide_claim_lease(
+            ClaimLeaseCommand::Acquire { request },
+            &[],
+            "2026-06-22T00:00:00-05:00",
+        );
+
+        assert_eq!(
+            decision.events,
+            vec![ClaimLeaseEvent::Acquired {
+                claim_id: "claim-1".to_string(),
+                lease_expires_at: "2026-06-22T05:05:00Z".to_string(),
+            }]
+        );
+
+        let mut acquired = claim("claim-1", "exclusive", "task-1", "run-1", "domain-a");
+        acquired.lease_expires_at = "2026-06-22T05:05:00Z".to_string();
+        let conflicting_request =
+            claim_request("claim-2", "exclusive", "task-1", "run-1", "domain-b");
+
+        let conflicting_decision = decide_claim_lease(
+            ClaimLeaseCommand::Acquire {
+                request: conflicting_request,
+            },
+            &[acquired],
+            "2026-06-22T04:59:00Z",
+        );
+
+        assert!(!conflicting_decision.admitted);
+        assert_eq!(
+            conflicting_decision.blocker_codes,
+            vec!["orchestrator_claim_conflict_task"]
+        );
+    }
+
+    #[test]
+    fn invalid_acquire_timestamp_fails_closed() {
+        let request = claim_request("claim-1", "exclusive", "task-1", "run-1", "domain-a");
+        let decision = decide_claim_lease(ClaimLeaseCommand::Acquire { request }, &[], "now");
+
+        assert!(!decision.admitted);
+        assert_eq!(
+            decision.blocker_codes,
+            vec!["orchestrator_claim_invalid_now"]
         );
     }
 

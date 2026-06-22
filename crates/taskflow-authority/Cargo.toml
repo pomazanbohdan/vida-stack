@@ -12,6 +12,7 @@ vida-contracts = { path = "../vida-contracts" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+time = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.11.0"
