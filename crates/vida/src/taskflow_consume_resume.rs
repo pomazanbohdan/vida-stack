@@ -1051,14 +1051,8 @@ async fn validate_run_graph_resume_state(
 async fn validate_run_graph_resume_state_for_dispatch_receipt(
     store: &super::StateStore,
     run_id: &str,
-    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    _receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<(), String> {
-    if crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_pre_execution_packet_ready(
-        receipt,
-        Some(run_id),
-    ) {
-        return Ok(());
-    }
     validate_run_graph_resume_state(store, run_id).await
 }
 
@@ -8489,18 +8483,17 @@ mod tests {
             .expect("latest receipt exists");
         assert_eq!(latest.dispatch_target, "tester");
 
-        let resolved = resolve_runtime_consumption_resume_inputs(
+        let error = resolve_runtime_consumption_resume_inputs(
             &store,
             Some(run_id),
             Some(developer_packet_path_text.replace('\\', "/").as_str()),
             None,
         )
         .await
-        .expect("explicit developer packet should use its lane-scoped receipt");
-        assert_eq!(resolved.dispatch_receipt.dispatch_target, "developer");
-        assert_eq!(
-            resolved.dispatch_receipt.dispatch_packet_path.as_deref(),
-            Some(developer_packet_path_text.as_str())
+        .expect_err("stale explicit developer packet must respect the current resume gate");
+        assert!(
+            error.contains("recovery_ready is false"),
+            "unexpected stale dispatch packet error: {error}"
         );
 
         let _ = fs::remove_dir_all(&root);
