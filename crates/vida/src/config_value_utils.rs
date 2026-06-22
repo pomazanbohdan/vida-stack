@@ -51,7 +51,98 @@ pub(crate) struct AgentExtensionValidationFlagConfig {
 }
 
 pub(crate) fn project_overlay_config(value: &serde_yaml::Value) -> ProjectOverlayConfig {
-    serde_yaml::from_value(value.clone()).unwrap_or_default()
+    let agent_extensions = AgentExtensionsOverlayConfig {
+        enabled_project_roles: yaml_string_list(yaml_lookup(
+            value,
+            &["agent_extensions", "enabled_project_roles"],
+        )),
+        enabled_project_profiles: yaml_string_list(yaml_lookup(
+            value,
+            &["agent_extensions", "enabled_project_profiles"],
+        )),
+        enabled_project_flows: yaml_string_list(yaml_lookup(
+            value,
+            &["agent_extensions", "enabled_project_flows"],
+        )),
+        registries: AgentExtensionRegistryPathConfig {
+            roles: yaml_string(yaml_lookup(
+                value,
+                &["agent_extensions", "registries", "roles"],
+            ))
+            .filter(|value| !value.trim().is_empty()),
+            skills: yaml_string(yaml_lookup(
+                value,
+                &["agent_extensions", "registries", "skills"],
+            ))
+            .filter(|value| !value.trim().is_empty()),
+            profiles: yaml_string(yaml_lookup(
+                value,
+                &["agent_extensions", "registries", "profiles"],
+            ))
+            .filter(|value| !value.trim().is_empty()),
+            flows: yaml_string(yaml_lookup(
+                value,
+                &["agent_extensions", "registries", "flows"],
+            ))
+            .filter(|value| !value.trim().is_empty()),
+            dispatch_aliases: yaml_string(yaml_lookup(
+                value,
+                &["agent_extensions", "registries", "dispatch_aliases"],
+            ))
+            .filter(|value| !value.trim().is_empty()),
+        },
+        validation: AgentExtensionValidationFlagConfig {
+            require_registry_files: yaml_bool(
+                yaml_lookup(
+                    value,
+                    &["agent_extensions", "validation", "require_registry_files"],
+                ),
+                false,
+            ),
+            require_profile_resolution: yaml_bool(
+                yaml_lookup(
+                    value,
+                    &[
+                        "agent_extensions",
+                        "validation",
+                        "require_profile_resolution",
+                    ],
+                ),
+                false,
+            ),
+            require_flow_resolution: yaml_bool(
+                yaml_lookup(
+                    value,
+                    &["agent_extensions", "validation", "require_flow_resolution"],
+                ),
+                false,
+            ),
+            require_framework_role_compatibility: yaml_bool(
+                yaml_lookup(
+                    value,
+                    &[
+                        "agent_extensions",
+                        "validation",
+                        "require_framework_role_compatibility",
+                    ],
+                ),
+                false,
+            ),
+            require_skill_role_compatibility: yaml_bool(
+                yaml_lookup(
+                    value,
+                    &[
+                        "agent_extensions",
+                        "validation",
+                        "require_skill_role_compatibility",
+                    ],
+                ),
+                false,
+            ),
+        },
+    };
+
+    ProjectOverlayConfig { agent_extensions }
 }
 
 fn deserialize_yaml_string_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -256,6 +347,46 @@ agent_extensions:
         assert!(!config.validation.require_flow_resolution);
         assert!(config.validation.require_framework_role_compatibility);
         assert!(!config.validation.require_skill_role_compatibility);
+    }
+
+    #[test]
+    fn typed_overlay_config_preserves_valid_security_fields_when_sibling_key_is_malformed() {
+        let raw = serde_yaml::from_str::<serde_yaml::Value>(
+            r#"
+agent_extensions:
+  enabled_project_profiles:
+    - missing_profile
+  registries:
+    roles: ".agents/roles.yaml"
+    profiles: ".agents/profiles.yaml"
+  validation:
+    require_registry_files: true
+    require_profile_resolution: true
+    require_flow_resolution: true
+    require_framework_role_compatibility: true
+    require_skill_role_compatibility: true
+  ? [unexpected, sequence, key]
+  : ignored
+"#,
+        )
+        .expect("overlay yaml should parse");
+
+        let config = project_overlay_config(&raw).agent_extensions;
+
+        assert_eq!(config.enabled_project_profiles, vec!["missing_profile"]);
+        assert_eq!(
+            config.registries.roles.as_deref(),
+            Some(".agents/roles.yaml")
+        );
+        assert_eq!(
+            config.registries.profiles.as_deref(),
+            Some(".agents/profiles.yaml")
+        );
+        assert!(config.validation.require_registry_files);
+        assert!(config.validation.require_profile_resolution);
+        assert!(config.validation.require_flow_resolution);
+        assert!(config.validation.require_framework_role_compatibility);
+        assert!(config.validation.require_skill_role_compatibility);
     }
 
     #[test]
