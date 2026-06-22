@@ -278,7 +278,7 @@ fn render_shell_environment_policy(policy: Option<&serde_json::Value>) -> Option
     }
     for key in ["include_only", "exclude"] {
         if let Some(values) = object.get(key).and_then(serde_json::Value::as_array) {
-            lines.push(format!("{key} = [{}]", toml_basic_string_list(values)));
+            lines.push(format!("{key} = {}", toml_basic_string_list(values)));
         }
     }
     if let Some(set) = object.get("set").and_then(serde_json::Value::as_object) {
@@ -941,6 +941,42 @@ mod tests {
 
         assert!(rendered.contains(&format!("model = \"{model}\"")));
         assert!(rendered.contains(&format!("model_reasoning_effort = \"{effort}\"")));
+    }
+
+    #[test]
+    fn shell_environment_policy_renders_flat_string_lists() {
+        let policy = serde_json::json!({
+            "inherit": "all",
+            "include_only": ["SAFE_VAR"],
+            "exclude": ["*_KEY", "*_SECRET"]
+        });
+
+        let rendered = super::render_shell_environment_policy(Some(&policy))
+            .expect("shell environment policy should render");
+
+        assert!(rendered.contains("inherit = \"all\""));
+        assert!(rendered.contains("include_only = [\"SAFE_VAR\"]"));
+        assert!(rendered.contains("exclude = [\"*_KEY\", \"*_SECRET\"]"));
+        assert!(
+            !rendered.contains("[["),
+            "shell environment string lists must not render as nested TOML arrays"
+        );
+
+        let document = rendered
+            .parse::<toml_edit::DocumentMut>()
+            .expect("rendered shell environment policy should parse as TOML");
+        let policy_table = document["shell_environment_policy"]
+            .as_table()
+            .expect("shell environment policy should be a TOML table");
+        for key in ["include_only", "exclude"] {
+            let values = policy_table[key]
+                .as_array()
+                .expect("string-list policy should render as a TOML array");
+            assert!(
+                values.iter().all(|value| value.as_str().is_some()),
+                "{key} must contain strings directly, not nested arrays"
+            );
+        }
     }
 
     #[test]
