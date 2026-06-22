@@ -7,5 +7,6 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+taskflow-core = { path = "../taskflow-core" }
 thiserror.workspace = true
 toml_edit = "0.25.12"

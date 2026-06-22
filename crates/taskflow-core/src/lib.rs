@@ -8,6 +8,8 @@ use uuid::Uuid;
 pub mod consume;
 /// Shared TaskFlow path normalization and ownership policy.
 pub mod path_policy;
+/// Compiled role-step state for configured development-team flows.
+pub mod role_step;
 /// TaskFlow run-graph skeletons for future core extraction.
 pub mod run_graph;
 /// Deterministic run workflow aggregate and state machine.

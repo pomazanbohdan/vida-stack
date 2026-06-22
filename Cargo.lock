@@ -6785,6 +6785,7 @@ version = "0.9.7"
 dependencies = [
  "serde",
  "serde_json",
+ "taskflow-core",
  "thiserror 2.0.18",
  "toml_edit",
 ]
