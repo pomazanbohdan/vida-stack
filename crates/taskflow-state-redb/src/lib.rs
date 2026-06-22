@@ -698,6 +698,8 @@ mod tests {
     use taskflow_state::{
         JournalAppendRequest, JournalArtifactRecord, JournalIdempotencyState, JournalOutboxState,
         OperationalJournal, RunWorkflowJournalRepository, TaskflowStateError,
+        verify_run_workflow_repository_conformance,
+        verify_run_workflow_repository_corrupt_payload_fails_closed,
     };
     use tempfile::tempdir;
 
@@ -760,29 +762,11 @@ mod tests {
 
     #[test]
     fn run_workflow_repository_replays_snapshot_hash_after_reopen() {
-        use taskflow_core::{
-            role_step::TaskRoleStep,
-            run_workflow::{RunWorkflowAggregate, RunWorkflowCommand},
-        };
-
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("journal.redb");
         let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
-        let mut aggregate = RunWorkflowAggregate::new("run-031-redb", "ldr-031");
-        for command in [
-            RunWorkflowCommand::Start {
-                first_step: TaskRoleStep::planning(),
-            },
-            RunWorkflowCommand::Dispatch {
-                target: TaskRoleStep::developer(),
-            },
-        ] {
-            let before = aggregate.clone();
-            let event = aggregate.handle(command);
-            RunWorkflowJournalRepository::new(&mut journal)
-                .append(&before, event)
-                .expect("repository append should pass");
-        }
+        let report = verify_run_workflow_repository_conformance(&mut journal, "run-031-redb")
+            .expect("repository conformance should pass");
         drop(journal);
 
         let mut reopened = RedbOperationalJournal::open(&path).expect("reopen journal");
@@ -790,10 +774,8 @@ mod tests {
             .load("run-031-redb", "ldr-031")
             .expect("repository load should pass");
 
-        assert_eq!(
-            loaded.snapshot_replay_hash(),
-            aggregate.snapshot_replay_hash()
-        );
+        assert_eq!(loaded.snapshot_replay_hash(), report.final_snapshot_hash);
+        assert_eq!(report.event_count, 2);
         assert_eq!(
             reopened
                 .health_status()
@@ -801,6 +783,19 @@ mod tests {
                 .stream_event_count,
             2
         );
+    }
+
+    #[test]
+    fn run_workflow_repository_load_fails_closed_on_corrupt_payload() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        verify_run_workflow_repository_corrupt_payload_fails_closed(
+            &mut journal,
+            "run-031-redb-corrupt",
+        )
+        .expect("corrupt payload must fail closed");
     }
 
     #[test]

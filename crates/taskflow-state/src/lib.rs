@@ -9,7 +9,11 @@ use taskflow_contracts::{
 };
 use taskflow_core::{
     TaskId,
-    run_workflow::{RunWorkflowAggregate, RunWorkflowEffectIntent, RunWorkflowEvent},
+    role_step::TaskRoleStep,
+    run_workflow::{
+        RunWorkflowAggregate, RunWorkflowCommand, RunWorkflowEffectIntent, RunWorkflowEvent,
+        RunWorkflowState,
+    },
 };
 use thiserror::Error;
 
@@ -331,6 +335,103 @@ fn event_effects_to_journal_effects(
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunWorkflowRepositoryConformanceReport {
+    pub run_id: String,
+    pub final_snapshot_hash: String,
+    pub event_count: usize,
+}
+
+pub fn verify_run_workflow_repository_conformance<J: OperationalJournal>(
+    journal: &mut J,
+    run_id: &str,
+) -> Result<RunWorkflowRepositoryConformanceReport, TaskflowStateError> {
+    let task_id = "ldr-031";
+    let mut aggregate = RunWorkflowAggregate::new(run_id, task_id);
+    let initial_hash = aggregate.snapshot_replay_hash();
+    for command in [
+        RunWorkflowCommand::Start {
+            first_step: TaskRoleStep::planning(),
+        },
+        RunWorkflowCommand::Dispatch {
+            target: TaskRoleStep::developer(),
+        },
+    ] {
+        let before = aggregate.clone();
+        let event = aggregate.handle(command);
+        RunWorkflowJournalRepository::new(journal).append(&before, event)?;
+    }
+
+    let loaded = RunWorkflowJournalRepository::new(journal).load(run_id, task_id)?;
+    if loaded.state
+        != (RunWorkflowState::Active {
+            step: TaskRoleStep::developer(),
+        })
+    {
+        return Err(TaskflowStateError::Storage(
+            "run workflow repository replay state mismatch".to_string(),
+        ));
+    }
+    if loaded.version != aggregate.version {
+        return Err(TaskflowStateError::Storage(
+            "run workflow repository replay version mismatch".to_string(),
+        ));
+    }
+    if loaded.snapshot_replay_hash() != aggregate.snapshot_replay_hash() {
+        return Err(TaskflowStateError::Storage(
+            "run workflow repository replay hash mismatch".to_string(),
+        ));
+    }
+    if initial_hash == loaded.snapshot_replay_hash() {
+        return Err(TaskflowStateError::Storage(
+            "run workflow repository replay hash did not change after events".to_string(),
+        ));
+    }
+
+    Ok(RunWorkflowRepositoryConformanceReport {
+        run_id: run_id.to_string(),
+        final_snapshot_hash: loaded.snapshot_replay_hash(),
+        event_count: loaded.version as usize,
+    })
+}
+
+pub fn verify_run_workflow_repository_corrupt_payload_fails_closed<J: OperationalJournal>(
+    journal: &mut J,
+    run_id: &str,
+) -> Result<(), TaskflowStateError> {
+    let command_id = VidaCommandRef(format!("run-workflow:{run_id}:1"));
+    journal.append(JournalAppendRequest {
+        stream_id: run_workflow_stream_id(run_id),
+        expected_stream_version: Some(VidaStreamVersion(0)),
+        command_id: command_id.clone(),
+        idempotency_key: VidaIdempotencyKey(format!("run-workflow:{run_id}:1")),
+        causation_id: None,
+        correlation_id: Some("ldr-031".to_string()),
+        events: vec![VidaDomainEventEnvelope {
+            schema_id: VidaSchemaId("taskflow.run_workflow.event".to_string()),
+            event_version: VidaSchemaVersion(1),
+            event_id: VidaEventRef(format!("run-workflow:{run_id}:1:event")),
+            command_id: Some(command_id),
+            causation_id: None,
+            stream_id: run_workflow_stream_id(run_id),
+            stream_version: VidaStreamVersion(1),
+            aggregate_id: VidaAggregateRef(run_id.to_string()),
+            occurred_at: VidaTimestamp("version-1".to_string()),
+            payload: serde_json::json!({"unexpected": "shape"}),
+            trace: serde_json::json!({}),
+        }],
+        effect_intents: Vec::new(),
+    })?;
+
+    match RunWorkflowJournalRepository::new(journal).load(run_id, "ldr-031") {
+        Err(TaskflowStateError::PayloadDecode(_)) => Ok(()),
+        Err(error) => Err(error),
+        Ok(_) => Err(TaskflowStateError::Storage(
+            "corrupt run workflow repository payload loaded successfully".to_string(),
+        )),
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct InMemoryOperationalJournal {
     streams: HashMap<String, Vec<VidaDomainEventEnvelope>>,
@@ -596,19 +697,16 @@ mod tests {
         InMemoryOperationalJournal, InMemoryTaskStore, JournalAppendRequest, JournalArtifactRecord,
         JournalIdempotencyState, JournalOutboxState, JournalProjectionFailure, OperationalJournal,
         RunWorkflowJournalRepository, TaskStore, TaskflowStateError,
+        verify_run_workflow_repository_conformance,
+        verify_run_workflow_repository_corrupt_payload_fails_closed,
     };
     use taskflow_contracts::{
         DependencyEdge, TaskRecord, VidaAggregateRef, VidaArtifactRef, VidaCommandRef,
         VidaDomainEventEnvelope, VidaEffectIntent, VidaEffectRef, VidaEventCursor, VidaEventRef,
         VidaIdempotencyKey, VidaOperation, VidaProjectionCheckpoint, VidaProjectionRef,
-        VidaReceiptId, VidaSchemaId, VidaSchemaVersion, VidaStreamRef, VidaStreamVersion,
-        VidaTimestamp,
+        VidaReceiptId, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
     };
-    use taskflow_core::{
-        IssueType, TaskId,
-        role_step::TaskRoleStep,
-        run_workflow::{RunWorkflowAggregate, RunWorkflowCommand, RunWorkflowState},
-    };
+    use taskflow_core::{IssueType, TaskId};
 
     #[test]
     fn in_memory_store_round_trips_task_records() {
@@ -845,96 +943,38 @@ mod tests {
     #[test]
     fn run_workflow_repository_appends_and_replays_from_journal() {
         let mut journal = InMemoryOperationalJournal::default();
-        let mut aggregate = RunWorkflowAggregate::new("run-031", "ldr-031");
-        let initial_hash = aggregate.snapshot_replay_hash();
-        let event = aggregate.handle(RunWorkflowCommand::Start {
-            first_step: TaskRoleStep::planning(),
-        });
 
-        let receipt = RunWorkflowJournalRepository::new(&mut journal)
-            .append(&RunWorkflowAggregate::new("run-031", "ldr-031"), event)
-            .expect("repository append should pass");
+        let report = verify_run_workflow_repository_conformance(&mut journal, "run-031")
+            .expect("repository conformance should pass");
 
-        assert_eq!(
-            receipt.stream_id,
-            VidaStreamRef("run-workflow:run-031".to_string())
-        );
-        let loaded = RunWorkflowJournalRepository::new(&mut journal)
-            .load("run-031", "ldr-031")
-            .expect("repository load should pass");
-        assert_eq!(
-            loaded.state,
-            RunWorkflowState::Active {
-                step: TaskRoleStep::planning()
-            }
-        );
-        assert_eq!(loaded.version, 1);
-        assert_ne!(initial_hash, loaded.snapshot_replay_hash());
+        assert_eq!(report.run_id, "run-031");
+        assert_eq!(report.event_count, 2);
+        assert!(!report.final_snapshot_hash.is_empty());
     }
 
     #[test]
     fn run_workflow_repository_snapshot_replay_hash_matches_journal_replay() {
         let mut journal = InMemoryOperationalJournal::default();
-        let mut aggregate = RunWorkflowAggregate::new("run-031-hash", "ldr-031");
-        for command in [
-            RunWorkflowCommand::Start {
-                first_step: TaskRoleStep::planning(),
-            },
-            RunWorkflowCommand::Dispatch {
-                target: TaskRoleStep::developer(),
-            },
-        ] {
-            let before = aggregate.clone();
-            let event = aggregate.handle(command);
-            RunWorkflowJournalRepository::new(&mut journal)
-                .append(&before, event)
-                .expect("repository append should pass");
-        }
 
-        let loaded = RunWorkflowJournalRepository::new(&mut journal)
+        let first = verify_run_workflow_repository_conformance(&mut journal, "run-031-hash")
+            .expect("repository conformance should pass");
+        let replay = RunWorkflowJournalRepository::new(&mut journal)
             .load("run-031-hash", "ldr-031")
-            .expect("repository load should pass");
+            .expect("repository replay should pass");
 
-        assert_eq!(
-            loaded.snapshot_replay_hash(),
-            aggregate.snapshot_replay_hash()
-        );
-        assert_eq!(loaded.version, 2);
+        assert_eq!(replay.snapshot_replay_hash(), first.final_snapshot_hash);
+        assert_eq!(replay.version, 2);
     }
 
     #[test]
     fn run_workflow_repository_load_fails_closed_on_corrupt_payload() {
         let mut journal = InMemoryOperationalJournal::default();
-        journal
-            .append(JournalAppendRequest {
-                stream_id: VidaStreamRef("run-workflow:run-031-corrupt".to_string()),
-                expected_stream_version: Some(VidaStreamVersion(0)),
-                command_id: VidaCommandRef("run-workflow:run-031-corrupt:1".to_string()),
-                idempotency_key: VidaIdempotencyKey("run-workflow:run-031-corrupt:1".to_string()),
-                causation_id: None,
-                correlation_id: Some("ldr-031".to_string()),
-                events: vec![VidaDomainEventEnvelope {
-                    schema_id: VidaSchemaId("taskflow.run_workflow.event".to_string()),
-                    event_version: VidaSchemaVersion(1),
-                    event_id: VidaEventRef("run-workflow:run-031-corrupt:1:event".to_string()),
-                    command_id: Some(VidaCommandRef("run-workflow:run-031-corrupt:1".to_string())),
-                    causation_id: None,
-                    stream_id: VidaStreamRef("run-workflow:run-031-corrupt".to_string()),
-                    stream_version: VidaStreamVersion(1),
-                    aggregate_id: VidaAggregateRef("run-031-corrupt".to_string()),
-                    occurred_at: VidaTimestamp("version-1".to_string()),
-                    payload: serde_json::json!({"unexpected": "shape"}),
-                    trace: serde_json::json!({}),
-                }],
-                effect_intents: Vec::new(),
-            })
-            .expect("corrupt test event should append");
 
-        let error = RunWorkflowJournalRepository::new(&mut journal)
-            .load("run-031-corrupt", "ldr-031")
-            .expect_err("corrupt payload must fail closed");
-
-        assert!(matches!(error, TaskflowStateError::PayloadDecode(_)));
+        verify_run_workflow_repository_corrupt_payload_fails_closed(
+            &mut journal,
+            "run-031-corrupt",
+        )
+        .expect("corrupt payload must fail closed");
     }
 
     fn append_request(
