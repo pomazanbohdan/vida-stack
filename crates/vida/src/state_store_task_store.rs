@@ -11,9 +11,9 @@ use taskflow_authority::task_transition::{
     TaskLifecycleRuntimeEvidence,
 };
 use taskflow_core::task::aggregate::{
-    plan_close_task, plan_create_task, plan_reparent_tasks, plan_update_task_status,
-    TaskAggregateTaskSnapshot, TaskCloseCommand, TaskCreateCommand, TaskReparentCommand,
-    TaskStatusUpdateCommand,
+    plan_add_task_dependency, plan_close_task, plan_create_task, plan_remove_task_dependency,
+    plan_reparent_tasks, plan_update_task_status, TaskAggregateTaskSnapshot, TaskCloseCommand,
+    TaskCreateCommand, TaskDependencyMutationCommand, TaskReparentCommand, TaskStatusUpdateCommand,
 };
 use taskflow_core::task::lifecycle::{TaskLifecycleEvent, TaskLifecycleInput, TaskLifecycleStatus};
 
@@ -2361,17 +2361,18 @@ impl StateStore {
             });
         }
 
+        let now = unix_timestamp_nanos().to_string();
         let dependency = TaskDependencyRecord {
             issue_id: issue_id.to_string(),
             depends_on_id: depends_on_id.to_string(),
             edge_type: edge_type.to_string(),
-            created_at: unix_timestamp_nanos().to_string(),
+            created_at: now.clone(),
             created_by: created_by.to_string(),
             metadata: "{}".to_string(),
             thread_id: String::new(),
         };
         tasks[task_index].dependencies.push(dependency.clone());
-        tasks[task_index].updated_at = unix_timestamp_nanos().to_string();
+        tasks[task_index].updated_at = now.clone();
         tasks[task_index].dependencies.sort_by(|left, right| {
             left.edge_type
                 .cmp(&right.edge_type)
@@ -2390,6 +2391,21 @@ impl StateStore {
                 ),
             });
         }
+
+        let dependency_plan = plan_add_task_dependency(TaskDependencyMutationCommand {
+            task_id: issue_id.to_string(),
+            depends_on_id: depends_on_id.to_string(),
+            edge_type: edge_type.to_string(),
+            occurred_at: now,
+        });
+        debug_assert_eq!(
+            dependency_plan
+                .touched_task_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            touched_task_ids
+        );
 
         self.persist_task_record(tasks[task_index].clone()).await?;
         Ok(dependency)
@@ -2599,7 +2615,23 @@ impl StateStore {
         updated.dependencies.retain(|dependency| {
             !(dependency.depends_on_id == depends_on_id && dependency.edge_type == edge_type)
         });
-        updated.updated_at = unix_timestamp_nanos().to_string();
+        let now = unix_timestamp_nanos().to_string();
+        updated.updated_at = now.clone();
+        let touched_task_ids = BTreeSet::from([issue_id.to_string(), depends_on_id.to_string()]);
+        let dependency_plan = plan_remove_task_dependency(TaskDependencyMutationCommand {
+            task_id: issue_id.to_string(),
+            depends_on_id: depends_on_id.to_string(),
+            edge_type: edge_type.to_string(),
+            occurred_at: now,
+        });
+        debug_assert_eq!(
+            dependency_plan
+                .touched_task_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            touched_task_ids
+        );
 
         self.persist_task_record(updated).await?;
         Ok(removed)

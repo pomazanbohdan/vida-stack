@@ -62,6 +62,14 @@ pub struct TaskReparentCommand {
     pub auto_closed_parents: Vec<TaskAggregateTaskSnapshot>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskDependencyMutationCommand {
+    pub task_id: String,
+    pub depends_on_id: String,
+    pub edge_type: String,
+    pub occurred_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum TaskAggregateEvent {
@@ -96,6 +104,18 @@ pub enum TaskAggregateEvent {
         task_id: String,
         from_parent_id: String,
         to_parent_id: String,
+        occurred_at: String,
+    },
+    TaskDependencyAdded {
+        task_id: String,
+        depends_on_id: String,
+        edge_type: String,
+        occurred_at: String,
+    },
+    TaskDependencyRemoved {
+        task_id: String,
+        depends_on_id: String,
+        edge_type: String,
         occurred_at: String,
     },
 }
@@ -139,6 +159,18 @@ pub enum TaskAggregateMutation {
         parent_id: Option<String>,
         updated_at: String,
     },
+    AddDependency {
+        task_id: String,
+        depends_on_id: String,
+        edge_type: String,
+        updated_at: String,
+    },
+    RemoveDependency {
+        task_id: String,
+        depends_on_id: String,
+        edge_type: String,
+        updated_at: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +184,13 @@ pub struct TaskMutationPlan {
 pub struct TaskAggregateProjection {
     pub statuses: BTreeMap<String, String>,
     pub parent_ids: BTreeMap<String, Option<String>>,
+    pub dependencies: BTreeMap<String, Vec<TaskAggregateDependencyEdge>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TaskAggregateDependencyEdge {
+    pub depends_on_id: String,
+    pub edge_type: String,
 }
 
 #[must_use]
@@ -335,9 +374,84 @@ pub fn replay_task_events(events: &[TaskAggregateEvent]) -> TaskAggregateProject
                     .parent_ids
                     .insert(task_id.clone(), Some(to_parent_id.clone()));
             }
+            TaskAggregateEvent::TaskDependencyAdded {
+                task_id,
+                depends_on_id,
+                edge_type,
+                ..
+            } => {
+                let edges = projection.dependencies.entry(task_id.clone()).or_default();
+                let edge = TaskAggregateDependencyEdge {
+                    depends_on_id: depends_on_id.clone(),
+                    edge_type: edge_type.clone(),
+                };
+                if !edges.contains(&edge) {
+                    edges.push(edge);
+                    edges.sort();
+                }
+            }
+            TaskAggregateEvent::TaskDependencyRemoved {
+                task_id,
+                depends_on_id,
+                edge_type,
+                ..
+            } => {
+                if let Some(edges) = projection.dependencies.get_mut(task_id) {
+                    edges.retain(|edge| {
+                        edge.depends_on_id != *depends_on_id || edge.edge_type != *edge_type
+                    });
+                }
+            }
         }
     }
     projection
+}
+
+#[must_use]
+pub fn plan_add_task_dependency(command: TaskDependencyMutationCommand) -> TaskMutationPlan {
+    let touched_task_ids = dependency_touched_task_ids(&command.task_id, &command.depends_on_id);
+    TaskMutationPlan {
+        events: vec![TaskAggregateEvent::TaskDependencyAdded {
+            task_id: command.task_id.clone(),
+            depends_on_id: command.depends_on_id.clone(),
+            edge_type: command.edge_type.clone(),
+            occurred_at: command.occurred_at.clone(),
+        }],
+        mutations: vec![TaskAggregateMutation::AddDependency {
+            task_id: command.task_id,
+            depends_on_id: command.depends_on_id,
+            edge_type: command.edge_type,
+            updated_at: command.occurred_at,
+        }],
+        touched_task_ids,
+    }
+}
+
+#[must_use]
+pub fn plan_remove_task_dependency(command: TaskDependencyMutationCommand) -> TaskMutationPlan {
+    let touched_task_ids = dependency_touched_task_ids(&command.task_id, &command.depends_on_id);
+    TaskMutationPlan {
+        events: vec![TaskAggregateEvent::TaskDependencyRemoved {
+            task_id: command.task_id.clone(),
+            depends_on_id: command.depends_on_id.clone(),
+            edge_type: command.edge_type.clone(),
+            occurred_at: command.occurred_at.clone(),
+        }],
+        mutations: vec![TaskAggregateMutation::RemoveDependency {
+            task_id: command.task_id,
+            depends_on_id: command.depends_on_id,
+            edge_type: command.edge_type,
+            updated_at: command.occurred_at,
+        }],
+        touched_task_ids,
+    }
+}
+
+fn dependency_touched_task_ids(task_id: &str, depends_on_id: &str) -> Vec<String> {
+    let mut touched_task_ids = vec![task_id.to_string(), depends_on_id.to_string()];
+    touched_task_ids.sort();
+    touched_task_ids.dedup();
+    touched_task_ids
 }
 
 #[must_use]
@@ -598,11 +712,7 @@ mod tests {
             auto_closed_parents: Vec::new(),
         });
         let close = plan_close_task(TaskCloseCommand {
-            task: TaskAggregateTaskSnapshot::closed(
-                "child",
-                "102",
-                Some("target".to_string()),
-            ),
+            task: TaskAggregateTaskSnapshot::closed("child", "102", Some("target".to_string())),
             reason: "done".to_string(),
             occurred_at: "102".to_string(),
             auto_closed_parents: Vec::new(),
@@ -623,6 +733,79 @@ mod tests {
         assert_eq!(
             projection.parent_ids.get("child"),
             Some(&Some("target".to_string()))
+        );
+    }
+
+    #[test]
+    fn task_aggregate_plans_dependency_add_and_remove_events() {
+        let add = plan_add_task_dependency(TaskDependencyMutationCommand {
+            task_id: "task-a".to_string(),
+            depends_on_id: "task-b".to_string(),
+            edge_type: "blocks".to_string(),
+            occurred_at: "104".to_string(),
+        });
+        let remove = plan_remove_task_dependency(TaskDependencyMutationCommand {
+            task_id: "task-a".to_string(),
+            depends_on_id: "task-b".to_string(),
+            edge_type: "blocks".to_string(),
+            occurred_at: "105".to_string(),
+        });
+
+        assert_eq!(
+            add.events,
+            vec![TaskAggregateEvent::TaskDependencyAdded {
+                task_id: "task-a".to_string(),
+                depends_on_id: "task-b".to_string(),
+                edge_type: "blocks".to_string(),
+                occurred_at: "104".to_string(),
+            }]
+        );
+        assert_eq!(add.touched_task_ids, vec!["task-a", "task-b"]);
+        assert_eq!(
+            remove.events,
+            vec![TaskAggregateEvent::TaskDependencyRemoved {
+                task_id: "task-a".to_string(),
+                depends_on_id: "task-b".to_string(),
+                edge_type: "blocks".to_string(),
+                occurred_at: "105".to_string(),
+            }]
+        );
+        assert_eq!(remove.touched_task_ids, vec!["task-a", "task-b"]);
+    }
+
+    #[test]
+    fn task_aggregate_replays_dependency_events() {
+        let add = plan_add_task_dependency(TaskDependencyMutationCommand {
+            task_id: "task-a".to_string(),
+            depends_on_id: "task-b".to_string(),
+            edge_type: "blocks".to_string(),
+            occurred_at: "104".to_string(),
+        });
+        let remove = plan_remove_task_dependency(TaskDependencyMutationCommand {
+            task_id: "task-a".to_string(),
+            depends_on_id: "task-b".to_string(),
+            edge_type: "blocks".to_string(),
+            occurred_at: "105".to_string(),
+        });
+
+        let added_projection = replay_task_events(&add.events);
+        assert_eq!(
+            added_projection.dependencies.get("task-a"),
+            Some(&vec![TaskAggregateDependencyEdge {
+                depends_on_id: "task-b".to_string(),
+                edge_type: "blocks".to_string(),
+            }])
+        );
+
+        let removed_projection = replay_task_events(
+            &add.events
+                .into_iter()
+                .chain(remove.events)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            removed_projection.dependencies.get("task-a"),
+            Some(&Vec::new())
         );
     }
 }
