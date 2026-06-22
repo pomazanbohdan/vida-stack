@@ -2218,6 +2218,94 @@ fn read_cached_lane_show_projection(state_dir: &Path, projection_name: &str) -> 
     crate::operator_projection_cache::read_fresh_json_projection(state_dir, projection_name)
 }
 
+fn current_session_task_claim_ids(operator_session_projection: &serde_json::Value) -> Vec<String> {
+    let mut task_ids = Vec::new();
+    for field in [
+        "current_session_task_claims",
+        "active_task_claim_blockers",
+        "claim_conflicts",
+    ] {
+        let Some(claims) = operator_session_projection
+            .get(field)
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        for claim in claims {
+            let Some(task_id) = claim
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            if !task_ids.iter().any(|known| known == task_id) {
+                task_ids.push(task_id.to_string());
+            }
+        }
+    }
+    task_ids
+}
+
+fn task_ids_with_parent_ancestors(
+    tasks: &[crate::state_store::TaskRecord],
+    seed_task_ids: &[String],
+) -> Vec<String> {
+    let mut by_id = std::collections::BTreeMap::new();
+    for task in tasks {
+        by_id.insert(task.id.as_str(), task);
+    }
+    let mut scoped = Vec::new();
+    let mut stack = seed_task_ids
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    while let Some(task_id) = stack.pop() {
+        if scoped.iter().any(|known| known == &task_id) {
+            continue;
+        }
+        scoped.push(task_id.clone());
+        let Some(task) = by_id.get(task_id.as_str()) else {
+            continue;
+        };
+        for dependency in &task.dependencies {
+            if dependency.edge_type == "parent-child" && dependency.issue_id == task.id {
+                stack.push(dependency.depends_on_id.clone());
+            }
+        }
+    }
+    scoped
+}
+
+async fn latest_scoped_lane_summary(
+    store: &StateStore,
+    scoped_task_ids: &[String],
+) -> Result<Option<crate::state_store::RunGraphDispatchReceiptSummary>, crate::StateStoreError> {
+    for task_id in scoped_task_ids {
+        if let Ok(status) = store.run_graph_status(task_id).await {
+            if let Some(summary) = store
+                .run_graph_dispatch_receipt_summary_for_status(&status)
+                .await?
+            {
+                return Ok(Some(summary));
+            }
+        }
+        let Some(status) = store.latest_run_graph_status_for_task(task_id).await? else {
+            continue;
+        };
+        let Some(summary) = store
+            .run_graph_dispatch_receipt_summary_for_status(&status)
+            .await?
+        else {
+            continue;
+        };
+        return Ok(Some(summary));
+    }
+    Ok(None)
+}
+
 fn emit_lane_envelope_with_projection_cache(
     state_dir: &Path,
     run_id: &str,
@@ -3949,14 +4037,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
 
     match &command {
         LaneCommand::ShowLatest { as_json } => {
-            if *as_json {
-                if let Some(cached) = read_cached_lane_show_projection(
-                    &state_dir,
-                    &lane_show_projection_name("latest"),
-                ) {
-                    return emit_cached_lane_show_projection(cached);
-                }
-            }
             let store = match StateStore::open_existing_read_only_with_timeout(
                 state_dir.clone(),
                 LANE_SURFACE_LOCK_TIMEOUT,
@@ -3979,6 +4059,18 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+            let claimed_task_ids = current_session_task_claim_ids(&operator_session_projection);
+            let scoped_task_ids = if claimed_task_ids.is_empty() {
+                Vec::new()
+            } else {
+                match store.list_tasks(None, true).await {
+                    Ok(tasks) => task_ids_with_parent_ancestors(&tasks, &claimed_task_ids),
+                    Err(error) => {
+                        eprintln!("Failed to read TaskFlow task scope for latest lane: {error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            };
             let latest_status = match store.latest_run_graph_status().await {
                 Ok(status) => status,
                 Err(error) => {
@@ -3991,21 +4083,29 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 .await
             {
                 Ok(Some(summary)) => Ok(Some(summary)),
-                Ok(None) => match store
-                    .latest_active_exception_takeover_dispatch_receipt()
-                    .await
-                {
-                    Ok(Some(receipt)) => Ok(Some(
-                        crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt),
-                    )),
-                    Ok(None) => match latest_status.as_ref() {
-                        Some(status) => {
-                            store
-                                .run_graph_dispatch_receipt_summary_for_status(status)
-                                .await
+                Ok(None) => match latest_scoped_lane_summary(&store, &scoped_task_ids).await {
+                    Ok(Some(summary)) => Ok(Some(summary)),
+                    Ok(None) => {
+                        match store
+                            .latest_active_exception_takeover_dispatch_receipt()
+                            .await
+                        {
+                            Ok(Some(receipt)) => Ok(Some(
+                                crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(
+                                    receipt,
+                                ),
+                            )),
+                            Ok(None) => match latest_status.as_ref() {
+                                Some(status) => {
+                                    store
+                                        .run_graph_dispatch_receipt_summary_for_status(status)
+                                        .await
+                                }
+                                None => Ok(None),
+                            },
+                            Err(error) => Err(error),
                         }
-                        None => Ok(None),
-                    },
+                    }
                     Err(error) => Err(error),
                 },
                 Err(error) => Err(error),
@@ -5630,6 +5730,28 @@ mod tests {
         assert!(matches!(command, LaneCommand::ShowLatest { as_json: true }));
     }
 
+    #[test]
+    fn current_session_task_claim_ids_accepts_claim_blocker_task_evidence() {
+        let projection = serde_json::json!({
+            "current_session_task_claims": [],
+            "active_task_claim_blockers": [
+                {"task_id": "blocked-active-task"}
+            ],
+            "claim_conflicts": [
+                {"task_id": "blocked-active-task"},
+                {"task_id": "conflict-active-task"}
+            ]
+        });
+
+        assert_eq!(
+            current_session_task_claim_ids(&projection),
+            vec![
+                "blocked-active-task".to_string(),
+                "conflict-active-task".to_string()
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn lane_show_latest_uses_latest_status_when_current_session_has_no_receipt() {
         let _guard = acquire_lane_surface_test_lock();
@@ -5686,6 +5808,141 @@ mod tests {
             serde_json::from_str(&cached).expect("cached lane show projection should be json");
         assert_eq!(cached_json["status"], "pass");
         assert_eq!(cached_json["run_id"], run_id);
+        assert_eq!(cached_json["lane_status"], "lane_exception_takeover");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_show_latest_prefers_active_task_ancestor_exception_takeover() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-latest-active-scope-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let source_repo = root.display().to_string();
+        let labels: Vec<String> = Vec::new();
+        let parent_run_id = "run-active-parent-exception";
+        let active_child_id = "todo-active-child";
+
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: parent_run_id,
+                title: "Parent exception task",
+                display_id: None,
+                description: "Parent exception task",
+                issue_type: "defect",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: &source_repo,
+            })
+            .await
+            .expect("create parent task");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: active_child_id,
+                title: "Active child todo",
+                display_id: None,
+                description: "Active child todo",
+                issue_type: "todo",
+                status: "in_progress",
+                priority: 1,
+                parent_id: Some(parent_run_id),
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: &source_repo,
+            })
+            .await
+            .expect("create active child task");
+
+        let mut scoped_status = crate::taskflow_run_graph::default_run_graph_status(
+            parent_run_id,
+            parent_run_id,
+            "analyst",
+        );
+        scoped_status.status = "blocked".to_string();
+        scoped_status.active_node = "analyst".to_string();
+        scoped_status.lifecycle_stage = "analyst_blocked".to_string();
+        store
+            .record_run_graph_status(&scoped_status)
+            .await
+            .expect("persist scoped status");
+
+        let mut scoped_receipt = sample_receipt("blocked");
+        scoped_receipt.run_id = parent_run_id.to_string();
+        scoped_receipt.dispatch_target = "analyst".to_string();
+        scoped_receipt.lane_status = crate::LaneStatus::LaneExceptionTakeover
+            .as_str()
+            .to_string();
+        scoped_receipt.exception_path_receipt_id = Some("scoped-exception-1".to_string());
+        scoped_receipt.supersedes_receipt_id = Some("scoped-exception-1".to_string());
+        scoped_receipt.recorded_at = "2026-06-22T00:00:00Z".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&scoped_receipt)
+            .await
+            .expect("persist scoped receipt");
+
+        let stale_run_id = "zz-stale-global-exception";
+        let mut stale_status = crate::taskflow_run_graph::default_run_graph_status(
+            stale_run_id,
+            stale_run_id,
+            "analyst",
+        );
+        stale_status.status = "blocked".to_string();
+        stale_status.active_node = "analyst".to_string();
+        stale_status.lifecycle_stage = "analyst_blocked".to_string();
+        store
+            .record_run_graph_status(&stale_status)
+            .await
+            .expect("persist stale status");
+        let mut stale_receipt = scoped_receipt.clone();
+        stale_receipt.run_id = stale_run_id.to_string();
+        stale_receipt.recorded_at = "2026-06-23T00:00:00Z".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&stale_receipt)
+            .await
+            .expect("persist stale receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+        crate::operator_projection_cache::write_json_projection(
+            &root,
+            &lane_show_projection_name("latest"),
+            &serde_json::json!({
+                "status": "blocked",
+                "run_id": stale_run_id,
+                "lane_status": "lane_open"
+            }),
+        );
+
+        let show_args = ProxyArgs {
+            args: vec![
+                "show".to_string(),
+                "--latest".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(show_args).await, ExitCode::SUCCESS);
+
+        let cached = read_cached_lane_show_projection(&root, &lane_show_projection_name("latest"))
+            .expect("lane show latest projection cache should be written");
+        let cached_json: serde_json::Value =
+            serde_json::from_str(&cached).expect("cached lane show projection should be json");
+        assert_eq!(cached_json["status"], "pass");
+        assert_eq!(cached_json["run_id"], parent_run_id);
         assert_eq!(cached_json["lane_status"], "lane_exception_takeover");
 
         let _ = std::fs::remove_dir_all(&root);

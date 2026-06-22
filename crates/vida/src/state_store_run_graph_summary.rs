@@ -24,6 +24,55 @@ use taskflow_core::run_graph::model::{
 
 const MAX_RECONCILED_PACK_DISPATCH_PACKET_BYTES: u64 = 1024 * 1024;
 
+fn run_graph_dispatch_lane_receipt_id(
+    run_id: &str,
+    dispatch_target: &str,
+    dispatch_packet_path: &str,
+) -> String {
+    use std::hash::{Hash, Hasher};
+
+    fn component(value: &str) -> String {
+        let safe: String = value
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                    ch
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        safe.trim_matches('-').chars().take(80).collect::<String>()
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    run_id.hash(&mut hasher);
+    dispatch_target.hash(&mut hasher);
+    dispatch_packet_path.hash(&mut hasher);
+    format!(
+        "{}-{}-{:016x}",
+        component(run_id),
+        component(dispatch_target),
+        hasher.finish()
+    )
+}
+
+fn dispatch_packet_path_matches_receipt(stored: Option<&str>, requested: &str) -> bool {
+    let Some(stored) = stored else {
+        return false;
+    };
+    fn normalized(value: &str) -> String {
+        value.trim().replace('\\', "/")
+    }
+    let stored = normalized(stored);
+    let requested = normalized(requested);
+    if cfg!(windows) {
+        stored.eq_ignore_ascii_case(&requested)
+    } else {
+        stored == requested
+    }
+}
+
 fn packet_path_has_dot_segment(path: &std::path::Path) -> bool {
     path.components().any(|component| {
         matches!(
@@ -2185,6 +2234,41 @@ impl StateStore {
         Ok(())
     }
 
+    pub async fn record_run_graph_dispatch_lane_receipt(
+        &self,
+        receipt: &RunGraphDispatchReceipt,
+    ) -> Result<(), StateStoreError> {
+        let Some(dispatch_packet_path) = receipt
+            .dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch lane receipt for `{}` must include dispatch_packet_path",
+                    receipt.run_id
+                ),
+            });
+        };
+        self.record_run_graph_owner_evidence(&receipt.run_id, "dispatch_lane_receipt")
+            .await?;
+        let receipt_id = run_graph_dispatch_lane_receipt_id(
+            &receipt.run_id,
+            &receipt.dispatch_target,
+            dispatch_packet_path,
+        );
+        let receipt: RunGraphDispatchReceiptStored = receipt.clone().into();
+        Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
+        let _: Option<RunGraphDispatchReceiptStored> = self
+            .db
+            .upsert(("run_graph_dispatch_lane_receipt", receipt_id.as_str()))
+            .content(receipt)
+            .await?;
+        crate::operator_projection_cache::touch_state_mutation_marker(self.root());
+        Ok(())
+    }
+
     pub async fn clear_run_graph_dispatch_receipt(
         &self,
         run_id: &str,
@@ -3918,6 +4002,47 @@ impl StateStore {
         let status = self.run_graph_status(run_id).await.ok();
         self.run_graph_dispatch_receipt_for_status(run_id, status.as_ref())
             .await
+    }
+
+    pub async fn run_graph_dispatch_receipt_for_packet(
+        &self,
+        run_id: &str,
+        dispatch_packet_path: &str,
+    ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
+        if let Some(receipt) = self.run_graph_dispatch_receipt(run_id).await? {
+            if dispatch_packet_path_matches_receipt(
+                receipt.dispatch_packet_path.as_deref(),
+                dispatch_packet_path,
+            ) {
+                return Ok(Some(receipt));
+            }
+        }
+        let mut query = self
+            .db
+            .query(
+                "SELECT * FROM run_graph_dispatch_lane_receipt \
+                 WHERE run_id = $run_id \
+                 ORDER BY recorded_at DESC, dispatch_target DESC \
+                 LIMIT 100;",
+            )
+            .bind(("run_id", run_id.to_string()))
+            .await?;
+        let rows: Vec<RunGraphDispatchReceiptStored> = query.take(0)?;
+        let Some(receipt) = rows.into_iter().find(|receipt| {
+            dispatch_packet_path_matches_receipt(
+                receipt.dispatch_packet_path.as_deref(),
+                dispatch_packet_path,
+            )
+        }) else {
+            return Ok(None);
+        };
+        let status = self.run_graph_status(run_id).await.ok();
+        let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
+        let mut receipt: RunGraphDispatchReceipt = receipt.into();
+        if let Some(status) = status.as_ref() {
+            terminal_closure_supersedes_stale_handoff_receipt(status, &mut receipt);
+        }
+        Ok(Some(receipt))
     }
 
     pub(crate) async fn run_graph_dispatch_receipt_for_status(

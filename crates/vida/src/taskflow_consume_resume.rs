@@ -3862,14 +3862,23 @@ async fn recover_missing_first_dispatch_receipt(
     if status.status == "completed" {
         return Ok(None);
     }
+    let legacy_resume_status = legacy_missing_first_receipt_resume_status(&status);
+    if validate_run_graph_resume_gate(&status).is_err()
+        && legacy_resume_status
+            .as_ref()
+            .is_none_or(|status| validate_run_graph_resume_gate(status).is_err())
+    {
+        return Ok(None);
+    }
     let run_graph_bootstrap =
         match super::taskflow_run_graph::run_graph_dispatch_bootstrap_from_status(&status).or_else(
             |_| {
-                legacy_missing_first_receipt_resume_status(&status)
-                    .ok_or_else(|| String::new())
+                legacy_resume_status
+                    .as_ref()
+                    .ok_or_else(String::new)
                     .and_then(|repaired_status| {
                         super::taskflow_run_graph::run_graph_dispatch_bootstrap_from_status(
-                            &repaired_status,
+                            repaired_status,
                         )
                         .map_err(|_| String::new())
                     })
@@ -6411,9 +6420,16 @@ pub(crate) async fn resolve_runtime_consumption_resume_inputs(
                 ));
             }
         }
-        let mut receipt = match store.run_graph_dispatch_receipt(run_id).await {
+        let mut receipt = match store
+            .run_graph_dispatch_receipt_for_packet(run_id, packet_path)
+            .await
+        {
             Ok(Some(receipt)) => receipt,
-            Ok(None) => return Err(missing_dispatch_receipt_error(run_id)),
+            Ok(None) => {
+                return Err(format!(
+                    "No persisted run-graph dispatch receipt exists for run_id `{run_id}` and dispatch packet `{packet_path}`. Re-materialize the lane-scoped dispatch packet before consuming it."
+                ));
+            }
             Err(error) => {
                 return Err(format!(
                     "Failed to read persisted run-graph dispatch receipt: {error}"
@@ -8335,6 +8351,144 @@ mod tests {
             })
             .await
             .expect("create TaskFlow authority");
+    }
+
+    #[tokio::test]
+    async fn explicit_dispatch_packet_resume_uses_lane_scoped_receipt_after_same_run_overwrite() {
+        let root = unique_consume_packet_test_root("vida-lane-scoped-dispatch-receipt");
+        fs::create_dir_all(&root).expect("create lane receipt state root");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-lane-scoped-dispatch-receipt";
+        taskflow_consume_resume_test_create_authority_task(
+            &store,
+            run_id,
+            "Lane scoped dispatch receipt",
+            "TaskFlow authority for multi-lane dispatch receipt materialization",
+        )
+        .await;
+
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "tester", "delivery");
+        status.task_id = run_id.to_string();
+        status.active_node = "tester".to_string();
+        status.next_node = Some("tester".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "tester_active".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "awaiting_tester".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "conversation_cursor".to_string();
+        status.resume_target = "dispatch.tester_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "configured_dev_team_dispatch_next".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "resume explicit lane packet".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("developer".to_string()),
+            allow_freeform_chat: false,
+            confidence: "explicit_configured_dev_team_lane".to_string(),
+            matched_terms: vec!["developer".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test lane-scoped receipt".to_string(),
+        };
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create dispatch packet dir");
+        let developer_packet_path = packet_dir.join("developer.json");
+        let tester_packet_path = packet_dir.join("tester.json");
+        let developer_packet_path_text = developer_packet_path.display().to_string();
+        let tester_packet_path_text = tester_packet_path.display().to_string();
+        for (target, packet_path) in [
+            ("developer", &developer_packet_path),
+            ("tester", &tester_packet_path),
+        ] {
+            let runtime_role = if target == "tester" {
+                "verifier"
+            } else {
+                "worker"
+            };
+            let task_class = if target == "tester" {
+                "verification"
+            } else {
+                "implementation"
+            };
+            let mut packet = serde_json::json!({
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": crate::runtime_dispatch_packets::runtime_delivery_task_packet(
+                    run_id,
+                    target,
+                    runtime_role,
+                    task_class,
+                    task_class,
+                    "Implement the bounded fix in crates/vida/src/runtime_dispatch_packets.rs and crates/vida/src/runtime_dispatch_state.rs with regression tests.",
+                )
+            });
+            packet["run_id"] = serde_json::json!(run_id);
+            packet["dispatch_target"] = serde_json::json!(target);
+            packet["dispatch_status"] = serde_json::json!("routed");
+            packet["lane_status"] = serde_json::json!("active");
+            packet["role_selection_full"] =
+                serde_json::to_value(&role_selection).expect("role selection should serialize");
+            fs::write(packet_path, packet.to_string()).expect("write dispatch packet");
+        }
+
+        let mut developer_receipt =
+            taskflow_consume_resume_test_receipt("configured_dev_team", "routed");
+        developer_receipt.run_id = run_id.to_string();
+        developer_receipt.dispatch_target = "developer".to_string();
+        developer_receipt.lane_status = "active".to_string();
+        developer_receipt.dispatch_packet_path = Some(developer_packet_path_text.clone());
+        developer_receipt.recorded_at = "2026-06-22T00:00:00Z-developer".to_string();
+        store
+            .record_run_graph_dispatch_lane_receipt(&developer_receipt)
+            .await
+            .expect("persist developer lane receipt");
+
+        let mut tester_receipt = developer_receipt.clone();
+        tester_receipt.dispatch_target = "tester".to_string();
+        tester_receipt.dispatch_packet_path = Some(tester_packet_path_text);
+        tester_receipt.recorded_at = "2026-06-22T00:00:01Z-tester".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&tester_receipt)
+            .await
+            .expect("persist tester as latest run receipt");
+        store
+            .record_run_graph_dispatch_lane_receipt(&tester_receipt)
+            .await
+            .expect("persist tester lane receipt");
+
+        let latest = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read latest receipt")
+            .expect("latest receipt exists");
+        assert_eq!(latest.dispatch_target, "tester");
+
+        let resolved = resolve_runtime_consumption_resume_inputs(
+            &store,
+            Some(run_id),
+            Some(developer_packet_path_text.replace('\\', "/").as_str()),
+            None,
+        )
+        .await
+        .expect("explicit developer packet should use its lane-scoped receipt");
+        assert_eq!(resolved.dispatch_receipt.dispatch_target, "developer");
+        assert_eq!(
+            resolved.dispatch_receipt.dispatch_packet_path.as_deref(),
+            Some(developer_packet_path_text.as_str())
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]

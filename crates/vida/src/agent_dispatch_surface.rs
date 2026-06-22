@@ -3160,6 +3160,10 @@ async fn materialize_configured_agent_dispatch_lane(
         .record_run_graph_dispatch_receipt(&dispatch_receipt)
         .await
         .map_err(|error| format!("Failed to record dev-team dispatch receipt: {error}"))?;
+    store
+        .record_run_graph_dispatch_lane_receipt(&dispatch_receipt)
+        .await
+        .map_err(|error| format!("Failed to record dev-team dispatch lane receipt: {error}"))?;
     store.close().await;
     let packet = validate_materialized_agent_dispatch_packet(
         lane,
