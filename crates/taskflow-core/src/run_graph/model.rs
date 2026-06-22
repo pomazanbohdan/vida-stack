@@ -127,6 +127,10 @@ pub fn decide_run_graph_transition(
 
     if let Some(receipt) = receipt {
         if receipt_has_active_exception_takeover(receipt) {
+            if !receipt_target_matches_current_graph(status, receipt) {
+                return untrusted_receipt_decision(status);
+            }
+
             return RunGraphTransitionDecision {
                 kind: RunGraphTransitionKind::ExceptionTakeover,
                 admitted: true,
@@ -139,6 +143,12 @@ pub fn decide_run_graph_transition(
         }
 
         if receipt.lane_status.as_deref() == Some("lane_completed") {
+            if !is_executed_receipt(receipt)
+                || !receipt_target_matches_current_graph(status, receipt)
+            {
+                return untrusted_receipt_decision(status);
+            }
+
             return RunGraphTransitionDecision {
                 kind: RunGraphTransitionKind::CompletedLane,
                 admitted: true,
@@ -169,6 +179,13 @@ pub fn decide_run_graph_transition(
                 .is_some_and(|target| !target.trim().is_empty())
             && receipt.downstream_dispatch_blockers.is_empty()
         {
+            if !is_executed_receipt(receipt)
+                || !receipt_target_matches_current_graph(status, receipt)
+                || !downstream_target_matches_expected_next(status, receipt)
+            {
+                return untrusted_receipt_decision(status);
+            }
+
             let target = receipt.downstream_dispatch_target.clone();
             return RunGraphTransitionDecision {
                 kind: RunGraphTransitionKind::DownstreamReadyHandoff,
@@ -193,6 +210,52 @@ pub fn decide_run_graph_transition(
         resume_target: status.resume_target.clone(),
         blocker_codes: Vec::new(),
         next_actions: Vec::new(),
+    }
+}
+
+fn is_executed_receipt(receipt: &DispatchReceiptSnapshot) -> bool {
+    receipt.dispatch_status.trim() == "executed"
+}
+
+fn receipt_target_matches_current_graph(
+    status: &RunGraphStatusSnapshot,
+    receipt: &DispatchReceiptSnapshot,
+) -> bool {
+    let dispatch_target = receipt.dispatch_target.trim();
+    !dispatch_target.is_empty()
+        && (dispatch_target == status.active_node
+            || status
+                .next_node
+                .as_deref()
+                .is_some_and(|next_node| dispatch_target == next_node))
+}
+
+fn downstream_target_matches_expected_next(
+    status: &RunGraphStatusSnapshot,
+    receipt: &DispatchReceiptSnapshot,
+) -> bool {
+    let Some(target) = receipt.downstream_dispatch_target.as_deref() else {
+        return false;
+    };
+    let target = target.trim();
+    !target.is_empty()
+        && status
+            .next_node
+            .as_deref()
+            .is_some_and(|next_node| target == next_node)
+}
+
+fn untrusted_receipt_decision(status: &RunGraphStatusSnapshot) -> RunGraphTransitionDecision {
+    RunGraphTransitionDecision {
+        kind: RunGraphTransitionKind::NoTransition,
+        admitted: false,
+        active_node: status.active_node.clone(),
+        next_node: status.next_node.clone(),
+        resume_target: status.resume_target.clone(),
+        blocker_codes: vec!["untrusted_dispatch_receipt".to_string()],
+        next_actions: vec![
+            "verify dispatch receipt binding before advancing run graph".to_string(),
+        ],
     }
 }
 
@@ -290,7 +353,7 @@ mod tests {
         let completed = decide_run_graph_transition(
             &status_snapshot(),
             Some(&DispatchReceiptSnapshot {
-                dispatch_target: "tester".to_string(),
+                dispatch_target: "developer".to_string(),
                 dispatch_status: "executed".to_string(),
                 lane_status: Some("lane_completed".to_string()),
                 supersedes_receipt_id: None,
@@ -325,8 +388,9 @@ mod tests {
 
     #[test]
     fn run_graph_transition_admits_downstream_ready_handoff() {
+        let status = active_developer_status_snapshot();
         let decision = decide_run_graph_transition(
-            &status_snapshot(),
+            &status,
             Some(&DispatchReceiptSnapshot {
                 dispatch_target: "developer".to_string(),
                 dispatch_status: "executed".to_string(),
@@ -362,6 +426,7 @@ mod tests {
             blocker_codes: &'static [&'static str],
         }
 
+        let downstream_status = active_developer_status_snapshot();
         let cases = [
             Case {
                 name: "terminal closure wins over receipt evidence",
@@ -434,11 +499,13 @@ mod tests {
         ];
 
         for case in cases {
-            let decision = decide_run_graph_transition(
-                &status_snapshot(),
-                case.receipt.as_ref(),
-                case.closure.as_ref(),
-            );
+            let status = if case.name.contains("downstream") {
+                &downstream_status
+            } else {
+                &status_snapshot()
+            };
+            let decision =
+                decide_run_graph_transition(status, case.receipt.as_ref(), case.closure.as_ref());
 
             assert_eq!(decision.kind, case.kind, "{}", case.name);
             assert_eq!(decision.admitted, case.admitted, "{}", case.name);
@@ -453,10 +520,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn run_graph_transition_rejects_forged_completed_lane_receipt() {
+        let decision = decide_run_graph_transition(
+            &status_snapshot(),
+            Some(&DispatchReceiptSnapshot {
+                dispatch_target: "attacker_controlled_lane".to_string(),
+                dispatch_status: "routed_not_executed".to_string(),
+                lane_status: Some("lane_completed".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_target: None,
+                downstream_dispatch_blockers: Vec::new(),
+            }),
+            None,
+        );
+
+        assert_eq!(decision.kind, RunGraphTransitionKind::NoTransition);
+        assert!(!decision.admitted);
+        assert_eq!(decision.active_node, "planning");
+        assert_eq!(decision.blocker_codes, vec!["untrusted_dispatch_receipt"]);
+    }
+
+    #[test]
+    fn run_graph_transition_rejects_forged_downstream_handoff_receipt() {
+        let decision = decide_run_graph_transition(
+            &status_snapshot(),
+            Some(&DispatchReceiptSnapshot {
+                dispatch_target: "developer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_open".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_target: Some("attacker.backend.root".to_string()),
+                downstream_dispatch_blockers: Vec::new(),
+            }),
+            None,
+        );
+
+        assert_eq!(decision.kind, RunGraphTransitionKind::NoTransition);
+        assert!(!decision.admitted);
+        assert_eq!(decision.next_node, Some("developer".to_string()));
+        assert_eq!(decision.resume_target, "dispatch.developer");
+        assert_eq!(decision.blocker_codes, vec!["untrusted_dispatch_receipt"]);
+    }
+
     fn receipt_with_lane_status(lane_status: &str) -> DispatchReceiptSnapshot {
         DispatchReceiptSnapshot {
             dispatch_target: "developer".to_string(),
-            dispatch_status: "routed".to_string(),
+            dispatch_status: "executed".to_string(),
             lane_status: Some(lane_status.to_string()),
             supersedes_receipt_id: None,
             exception_path_receipt_id: None,
@@ -486,6 +600,15 @@ mod tests {
             downstream_dispatch_target: target.map(str::to_string),
             downstream_dispatch_blockers: blockers,
             ..receipt_with_lane_status("lane_open")
+        }
+    }
+
+    fn active_developer_status_snapshot() -> RunGraphStatusSnapshot {
+        RunGraphStatusSnapshot {
+            active_node: "developer".to_string(),
+            next_node: Some("tester".to_string()),
+            resume_target: "dispatch.tester".to_string(),
+            ..status_snapshot()
         }
     }
 
