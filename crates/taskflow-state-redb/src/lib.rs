@@ -4,8 +4,9 @@ use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use taskflow_contracts::{
-    VidaArtifactRef, VidaDomainEventEnvelope, VidaEventCursor, VidaEventRef, VidaIdempotencyKey,
-    VidaProjectionCheckpoint, VidaProjectionRef, VidaReceiptId, VidaStreamRef, VidaStreamVersion,
+    VidaArtifactRef, VidaCommandRef, VidaDomainEventEnvelope, VidaEventCursor, VidaEventRef,
+    VidaIdempotencyKey, VidaProjectionCheckpoint, VidaProjectionRef, VidaReceiptId, VidaStreamRef,
+    VidaStreamVersion,
 };
 use taskflow_state::{
     JournalAppendReceipt, JournalAppendRequest, JournalArtifactRecord, JournalEventRecord,
@@ -40,6 +41,24 @@ pub struct RedbOperationalJournal {
 struct RedbAppendIdempotencyRecord {
     request_fingerprint: String,
     receipt: JournalAppendReceipt,
+    #[serde(default)]
+    command_id: Option<VidaCommandRef>,
+    #[serde(default)]
+    first_seen_at: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    result_hash: Option<String>,
+    #[serde(default)]
+    result_ref: Option<VidaReceiptId>,
+    #[serde(default)]
+    conflict_reason: Option<String>,
+    #[serde(default)]
+    retry_count: u64,
+    #[serde(default)]
+    last_error: Option<String>,
+    #[serde(default)]
+    committed_event_cursor: Option<VidaEventCursor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +77,7 @@ pub struct RedbJournalHealth {
     pub artifact_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RedbJournalBlocker {
     pub code: &'static str,
     pub next_action: String,
@@ -100,6 +119,20 @@ pub fn classify_redb_journal_error(
         });
     }
     None
+}
+
+pub fn redb_journal_blocker_operator_payload(
+    blocker: &RedbJournalBlocker,
+    journal_path: impl AsRef<Path>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "blocked",
+        "blocker_codes": [blocker.code],
+        "next_actions": [blocker.next_action],
+        "artifact_refs": {
+            "journal_path": journal_path.as_ref().display().to_string(),
+        }
+    })
 }
 
 impl RedbOperationalJournal {
@@ -305,6 +338,8 @@ impl OperationalJournal for RedbOperationalJournal {
         request: JournalAppendRequest,
     ) -> Result<JournalAppendReceipt, TaskflowStateError> {
         validate_append_event_streams(&request)?;
+        let ledger_key = request.idempotency_key.clone();
+        let ledger_command_id = request.command_id.clone();
         let request_fingerprint = append_request_fingerprint(&request);
         let write = self.db.begin_write().map_err(storage_error)?;
         let result = {
@@ -317,126 +352,211 @@ impl OperationalJournal for RedbOperationalJournal {
             let mut append_idempotency = write
                 .open_table(APPEND_IDEMPOTENCY_TABLE)
                 .map_err(storage_error)?;
+            let mut idempotency = write.open_table(IDEMPOTENCY_TABLE).map_err(storage_error)?;
 
-            if let Some(row) = append_idempotency
-                .get(request.idempotency_key.0.as_str())
-                .map_err(storage_error)?
-            {
-                let record: RedbAppendIdempotencyRecord =
-                    serde_json::from_slice(row.value()).map_err(storage_error)?;
+            let existing_append_record = {
+                let row = append_idempotency
+                    .get(request.idempotency_key.0.as_str())
+                    .map_err(storage_error)?;
+                match row {
+                    Some(row) => Some(
+                        serde_json::from_slice::<RedbAppendIdempotencyRecord>(row.value())
+                            .map_err(storage_error)?,
+                    ),
+                    None => None,
+                }
+            };
+
+            if let Some(mut record) = existing_append_record {
                 if record.request_fingerprint == request_fingerprint {
-                    return Ok(record.receipt);
+                    record.retry_count += 1;
+                    record.command_id = record
+                        .command_id
+                        .or_else(|| Some(ledger_command_id.clone()));
+                    record.status = "completed".to_string();
+                    record.result_hash = Some(append_receipt_fingerprint(&record.receipt));
+                    record.result_ref = Some(append_receipt_ref(&ledger_key, &record.receipt));
+                    record.last_error = None;
+                    record.committed_event_cursor = record.receipt.last_global_cursor.clone();
+                    let payload = serde_json::to_vec(&record).map_err(storage_error)?;
+                    append_idempotency
+                        .insert(request.idempotency_key.0.as_str(), payload.as_slice())
+                        .map_err(storage_error)?;
+                    let lifecycle = JournalIdempotencyRecord {
+                        key: ledger_key.clone(),
+                        command_id: ledger_command_id.clone(),
+                        state: JournalIdempotencyState::Completed,
+                        receipt_id: record.result_ref.clone(),
+                        conflict_reason: None,
+                    };
+                    let lifecycle_payload =
+                        serde_json::to_vec(&lifecycle).map_err(storage_error)?;
+                    idempotency
+                        .insert(ledger_key.0.as_str(), lifecycle_payload.as_slice())
+                        .map_err(storage_error)?;
+                    Ok(record.receipt)
+                } else {
+                    let reason =
+                        "same idempotency key used with different append payload".to_string();
+                    record.retry_count += 1;
+                    record.command_id = record
+                        .command_id
+                        .or_else(|| Some(ledger_command_id.clone()));
+                    record.status = "conflicted".to_string();
+                    record.conflict_reason = Some(reason.clone());
+                    record.last_error = Some(reason.clone());
+                    let payload = serde_json::to_vec(&record).map_err(storage_error)?;
+                    append_idempotency
+                        .insert(request.idempotency_key.0.as_str(), payload.as_slice())
+                        .map_err(storage_error)?;
+                    let lifecycle = JournalIdempotencyRecord {
+                        key: ledger_key.clone(),
+                        command_id: ledger_command_id.clone(),
+                        state: JournalIdempotencyState::Conflicted,
+                        receipt_id: record.result_ref.clone(),
+                        conflict_reason: Some(reason),
+                    };
+                    let lifecycle_payload =
+                        serde_json::to_vec(&lifecycle).map_err(storage_error)?;
+                    idempotency
+                        .insert(ledger_key.0.as_str(), lifecycle_payload.as_slice())
+                        .map_err(storage_error)?;
+                    Err(TaskflowStateError::IdempotencyConflict(
+                        ledger_key.0.clone(),
+                    ))
                 }
-                return Err(TaskflowStateError::IdempotencyConflict(
-                    request.idempotency_key.0,
-                ));
-            }
+            } else {
+                let stream_key = request.stream_id.0.clone();
+                let mut actual_version = 0;
+                for row in events_by_stream.iter().map_err(storage_error)? {
+                    let (_, value) = row.map_err(storage_error)?;
+                    let event: VidaDomainEventEnvelope =
+                        serde_json::from_slice(value.value()).map_err(storage_error)?;
+                    if event.stream_id == request.stream_id {
+                        actual_version += 1;
+                    }
+                }
+                if request
+                    .expected_stream_version
+                    .as_ref()
+                    .map(|version| version.0)
+                    != Some(actual_version)
+                {
+                    return Err(TaskflowStateError::StreamVersionConflict {
+                        stream_id: stream_key,
+                        expected: request
+                            .expected_stream_version
+                            .as_ref()
+                            .map(|version| version.0),
+                        actual: actual_version,
+                    });
+                }
 
-            let stream_key = request.stream_id.0.clone();
-            let mut actual_version = 0;
-            for row in events_by_stream.iter().map_err(storage_error)? {
-                let (_, value) = row.map_err(storage_error)?;
-                let event: VidaDomainEventEnvelope =
-                    serde_json::from_slice(value.value()).map_err(storage_error)?;
-                if event.stream_id == request.stream_id {
-                    actual_version += 1;
+                let mut first_index: usize = 0;
+                for row in events_by_global.iter().map_err(storage_error)? {
+                    row.map_err(storage_error)?;
+                    first_index += 1;
                 }
-            }
-            if request
-                .expected_stream_version
-                .as_ref()
-                .map(|version| version.0)
-                != Some(actual_version)
-            {
-                return Err(TaskflowStateError::StreamVersionConflict {
-                    stream_id: stream_key,
-                    expected: request
-                        .expected_stream_version
+                let event_count = request.events.len();
+                let effect_intent_count = request.effect_intents.len();
+                let mut next_global_index: usize = first_index;
+                for event in request.events.clone() {
+                    next_global_index += 1;
+                    let cursor = VidaEventCursor(format!("global-{next_global_index}"));
+                    let stream_event_key =
+                        format!("{}:{:020}", request.stream_id.0, event.stream_version.0);
+                    let global_event_key = format!("{next_global_index:020}");
+                    let event_payload = serde_json::to_vec(&event).map_err(storage_error)?;
+                    events_by_stream
+                        .insert(stream_event_key.as_str(), event_payload.as_slice())
+                        .map_err(storage_error)?;
+                    let global_record = JournalEventRecord {
+                        global_cursor: cursor,
+                        event,
+                    };
+                    let global_payload =
+                        serde_json::to_vec(&global_record).map_err(storage_error)?;
+                    events_by_global
+                        .insert(global_event_key.as_str(), global_payload.as_slice())
+                        .map_err(storage_error)?;
+                }
+                drop(events_by_stream);
+                drop(events_by_global);
+
+                let mut outbox = write.open_table(OUTBOX_TABLE).map_err(storage_error)?;
+                let mut outbox_len = 0;
+                for row in outbox.iter().map_err(storage_error)? {
+                    row.map_err(storage_error)?;
+                    outbox_len += 1;
+                }
+                for effect in request.effect_intents {
+                    outbox_len += 1;
+                    let record = JournalOutboxRecord {
+                        outbox_id: VidaEventRef(format!("outbox-{outbox_len}")),
+                        effect,
+                        state: JournalOutboxState::Pending,
+                    };
+                    let payload = serde_json::to_vec(&record).map_err(storage_error)?;
+                    outbox
+                        .insert(record.outbox_id.0.as_str(), payload.as_slice())
+                        .map_err(storage_error)?;
+                }
+                drop(outbox);
+
+                let last_index = next_global_index.saturating_sub(1);
+                let receipt = JournalAppendReceipt {
+                    stream_id: request.stream_id,
+                    first_global_cursor: if event_count > 0 {
+                        Some(VidaEventCursor(format!("global-{}", first_index + 1)))
+                    } else {
+                        None
+                    },
+                    last_global_cursor: if event_count > 0 {
+                        Some(VidaEventCursor(format!("global-{last_index}")))
+                    } else {
+                        None
+                    },
+                    stream_version: VidaStreamVersion(actual_version + event_count as u64),
+                    event_count,
+                    effect_intent_count,
+                };
+                let idempotency_record = RedbAppendIdempotencyRecord {
+                    request_fingerprint,
+                    receipt: receipt.clone(),
+                    command_id: Some(ledger_command_id.clone()),
+                    first_seen_at: receipt
+                        .first_global_cursor
                         .as_ref()
-                        .map(|version| version.0),
-                    actual: actual_version,
-                });
-            }
-
-            let mut first_index: usize = 0;
-            for row in events_by_global.iter().map_err(storage_error)? {
-                row.map_err(storage_error)?;
-                first_index += 1;
-            }
-            let event_count = request.events.len();
-            let effect_intent_count = request.effect_intents.len();
-            let mut next_global_index: usize = first_index;
-            for event in request.events.clone() {
-                next_global_index += 1;
-                let cursor = VidaEventCursor(format!("global-{next_global_index}"));
-                let stream_event_key =
-                    format!("{}:{:020}", request.stream_id.0, event.stream_version.0);
-                let global_event_key = format!("{next_global_index:020}");
-                let event_payload = serde_json::to_vec(&event).map_err(storage_error)?;
-                events_by_stream
-                    .insert(stream_event_key.as_str(), event_payload.as_slice())
-                    .map_err(storage_error)?;
-                let global_record = JournalEventRecord {
-                    global_cursor: cursor,
-                    event,
+                        .map(|cursor| cursor.0.clone())
+                        .unwrap_or_else(|| format!("stream-version-{actual_version}")),
+                    status: "completed".to_string(),
+                    result_hash: Some(append_receipt_fingerprint(&receipt)),
+                    result_ref: Some(append_receipt_ref(&ledger_key, &receipt)),
+                    conflict_reason: None,
+                    retry_count: 0,
+                    last_error: None,
+                    committed_event_cursor: receipt.last_global_cursor.clone(),
                 };
-                let global_payload = serde_json::to_vec(&global_record).map_err(storage_error)?;
-                events_by_global
-                    .insert(global_event_key.as_str(), global_payload.as_slice())
+                let payload = serde_json::to_vec(&idempotency_record).map_err(storage_error)?;
+                append_idempotency
+                    .insert(request.idempotency_key.0.as_str(), payload.as_slice())
                     .map_err(storage_error)?;
-            }
-            drop(events_by_stream);
-            drop(events_by_global);
-
-            let mut outbox = write.open_table(OUTBOX_TABLE).map_err(storage_error)?;
-            let mut outbox_len = 0;
-            for row in outbox.iter().map_err(storage_error)? {
-                row.map_err(storage_error)?;
-                outbox_len += 1;
-            }
-            for effect in request.effect_intents {
-                outbox_len += 1;
-                let record = JournalOutboxRecord {
-                    outbox_id: VidaEventRef(format!("outbox-{outbox_len}")),
-                    effect,
-                    state: JournalOutboxState::Pending,
+                let lifecycle = JournalIdempotencyRecord {
+                    key: ledger_key.clone(),
+                    command_id: ledger_command_id,
+                    state: JournalIdempotencyState::Completed,
+                    receipt_id: idempotency_record.result_ref,
+                    conflict_reason: None,
                 };
-                let payload = serde_json::to_vec(&record).map_err(storage_error)?;
-                outbox
-                    .insert(record.outbox_id.0.as_str(), payload.as_slice())
+                let lifecycle_payload = serde_json::to_vec(&lifecycle).map_err(storage_error)?;
+                idempotency
+                    .insert(ledger_key.0.as_str(), lifecycle_payload.as_slice())
                     .map_err(storage_error)?;
+                Ok(receipt)
             }
-            drop(outbox);
-
-            let last_index = next_global_index.saturating_sub(1);
-            let receipt = JournalAppendReceipt {
-                stream_id: request.stream_id,
-                first_global_cursor: if event_count > 0 {
-                    Some(VidaEventCursor(format!("global-{}", first_index + 1)))
-                } else {
-                    None
-                },
-                last_global_cursor: if event_count > 0 {
-                    Some(VidaEventCursor(format!("global-{last_index}")))
-                } else {
-                    None
-                },
-                stream_version: VidaStreamVersion(actual_version + event_count as u64),
-                event_count,
-                effect_intent_count,
-            };
-            let idempotency_record = RedbAppendIdempotencyRecord {
-                request_fingerprint,
-                receipt: receipt.clone(),
-            };
-            let payload = serde_json::to_vec(&idempotency_record).map_err(storage_error)?;
-            append_idempotency
-                .insert(request.idempotency_key.0.as_str(), payload.as_slice())
-                .map_err(storage_error)?;
-            Ok(receipt)
-        }?;
+        };
         write.commit().map_err(storage_error)?;
-        Ok(result)
+        result
     }
 
     fn load_stream(&self, stream_id: &VidaStreamRef) -> Vec<VidaDomainEventEnvelope> {
@@ -678,6 +798,17 @@ fn payload_decode_error(error: impl std::fmt::Display) -> TaskflowStateError {
     TaskflowStateError::Storage(format!("redb journal payload corrupt: {error}"))
 }
 
+fn append_receipt_fingerprint(receipt: &JournalAppendReceipt) -> String {
+    format!("{receipt:?}")
+}
+
+fn append_receipt_ref(key: &VidaIdempotencyKey, receipt: &JournalAppendReceipt) -> VidaReceiptId {
+    VidaReceiptId(format!(
+        "redb-append:{}:{}",
+        key.0, receipt.stream_version.0
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -686,7 +817,8 @@ mod tests {
     use super::{
         APPEND_IDEMPOTENCY_TABLE, EVENTS_BY_GLOBAL_CURSOR_TABLE, EVENTS_BY_STREAM_TABLE,
         OUTBOX_TABLE, REDB_CORRUPT_PAYLOAD_BLOCKER_CODE, REDB_SINGLE_WRITER_BLOCKER_CODE,
-        RedbOperationalJournal, classify_redb_journal_error,
+        RedbAppendIdempotencyRecord, RedbOperationalJournal, classify_redb_journal_error,
+        redb_journal_blocker_operator_payload,
     };
     use redb::{ReadableDatabase, ReadableTable, TableDefinition};
     use taskflow_contracts::{
@@ -889,6 +1021,52 @@ mod tests {
     }
 
     #[test]
+    fn append_retry_cache_survives_restart_and_repeated_retries() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        let first = journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("first append should pass");
+        drop(journal);
+
+        let mut reopened = RedbOperationalJournal::open(&path).expect("reopen journal");
+        for _ in 0..64 {
+            let mut retry_request = append_request(1, vec![event(1)], vec![effect("effect-1")]);
+            retry_request.expected_stream_version = Some(VidaStreamVersion(1));
+            let retry = reopened
+                .append(retry_request)
+                .expect("same payload retry after restart should return cached receipt");
+            assert_eq!(retry, first);
+        }
+
+        let health = reopened.health_status().expect("journal health");
+        assert_eq!(health.append_idempotency_count, 1);
+        assert_eq!(health.idempotency_count, 1);
+        assert_eq!(health.stream_event_count, 1);
+        assert_eq!(health.global_event_count, 1);
+        assert_eq!(health.outbox_pending_count, 1);
+        let append_ledger: RedbAppendIdempotencyRecord = reopened
+            .read_one(APPEND_IDEMPOTENCY_TABLE, "idem-1")
+            .expect("append ledger read")
+            .expect("append ledger row");
+        assert_eq!(append_ledger.status, "completed");
+        assert_eq!(append_ledger.retry_count, 64);
+        assert_eq!(
+            append_ledger.committed_event_cursor,
+            first.last_global_cursor
+        );
+        assert!(append_ledger.result_hash.is_some());
+        assert!(append_ledger.result_ref.is_some());
+        let command_ledger = reopened
+            .idempotency_record(&VidaIdempotencyKey("idem-1".to_string()))
+            .expect("command idempotency record");
+        assert_eq!(command_ledger.state, JournalIdempotencyState::Completed);
+        assert_eq!(command_ledger.receipt_id, append_ledger.result_ref);
+    }
+
+    #[test]
     fn append_rejects_changed_payload_for_same_idempotency_key() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("journal.redb");
@@ -912,6 +1090,54 @@ mod tests {
             1
         );
         assert_eq!(journal.claim_outbox_batch("worker-1", 10).len(), 1);
+        let append_ledger: RedbAppendIdempotencyRecord = journal
+            .read_one(APPEND_IDEMPOTENCY_TABLE, "idem-1")
+            .expect("append ledger read")
+            .expect("append ledger row");
+        assert_eq!(append_ledger.status, "conflicted");
+        assert_eq!(append_ledger.retry_count, 1);
+        assert!(append_ledger.conflict_reason.is_some());
+        assert!(append_ledger.last_error.is_some());
+        let command_ledger = journal
+            .idempotency_record(&VidaIdempotencyKey("idem-1".to_string()))
+            .expect("command idempotency record");
+        assert_eq!(command_ledger.state, JournalIdempotencyState::Conflicted);
+        assert!(command_ledger.conflict_reason.is_some());
+    }
+
+    #[test]
+    fn corrupt_payload_blocker_serializes_operator_json() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let blocker = classify_redb_journal_error(
+            &TaskflowStateError::Storage("json expected eof while decoding record".to_string()),
+            &path,
+        )
+        .expect("corrupt payload blocker should classify");
+
+        let payload = serde_json::to_value(&blocker).expect("blocker should serialize");
+
+        assert_eq!(payload["code"], REDB_CORRUPT_PAYLOAD_BLOCKER_CODE);
+        assert!(
+            payload["next_action"]
+                .as_str()
+                .expect("next action")
+                .contains(path.to_string_lossy().as_ref())
+        );
+        let operator_payload = redb_journal_blocker_operator_payload(&blocker, &path);
+        assert_eq!(operator_payload["status"], "blocked");
+        assert_eq!(
+            operator_payload["blocker_codes"][0],
+            REDB_CORRUPT_PAYLOAD_BLOCKER_CODE
+        );
+        assert_eq!(
+            operator_payload["next_actions"][0],
+            blocker.next_action.as_str()
+        );
+        assert_eq!(
+            operator_payload["artifact_refs"]["journal_path"],
+            path.to_string_lossy().as_ref()
+        );
     }
 
     #[test]
