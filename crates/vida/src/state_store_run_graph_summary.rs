@@ -2346,6 +2346,11 @@ impl StateStore {
             .db
             .delete(("run_graph_dispatch_receipt", run_id))
             .await?;
+        let _ = self
+            .db
+            .query("DELETE run_graph_dispatch_lane_receipt WHERE run_id = $run_id;")
+            .bind(("run_id", run_id.to_string()))
+            .await?;
         crate::operator_projection_cache::touch_state_mutation_marker(self.root());
         Ok(())
     }

@@ -8500,6 +8500,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clearing_dispatch_receipt_invalidates_lane_scoped_dispatch_receipts() {
+        let root = unique_consume_packet_test_root("vida-clear-lane-dispatch-receipts");
+        fs::create_dir_all(&root).expect("create lane receipt state root");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-clear-lane-dispatch-receipts";
+        let packet_path = root
+            .join("runtime-consumption/dispatch-packets/developer.json")
+            .display()
+            .to_string();
+
+        let mut receipt = taskflow_consume_resume_test_receipt("configured_dev_team", "routed");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_target = "developer".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.dispatch_packet_path = Some(packet_path.clone());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist primary dispatch receipt");
+        store
+            .record_run_graph_dispatch_lane_receipt(&receipt)
+            .await
+            .expect("persist lane-scoped dispatch receipt");
+
+        store
+            .clear_run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("clear primary and lane-scoped dispatch receipts");
+
+        assert!(
+            store
+                .run_graph_dispatch_receipt(run_id)
+                .await
+                .expect("read primary dispatch receipt")
+                .is_none(),
+            "primary dispatch receipt should be cleared"
+        );
+        assert!(
+            store
+                .run_graph_dispatch_receipt_for_packet(run_id, &packet_path)
+                .await
+                .expect("read dispatch receipt for packet")
+                .is_none(),
+            "cleared lane-scoped dispatch receipt must not remain usable"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn materialization_only_receipt_gate_rejects_preview_and_accepts_execution_evidence() {
         let root = unique_consume_packet_test_root("vida-materialization-receipt-gate");
         fs::create_dir_all(&root).expect("create materialization receipt gate state root");
