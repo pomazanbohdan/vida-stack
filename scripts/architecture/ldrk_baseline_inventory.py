@@ -281,7 +281,7 @@ def tool_availability(root: Path) -> list[dict[str, object]]:
         if resolved:
             try:
                 proc = subprocess.run(
-                    [tool, "--version"],
+                    [resolved, "--version"],
                     cwd=root,
                     text=True,
                     stdout=subprocess.PIPE,
