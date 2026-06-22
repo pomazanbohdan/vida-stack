@@ -3979,10 +3979,38 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let Some(summary) = (match store
+            let latest_status = match store.latest_run_graph_status().await {
+                Ok(status) => status,
+                Err(error) => {
+                    eprintln!("Failed to read latest run-graph status: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let summary = match store
                 .latest_run_graph_dispatch_receipt_summary_for_current_session()
                 .await
             {
+                Ok(Some(summary)) => Ok(Some(summary)),
+                Ok(None) => match store
+                    .latest_active_exception_takeover_dispatch_receipt()
+                    .await
+                {
+                    Ok(Some(receipt)) => Ok(Some(
+                        crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt),
+                    )),
+                    Ok(None) => match latest_status.as_ref() {
+                        Some(status) => {
+                            store
+                                .run_graph_dispatch_receipt_summary_for_status(status)
+                                .await
+                        }
+                        None => Ok(None),
+                    },
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            };
+            let Some(summary) = (match summary {
                 Ok(summary) => summary,
                 Err(error) => {
                     eprintln!("Failed to read latest lane receipt summary: {error}");
@@ -5600,6 +5628,67 @@ mod tests {
         ];
         let command = parse_lane_args(&args).expect("lane show latest should parse");
         assert!(matches!(command, LaneCommand::ShowLatest { as_json: true }));
+    }
+
+    #[tokio::test]
+    async fn lane_show_latest_uses_latest_status_when_current_session_has_no_receipt() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-latest-status-fallback-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-latest-status-fallback";
+
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, run_id, "analyst");
+        status.status = "blocked".to_string();
+        status.active_node = "analyst".to_string();
+        status.lifecycle_stage = "analyst_blocked".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist latest run graph status");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.lane_status = crate::LaneStatus::LaneExceptionTakeover
+            .as_str()
+            .to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("exception-1".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let show_args = ProxyArgs {
+            args: vec![
+                "show".to_string(),
+                "--latest".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(show_args).await, ExitCode::SUCCESS);
+
+        let cached = read_cached_lane_show_projection(&root, &lane_show_projection_name("latest"))
+            .expect("lane show latest projection cache should be written");
+        let cached_json: serde_json::Value =
+            serde_json::from_str(&cached).expect("cached lane show projection should be json");
+        assert_eq!(cached_json["status"], "pass");
+        assert_eq!(cached_json["run_id"], run_id);
+        assert_eq!(cached_json["lane_status"], "lane_exception_takeover");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

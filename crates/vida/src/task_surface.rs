@@ -1337,9 +1337,12 @@ async fn task_takeover_status_receipt(
     task: &state_store::TaskRecord,
     status_override: Option<state_store::RunGraphStatus>,
     lane_source_override: Option<&str>,
+    allow_latest_fallback: bool,
 ) -> TaskTakeoverStatusReceipt {
     let (lane_source, status) = if let Some(status) = status_override {
         (lane_source_override.unwrap_or("run_id"), Some(status))
+    } else if !allow_latest_fallback {
+        (lane_source_override.unwrap_or("task_id"), None)
     } else {
         let current_status = store
             .latest_run_graph_status_for_current_session()
@@ -1385,15 +1388,25 @@ async fn task_takeover_status_receipt(
             active_takeover_state: "not_recorded".to_string(),
             takeover_ready_state: "not_ready".to_string(),
             recommended_surface: Some("vida lane show".to_string()),
-            reason: "no run-graph lane evidence is available for takeover status".to_string(),
+            reason: format!(
+                "no run-graph lane evidence is available for takeover status of task `{}`",
+                task.id
+            ),
             recommended_command: Some(operator_output::command_text::human_command(
-                "vida lane show --latest --json",
+                &format!("vida lane show {} --json", crate::shell_quote(&task.id)),
             )),
             next_actions: vec![format!(
-                "Run `{}` to inspect lane evidence before attempting exception takeover.",
-                operator_output::command_text::human_command("vida lane show --latest --json")
+                "Run `{}` to inspect task-scoped lane evidence before attempting exception takeover.",
+                operator_output::command_text::human_command(&format!(
+                    "vida lane show {} --json",
+                    crate::shell_quote(&task.id)
+                ))
             )],
-            blocker_codes: vec!["missing_latest_lane_receipt".to_string()],
+            blocker_codes: vec![if allow_latest_fallback {
+                "missing_latest_lane_receipt".to_string()
+            } else {
+                "missing_lane_receipt".to_string()
+            }],
         };
     };
     let summary = store
@@ -9628,12 +9641,29 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 };
                 match StateStore::open_existing_read_only(state_dir).await {
                     Ok(store) => {
+                        let task_id_was_requested = requested_task_id
+                            .as_ref()
+                            .is_some_and(|value| !value.trim().is_empty());
                         let (status_override, lane_source) =
                             if let Some(run_id) = command.run_id.as_deref() {
                                 match store.run_graph_status(run_id).await {
                                     Ok(status) => (Some(status), Some("run_id")),
                                     Err(error) => {
                                         eprintln!("Failed to inspect run graph status: {error}");
+                                        return ExitCode::from(1);
+                                    }
+                                }
+                            } else if let Some(task_id) = requested_task_id
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                            {
+                                match store.latest_run_graph_status_for_task(task_id).await {
+                                    Ok(status) => (status, Some("task_id")),
+                                    Err(error) => {
+                                        eprintln!(
+                                        "Failed to inspect task-scoped run graph status: {error}"
+                                    );
                                         return ExitCode::from(1);
                                     }
                                 }
@@ -9713,6 +9743,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     &task,
                                     status_override,
                                     lane_source,
+                                    !task_id_was_requested,
                                 )
                                 .await;
                                 if command.json {
@@ -12762,7 +12793,8 @@ mod tests {
                 .expect("dispatch receipt should persist");
 
             let receipt =
-                task_takeover_status_receipt(&store, &task, Some(status), Some("run_id")).await;
+                task_takeover_status_receipt(&store, &task, Some(status), Some("run_id"), true)
+                    .await;
 
             assert!(!receipt.allowed);
             assert!(!receipt.root_local_write_allowed);
@@ -12775,6 +12807,68 @@ mod tests {
                 receipt.blocker_codes,
                 vec!["exception_takeover_scope_missing".to_string()]
             );
+        });
+    }
+
+    #[test]
+    fn task_takeover_status_for_requested_task_does_not_fall_back_to_foreign_latest_lane() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            let requested =
+                owned_task_record("requested-task-without-lane", vec!["crates/vida/src"]);
+            let foreign_status = state_store::RunGraphStatus {
+                run_id: "foreign-latest-run".to_string(),
+                task_id: "foreign-latest-task".to_string(),
+                task_class: "implementation".to_string(),
+                active_node: "implementer".to_string(),
+                next_node: None,
+                status: "blocked".to_string(),
+                route_task_class: "implementation".to_string(),
+                selected_backend: "internal_subagents".to_string(),
+                lane_id: "implementer".to_string(),
+                lifecycle_stage: "implementer_blocked".to_string(),
+                policy_gate: "blocked_open_delegated_cycle".to_string(),
+                handoff_state: "bridge_request_pending".to_string(),
+                context_state: "ready".to_string(),
+                checkpoint_kind: "runtime_dispatch".to_string(),
+                resume_target: "none".to_string(),
+                recovery_ready: false,
+            };
+            store
+                .record_run_graph_status(&foreign_status)
+                .await
+                .expect("foreign run graph status should persist");
+            let scoped_status = store
+                .latest_run_graph_status_for_task(&requested.id)
+                .await
+                .expect("task-scoped status lookup should succeed");
+            assert!(scoped_status.is_none());
+
+            let receipt = task_takeover_status_receipt(
+                &store,
+                &requested,
+                scoped_status,
+                Some("task_id"),
+                false,
+            )
+            .await;
+
+            assert_eq!(receipt.status, "blocked");
+            assert_eq!(receipt.lane["source"], "task_id");
+            assert_eq!(receipt.lane["run_id"], serde_json::Value::Null);
+            assert_eq!(
+                receipt.blocker_codes,
+                vec!["missing_lane_receipt".to_string()]
+            );
+            assert!(!receipt
+                .blocker_codes
+                .contains(&"latest_lane_task_mismatch".to_string()));
+            assert_ne!(receipt.lane["task_id"], "foreign-latest-task");
         });
     }
 

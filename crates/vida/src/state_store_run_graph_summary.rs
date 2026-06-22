@@ -3636,6 +3636,55 @@ impl StateStore {
         Ok(rows.into_iter().next().map(|latest| latest.run_id))
     }
 
+    pub(crate) async fn latest_run_graph_status_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<RunGraphStatus>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT run_id, task_id, status, updated_at FROM execution_plan_state WHERE task_id = $task_id ORDER BY updated_at DESC, run_id DESC LIMIT 25;",
+            )
+            .bind(("task_id", task_id.to_string()))
+            .await?;
+        let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
+        for latest in rows {
+            if self
+                .run_graph_latest_receipt_row_supersedes_lane(&latest.run_id)
+                .await?
+            {
+                continue;
+            }
+            match self
+                .run_graph_status_from_task_rows(&latest.run_id, &[])
+                .await
+            {
+                Ok(status) => {
+                    if status.task_id.trim() != task_id.trim()
+                        || self
+                            .run_graph_status_points_to_terminal_task_active(&status)
+                            .await?
+                    {
+                        continue;
+                    }
+                    return Ok(Some(status));
+                }
+                Err(StateStoreError::MissingTask { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        if let Ok(status) = self.run_graph_status(task_id).await {
+            if status.task_id.trim() == task_id.trim()
+                && !self
+                    .run_graph_status_points_to_terminal_task_active(&status)
+                    .await?
+            {
+                return Ok(Some(status));
+            }
+        }
+        Ok(None)
+    }
+
     async fn ensure_run_graph_recovery_surface_rows_present(
         &self,
         run_id: &str,
@@ -6502,6 +6551,59 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
         restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_status_for_task_ignores_newer_foreign_run() {
+        let root = temp_run_graph_root("vida-run-graph-task-scoped-latest");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        for task_id in ["task-requested", "task-foreign"] {
+            store
+                .create_task_with_fixture_parent(CreateTaskRequest {
+                    task_id,
+                    title: task_id,
+                    display_id: None,
+                    description: "",
+                    issue_type: "task",
+                    status: "in_progress",
+                    priority: 0,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "test",
+                })
+                .await
+                .expect("create run graph task");
+        }
+
+        let mut requested = sample_run_graph_status();
+        requested.run_id = "run-requested-task".to_string();
+        requested.task_id = "task-requested".to_string();
+        store
+            .record_run_graph_status(&requested)
+            .await
+            .expect("persist requested status");
+
+        let mut foreign = sample_run_graph_status();
+        foreign.run_id = "run-foreign-newer".to_string();
+        foreign.task_id = "task-foreign".to_string();
+        store
+            .record_run_graph_status(&foreign)
+            .await
+            .expect("persist foreign status");
+
+        let status = store
+            .latest_run_graph_status_for_task("task-requested")
+            .await
+            .expect("read task-scoped latest")
+            .expect("requested task status should resolve");
+        assert_eq!(status.run_id, "run-requested-task");
+        assert_eq!(status.task_id, "task-requested");
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
