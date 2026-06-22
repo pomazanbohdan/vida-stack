@@ -3599,6 +3599,7 @@ fn read_dispatch_packet_for_store(
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct ResumeInputs {
     pub(crate) dispatch_receipt: crate::state_store::RunGraphDispatchReceipt,
     pub(crate) dispatch_packet_path: String,

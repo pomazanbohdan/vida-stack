@@ -5886,24 +5886,22 @@ mod tests {
             .await
             .expect("create active child task");
         store
-            .acquire_orchestrator_claim(
-                crate::state_store_orchestrator_claim::AcquireOrchestratorClaimRequest {
-                    claim_id: "lane-show-latest-current-task-claim".to_string(),
-                    state_root_id: root.display().to_string(),
-                    worktree_environment_id: root.display().to_string(),
-                    orchestrator_session_id: "lane-show-latest-current-session".to_string(),
-                    process_id: Some(std::process::id()),
-                    task_id: Some(active_child_id.to_string()),
-                    run_id: None,
-                    lane_id: None,
-                    claim_kind: "active_task_session_claim".to_string(),
-                    conflict_domain: Some(format!("task:{active_child_id}")),
-                    owned_paths: Vec::new(),
-                    read_only_paths: Vec::new(),
-                    lease_mode: crate::state_store_orchestrator_claim::LeaseMode::Observe,
-                    lease_seconds: 3600,
-                },
-            )
+            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "lane-show-latest-current-task-claim".to_string(),
+                state_root_id: root.display().to_string(),
+                worktree_environment_id: root.display().to_string(),
+                orchestrator_session_id: "lane-show-latest-current-session".to_string(),
+                process_id: Some(std::process::id()),
+                task_id: Some(active_child_id.to_string()),
+                run_id: None,
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some(format!("task:{active_child_id}")),
+                owned_paths: Vec::new(),
+                read_only_paths: Vec::new(),
+                lease_mode: crate::state_store::LeaseMode::Observe,
+                lease_seconds: 3600,
+            })
             .await
             .expect("claim active child for current session");
 
