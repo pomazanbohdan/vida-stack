@@ -148,6 +148,7 @@ mod tests {
         decide_claim_lease,
     };
     use crate::scheduler_claim::{OrchestratorClaimActiveInput, OrchestratorClaimRequestInput};
+    use proptest::prelude::*;
 
     #[test]
     fn exclusive_claim_on_same_bounded_unit_is_rejected() {
@@ -225,6 +226,30 @@ mod tests {
     #[test]
     fn claims_module_is_registered() {
         assert_eq!(MODULE, "claims");
+    }
+
+    proptest! {
+        #[test]
+        fn exclusive_claims_for_same_bounded_unit_never_both_admit(
+            task_id in "[a-z][a-z0-9-]{0,16}",
+            run_id in "[a-z][a-z0-9-]{0,16}",
+            conflict_domain in "[a-z][a-z0-9-]{0,16}",
+        ) {
+            let request = claim_request("claim-2", "exclusive", &task_id, &run_id, &conflict_domain);
+            let active = vec![claim("claim-1", "exclusive", &task_id, &run_id, &conflict_domain)];
+
+            let decision = decide_claim_lease(
+                ClaimLeaseCommand::Acquire { request },
+                &active,
+                "2026-06-22T00:00:00Z",
+            );
+
+            prop_assert!(!decision.admitted);
+            prop_assert_eq!(
+                decision.blocker_codes,
+                vec!["orchestrator_claim_conflict_task".to_string()]
+            );
+        }
     }
 
     fn claim_request(

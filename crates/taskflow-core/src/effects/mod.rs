@@ -137,6 +137,7 @@ mod tests {
         EFFECT_INTENT_SCHEMA_VERSION, EffectIntent, EffectIntentKind, IdGenerator, MODULE,
         intent_is_idempotent,
     };
+    use proptest::prelude::*;
 
     struct StableGenerator;
 
@@ -200,5 +201,28 @@ mod tests {
     #[test]
     fn effects_module_is_registered() {
         assert_eq!(MODULE, "effects");
+    }
+
+    proptest! {
+        #[test]
+        fn effect_intent_ids_are_stable_for_repeated_construction(
+            bounded_unit_id in "[a-z][a-z0-9-]{0,16}",
+            sequence in 0_u64..10_000,
+            dispatch_target in "[a-z][a-z0-9-]{0,16}",
+            packet_id in "[a-z][a-z0-9-]{0,16}",
+        ) {
+            let generator = StableGenerator;
+            let kind = EffectIntentKind::HostDispatch {
+                dispatch_target,
+                packet_id,
+            };
+
+            let left = EffectIntent::new(bounded_unit_id.clone(), sequence, kind.clone(), &generator);
+            let right = EffectIntent::new(bounded_unit_id, sequence, kind, &generator);
+
+            prop_assert_eq!(&left.intent_id, &right.intent_id);
+            prop_assert_eq!(&left.idempotency_key, &right.idempotency_key);
+            prop_assert!(intent_is_idempotent(&left, &right));
+        }
     }
 }

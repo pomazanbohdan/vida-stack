@@ -6762,7 +6762,6 @@ version = "0.9.7"
 dependencies = [
  "cedar-policy",
  "proptest",
- "runtime-path-policy",
  "serde",
  "serde_json",
  "taskflow-contracts",
