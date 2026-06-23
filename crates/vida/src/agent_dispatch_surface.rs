@@ -657,9 +657,11 @@ fn host_bridge_completion_allowed_next_node(
         }
     }
     let packet_path = host_bridge_request_string(request, "packet_path")?;
-    let packet_path = state_root
-        .and_then(|state_root| canonical_state_artifact_path(state_root, packet_path, true).ok())
-        .unwrap_or_else(|| std::path::PathBuf::from(packet_path));
+    let packet_path = if let Some(state_root) = state_root {
+        canonical_state_artifact_path(state_root, packet_path, true).ok()?
+    } else {
+        std::path::PathBuf::from(packet_path)
+    };
     let packet =
         read_canonical_host_bridge_json_artifact(&packet_path, "host bridge packet").ok()?;
     for field in ["allowed_next_node", "downstream_dispatch_target"] {
