@@ -114,28 +114,28 @@ fn cli_service_first_families_emit_vida_client_operations() {
             "vida.project.status",
         ),
         (
-            &["wizard", "inspect", "--json"][..],
+            &["wizard", "inspect", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.schema.get",
         ),
         (
-            &["wizard", "draft", "--json"][..],
+            &["wizard", "draft", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.session.start",
         ),
         (
-            &["wizard", "validate", "--json"][..],
+            &["wizard", "validate", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.session.validate",
         ),
         (
-            &["wizard", "diff", "--json"][..],
+            &["wizard", "diff", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.session.diff",
         ),
         (&["job", "status", "--json"][..], "job", "vida.jobs.get"),
         (
-            &["receipt", "get", "--json"][..],
+            &["receipt", "get", "--project", "vida-stack", "--json"][..],
             "receipt",
             "vida.receipts.get",
         ),
@@ -186,6 +186,28 @@ fn cli_job_status_default_output_is_actionable_without_json() {
         json["response"]["result"]["job"]["authority"],
         "redb_outbox"
     );
+}
+
+#[test]
+fn cli_job_status_default_output_escapes_blocker_repair_control_characters() {
+    let journal_path = std::env::temp_dir().join("missing-vida-job-\u{1b}]52;c;SGFja2Vk\u{7}.redb");
+    let output = vida()
+        .env("VIDA_JOB_JOURNAL_PATH", &journal_path)
+        .args(["job", "status"])
+        .output()
+        .expect("job status command should execute");
+    assert!(
+        output.status.success(),
+        "job status should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("job_status: unavailable"));
+    assert!(stdout.contains("repair_action: redb outbox journal"));
+    assert!(stdout.contains("\\u{1b}]52;c;SGFja2Vk\\u{7}"));
+    assert!(!stdout.contains('\u{1b}'));
+    assert!(!stdout.contains('\u{7}'));
 }
 
 #[test]
