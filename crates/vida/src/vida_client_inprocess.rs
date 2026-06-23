@@ -4,6 +4,7 @@ use serde_json::json;
 use vida_contracts::{
     mvp_operation_registry, operations, VidaCommandEnvelope, VidaCommandResponse,
 };
+use vida_runtime_local::engine::local_runtime_capabilities;
 use vida_runtime_local::jobs::{
     job_status_payload, plan_outbox_job_from_redb, unavailable_job_status, RetryPolicy,
 };
@@ -107,12 +108,15 @@ impl LocalRuntimeVidaClient {
     }
 
     fn service_capabilities(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        let engine_capabilities = serde_json::to_value(local_runtime_capabilities())
+            .expect("serialize engine capabilities");
         pass_response(
             envelope,
             json!({
                 "service": "vida",
                 "status": "ready",
                 "mutation_apply_supported": false,
+                "engine_capabilities": engine_capabilities,
                 "capabilities": [
                     "read_status",
                     "read_events",

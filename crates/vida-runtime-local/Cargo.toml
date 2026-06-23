@@ -11,6 +11,7 @@ serde_json.workspace = true
 taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-state = { path = "../taskflow-state" }
 taskflow-state-redb = { path = "../taskflow-state-redb" }
+vida-contracts = { path = "../vida-contracts" }
 
 [dev-dependencies]
 tempfile = "3.27.0"

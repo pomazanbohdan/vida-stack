@@ -212,6 +212,39 @@ fn cli_job_status_default_output_exposes_blocker_repair_without_json() {
 }
 
 #[test]
+fn cli_service_capabilities_default_output_is_actionable_without_json() {
+    let output = vida()
+        .args(["service", "capabilities"])
+        .output()
+        .expect("service capabilities command should execute");
+    assert!(
+        output.status.success(),
+        "service capabilities should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("vida service capabilities"));
+    assert!(stdout.contains("engine_id: vida-runtime-local"));
+    assert!(stdout.contains("engine_kind: local_redb_effectum"));
+    assert!(stdout.contains("engine_contract: vida-runtime-engine-v1"));
+    assert!(stdout.contains("capabilities[7]{capability,supported,mode,blocker_code}:"));
+    assert!(stdout.contains("jobs,true,redb_outbox_effectum,"));
+    assert!(stdout.contains("durable_timers,false,unsupported,unsupported_engine_capability"));
+    assert!(!stdout.contains("--json"));
+
+    let json = run_json(&["service", "capabilities", "--json"]);
+    assert_eq!(
+        json["response"]["result"]["engine_capabilities"]["engine_id"],
+        "vida-runtime-local"
+    );
+    assert_eq!(
+        json["response"]["result"]["engine_capabilities"]["contract_version"],
+        "vida-runtime-engine-v1"
+    );
+}
+
+#[test]
 fn cli_help_description_inventory_covers_service_first_proxy_commands() {
     for (args, expected) in [
         (

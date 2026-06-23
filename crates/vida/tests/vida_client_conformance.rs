@@ -169,6 +169,29 @@ fn local_runtime_status_reflects_current_project_root() {
 }
 
 #[test]
+fn local_runtime_capabilities_expose_engine_negotiation_snapshot() {
+    let response = execute(operations::SERVICE_CAPABILITIES);
+    let result = response.result.expect("capability result");
+    let engine = &result["engine_capabilities"];
+
+    assert_eq!(engine["contract_version"], "vida-runtime-engine-v1");
+    assert_eq!(engine["engine_id"], "vida-runtime-local");
+    assert_eq!(engine["engine_kind"], "local_redb_effectum");
+    assert!(engine["capabilities"]
+        .as_array()
+        .expect("capability rows")
+        .iter()
+        .any(|entry| entry["capability"] == "jobs" && entry["supported"] == true));
+    assert!(engine["capabilities"]
+        .as_array()
+        .expect("capability rows")
+        .iter()
+        .any(|entry| entry["capability"] == "durable_timers"
+            && entry["supported"] == false
+            && entry["blocker_code"] == "unsupported_engine_capability"));
+}
+
+#[test]
 fn local_runtime_project_registry_and_status_use_current_worktree() {
     let list = execute(operations::PROJECT_REGISTRY_LIST)
         .result
