@@ -1,6 +1,7 @@
 param(
     [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "release-package", "release-install", "target-dir-policy", "invoke-timed-argv-smoke")]
     [string]$Mode = "quick",
+    [string]$Package = "vida",
     [string]$TestFilter = "",
     [string[]]$FormatFile = @(),
     [string[]]$AllowDirtyFile = @(),
@@ -230,14 +231,14 @@ Initialize-WindowsHostEnvironment
 function Show-Help {
     @"
 Usage:
-  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode <mode> [-Json] [-Jobs <n>] [-TestFilter <filter>]
+  pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode <mode> [-Json] [-Jobs <n>] [-Package <crate>] [-TestFilter <filter>]
   pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode release-package -SkipBuild -Windows -ReleaseBinDir <dir> [-ReleaseVersion vX.Y.Z] [-Json]
 
 Modes:
   script-check      No-Cargo proof for diffs, runtime boundaries, and script syntax.
   quick             Debug source proof: git diff check, cargo fmt, cargo check.
   scoped-format     Format only explicit -FormatFile Rust files and fail on out-of-scope dirty files.
-  focused-nextest   Focused vida package test proof; requires -TestFilter.
+  focused-nextest   Focused package test proof; defaults to -Package vida and requires -TestFilter.
   package-nextest   Full vida package test proof with the default nextest profile.
   workspace-nextest Workspace nextest proof with the CI profile.
   doc-test          Workspace Rust doc tests.
@@ -1061,12 +1062,18 @@ $ProbeArgs | ConvertTo-Json -Compress
             Write-Error "-Mode focused-nextest requires -TestFilter <filter>."
             exit 2
         }
+        $trimmedPackage = $Package.Trim()
+        if ($trimmedPackage.Length -eq 0) {
+            Write-Error "-Mode focused-nextest requires non-empty -Package <crate>."
+            exit 2
+        }
         $trimmedTestFilter = $TestFilter.Trim()
         if ($trimmedTestFilter.Length -gt 0) {
             if (-not $Json) {
+                Write-Output ("focused-nextest package: {0}" -f $trimmedPackage)
                 Write-Output ("focused-nextest filter: {0}" -f $trimmedTestFilter)
             }
-            Invoke-Timed "nextest-focused" (New-NextestCommand -NextestArgs @("-p", "vida", "--profile", "default", $trimmedTestFilter))
+            Invoke-Timed "nextest-focused:$trimmedPackage" (New-NextestCommand -NextestArgs @("-p", $trimmedPackage, "--profile", "default", $trimmedTestFilter))
         }
     } elseif ($Mode -eq "package-nextest") {
         Invoke-Timed "nextest-package-vida" (New-NextestCommand -NextestArgs @("-p", "vida", "--profile", "default"))
