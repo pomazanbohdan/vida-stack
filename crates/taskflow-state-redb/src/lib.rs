@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
@@ -589,6 +590,7 @@ impl RedbOperationalJournal {
         snapshot: &taskflow_state_fs::TaskSnapshot,
     ) -> Result<RedbTaskflowSnapshotParity, TaskflowStateError> {
         let normalized = normalize_taskflow_snapshot(snapshot);
+        validate_taskflow_snapshot_storage_keys(&normalized)?;
         let write = self.db.begin_write().map_err(storage_error)?;
         {
             let mut tasks = write
@@ -622,7 +624,7 @@ impl RedbOperationalJournal {
             }
         }
         write.commit().map_err(storage_error)?;
-        Ok(taskflow_snapshot_fingerprint(&normalized))
+        self.taskflow_snapshot_parity(&normalized)
     }
 
     pub fn export_taskflow_snapshot(
@@ -1319,6 +1321,32 @@ fn normalize_taskflow_snapshot(
         tasks,
         dependencies,
     }
+}
+
+fn validate_taskflow_snapshot_storage_keys(
+    snapshot: &taskflow_state_fs::TaskSnapshot,
+) -> Result<(), TaskflowStateError> {
+    let mut task_ids = BTreeSet::new();
+    for task in &snapshot.tasks {
+        if !task_ids.insert(task.id.as_str().to_string()) {
+            return Err(TaskflowStateError::Storage(format!(
+                "taskflow snapshot import rejected duplicate task id: {}",
+                task.id.as_str()
+            )));
+        }
+    }
+
+    let mut dependency_keys = BTreeSet::new();
+    for dependency in &snapshot.dependencies {
+        let key = task_dependency_key(dependency);
+        if !dependency_keys.insert(key.clone()) {
+            return Err(TaskflowStateError::Storage(format!(
+                "taskflow snapshot import rejected duplicate dependency key: {key}"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 fn taskflow_snapshot_fingerprint(
@@ -2488,6 +2516,105 @@ mod tests {
         assert_eq!(exported.tasks.len(), 1);
         assert_eq!(exported.tasks[0].id.as_str(), "vida-root");
         assert!(exported.dependencies.is_empty());
+    }
+
+    #[test]
+    fn redb_shadow_replace_rejects_duplicate_task_ids() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+        let duplicate = taskflow_state_fs::TaskSnapshot {
+            tasks: vec![
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-duplicate"),
+                    "First",
+                    taskflow_core::IssueType::Task,
+                ),
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-duplicate"),
+                    "Second",
+                    taskflow_core::IssueType::Task,
+                ),
+            ],
+            dependencies: Vec::new(),
+        };
+
+        let error = journal
+            .replace_taskflow_snapshot(&duplicate)
+            .expect_err("duplicate task ids must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("taskflow snapshot import rejected duplicate task id: vida-duplicate")
+        );
+        assert!(
+            journal
+                .export_taskflow_snapshot()
+                .expect("export should pass")
+                .tasks
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn redb_shadow_replace_rejects_colliding_dependency_keys() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+        let colliding = taskflow_state_fs::TaskSnapshot {
+            tasks: vec![
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-a\u{1f}b"),
+                    "A",
+                    taskflow_core::IssueType::Task,
+                ),
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-c"),
+                    "C",
+                    taskflow_core::IssueType::Task,
+                ),
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-a"),
+                    "A delimiter",
+                    taskflow_core::IssueType::Task,
+                ),
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-b\u{1f}vida-c"),
+                    "B delimiter",
+                    taskflow_core::IssueType::Task,
+                ),
+            ],
+            dependencies: vec![
+                DependencyEdge {
+                    issue_id: taskflow_core::TaskId::new("vida-a\u{1f}b"),
+                    depends_on_id: taskflow_core::TaskId::new("vida-c"),
+                    dependency_type: "blocks".to_string(),
+                },
+                DependencyEdge {
+                    issue_id: taskflow_core::TaskId::new("vida-a"),
+                    depends_on_id: taskflow_core::TaskId::new("vida-b\u{1f}vida-c"),
+                    dependency_type: "blocks".to_string(),
+                },
+            ],
+        };
+
+        let error = journal
+            .replace_taskflow_snapshot(&colliding)
+            .expect_err("colliding dependency storage keys must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("taskflow snapshot import rejected duplicate dependency key")
+        );
+        assert!(
+            journal
+                .export_taskflow_snapshot()
+                .expect("export should pass")
+                .dependencies
+                .is_empty()
+        );
     }
 
     #[test]
