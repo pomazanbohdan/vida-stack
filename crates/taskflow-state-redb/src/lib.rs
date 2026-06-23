@@ -1378,8 +1378,9 @@ fn reconcile_artifact_record(
     }
 
     let materialized_path = project_root.join(&record.path);
-    let content = match std::fs::read(&materialized_path) {
-        Ok(content) => content,
+    let root = project_root.canonicalize().map_err(storage_error)?;
+    let metadata = match std::fs::symlink_metadata(&materialized_path) {
+        Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(RedbArtifactReconciliationRecord {
                 artifact_ref: record.artifact_ref,
@@ -1390,6 +1391,32 @@ fn reconcile_artifact_record(
                 detail: Some("artifact path is not materialized".to_string()),
             });
         }
+        Err(error) => return Err(storage_error(error)),
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Ok(RedbArtifactReconciliationRecord {
+            artifact_ref: record.artifact_ref,
+            path: record.path,
+            expected_content_hash: record.content_hash,
+            computed_content_hash: None,
+            status: "out_of_root".to_string(),
+            detail: Some("artifact path must be a regular file under the project root".to_string()),
+        });
+    }
+    let materialized_path = materialized_path.canonicalize().map_err(storage_error)?;
+    if !materialized_path.starts_with(&root) {
+        return Ok(RedbArtifactReconciliationRecord {
+            artifact_ref: record.artifact_ref,
+            path: record.path,
+            expected_content_hash: record.content_hash,
+            computed_content_hash: None,
+            status: "out_of_root".to_string(),
+            detail: Some("artifact path must remain under the project root".to_string()),
+        });
+    }
+
+    let content = match std::fs::read(&materialized_path) {
+        Ok(content) => content,
         Err(error) => return Err(storage_error(error)),
     };
     let computed = content_hash_for_expected(&record.content_hash, &content);
@@ -2292,6 +2319,52 @@ mod tests {
             mismatch[0].computed_content_hash.as_deref(),
             Some(indexed.content_hash.as_str())
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn artifact_hash_reconciliation_rejects_symlink_escape() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let artifact_dir = dir.path().join("artifacts");
+        fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+        let outside = dir
+            .path()
+            .parent()
+            .expect("temp parent")
+            .join(format!("outside-secret-{}.txt", std::process::id()));
+        fs::write(
+            &outside,
+            b"outside secret
+",
+        )
+        .expect("write outside secret");
+        let symlink_path = artifact_dir.join("secret_link.txt");
+        std::os::unix::fs::symlink(&outside, &symlink_path).expect("create symlink");
+
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal
+            .append(append_request(0, vec![event(1)], Vec::new()))
+            .expect("append should pass");
+        journal.index_artifact(JournalArtifactRecord {
+            artifact_ref: taskflow_contracts::VidaArtifactRef("artifact-symlink".to_string()),
+            content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            path: "artifacts/secret_link.txt".to_string(),
+        });
+
+        let reconciled = journal
+            .reconcile_artifact_hashes(dir.path())
+            .expect("artifact reconcile symlink");
+        assert_eq!(reconciled.len(), 1);
+        assert_eq!(reconciled[0].status, "out_of_root");
+        assert_eq!(reconciled[0].computed_content_hash, None);
+        assert_eq!(
+            reconciled[0].detail.as_deref(),
+            Some("artifact path must be a regular file under the project root")
+        );
+
+        fs::remove_file(&outside).expect("remove outside secret");
     }
 
     #[test]
