@@ -10944,7 +10944,7 @@ mod tests {
         assert_eq!(
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
                 .as_deref(),
-            Some("vida lane show run-stale-binding --json")
+            Some("vida lane show run-stale-binding")
         );
     }
 
@@ -13327,6 +13327,16 @@ mod tests {
         )
         .await
         .expect("seed should be generated");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "dispatch-init-exception-replay-claim",
+                run_id,
+                run_id,
+                "runtime-recovery-contract",
+                "crates/vida/src/taskflow_run_graph.rs",
+            )
+            .await
+            .expect("current session should claim dispatch-init exception replay");
         persist_seed_artifacts(&store, &payload)
             .await
             .expect("persist seeded artifacts should succeed");
@@ -14650,35 +14660,14 @@ mod tests {
             .record_run_graph_status(&stale_status)
             .await
             .expect("persist stale latest run status");
-        let owner_evidence =
-            crate::orchestrator_session_surface::build_runtime_owner_evidence(store.root(), true)
-                .expect("current owner evidence should build");
-        let current_session = &owner_evidence["current_session"];
-        let current_session_id = current_session["session_id"]
-            .as_str()
-            .expect("current session id should exist")
-            .to_string();
-        let worktree_environment_id = current_session["worktree_environment_id"]
-            .as_str()
-            .unwrap_or_else(|| store.root().to_str().unwrap_or_default())
-            .to_string();
         store
-            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
-                claim_id: "dispatch-init-refresh-current-run-claim".to_string(),
-                state_root_id: store.root().display().to_string(),
-                worktree_environment_id,
-                orchestrator_session_id: current_session_id,
-                process_id: Some(std::process::id()),
-                task_id: Some("task-refresh-latest".to_string()),
-                run_id: Some("task-refresh-latest".to_string()),
-                lane_id: None,
-                claim_kind: "active_task_session_claim".to_string(),
-                conflict_domain: Some("runtime-recovery-contract".to_string()),
-                owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
-                read_only_paths: Vec::new(),
-                lease_mode: crate::state_store::LeaseMode::Observe,
-                lease_seconds: 3600,
-            })
+            .acquire_current_session_run_graph_claim_for_test(
+                "dispatch-init-refresh-current-run-claim",
+                "task-refresh-latest",
+                "task-refresh-latest",
+                "runtime-recovery-contract",
+                "crates/vida/src/taskflow_run_graph.rs",
+            )
             .await
             .expect("current session should claim dispatch-init target run");
 
@@ -14789,7 +14778,7 @@ mod tests {
             .expect_err("active exception takeover should block route advance");
 
         assert!(error.contains("active exception takeover"));
-        assert!(error.contains("vida lane takeover-ready run-active-exception-advance --json"));
+        assert!(error.contains("vida lane takeover-ready run-active-exception-advance"));
         assert!(
             !error.contains("currently supports only seeded implementation"),
             "advance should not mask active exception takeover behind route support errors"

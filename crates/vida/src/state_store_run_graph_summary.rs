@@ -1811,7 +1811,13 @@ impl StateStore {
             task_ids: Vec::new(),
         };
         for claim in self.active_orchestrator_claims().await? {
-            if claim.orchestrator_session_id != current_session_id {
+            let claim_matches_current_session = claim.orchestrator_session_id == current_session_id
+                || current_stable_fallback.as_deref().is_some_and(|fallback| {
+                    let fallback = fallback.trim();
+                    !fallback.is_empty() && claim.orchestrator_session_id == fallback
+                })
+                || claim.process_id == Some(std::process::id());
+            if !claim_matches_current_session {
                 continue;
             }
             if let Some(run_id) = claim.run_id {
@@ -1909,6 +1915,53 @@ impl StateStore {
         } else {
             Ok(Some(scope))
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn acquire_current_session_run_graph_claim_for_test(
+        &self,
+        claim_id: &str,
+        run_id: &str,
+        task_id: &str,
+        conflict_domain: &str,
+        owned_path: &str,
+    ) -> Result<OrchestratorClaim, StateStoreError> {
+        let owner_evidence = self.current_runtime_owner_evidence()?;
+        let current_session = &owner_evidence["current_session"];
+        let current_session_id = current_session["session_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| StateStoreError::InvalidTaskRecord {
+                reason: "test run-graph claim requires current session id".to_string(),
+            })?;
+        let claim_session_id = current_session
+            ["fallback_replaces_legacy_stable_worktree_state_hash"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current_session_id);
+        let worktree_environment_id = current_session["worktree_environment_id"]
+            .as_str()
+            .unwrap_or_else(|| self.root().to_str().unwrap_or_default())
+            .to_string();
+        self.acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+            claim_id: claim_id.to_string(),
+            state_root_id: self.root().display().to_string(),
+            worktree_environment_id,
+            orchestrator_session_id: claim_session_id.to_string(),
+            process_id: Some(std::process::id()),
+            task_id: Some(task_id.to_string()),
+            run_id: Some(run_id.to_string()),
+            lane_id: None,
+            claim_kind: "active_task_session_claim".to_string(),
+            conflict_domain: Some(conflict_domain.to_string()),
+            owned_paths: vec![owned_path.to_string()],
+            read_only_paths: Vec::new(),
+            lease_mode: LeaseMode::Observe,
+            lease_seconds: 3600,
+        })
+        .await
     }
 
     fn ensure_runtime_owner_mutation_allowed(
@@ -2032,7 +2085,13 @@ impl StateStore {
             .map(|task_id| task_id.trim().to_string())
             .filter(|task_id| !task_id.is_empty());
         for claim in active_claims {
-            if claim.orchestrator_session_id == current_session_id
+            let claim_matches_current_session = claim.orchestrator_session_id == current_session_id
+                || current_stable_fallback.is_some_and(|fallback| {
+                    let fallback = fallback.trim();
+                    !fallback.is_empty() && claim.orchestrator_session_id == fallback
+                })
+                || claim.process_id == Some(std::process::id());
+            if claim_matches_current_session
                 && claim
                     .run_id
                     .as_deref()
@@ -2040,7 +2099,7 @@ impl StateStore {
             {
                 return Ok(());
             }
-            if claim.orchestrator_session_id == current_session_id
+            if claim_matches_current_session
                 && run_task_id.as_deref().is_some_and(|task_id| {
                     claim
                         .task_id
@@ -7676,6 +7735,16 @@ mod tests {
             .record_run_graph_dispatch_receipt(&receipt)
             .await
             .expect("persist exception takeover receipt");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "advanced-exception-handoff-claim",
+                "run-exception-advanced",
+                "task-exception-advanced",
+                "run-graph-continuation-ownership",
+                "crates/vida/src/state_store_run_graph_summary.rs",
+            )
+            .await
+            .expect("current session should claim advanced exception fixture");
 
         let mut advanced = status.clone();
         advanced.active_node = "coach".to_string();
@@ -9710,6 +9779,16 @@ mod tests {
             })
             .await
             .expect("record exception takeover receipt");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "next-lawful-stale-binding-claim",
+                "run-next-lawful-stale",
+                "task-next-lawful-stale",
+                "run-graph-continuation-ownership",
+                "crates/vida/src/state_store_run_graph_summary.rs",
+            )
+            .await
+            .expect("current session should claim next-lawful stale fixture");
 
         store
             .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
