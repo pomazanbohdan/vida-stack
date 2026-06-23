@@ -10,6 +10,9 @@ use runtime_path_policy::{
 use serde::Serialize;
 use taskflow_host_bridge::{
     host_bridge_artifact_has_retryable_completion_blocker,
+    host_bridge_completed_artifact_status_is_admissible,
+    host_bridge_completed_result_execution_state_is_admissible,
+    host_bridge_completed_result_status_is_admissible,
     host_bridge_completion_authorized_request_artifacts, host_bridge_completion_retryable_blocker,
     host_bridge_completion_verdict, host_bridge_request_artifacts_are_bare_completion_candidates,
     host_bridge_request_requires_implementation_artifacts,
@@ -3618,6 +3621,9 @@ fn host_bridge_request_has_retryable_completion_evidence(
     let Ok(request) = read_host_bridge_request(state_root, request_path) else {
         return false;
     };
+    if host_bridge_request_has_completed_preview_refresh_evidence(state_root, &request) {
+        return true;
+    }
     for field in ["receipt_path", "result_path"] {
         let Ok(raw_path) = host_bridge_path_string(&request, field) else {
             continue;
@@ -3636,6 +3642,77 @@ fn host_bridge_request_has_retryable_completion_evidence(
         }
     }
     false
+}
+
+fn host_bridge_request_has_completed_preview_refresh_evidence(
+    state_root: &Path,
+    request: &serde_json::Value,
+) -> bool {
+    let Some(status) = request
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+    else {
+        return false;
+    };
+    if !host_bridge_completed_artifact_status_is_admissible(status) && status != "completed" {
+        return false;
+    }
+    if request
+        .get("dispatch_transport")
+        .and_then(serde_json::Value::as_str)
+        != Some("host_tool_bridge")
+    {
+        return false;
+    }
+    let Ok(raw_result_path) = host_bridge_path_string(request, "result_path") else {
+        return false;
+    };
+    let result_path =
+        crate::runtime_dispatch_state::normalize_persisted_runtime_path(raw_result_path);
+    let Ok(result_path) =
+        canonicalize_existing_regular_state_path(state_root, &result_path, "result_path")
+    else {
+        return false;
+    };
+    let Ok(result) = read_host_bridge_json_artifact_at_path(&result_path) else {
+        return false;
+    };
+    let result_status = result
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if !result_status.is_some_and(host_bridge_completed_result_status_is_admissible) {
+        return false;
+    }
+    let execution_state = result
+        .get("execution_state")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if !execution_state.is_some_and(host_bridge_completed_result_execution_state_is_admissible) {
+        return false;
+    }
+    for field in ["request_id", "run_id", "dispatch_target"] {
+        let request_value = request
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim);
+        let result_value = result
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim);
+        if request_value.is_some() && result_value.is_some() && request_value != result_value {
+            return false;
+        }
+    }
+    result
+        .get("allowed_next_node")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "next")
+        .is_some()
 }
 
 fn host_bridge_completion_request_required(

@@ -21,7 +21,9 @@ use runtime_path_policy::{
 use taskflow_host_bridge::{
     build_host_bridge_adapter_payload, build_host_bridge_normalized_implementation_artifact,
     host_bridge_artifact_file, host_bridge_artifact_has_retryable_completion_blocker,
-    host_bridge_changed_files_from_artifact, host_bridge_completion_retryable_blocker,
+    host_bridge_changed_files_from_artifact, host_bridge_completed_artifact_status_is_admissible,
+    host_bridge_completed_result_execution_state_is_admissible,
+    host_bridge_completed_result_status_is_admissible, host_bridge_completion_retryable_blocker,
     host_bridge_normalized_implementation_artifact_path, host_bridge_operator_fields,
     host_bridge_provenance_public_blocker_code, host_bridge_request_implementation_artifacts,
     host_bridge_request_owned_paths, host_bridge_request_requires_implementation_artifacts,
@@ -428,7 +430,9 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
             blockers.dedup();
         }
     }
-    if host_bridge_packet_is_empty_object(canonical_packet_path.as_deref()) {
+    if host_bridge_packet_is_empty_object(canonical_packet_path.as_deref())
+        && !completed_host_bridge_completion_request_for_state_root(&state_root, request)
+    {
         blockers.push(blocker_code_value(
             taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing,
         ));
@@ -597,6 +601,9 @@ fn retryable_host_bridge_completion_request_for_state_root(
     state_root: &Path,
     request: &serde_json::Value,
 ) -> bool {
+    if completed_host_bridge_completion_request_for_state_root(state_root, request) {
+        return true;
+    }
     if !matches!(
         host_bridge_request_string(request, "status"),
         Some(status)
@@ -628,6 +635,63 @@ fn retryable_host_bridge_completion_request_for_state_root(
         }
     }
     false
+}
+
+fn completed_host_bridge_completion_request_for_state_root(
+    state_root: &Path,
+    request: &serde_json::Value,
+) -> bool {
+    let Some(status) = host_bridge_request_string(request, "status") else {
+        return false;
+    };
+    if !host_bridge_completed_artifact_status_is_admissible(status) && status != "completed" {
+        return false;
+    }
+    if host_bridge_request_string(request, "dispatch_transport") != Some("host_tool_bridge") {
+        return false;
+    }
+    let Some(raw_result_path) = host_bridge_request_string(request, "result_path") else {
+        return false;
+    };
+    let Ok(result_path) = canonical_state_artifact_path(state_root, raw_result_path, true) else {
+        return false;
+    };
+    let Ok(result) = read_canonical_host_bridge_json_artifact(&result_path, "host bridge result")
+    else {
+        return false;
+    };
+    let result_status = result
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if !result_status.is_some_and(host_bridge_completed_result_status_is_admissible) {
+        return false;
+    }
+    let execution_state = result
+        .get("execution_state")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if !execution_state.is_some_and(host_bridge_completed_result_execution_state_is_admissible) {
+        return false;
+    }
+    for field in ["request_id", "run_id", "dispatch_target"] {
+        let request_value = host_bridge_request_string(request, field).map(str::trim);
+        let result_value = result
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim);
+        if request_value.is_some() && result_value.is_some() && request_value != result_value {
+            return false;
+        }
+    }
+    result
+        .get("allowed_next_node")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "next")
+        .is_some()
 }
 
 fn retryable_host_bridge_completion_request(
@@ -5550,7 +5614,15 @@ mod tests {
         std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
             .expect("packet parent should be created");
         std::fs::write(&request_path, b"{}").expect("request file should be written");
-        std::fs::write(&packet_path, b"{}").expect("packet file should be written");
+        std::fs::write(
+            &packet_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "run_id": "run-pending",
+                "dispatch_target": "implementer"
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet file should be written");
 
         let request = serde_json::json!({
             "schema_version": 1,
@@ -5627,6 +5699,143 @@ mod tests {
 
         assert!(!blockers.contains(&"host_bridge_dispatch_receipt_inactive".to_string()));
         assert_eq!(blockers, Vec::<String>::new());
+    }
+
+    #[test]
+    fn host_bridge_provenance_allows_completed_pass_preview_refresh() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path();
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path =
+            state_root.join("runtime-consumption/dispatch-packets/run-completed.json");
+        let result_path = state_root.join("host-tool-bridge/results/result.json");
+        let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
+        for path in [&request_path, &packet_path, &result_path, &receipt_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("artifact parent should be created");
+        }
+        std::fs::write(
+            &packet_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "run_id": "run-completed",
+                "dispatch_target": "analyst"
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet file should be written");
+        std::fs::write(
+            &result_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "status": "pass",
+                "execution_state": "executed",
+                "request_id": "req-completed",
+                "run_id": "run-completed",
+                "dispatch_target": "analyst",
+                "decision": "approve",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "allowed_next_node": "developer"
+            }))
+            .expect("result should serialize"),
+        )
+        .expect("result file should be written");
+        std::fs::write(
+            &receipt_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_receipt",
+                "status": "pass",
+                "request_id": "req-completed",
+                "run_id": "run-completed",
+                "dispatch_target": "analyst",
+                "allowed_next_node": "developer",
+                "result_path": result_path.display().to_string()
+            }))
+            .expect("receipt should serialize"),
+        )
+        .expect("receipt file should be written");
+
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pass",
+            "request_id": "req-completed",
+            "run_id": "run-completed",
+            "dispatch_target": "analyst",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("request file should be written");
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let blockers = runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.to_path_buf())
+                .await
+                .expect("state store should open");
+            store
+                .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                    run_id: "run-completed".to_string(),
+                    dispatch_target: "analyst".to_string(),
+                    dispatch_status: "executed".to_string(),
+                    lane_status: "lane_completed".to_string(),
+                    supersedes_receipt_id: None,
+                    exception_path_receipt_id: None,
+                    dispatch_kind: "agent_lane".to_string(),
+                    dispatch_surface: Some("vida agent-init".to_string()),
+                    dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+                    dispatch_packet_path: Some(packet_path.display().to_string()),
+                    dispatch_result_path: Some(result_path.display().to_string()),
+                    blocker_code: None,
+                    downstream_dispatch_target: None,
+                    downstream_dispatch_command: None,
+                    downstream_dispatch_note: None,
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: Vec::new(),
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: Some(result_path.display().to_string()),
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("internal_subagents".to_string()),
+                    activation_runtime_role: Some("worker".to_string()),
+                    selected_backend: Some("internal_subagents".to_string()),
+                    recorded_at: "2026-06-23T00:00:00Z".to_string(),
+                })
+                .await
+                .expect("completed host bridge receipt should record");
+            let blockers = super::host_bridge_request_provenance_blockers_for_state_root(
+                state_root,
+                &request_path,
+                &request,
+            )
+            .await;
+            store.close().await;
+            blockers
+        });
+
+        assert_eq!(blockers, Vec::<String>::new());
+        let payload =
+            host_bridge_adapter_payload(&request_path, &request, blockers, Some(&state_root));
+        assert_eq!(payload["status"], "pass");
+        assert!(!payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
     }
 
     #[test]
