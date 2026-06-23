@@ -472,6 +472,44 @@ Meta-analysis remediation:
 7. If remediation cannot be completed inside the just-closed task, create or
    update a follow-up with acceptance criteria and cite it in the scorecard.
 
+Development-time defect batching:
+
+1. Defects found while closing or proving another task must be classified before
+   creating a new leaf task:
+   - `blocks_current_closure`: prevents the current task, commit, release,
+     install, or proof from completing; fix inside the current task when it fits
+     the same ownership boundary, or create one blocker task if ownership differs.
+   - `same_surface_batch`: shares the same command family, output contract,
+     runtime gate, proof script, or recovery path with other findings; add it to
+     the current open batch task for that surface instead of creating one leaf per
+     symptom.
+   - `later_evidence_only`: useful evidence but not blocking and not enough to
+     define acceptance; record it in the batch task notes or scorecard until a
+     concrete invariant is clear.
+2. A batch task is the default container for related runtime-DX defects discovered
+   during development. Name the invariant, not the first symptom. Examples:
+   default output/actionability, proof/build gate friction, agent/exception/lane
+   recovery, PR intake closeout, and release/install feedback.
+3. A batch task must carry an acceptance matrix: affected commands or surfaces,
+   default TOON/plain output, explicit JSON parity when applicable, help or
+   next-action text, proof artifacts, and release/install impact. Close the batch
+   only after the matrix is green or after out-of-scope rows are split with a
+   recorded reason.
+4. Create a separate new leaf task only when the defect has a different owner
+   surface, blocks the current closure independently, crosses a security/data
+   migration boundary, needs a separate release/install proof, or would make the
+   batch too broad to validate in one proof cycle.
+5. If a batch already exists, update that task with the new reproduction,
+   acceptance row, and proof target. Do not inflate epic totals by creating a new
+   task for every small default-output, option-help, lock, or recovery-friction
+   symptom.
+6. Commit and release per batch, not per small symptom, unless the symptom is a
+   `blocks_current_closure` fix. The scorecard must report batch membership,
+   newly added rows, rows closed, and whether total epic scope grew.
+7. Epic progress reports after a defect-finding segment must include both raw
+   TaskFlow percent and scope delta: tasks closed, tasks created, net open
+   change, and whether new items were batch rows or new leaf tasks.
+
 ## Post-Task Optimization Checklist
 
 After every task, the orchestrator must track:
