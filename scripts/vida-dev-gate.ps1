@@ -577,7 +577,7 @@ function Get-ChangedBashScripts {
 
 function New-NextestCommand {
     param(
-        [string[]]$Args
+        [string[]]$NextestArgs
     )
 
     $command = New-Object System.Collections.Generic.List[string]
@@ -585,7 +585,7 @@ function New-NextestCommand {
     $command.Add("nextest")
     $command.Add("run")
     $command.Add("--locked")
-    foreach ($arg in $Args) {
+    foreach ($arg in $NextestArgs) {
         $command.Add($arg)
     }
     if ($Jobs -gt 0) {
@@ -869,13 +869,17 @@ try {
             Write-Error "-Mode focused-nextest requires -TestFilter <filter>."
             exit 2
         }
-        if ($TestFilter.Trim().Length -gt 0) {
-            Invoke-Timed "nextest-focused" (New-NextestCommand @("-p", "vida", "--profile", "default", $TestFilter))
+        $trimmedTestFilter = $TestFilter.Trim()
+        if ($trimmedTestFilter.Length -gt 0) {
+            if (-not $Json) {
+                Write-Output ("focused-nextest filter: {0}" -f $trimmedTestFilter)
+            }
+            Invoke-Timed "nextest-focused" (New-NextestCommand -NextestArgs @("-p", "vida", "--profile", "default", $trimmedTestFilter))
         }
     } elseif ($Mode -eq "package-nextest") {
-        Invoke-Timed "nextest-package-vida" (New-NextestCommand @("-p", "vida", "--profile", "default"))
+        Invoke-Timed "nextest-package-vida" (New-NextestCommand -NextestArgs @("-p", "vida", "--profile", "default"))
     } elseif ($Mode -eq "workspace-nextest") {
-        Invoke-Timed "nextest-workspace" (New-NextestCommand @("--workspace", "--profile", "ci"))
+        Invoke-Timed "nextest-workspace" (New-NextestCommand -NextestArgs @("--workspace", "--profile", "ci"))
     } elseif ($Mode -eq "doc-test") {
         Invoke-Timed "cargo-doc-tests" @("cargo", "test", "--workspace", "--doc", "--locked")
     } elseif ($Mode -eq "build-debug") {
