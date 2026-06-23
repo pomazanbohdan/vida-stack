@@ -6969,6 +6969,24 @@ fn task_next_lawful_recommended_parallel_batch(
         .collect()
 }
 
+fn task_next_lawful_unique_top_priority_candidate(
+    ready_task_candidates: &[TaskContinuationCandidate],
+) -> Option<TaskContinuationCandidate> {
+    let top_priority = ready_task_candidates
+        .iter()
+        .map(|candidate| candidate.priority)
+        .min()?;
+    let mut top_candidates = ready_task_candidates
+        .iter()
+        .filter(|candidate| candidate.priority == top_priority);
+    let candidate = top_candidates.next()?.clone();
+    if top_candidates.next().is_none() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
 fn task_epic_ancestor_id(tasks: &[state_store::TaskRecord], task_id: &str) -> Option<String> {
     let by_id = tasks
         .iter()
@@ -7842,12 +7860,39 @@ fn task_next_lawful_receipt(
                 "no_ready_task_candidates",
                 "Create/import the next task or refresh TaskFlow state before continuing.",
             ),
-            _ => blocked_task_next_lawful_receipt(
-                serde_json::Value::Null,
-                ready_task_candidates,
-                "ambiguous_ready_task_candidates",
-                "Multiple ready tasks are available; choose and bind the intended bounded unit explicitly before implementation.",
-            ),
+            _ => {
+                if let Some(candidate) =
+                    task_next_lawful_unique_top_priority_candidate(&ready_task_candidates)
+                {
+                    pass_task_next_lawful_receipt(
+                        serde_json::json!({
+                            "task_id": candidate.task_id.clone(),
+                            "title": candidate.title.clone(),
+                            "status": candidate.status.clone(),
+                            "issue_type": candidate.issue_type.clone(),
+                        }),
+                        None,
+                        "unique highest-priority ready TaskFlow candidate after close/release automation",
+                        if candidate.ready_parallel_safe {
+                            "parallel_safe_unique_top_priority_candidate"
+                        } else {
+                            "sequential_only_unique_top_priority_candidate"
+                        },
+                        ready_task_candidates.clone(),
+                        format!(
+                            "Continue unique highest-priority ready task `{}`.",
+                            candidate.task_id
+                        ),
+                    )
+                } else {
+                    blocked_task_next_lawful_receipt(
+                        serde_json::Value::Null,
+                        ready_task_candidates,
+                        "ambiguous_ready_task_candidates",
+                        "Multiple ready tasks share continuation priority; choose and bind the intended bounded unit explicitly before implementation.",
+                    )
+                }
+            }
         },
         _ => blocked_task_next_lawful_receipt(
             serde_json::Value::Null,
@@ -14412,11 +14457,45 @@ mod tests {
     }
 
     #[test]
+    fn task_next_lawful_selects_unique_top_priority_ready_candidate() {
+        let mut top = owned_task_record("task-top", vec![]);
+        top.status = "open".to_string();
+        top.priority = 1;
+        let mut lower = owned_task_record("task-lower", vec![]);
+        lower.status = "open".to_string();
+        lower.priority = 2;
+        let ready = vec![
+            super::task_continuation_candidate(&top, false),
+            super::task_continuation_candidate(&lower, false),
+        ];
+
+        let receipt = task_next_lawful_receipt(&[top, lower], ready, None);
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.active_bounded_unit["task_id"], "task-top");
+        assert_eq!(
+            receipt.why_this_unit,
+            "unique highest-priority ready TaskFlow candidate after close/release automation"
+        );
+        assert_eq!(
+            receipt.sequential_vs_parallel_posture,
+            "sequential_only_unique_top_priority_candidate"
+        );
+        assert_eq!(
+            receipt.bind_command.as_deref(),
+            Some("vida taskflow run-graph dispatch-init task-top --json")
+        );
+        assert!(receipt.blocker_codes.is_empty());
+    }
+
+    #[test]
     fn task_next_lawful_blocks_multiple_ready_candidates() {
         let mut first = owned_task_record("task-a", vec![]);
         first.status = "open".to_string();
+        first.priority = 1;
         let mut second = owned_task_record("task-b", vec![]);
         second.status = "open".to_string();
+        second.priority = 1;
         let ready = vec![
             super::task_continuation_candidate(&first, false),
             super::task_continuation_candidate(&second, false),
