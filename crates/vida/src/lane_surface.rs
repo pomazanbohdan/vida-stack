@@ -11,7 +11,7 @@ use serde::Serialize;
 use taskflow_host_bridge::{
     host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
-    host_bridge_completed_result_execution_state_is_admissible,
+    host_bridge_completed_result_has_preview_refresh_evidence,
     host_bridge_completed_result_status_is_admissible,
     host_bridge_completion_authorized_request_artifacts, host_bridge_completion_retryable_blocker,
     host_bridge_completion_verdict, host_bridge_request_artifacts_are_bare_completion_candidates,
@@ -3681,70 +3681,7 @@ fn host_bridge_request_has_completed_preview_refresh_evidence(
     let Ok(result) = read_host_bridge_json_artifact_at_path(&result_path) else {
         return false;
     };
-    let result_status = result
-        .get("status")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if !result_status.is_some_and(host_bridge_completed_result_status_is_admissible) {
-        return false;
-    }
-    let execution_state = result
-        .get("execution_state")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if !execution_state.is_some_and(host_bridge_completed_result_execution_state_is_admissible) {
-        return false;
-    }
-    if result
-        .get("artifact_kind")
-        .and_then(serde_json::Value::as_str)
-        != Some("host_tool_bridge_result")
-    {
-        return false;
-    }
-    if result
-        .pointer("/execution_evidence/receipt_backed")
-        .and_then(serde_json::Value::as_bool)
-        != Some(true)
-    {
-        return false;
-    }
-    if result
-        .get("source_dispatch_packet_path")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_none()
-    {
-        return false;
-    }
-    for field in ["request_id", "run_id", "dispatch_target"] {
-        let Some(request_value) = request
-            .get(field)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-        else {
-            return false;
-        };
-        let Some(result_value) = result
-            .get(field)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-        else {
-            return false;
-        };
-        if request_value.is_empty() || result_value.is_empty() || request_value != result_value {
-            return false;
-        }
-    }
-    result
-        .get("allowed_next_node")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "next")
-        .is_some()
+    host_bridge_completed_result_has_preview_refresh_evidence(&request, &result)
 }
 
 fn host_bridge_completion_request_required(

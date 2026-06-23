@@ -7,7 +7,7 @@ use time::OffsetDateTime;
 
 use crate::provenance::HostBridgeProvenanceDecision;
 use crate::receipt_binding::DispatchReceiptBindingDecision;
-use crate::request::HostBridgeRequest;
+use crate::request::{HostBridgeRequest, host_bridge_request_string};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostBridgeCompletionInput {
@@ -366,6 +366,70 @@ pub fn host_bridge_completed_result_status_is_admissible(status: &str) -> bool {
 #[must_use]
 pub fn host_bridge_completed_result_execution_state_is_admissible(execution_state: &str) -> bool {
     matches!(execution_state, "executed" | "blocked")
+}
+
+#[must_use]
+pub fn host_bridge_completed_result_has_preview_refresh_evidence(
+    request: &Value,
+    result: &Value,
+) -> bool {
+    let result_status = result
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if !result_status.is_some_and(host_bridge_completed_result_status_is_admissible) {
+        return false;
+    }
+    let execution_state = result
+        .get("execution_state")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if !execution_state.is_some_and(host_bridge_completed_result_execution_state_is_admissible) {
+        return false;
+    }
+    if result.get("artifact_kind").and_then(Value::as_str) != Some("host_tool_bridge_result") {
+        return false;
+    }
+    if result
+        .pointer("/execution_evidence/receipt_backed")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return false;
+    }
+    if result
+        .get("source_dispatch_packet_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        return false;
+    }
+    for field in ["request_id", "run_id", "dispatch_target"] {
+        let Some(request_value) = host_bridge_request_string(request, field) else {
+            return false;
+        };
+        let Some(result_value) = result
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return false;
+        };
+        if request_value != result_value {
+            return false;
+        }
+    }
+    result
+        .get("allowed_next_node")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "next")
+        .is_some()
 }
 
 #[must_use]
@@ -1016,6 +1080,48 @@ mod tests {
         ));
         assert!(host_bridge_completed_result_execution_state_is_admissible(
             "blocked"
+        ));
+    }
+
+    #[test]
+    fn completed_result_preview_refresh_evidence_requires_provenance_and_identity() {
+        let request = serde_json::json!({
+            "request_id": "req-1",
+            "run_id": "run-1",
+            "dispatch_target": "developer"
+        });
+        let result = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "artifact_kind": "host_tool_bridge_result",
+            "execution_evidence": {
+                "receipt_backed": true
+            },
+            "source_dispatch_packet_path": "runtime-consumption/dispatch-packet.json",
+            "request_id": "req-1",
+            "run_id": "run-1",
+            "dispatch_target": "developer",
+            "allowed_next_node": "tester"
+        });
+
+        assert!(host_bridge_completed_result_has_preview_refresh_evidence(
+            &request, &result
+        ));
+
+        let forged = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "allowed_next_node": "tester"
+        });
+        assert!(!host_bridge_completed_result_has_preview_refresh_evidence(
+            &request, &forged
+        ));
+
+        let mut mismatched = result.clone();
+        mismatched["request_id"] = serde_json::json!("other-request");
+        assert!(!host_bridge_completed_result_has_preview_refresh_evidence(
+            &request,
+            &mismatched
         ));
     }
 

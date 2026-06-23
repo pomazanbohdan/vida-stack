@@ -24,6 +24,7 @@ pub use completion::{
     HostBridgeResultVerdictFields, host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
+    host_bridge_completed_result_has_preview_refresh_evidence,
     host_bridge_completed_result_status_is_admissible,
     host_bridge_completion_authorized_request_artifacts,
     host_bridge_completion_requires_implementation_artifacts,
