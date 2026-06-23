@@ -435,6 +435,16 @@ try {
     $script:ResolvedReleaseBinDir = [System.IO.Path]::GetFullPath($ReleaseBinDir)
 
     if (-not $SkipBuild) {
+        $cleanup = Invoke-VidaBuildTargetProcessCleanup -RootDir $RootDir -TargetRoot $cargoTargetRoot -ExcludeProcessId $PID
+        if ($cleanup.Skipped -and $cleanup.SkipReason -eq "unsafe_target_root") {
+            Write-Host ("[cleanup] skipped stale target process cleanup for unsafe Cargo target dir: {0}" -f $cargoTargetRoot)
+        }
+        if ($cleanup.StoppedProcesses.Count -gt 0) {
+            Write-Host ("[cleanup] stopped stale target process(es): {0}" -f ($cleanup.StoppedProcesses -join ", "))
+        }
+        if ($cleanup.FailedProcesses.Count -gt 0) {
+            Fail ("stale target process cleanup failed for: {0}" -f ($cleanup.FailedProcesses -join ", "))
+        }
         Push-Location $RootDir
         try {
             & cargo build --release --target-dir $cargoTargetRoot -p vida -p taskflow-cli -p docflow-cli -p vida-pi-agent -p vida-coder
@@ -609,11 +619,18 @@ try {
     }
 } catch {
     if ($Json) {
-        [ordered]@{
+        $blocked = [ordered]@{
             status = "blocked"
             blocker_codes = @("release_package_failed")
             error = $_.Exception.Message
-        } | ConvertTo-Json -Depth 4
+        }
+        if ($null -ne $script:VidaBuildGuardLastBlockedOwner) {
+            $blocked.lock_owner_pid = $script:VidaBuildGuardLastBlockedOwner.lock_owner_pid
+            $blocked.lock_owner_status = $script:VidaBuildGuardLastBlockedOwner.lock_owner_status
+            $blocked.lock_owner_command = $script:VidaBuildGuardLastBlockedOwner.lock_owner_command
+            $blocked.recovery_action = $script:VidaBuildGuardLastBlockedOwner.recovery_action
+        }
+        $blocked | ConvertTo-Json -Depth 4
     } else {
         Write-Error $_.Exception.Message
     }

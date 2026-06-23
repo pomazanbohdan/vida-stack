@@ -744,41 +744,12 @@ function Invoke-StaleCargoTargetProcessCleanup {
             return
         }
 
-        $comparison = Get-PathComparison
-        $processes = Get-CimInstance Win32_Process | Where-Object {
-            -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
-            $_.ProcessId -ne $PID
+        $cleanup = Invoke-VidaBuildTargetProcessCleanup -RootDir $RootDir -TargetRoot $targetRoot -ExcludeProcessId $PID
+        foreach ($process in $cleanup.StoppedProcesses) {
+            [void]$stopped.Add($process)
         }
-
-        foreach ($process in $processes) {
-            $exePath = $null
-            try {
-                $exePath = [System.IO.Path]::GetFullPath($process.ExecutablePath)
-            } catch {
-                continue
-            }
-            if (-not (Test-PathInsideRoot -Root $targetRoot -Path $exePath -Comparison $comparison)) {
-                continue
-            }
-
-            $label = "{0}({1})" -f $process.Name, $process.ProcessId
-            try {
-                Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
-                $deadline = (Get-Date).AddSeconds(5)
-                while ((Get-Date) -lt $deadline) {
-                    if (-not (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue)) {
-                        break
-                    }
-                    Start-Sleep -Milliseconds 100
-                }
-                if (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue) {
-                    [void]$failed.Add($label)
-                } else {
-                    [void]$stopped.Add($label)
-                }
-            } catch {
-                [void]$failed.Add($label)
-            }
+        foreach ($process in $cleanup.FailedProcesses) {
+            [void]$failed.Add($process)
         }
 
         if ($stopped.Count -gt 0 -and -not $Json) {
