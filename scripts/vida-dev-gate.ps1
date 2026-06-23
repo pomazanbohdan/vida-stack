@@ -364,26 +364,46 @@ function Invoke-Timed {
     if ($Command.Length -gt 1) {
         $args = $Command[1..($Command.Length - 1)]
     }
+    $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $safeId = $OperationId -replace '[^A-Za-z0-9_.-]', '-'
+    $stdoutPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.out.txt" -f $safeId, $started)
+    $stderrPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.err.txt" -f $safeId, $started)
+    $artifactRefs = @($stdoutPath, $stderrPath)
     try {
-        if ($Json) {
-            $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
-            New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-            $safeId = $OperationId -replace '[^A-Za-z0-9_.-]', '-'
-            $logPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.log" -f $safeId, $started)
-            $previousErrorActionPreference = $ErrorActionPreference
-            $ErrorActionPreference = "Continue"
-            try {
-                & $exe @args *> $logPath
-            } finally {
-                $ErrorActionPreference = $previousErrorActionPreference
-            }
-            $artifactRefs = @($logPath)
-        } else {
-            & $exe @args
-        }
-        $exitCode = $LASTEXITCODE
+        $process = Start-Process `
+            -FilePath $exe `
+            -ArgumentList $args `
+            -WorkingDirectory $RootDir `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -NoNewWindow `
+            -Wait `
+            -PassThru
+        $exitCode = $process.ExitCode
         if ($null -eq $exitCode) {
             $exitCode = 0
+        }
+        if (-not $Json -and $exitCode -eq 0) {
+            if ((Test-Path -LiteralPath $stdoutPath) -and (Get-Item -LiteralPath $stdoutPath).Length -gt 0) {
+                Get-Content -LiteralPath $stdoutPath -Encoding UTF8 | ForEach-Object { Write-Output $_ }
+            }
+            if ((Test-Path -LiteralPath $stderrPath) -and (Get-Item -LiteralPath $stderrPath).Length -gt 0) {
+                Get-Content -LiteralPath $stderrPath -Encoding UTF8 | ForEach-Object { [Console]::Error.WriteLine($_) }
+            }
+        }
+        if (-not $Json -and $exitCode -ne 0) {
+            [Console]::Error.WriteLine(("[fail] {0} exited with code {1}" -f $OperationId, $exitCode))
+            [Console]::Error.WriteLine(("stdout: {0}" -f $stdoutPath))
+            [Console]::Error.WriteLine(("stderr: {0}" -f $stderrPath))
+            foreach ($entry in @(@("stderr", $stderrPath), @("stdout", $stdoutPath))) {
+                $label = $entry[0]
+                $path = $entry[1]
+                if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length -gt 0) {
+                    [Console]::Error.WriteLine(("--- {0} tail ---" -f $label))
+                    Get-Content -LiteralPath $path -Encoding UTF8 -Tail 40 | ForEach-Object { [Console]::Error.WriteLine($_) }
+                }
+            }
         }
     } catch {
         $exitCode = 1
