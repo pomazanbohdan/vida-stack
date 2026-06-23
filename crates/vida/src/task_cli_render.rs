@@ -326,6 +326,45 @@ fn apply_json_field_selector(value: serde_json::Value, fields: Option<&str>) -> 
     operator_output::toon_report::select_fields(value, fields)
 }
 
+fn limited_ready_tasks(tasks: &[TaskRecord], limit: Option<usize>) -> &[TaskRecord] {
+    if let Some(limit) = limit {
+        let end = std::cmp::min(limit, tasks.len());
+        &tasks[..end]
+    } else {
+        tasks
+    }
+}
+
+fn task_ready_limited_toon_text(
+    tasks: &[TaskRecord],
+    fields: Option<&str>,
+    limit: Option<usize>,
+) -> String {
+    if limit.is_none() {
+        return task_record_list_toon_text("vida task ready", tasks, fields);
+    }
+
+    let display_tasks = limited_ready_tasks(tasks, limit);
+    let rows = if fields.is_some() {
+        display_tasks
+            .iter()
+            .map(|task| task_list_row_value(task, false))
+            .map(|value| apply_json_field_selector(value, fields))
+            .collect::<Vec<_>>()
+            .into()
+    } else {
+        default_task_record_list_toon_rows(display_tasks)
+    };
+    let value = serde_json::json!({
+        "task_count": tasks.len(),
+        "reported_task_count": display_tasks.len(),
+        "limit": limit,
+        "truncated_tasks": display_tasks.len() < tasks.len(),
+        "tasks": rows,
+    });
+    taskflow_format_toon::render_value_section("vida task ready", &value)
+}
+
 pub(crate) fn print_task_ready(
     render: RenderMode,
     scope_task_id: Option<&str>,
@@ -334,8 +373,9 @@ pub(crate) fn print_task_ready(
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
     view: &str,
     fields: Option<&str>,
+    limit: Option<usize>,
 ) {
-    let payload = task_ready_payload(scope_task_id, tasks, read_metadata, view, fields);
+    let payload = task_ready_payload(scope_task_id, tasks, read_metadata, view, fields, limit);
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -347,23 +387,33 @@ pub(crate) fn print_task_ready(
     if matches!(render, RenderMode::Plain) {
         println!(
             "{}",
-            task_record_list_toon_text("vida task ready", tasks, fields)
+            task_ready_limited_toon_text(tasks, fields, limit)
         );
         return;
     }
 
+    let display_tasks = limited_ready_tasks(tasks, limit);
     print_surface_header(render, "vida task ready");
     print_task_read_metadata(render, read_metadata);
     if let Some(scope_task_id) = scope_task_id {
         print_surface_line(render, "scope task", scope_task_id);
     }
     print_surface_line(render, "ready count", &tasks.len().to_string());
-    if tasks.is_empty() {
+    if let Some(limit) = limit {
+        print_surface_line(render, "reported ready count", &display_tasks.len().to_string());
+        print_surface_line(render, "limit", &limit.to_string());
+        print_surface_line(
+            render,
+            "truncated tasks",
+            &(display_tasks.len() < tasks.len()).to_string(),
+        );
+    }
+    if display_tasks.is_empty() {
         print_surface_line(render, "ready tasks", "none");
         return;
     }
 
-    for task in tasks {
+    for task in display_tasks {
         println!("{}\t{}\t{}", task.id, task.status, task.title);
     }
 }
@@ -374,6 +424,7 @@ pub(crate) fn task_ready_payload(
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
     view: &str,
     fields: Option<&str>,
+    limit: Option<usize>,
 ) -> serde_json::Value {
     let view = match view {
         "compact" => "compact",
@@ -382,7 +433,8 @@ pub(crate) fn task_ready_payload(
     };
     let output_policy = task_list_output_policy(view, view == "full");
     let row_full = view == "full";
-    let task_rows = tasks
+    let display_tasks = limited_ready_tasks(tasks, limit);
+    let task_rows = display_tasks
         .iter()
         .map(|task| task_list_row_value(task, row_full))
         .map(|value| apply_json_field_selector(value, fields))
@@ -396,6 +448,9 @@ pub(crate) fn task_ready_payload(
             "view": view,
             "scope_task_id": scope_task_id,
             "ready_count": tasks.len(),
+            "reported_ready_count": display_tasks.len(),
+            "limit": limit,
+            "truncated_tasks": display_tasks.len() < tasks.len(),
             "tasks": task_rows,
         }),
     )
@@ -1716,6 +1771,21 @@ mod tests {
         assert_eq!(payload["operator_contracts"]["status"], "pass");
         assert_eq!(payload["artifact_refs"]["surface"], "vida task ready");
         assert_eq!(payload["ready_count"], 1);
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_ready_payload_applies_limit_metadata() {
+        let tasks = vec![sample_task("task-1"), sample_task("task-2")];
+        let payload = super::task_ready_payload(None, &tasks, None, "summary", None, Some(1));
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["ready_count"], 2);
+        assert_eq!(payload["reported_ready_count"], 1);
+        assert_eq!(payload["limit"], 1);
+        assert_eq!(payload["truncated_tasks"], true);
+        assert_eq!(payload["tasks"].as_array().expect("tasks array").len(), 1);
+        assert_eq!(payload["tasks"][0]["id"], "task-1");
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 

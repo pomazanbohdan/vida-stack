@@ -16827,6 +16827,25 @@ fn task_list_show_ready_prefer_authoritative_state_over_stale_snapshot() {
         &state_dir,
     );
     assert_eq!(created["status"], "pass");
+    let created_second = run_command_json(
+        &[
+            "task",
+            "create",
+            "vida-authoritative-second",
+            "Second ready task",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "4",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created_second["status"], "pass");
 
     let updated = run_command_json(
         &[
@@ -16874,6 +16893,38 @@ fn task_list_show_ready_prefer_authoritative_state_over_stale_snapshot() {
     assert_eq!(ready_task["priority"], 7);
     assert_eq!(ready["state_access"]["mode"], "authoritative_live");
     assert_eq!(ready["state_access"]["degraded"], false);
+
+    let ready_limited = run_command_json(&["task", "ready", "--limit", "1", "--json"], &state_dir);
+    assert_eq!(ready_limited["ready_count"], 2);
+    assert_eq!(ready_limited["reported_ready_count"], 1);
+    assert_eq!(ready_limited["limit"], 1);
+    assert_eq!(ready_limited["truncated_tasks"], true);
+    assert_eq!(
+        ready_limited["tasks"].as_array().expect("tasks array").len(),
+        1
+    );
+
+    let ready_limited_toon = run_and_assert_success(
+        &[
+            "task",
+            "ready",
+            "--limit",
+            "1",
+            "--fields",
+            "id,status,title",
+        ],
+        &state_dir,
+    );
+    assert!(ready_limited_toon.starts_with("vida task ready\n"));
+    assert!(ready_limited_toon.contains("reported_task_count: 1"));
+    assert!(ready_limited_toon.contains("limit: 1"));
+    assert!(ready_limited_toon.contains("truncated_tasks: true"));
+    assert!(ready_limited_toon.contains("tasks[1]{id,status,title}:"));
+
+    let ready_help = run_and_assert_success(&["task", "ready", "--help"], &state_dir);
+    for expected in ["--limit", "--view", "--fields", "--json"] {
+        assert!(ready_help.contains(expected), "missing help option {expected}");
+    }
 
     let _ = fs::remove_dir_all(&state_dir);
 }

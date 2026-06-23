@@ -2876,6 +2876,9 @@ pub(crate) struct TaskReadyArgs {
     )]
     pub(crate) fields: Option<String>,
 
+    #[arg(long = "limit", help = "Maximum ready task rows to print")]
+    pub(crate) limit: Option<usize>,
+
     #[arg(
         long = "view",
         default_value = "summary",

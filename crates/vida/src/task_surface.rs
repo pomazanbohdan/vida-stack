@@ -10453,8 +10453,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            let cache_allowed =
-                command.json && command.fields.is_none() && command.view.trim() == "summary";
+            let cache_allowed = command.json
+                && command.fields.is_none()
+                && command.limit.is_none()
+                && command.view.trim() == "summary";
             if cache_allowed {
                 let projection_name = task_ready_projection_name(command.scope.as_deref());
                 if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
@@ -10485,6 +10487,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             Some(&metadata),
                             &command.view,
                             command.fields.as_deref(),
+                            command.limit,
                         );
                         crate::print_json_pretty(&payload);
                         if cache_allowed {
@@ -10503,6 +10506,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             Some(&metadata),
                             &command.view,
                             command.fields.as_deref(),
+                            command.limit,
                         );
                     }
                     ExitCode::SUCCESS
