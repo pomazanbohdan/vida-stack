@@ -1543,9 +1543,10 @@ fn build_dev_team_flow_projection(
 }
 
 fn single_in_progress_task_id_from_rows(rows: &[state_store::TaskRecord]) -> Option<&str> {
-    let mut candidates = rows
-        .iter()
-        .filter(|task| task.status == "in_progress" && task.issue_type != "epic");
+    let mut candidates = rows.iter().filter(|task| {
+        task.status == "in_progress"
+            && state_store::work_item_is_active_bounded_unit_candidate(&task.issue_type)
+    });
     let candidate = candidates.next()?;
     candidates.next().is_none().then_some(candidate.id.as_str())
 }
@@ -1849,34 +1850,6 @@ fn blocked_candidate(
         reasons,
         parallel_blockers: candidate.parallel_blockers.clone(),
     }
-}
-
-fn explicit_task_graph_continuation_task_id(
-    binding: Option<&state_store::RunGraphContinuationBinding>,
-) -> Option<&str> {
-    let binding = binding?;
-    if binding.status != "bound" || binding.binding_source != "explicit_continuation_bind_task" {
-        return None;
-    }
-    if !matches!(
-        binding
-            .active_bounded_unit
-            .get("kind")
-            .and_then(serde_json::Value::as_str),
-        Some("task_graph_task" | "run_graph_task")
-    ) {
-        return None;
-    }
-    binding
-        .active_bounded_unit
-        .get("task_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|task_id| !task_id.is_empty())
-        .or_else(|| {
-            let task_id = binding.task_id.trim();
-            (!task_id.is_empty()).then_some(task_id)
-        })
 }
 
 fn materialization_owned_paths_for_lane_task(
@@ -4296,8 +4269,10 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 None
             };
             let explicit_bound_current_task_id =
-                explicit_task_graph_continuation_task_id(explicit_binding.as_ref())
-                    .map(str::to_string);
+                crate::continuation_binding_summary::explicit_task_graph_continuation_task_id(
+                    explicit_binding.as_ref(),
+                )
+                .map(str::to_string);
             let taskflow_single_in_progress_task_id =
                 if command.current_task_id.is_none() && explicit_bound_current_task_id.is_none() {
                     StateStore::read_fresh_tasks_from_jsonl_snapshot(store.root())
@@ -6913,14 +6888,16 @@ mod tests {
     }
 
     #[test]
-    fn single_in_progress_task_id_from_rows_selects_only_non_epic_active_task() {
+    fn single_in_progress_task_id_from_rows_selects_only_bounded_active_task() {
         let mut active = task_with_labels_and_type("task-active", "Active task", &[], "task");
         active.status = "in_progress".to_string();
         let mut epic = task_with_labels_and_type("epic-active", "Active epic", &[], "epic");
         epic.status = "in_progress".to_string();
+        let mut todo = task_with_labels_and_type("todo-active", "Active todo", &[], "todo");
+        todo.status = "in_progress".to_string();
 
         assert_eq!(
-            single_in_progress_task_id_from_rows(&[epic, active]),
+            single_in_progress_task_id_from_rows(&[epic, todo, active]),
             Some("task-active")
         );
     }

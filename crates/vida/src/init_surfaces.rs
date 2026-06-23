@@ -2002,16 +2002,7 @@ fn agent_init_auto_dispatch_lineage_task_ids(
 fn agent_init_auto_dispatch_binding_task_id(
     binding: &crate::state_store::RunGraphContinuationBinding,
 ) -> Option<String> {
-    if binding.status != "bound" {
-        return None;
-    }
-    binding
-        .active_bounded_unit
-        .get("task_id")
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| Some(binding.task_id.as_str()))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    crate::continuation_binding_summary::explicit_task_graph_continuation_task_id(Some(binding))
         .map(ToOwned::to_owned)
 }
 
@@ -2036,7 +2027,7 @@ async fn agent_init_auto_dispatch_active_task_ids(
             tasks
                 .into_iter()
                 .filter(|task| {
-                    !crate::state_store::work_item_is_program_container(&task.issue_type)
+                    crate::state_store::work_item_is_active_bounded_unit_candidate(&task.issue_type)
                 })
                 .map(|task| task.id)
                 .collect()
@@ -7970,7 +7961,7 @@ mod agent_init_surface_tests {
                 "task_id": "active-task",
                 "run_id": "active-task"
             }),
-            binding_source: "explicit_continuation_bind".to_string(),
+            binding_source: "explicit_continuation_bind_task".to_string(),
             why_this_unit: "test".to_string(),
             primary_path: "normal_delivery_path".to_string(),
             sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
@@ -7982,6 +7973,28 @@ mod agent_init_surface_tests {
             agent_init_auto_dispatch_binding_task_id(&binding).as_deref(),
             Some("active-task")
         );
+    }
+
+    #[test]
+    fn agent_init_auto_dispatch_binding_task_id_ignores_stale_non_task_binding() {
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "stale-run".to_string(),
+            task_id: "fallback-task".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "downstream_dispatch_target",
+                "task_id": "stale-task",
+                "run_id": "stale-run"
+            }),
+            binding_source: "explicit_continuation_bind".to_string(),
+            why_this_unit: "test".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+            request_text: None,
+            recorded_at: "2026-06-22T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(agent_init_auto_dispatch_binding_task_id(&binding), None);
     }
 
     #[test]

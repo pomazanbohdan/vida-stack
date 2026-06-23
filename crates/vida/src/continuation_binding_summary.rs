@@ -75,6 +75,34 @@ fn explicit_task_binding_is_admissible_without_status(
         && task_id.is_some()
 }
 
+pub(crate) fn explicit_task_graph_continuation_task_id(
+    binding: Option<&crate::state_store::RunGraphContinuationBinding>,
+) -> Option<&str> {
+    let binding = binding?;
+    if binding.status != "bound" || binding.binding_source != "explicit_continuation_bind_task" {
+        return None;
+    }
+    if !matches!(
+        binding
+            .active_bounded_unit
+            .get("kind")
+            .and_then(serde_json::Value::as_str),
+        Some("task_graph_task" | "run_graph_task")
+    ) {
+        return None;
+    }
+    binding
+        .active_bounded_unit
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|task_id| !task_id.is_empty())
+        .or_else(|| {
+            let task_id = binding.task_id.trim();
+            (!task_id.is_empty()).then_some(task_id)
+        })
+}
+
 fn run_graph_status_is_blocked(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     normalized == "blocked" || normalized == "lane_blocked" || normalized.ends_with("_blocked")
@@ -1105,7 +1133,10 @@ pub(crate) fn taskflow_leaf_active_tasks(
 ) -> Vec<&crate::state_store::TaskRecord> {
     let active_task_ids = tasks
         .iter()
-        .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
+        .filter(|task| {
+            task.status == "in_progress"
+                && crate::state_store::work_item_is_active_bounded_unit_candidate(&task.issue_type)
+        })
         .map(|task| task.id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     let active_parent_ids = tasks

@@ -265,6 +265,11 @@ pub fn work_item_is_program_container(issue_type: &str) -> bool {
         .unwrap_or(false)
 }
 
+pub fn work_item_is_active_bounded_unit_candidate(issue_type: &str) -> bool {
+    !work_item_is_program_container(issue_type)
+        && canonical_work_item_issue_type(issue_type) != "todo"
+}
+
 pub(crate) fn task_has_label(task: &TaskRecord, label: &str) -> bool {
     task.labels.iter().any(|value| value.trim() == label)
 }
@@ -1130,7 +1135,8 @@ impl From<TaskDependencyJsonlRecord> for TaskDependencyRecord {
 mod tests {
     use super::{
         apply_provider_mapping_to_task_jsonl_record, canonical_work_item_issue_type,
-        normalize_work_item_issue_type, task_work_item_kind, work_item_is_program_container,
+        normalize_work_item_issue_type, task_work_item_kind,
+        work_item_is_active_bounded_unit_candidate, work_item_is_program_container,
         work_item_requires_parent, work_item_taxonomy_entry, TaskDependencyJsonlRecord,
         TaskJsonlRecord, TaskPlannerMetadata, TaskProviderMapping, TaskStorageRow,
         WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
@@ -1208,6 +1214,15 @@ mod tests {
         assert!(work_item_is_program_container(" EPIC "));
         assert!(!work_item_is_program_container("task"));
         assert!(!work_item_is_program_container("unknown_future_type"));
+    }
+
+    #[test]
+    fn active_bounded_unit_candidates_exclude_epics_and_todos() {
+        assert!(!work_item_is_active_bounded_unit_candidate("epic"));
+        assert!(!work_item_is_active_bounded_unit_candidate("todo"));
+        assert!(!work_item_is_active_bounded_unit_candidate("TODO"));
+        assert!(work_item_is_active_bounded_unit_candidate("defect"));
+        assert!(work_item_is_active_bounded_unit_candidate("task"));
     }
 
     #[test]
