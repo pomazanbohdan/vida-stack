@@ -902,7 +902,7 @@ function Invoke-ChangedRustfmtCheck {
         return
     }
 
-    Invoke-Timed "cargo-fmt-check" (@("rustfmt", "--edition", "2024", "--check") + $changedRustFiles)
+    Invoke-Timed "cargo-fmt-check" (@("rustfmt", "--edition", "2024", "--check", "--") + $changedRustFiles)
 }
 
 function Assert-ScopedDirtyFiles {
