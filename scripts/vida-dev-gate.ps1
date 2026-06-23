@@ -573,17 +573,16 @@ function Invoke-RootReadmeOnlyCheck {
     $artifactRefs = @()
     $violations = New-Object System.Collections.Generic.List[string]
 
-    $readmes = Get-ChildItem -LiteralPath $RootDir -Filter "README.md" -Recurse -Force -File |
-        Where-Object {
-            $relative = Get-RelativePathCompat -Root $RootDir -Path $_.FullName
-            $relative -ne "README.md" -and
-                -not $relative.StartsWith(".git/") -and
-                -not $relative.StartsWith("target/") -and
-                -not $relative.StartsWith("vendor/") -and
-                -not $relative.StartsWith(".vida/cargo-target/")
+    $readmes = & git -C $RootDir ls-files --cached --others --exclude-standard -- '*README.md' 'README.md'
+    if ($LASTEXITCODE -ne 0) {
+        [void]$violations.Add("git ls-files failed while checking README.md placement invariant.")
+    } else {
+        foreach ($readme in $readmes) {
+            $relative = ([string]$readme).Replace('\', '/').Trim()
+            if ($relative.Length -gt 0 -and $relative -ne "README.md") {
+                [void]$violations.Add(("{0}: nested README.md is not allowed; use index.md or a semantic document name." -f $relative))
+            }
         }
-    foreach ($readme in $readmes) {
-        [void]$violations.Add(("{0}: nested README.md is not allowed; use index.md or a semantic document name." -f (Get-RelativePathCompat -Root $RootDir -Path $readme.FullName)))
     }
 
     $sw.Stop()
