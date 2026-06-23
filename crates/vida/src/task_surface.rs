@@ -877,6 +877,7 @@ struct TaskProofAttachEvidenceReceipt {
     status: &'static str,
     task_id: String,
     proof_target: String,
+    proof_targets: Vec<String>,
     command: String,
     result: String,
     artifact_ref: Option<String>,
@@ -1071,6 +1072,60 @@ fn normalize_browser_proof_result(result: &str) -> Result<String, String> {
 }
 
 fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> TaskProofTargetStatus {
+    task_proof_target_status_with_inheritance(task, target, None)
+}
+
+fn task_direct_children_for_proof_inheritance<'a>(
+    tasks: &'a [state_store::TaskRecord],
+    parent_id: &str,
+) -> Vec<&'a state_store::TaskRecord> {
+    tasks
+        .iter()
+        .filter(|task| {
+            task.dependencies.iter().any(|dependency| {
+                dependency.edge_type == "parent-child" && dependency.depends_on_id == parent_id
+            })
+        })
+        .collect()
+}
+
+fn inherited_child_proof_evidence_status(
+    task: &state_store::TaskRecord,
+    target: &str,
+    tasks: &[state_store::TaskRecord],
+) -> Option<TaskProofTargetStatus> {
+    let children = task_direct_children_for_proof_inheritance(tasks, &task.id);
+    if children.is_empty() {
+        return None;
+    }
+    let open_children = children
+        .iter()
+        .filter(|child| !state_store::StateStore::task_status_is_closed_like(&child.status))
+        .count();
+    if open_children > 0 || children.len() != 1 {
+        return None;
+    }
+    let child = children[0];
+    let proof_match = structured_task_proof_evidence_match(child.notes.as_deref(), target)?;
+    Some(TaskProofTargetStatus {
+        target: target.trim().to_string(),
+        status: "satisfied".to_string(),
+        evidence_source: "inherited_child_task_proof_evidence".to_string(),
+        evidence_detail: format!(
+            "single closed child `{}` has matching structured proof evidence: {}",
+            child.id, proof_match.evidence_detail
+        ),
+        artifact_status: proof_match.artifact_status,
+        legacy_close_reason_match: proof_target_has_close_reason_evidence(task, target),
+        next_action: "No action for this proof target.".to_string(),
+    })
+}
+
+fn task_proof_target_status_with_inheritance(
+    task: &state_store::TaskRecord,
+    target: &str,
+    inheritance_rows: Option<&[state_store::TaskRecord]>,
+) -> TaskProofTargetStatus {
     let target = target.trim().to_string();
     let runtime_blocked =
         task_reports_runtime_proof_blocker(&task.labels, task.close_reason.as_deref());
@@ -1086,6 +1141,11 @@ fn task_proof_target_status(task: &state_store::TaskRecord, target: &str) -> Tas
             legacy_close_reason_match,
             next_action: "No action for this proof target.".to_string(),
         };
+    }
+    if let Some(rows) = inheritance_rows {
+        if let Some(inherited) = inherited_child_proof_evidence_status(task, &target, rows) {
+            return inherited;
+        }
     }
     if runtime_blocked {
         return TaskProofTargetStatus {
@@ -1129,11 +1189,19 @@ fn task_proof_status_payload(
     task: &state_store::TaskRecord,
     read_metadata: Option<&TaskReadMetadata>,
 ) -> serde_json::Value {
+    task_proof_status_payload_with_inheritance(task, read_metadata, None)
+}
+
+fn task_proof_status_payload_with_inheritance(
+    task: &state_store::TaskRecord,
+    read_metadata: Option<&TaskReadMetadata>,
+    inheritance_rows: Option<&[state_store::TaskRecord]>,
+) -> serde_json::Value {
     let targets = task
         .planner_metadata
         .proof_targets
         .iter()
-        .map(|target| task_proof_target_status(task, target))
+        .map(|target| task_proof_target_status_with_inheritance(task, target, inheritance_rows))
         .collect::<Vec<_>>();
     let configured_count = targets.len();
     let satisfied_count = targets
@@ -1207,8 +1275,9 @@ fn task_proof_status_payload(
 
 fn task_close_structured_proof_gate_payload(
     task: &state_store::TaskRecord,
+    inheritance_rows: Option<&[state_store::TaskRecord]>,
 ) -> Option<serde_json::Value> {
-    let proof_status = task_proof_status_payload(task, None);
+    let proof_status = task_proof_status_payload_with_inheritance(task, None, inheritance_rows);
     let configured_count = proof_status["configured_proof_target_count"]
         .as_u64()
         .unwrap_or(0);
@@ -1785,7 +1854,15 @@ fn print_task_evidence_proof_receipt(
     }
     print_task_mutation(render, receipt.surface, &receipt.task, false);
     print_surface_line(render, "result", &receipt.result);
-    print_surface_line(render, "proof target", &receipt.proof_target);
+    if receipt.proof_targets.len() > 1 {
+        print_surface_line(
+            render,
+            "proof targets",
+            &format!("{} ({})", receipt.proof_targets.len(), receipt.proof_target),
+        );
+    } else {
+        print_surface_line(render, "proof target", &receipt.proof_target);
+    }
     print_surface_line(render, "command", &receipt.command);
     if let Some(artifact_ref) = receipt.artifact_ref.as_deref() {
         print_surface_line(render, "artifact", artifact_ref);
@@ -10088,10 +10165,17 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             TaskProofCommand::Status(command) => {
                 let state_dir = command
                     .state_dir
+                    .clone()
                     .unwrap_or_else(state_store::default_state_dir);
-                match task_show_authoritative_first(state_dir, &command.task_id).await {
+                match task_show_authoritative_first(state_dir.clone(), &command.task_id).await {
                     Ok((task, metadata)) => {
-                        let payload = task_proof_status_payload(&task, Some(&metadata));
+                        let inheritance_rows =
+                            load_task_snapshot_rows_with_retry(&state_dir).await.ok();
+                        let payload = task_proof_status_payload_with_inheritance(
+                            &task,
+                            Some(&metadata),
+                            inheritance_rows.as_deref(),
+                        );
                         if command.json {
                             crate::print_json_pretty(&payload);
                         } else {
@@ -10228,9 +10312,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
             TaskProofCommand::AttachEvidence(command) => {
-                let proof_target = command.proof_target.trim();
-                if proof_target.is_empty() {
-                    eprintln!("--proof-target cannot be empty");
+                let proof_targets = parse_proof_target_values(&command.proof_target);
+                if proof_targets.is_empty() {
+                    eprintln!("at least one non-empty --proof-target is required");
                     return ExitCode::from(2);
                 }
                 let result = match normalize_browser_proof_result(&command.result) {
@@ -10246,7 +10330,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .unwrap_or(proof_target)
+                    .unwrap_or_else(|| proof_targets.first().map(String::as_str).unwrap_or(""))
                     .to_string();
                 let state_dir = command
                     .state_dir
@@ -10263,19 +10347,31 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         };
-                        let notes = append_task_proof_evidence_note(
-                            existing.notes.as_deref(),
-                            proof_target,
-                            Some(&command_text),
-                            &result,
-                            "command",
-                            command.artifact_ref.as_deref(),
-                            &evidence,
-                        );
-                        let planner_metadata = task_browser_proof_planner_metadata(
-                            &existing.planner_metadata,
-                            proof_target,
-                        );
+                        let mut notes = existing.notes.clone().unwrap_or_default();
+                        let mut planner_metadata = existing.planner_metadata.clone();
+                        for proof_target in &proof_targets {
+                            notes = append_task_proof_evidence_note(
+                                if notes.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(notes.as_str())
+                                },
+                                proof_target,
+                                Some(if command.command.is_some() {
+                                    command_text.as_str()
+                                } else {
+                                    proof_target.as_str()
+                                }),
+                                &result,
+                                "command",
+                                command.artifact_ref.as_deref(),
+                                &evidence,
+                            );
+                            planner_metadata = task_browser_proof_planner_metadata(
+                                &planner_metadata,
+                                proof_target,
+                            );
+                        }
                         match store
                             .update_task(state_store::UpdateTaskRequest {
                                 task_id: &command.task_id,
@@ -10309,7 +10405,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     surface: "vida task proof attach-evidence",
                                     status: task_json_success_status(),
                                     task_id: task.id.clone(),
-                                    proof_target: proof_target.to_string(),
+                                    proof_target: proof_targets.join(" | "),
+                                    proof_targets: proof_targets.clone(),
                                     command: command_text,
                                     result,
                                     artifact_ref: command.artifact_ref,
@@ -11247,8 +11344,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
-                    if let Some(payload) = task_close_structured_proof_gate_payload(&preclose_task)
-                    {
+                    let inheritance_rows = store.list_tasks(None, true).await.ok();
+                    if let Some(payload) = task_close_structured_proof_gate_payload(
+                        &preclose_task,
+                        inheritance_rows.as_deref(),
+                    ) {
                         print_task_close_structured_proof_gate_block(
                             command.render,
                             &payload,
@@ -12173,11 +12273,12 @@ mod tests {
         persist_task_handoff_accept_receipt, reconcile_epics_from_descendant_progress,
         runtime_binding_has_active_exception_takeover,
         runtime_binding_open_delegated_cycle_next_action, runtime_recovery_blocks_task_next_lawful,
-        select_task_next_lawful_binding, task_close_automation_is_blocked,
-        task_close_automation_receipt, task_close_commit_allowlist_next_actions,
-        task_close_commit_file_strings, task_close_epic_progress_summary,
-        task_close_feedback_blocker_summary, task_close_host_agent_telemetry,
-        task_close_result_payload, task_close_uses_isolated_state_dir, task_continuation_candidate,
+        select_task_next_lawful_binding, task_browser_proof_planner_metadata,
+        task_close_automation_is_blocked, task_close_automation_receipt,
+        task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
+        task_close_epic_progress_summary, task_close_feedback_blocker_summary,
+        task_close_host_agent_telemetry, task_close_result_payload,
+        task_close_uses_isolated_state_dir, task_continuation_candidate,
         task_create_planner_metadata_arg, task_create_semantics_mismatch,
         task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
         task_exception_takeover_metadata_path, task_exception_takeover_owned_write_scope,
@@ -12188,7 +12289,7 @@ mod tests {
         task_ready_authoritative_first, task_takeover_status_receipt,
         task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
         TaskCloseAutomationReceipt, TaskContinuationCandidate, TaskProofAttachBrowserReceipt,
-        ADAPTIVE_REPLAN_FINDING_KINDS,
+        TaskProofAttachEvidenceReceipt, ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -13746,6 +13847,101 @@ mod tests {
     }
 
     #[test]
+    fn task_proof_status_payload_inherits_single_closed_child_evidence() {
+        let target = "cargo test -p vida inherited_parent_proof";
+        let mut parent = owned_task_record("parent-proof-task", vec![]);
+        parent.status = "closed".to_string();
+        parent.planner_metadata.proof_targets = vec![target.to_string()];
+
+        let mut child = owned_task_record("closed-child-proof-task", vec![]);
+        child.status = "closed".to_string();
+        child.dependencies = vec![crate::state_store::TaskDependencyRecord {
+            issue_id: child.id.clone(),
+            depends_on_id: parent.id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-06-23T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+        child.notes = Some(super::append_task_proof_evidence_note(
+            None,
+            target,
+            Some(target),
+            "pass",
+            "command",
+            Some("artifacts/child-proof.json"),
+            &["child proof passed".to_string()],
+        ));
+
+        let rows = vec![parent.clone(), child];
+        let payload = super::task_proof_status_payload_with_inheritance(&parent, None, Some(&rows));
+
+        assert_eq!(payload["satisfied_count"], 1);
+        assert_eq!(payload["missing_count"], 0);
+        assert_eq!(
+            payload["proof_targets"][0]["evidence_source"],
+            "inherited_child_task_proof_evidence"
+        );
+        assert!(payload["proof_targets"][0]["evidence_detail"]
+            .as_str()
+            .expect("inherited detail should render")
+            .contains("closed-child-proof-task"));
+    }
+
+    #[test]
+    fn task_proof_status_payload_fails_closed_for_ambiguous_child_inheritance() {
+        let target = "cargo test -p vida ambiguous_parent_proof";
+        let mut parent = owned_task_record("ambiguous-parent-proof", vec![]);
+        parent.status = "closed".to_string();
+        parent.planner_metadata.proof_targets = vec![target.to_string()];
+
+        let mut closed_child = owned_task_record("closed-child-proof", vec![]);
+        closed_child.status = "closed".to_string();
+        closed_child.dependencies = vec![crate::state_store::TaskDependencyRecord {
+            issue_id: closed_child.id.clone(),
+            depends_on_id: parent.id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-06-23T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+        closed_child.notes = Some(super::append_task_proof_evidence_note(
+            None,
+            target,
+            Some(target),
+            "pass",
+            "command",
+            Some("artifacts/closed-child-proof.json"),
+            &["closed child proof passed".to_string()],
+        ));
+
+        let mut open_child = owned_task_record("open-child-proof", vec![]);
+        open_child.status = "open".to_string();
+        open_child.dependencies = vec![crate::state_store::TaskDependencyRecord {
+            issue_id: open_child.id.clone(),
+            depends_on_id: parent.id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-06-23T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+
+        let rows = vec![parent.clone(), closed_child, open_child];
+        let payload = super::task_proof_status_payload_with_inheritance(&parent, None, Some(&rows));
+
+        assert_eq!(payload["satisfied_count"], 0);
+        assert_eq!(payload["missing_count"], 1);
+        assert_eq!(payload["proof_targets"][0]["status"], "missing_evidence");
+        assert_eq!(
+            payload["proof_targets"][0]["evidence_source"],
+            "planner_metadata.proof_targets"
+        );
+    }
+
+    #[test]
     fn task_proof_attach_browser_cli_accepts_artifact_fields() {
         let parsed = cli(&[
             "task",
@@ -13853,7 +14049,10 @@ mod tests {
         };
 
         assert_eq!(command.task_id, "proof-task");
-        assert_eq!(command.proof_target, "cargo test -p vida proof_registry");
+        assert_eq!(
+            command.proof_target,
+            vec!["cargo test -p vida proof_registry".to_string()]
+        );
         assert_eq!(command.result, "pass");
         assert_eq!(
             command.command.as_deref(),
@@ -13865,6 +14064,102 @@ mod tests {
         );
         assert_eq!(command.evidence, vec!["tests green".to_string()]);
         assert!(command.json);
+    }
+
+    #[test]
+    fn task_proof_attach_evidence_cli_accepts_repeated_targets() {
+        let parsed = cli(&[
+            "task",
+            "proof",
+            "attach-evidence",
+            "proof-task",
+            "--proof-target",
+            "cargo test -p vida proof_registry_a",
+            "--proof-target",
+            "cargo test -p vida proof_registry_b",
+            "--result",
+            "pass",
+            "--evidence",
+            "tests green",
+        ]);
+        let Some(crate::Command::Task(args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let crate::TaskCommand::Proof(proof) = args.command else {
+            panic!("task proof command should parse");
+        };
+        let crate::TaskProofCommand::AttachEvidence(command) = proof.command else {
+            panic!("attach-evidence command should parse");
+        };
+
+        assert_eq!(
+            command.proof_target,
+            vec![
+                "cargo test -p vida proof_registry_a".to_string(),
+                "cargo test -p vida proof_registry_b".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn task_proof_attach_evidence_bulk_notes_satisfy_targets() {
+        let targets = vec![
+            "cargo test -p vida bulk_proof_a".to_string(),
+            "cargo test -p vida bulk_proof_b".to_string(),
+        ];
+        let mut task = owned_task_record("bulk-proof-task", vec![]);
+        let mut notes = String::new();
+        let mut planner_metadata = task.planner_metadata.clone();
+
+        for proof_target in &targets {
+            notes = super::append_task_proof_evidence_note(
+                if notes.trim().is_empty() {
+                    None
+                } else {
+                    Some(notes.as_str())
+                },
+                proof_target,
+                Some(proof_target),
+                "pass",
+                "command",
+                Some("artifacts/bulk-proof.json"),
+                &["bulk proof passed".to_string()],
+            );
+            planner_metadata = task_browser_proof_planner_metadata(&planner_metadata, proof_target);
+        }
+        task.notes = Some(notes);
+        task.planner_metadata = planner_metadata;
+
+        assert_eq!(task.planner_metadata.proof_targets, targets);
+        let payload = super::task_proof_status_payload(&task, None);
+        assert_eq!(payload["satisfied_count"], 2);
+        assert_eq!(payload["missing_count"], 0);
+    }
+
+    #[test]
+    fn task_proof_attach_evidence_receipt_serializes_bulk_targets() {
+        let receipt = TaskProofAttachEvidenceReceipt {
+            surface: "vida task proof attach-evidence",
+            status: task_json_success_status(),
+            task_id: "proof-task".to_string(),
+            proof_target: "target a | target b".to_string(),
+            proof_targets: vec!["target a".to_string(), "target b".to_string()],
+            command: "target a".to_string(),
+            result: "pass".to_string(),
+            artifact_ref: Some("artifacts/proof.json".to_string()),
+            evidence: vec!["tests green".to_string()],
+            notes_appended: true,
+            task: owned_task_record("proof-task", vec![]),
+        };
+
+        let payload =
+            serde_json::to_value(&receipt).expect("evidence proof receipt should serialize");
+
+        assert_eq!(
+            payload["proof_targets"],
+            serde_json::json!(["target a", "target b"])
+        );
+        assert_eq!(payload["proof_target"], "target a | target b");
     }
 
     #[test]
