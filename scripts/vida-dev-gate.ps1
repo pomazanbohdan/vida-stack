@@ -642,6 +642,38 @@ function Test-PathInsideRoot {
     return $Path.Equals($Root, $Comparison) -or $Path.StartsWith($Root + [System.IO.Path]::DirectorySeparatorChar, $Comparison)
 }
 
+function Test-CargoTargetDirSafeForProcessCleanup {
+    param(
+        [string]$TargetRoot
+    )
+
+    $comparison = Get-PathComparison
+    $normalizedTargetRoot = [System.IO.Path]::GetFullPath($TargetRoot).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $targetPathRoot = [System.IO.Path]::GetPathRoot($normalizedTargetRoot).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+
+    if ($normalizedTargetRoot.Equals($targetPathRoot, $comparison)) {
+        return $false
+    }
+
+    if ($CargoTargetDirState.target_dir_policy -ne "caller_provided") {
+        return $true
+    }
+
+    $normalizedRoot = [System.IO.Path]::GetFullPath($RootDir).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+
+    return (Test-PathInsideRoot -Root $normalizedRoot -Path $normalizedTargetRoot -Comparison $comparison) -and
+        -not $normalizedTargetRoot.Equals($normalizedRoot, $comparison)
+}
+
 function Invoke-StaleCargoTargetProcessCleanup {
     if (-not (Test-IsWindowsHost)) {
         return
@@ -659,6 +691,13 @@ function Invoke-StaleCargoTargetProcessCleanup {
 
     try {
         if (-not (Test-Path -LiteralPath $targetRoot)) {
+            return
+        }
+
+        if (-not (Test-CargoTargetDirSafeForProcessCleanup -TargetRoot $targetRoot)) {
+            if (-not $Json) {
+                Write-Output ("[cleanup] skipped stale target process cleanup for unsafe Cargo target dir: {0}" -f $CargoTargetDirState.effective_cargo_target_dir)
+            }
             return
         }
 
