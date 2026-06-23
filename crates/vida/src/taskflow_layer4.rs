@@ -1468,7 +1468,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "create-task",
             why: "New tracked work should be created directly in the primary backlog runtime with an explicit parent and display-id allocation path.",
-            command: "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json",
+            command: "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --owned-path <path> --acceptance-target \"...\" --proof-target \"...\"",
             failure_modes: "Task ids must remain stable, parent/display references must resolve in the delegated runtime, and creation should be recorded only after the target epic or parent task has been confirmed.",
         };
     }

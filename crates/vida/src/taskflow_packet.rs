@@ -565,7 +565,7 @@ fn build_taskflow_packet_repair_payload(
                 "vida task show {} --json",
                 task.map(|task| task.id.as_str()).unwrap_or("<task-id>")
             ),
-            "Create or bind the canonical task before re-running packet repair.".to_string(),
+            "If the task is missing and metadata is known, create it in one command: vida task create <task-id> <title> --parent-id <parent-id> --owned-path <path> --acceptance-target \"...\" --proof-target \"...\".".to_string(),
         ])
     } else {
         serde_json::json!([
@@ -1830,6 +1830,22 @@ mod tests {
             .as_str()
             .expect("next action")
             .contains("vida task update task-with-metadata --owned-path"));
+    }
+
+    #[test]
+    fn packet_repair_payload_guides_missing_task_to_one_shot_create() {
+        let payload =
+            build_taskflow_packet_repair_payload("run-1", None, Some("No canonical task exists."));
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["blocker_codes"][0], "task_metadata_not_found");
+        let next_action = payload["next_actions"][1]
+            .as_str()
+            .expect("one-shot create next action");
+        assert!(next_action.contains("vida task create <task-id> <title>"));
+        assert!(next_action.contains("--owned-path <path>"));
+        assert!(next_action.contains("--acceptance-target"));
+        assert!(next_action.contains("--proof-target"));
     }
 
     #[tokio::test]
