@@ -497,7 +497,7 @@ function Invoke-RootReadmeOnlyCheck {
 
     $readmes = Get-ChildItem -LiteralPath $RootDir -Filter "README.md" -Recurse -Force -File |
         Where-Object {
-            $relative = [System.IO.Path]::GetRelativePath($RootDir, $_.FullName).Replace("\", "/")
+            $relative = Get-RelativePathCompat -Root $RootDir -Path $_.FullName
             $relative -ne "README.md" -and
                 -not $relative.StartsWith(".git/") -and
                 -not $relative.StartsWith("target/") -and
@@ -505,7 +505,7 @@ function Invoke-RootReadmeOnlyCheck {
                 -not $relative.StartsWith(".vida/cargo-target/")
         }
     foreach ($readme in $readmes) {
-        [void]$violations.Add(("{0}: nested README.md is not allowed; use index.md or a semantic document name." -f [System.IO.Path]::GetRelativePath($RootDir, $readme.FullName).Replace("\", "/")))
+        [void]$violations.Add(("{0}: nested README.md is not allowed; use index.md or a semantic document name." -f (Get-RelativePathCompat -Root $RootDir -Path $readme.FullName)))
     }
 
     $sw.Stop()
@@ -587,6 +587,31 @@ function Get-PathComparison {
     return [System.StringComparison]::Ordinal
 }
 
+function Get-RelativePathCompat {
+    param(
+        [string]$Root,
+        [string]$Path
+    )
+
+    $method = [System.IO.Path].GetMethod("GetRelativePath", [type[]]@([string], [string]))
+    if ($null -ne $method) {
+        return [System.IO.Path]::GetRelativePath($Root, $Path).Replace('\', '/')
+    }
+
+    $fullRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if ($fullPath.Equals($fullRoot, (Get-PathComparison))) {
+        return "."
+    }
+    $rootWithSeparator = $fullRoot + [System.IO.Path]::DirectorySeparatorChar
+    $rootUri = New-Object System.Uri($rootWithSeparator)
+    $pathUri = New-Object System.Uri($fullPath)
+    if ($rootUri.Scheme -ne $pathUri.Scheme) {
+        return $fullPath.Replace('\', '/')
+    }
+    return [System.Uri]::UnescapeDataString($rootUri.MakeRelativeUri($pathUri).ToString()).Replace('\', '/')
+}
+
 function Test-PathInsideRoot {
     param(
         [string]$Root,
@@ -627,7 +652,7 @@ function Assert-NoReparsePointInPath {
         [string]$OriginalPath
     )
 
-    $relativePath = [System.IO.Path]::GetRelativePath($Root, $Path)
+    $relativePath = Get-RelativePathCompat -Root $Root -Path $Path
     $segments = @($relativePath -split "[/\\]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne "." })
     $current = $Root
     foreach ($segment in $segments) {
@@ -664,7 +689,7 @@ function ConvertTo-RepoRelativePath {
     if (-not (Test-PathInsideRoot -Root $fullRoot -Path $fullResolvedPath -Comparison $comparison)) {
         throw "Path resolves outside repository root: $Path"
     }
-    return [System.IO.Path]::GetRelativePath($fullRoot, $fullPath).Replace('\', '/')
+    return Get-RelativePathCompat -Root $fullRoot -Path $fullPath
 }
 
 function Get-GitPorcelainPaths {
