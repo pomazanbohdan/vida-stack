@@ -487,6 +487,126 @@ function Invoke-Timed {
     }
 }
 
+function Test-TransientInstalledVidaStatusFailure {
+    param([string[]]$ArtifactPaths)
+
+    foreach ($path in $ArtifactPaths) {
+        if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            continue
+        }
+        $content = Get-Content -LiteralPath $path -Encoding UTF8 -Raw -ErrorAction SilentlyContinue
+        if ($content -match "state_store_read_lock_contention|state store read lock contention|database is locked") {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Invoke-InstalledVidaStatusWithRetry {
+    param(
+        [string[]]$Command,
+        [int]$MaxAttempts = 6
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $operationId = "installed-vida-status"
+        $started = Get-Date
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $exitCode = 0
+        $exe = $Command[0]
+        $args = @()
+        if ($Command.Length -gt 1) {
+            $args = $Command[1..($Command.Length - 1)]
+        }
+        $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
+        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+        Assert-NoReparsePointInPath -Root $RootDir -Path $logDir -OriginalPath $logDir
+        $safeId = "$operationId-attempt-$attempt"
+        $stdoutPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.out.txt" -f $safeId, $started)
+        $stderrPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.err.txt" -f $safeId, $started)
+        $artifactRefs = @($stdoutPath, $stderrPath)
+        try {
+            $process = Start-Process `
+                -FilePath $exe `
+                -ArgumentList (Join-WindowsProcessArguments $args) `
+                -WorkingDirectory $RootDir `
+                -RedirectStandardOutput $stdoutPath `
+                -RedirectStandardError $stderrPath `
+                -NoNewWindow `
+                -Wait `
+                -PassThru
+            $exitCode = $process.ExitCode
+            if ($null -eq $exitCode) {
+                $exitCode = 0
+            }
+        } catch {
+            $exitCode = 1
+            throw
+        } finally {
+            $sw.Stop()
+        }
+
+        $retryable = $exitCode -ne 0 -and (Test-TransientInstalledVidaStatusFailure -ArtifactPaths $artifactRefs)
+        $exitStatus = if ($exitCode -eq 0) {
+            "pass"
+        } elseif ($retryable -and $attempt -lt $MaxAttempts) {
+            "blocked"
+        } else {
+            "fail"
+        }
+        $Records.Add([pscustomobject]@{
+            operation_id = $operationId
+            command_or_surface = ($Command -join " ")
+            cwd_or_context = $RootDir
+            started_at = $started.ToString("o")
+            duration_ms = [int64]$sw.ElapsedMilliseconds
+            exit_status = $exitStatus
+            classification = $(if ($sw.ElapsedMilliseconds -le 2000) { "fast" } elseif ($sw.ElapsedMilliseconds -le 5000) { "watch" } else { "long_gate_expected" })
+            target_dir_policy = $CargoTargetDirState.target_dir_policy
+            effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+            artifact_refs = $artifactRefs
+            attempt = $attempt
+            max_attempts = $MaxAttempts
+            retryable = $retryable
+        })
+
+        if ($exitCode -eq 0) {
+            if (-not $Json) {
+                if ((Test-Path -LiteralPath $stdoutPath) -and (Get-Item -LiteralPath $stdoutPath).Length -gt 0) {
+                    Get-Content -LiteralPath $stdoutPath -Encoding UTF8 | ForEach-Object { Write-Output $_ }
+                }
+                if ((Test-Path -LiteralPath $stderrPath) -and (Get-Item -LiteralPath $stderrPath).Length -gt 0) {
+                    Get-Content -LiteralPath $stderrPath -Encoding UTF8 | ForEach-Object { [Console]::Error.WriteLine($_) }
+                }
+            }
+            return
+        }
+
+        if ($retryable -and $attempt -lt $MaxAttempts) {
+            if (-not $Json) {
+                [Console]::Error.WriteLine(("[retry] installed-vida-status hit transient state-store lock contention; attempt {0}/{1}" -f $attempt, $MaxAttempts))
+            }
+            Start-Sleep -Milliseconds (250 * $attempt)
+            continue
+        }
+
+        if (-not $Json) {
+            [Console]::Error.WriteLine(("[fail] installed-vida-status exited with code {0}" -f $exitCode))
+            [Console]::Error.WriteLine(("stdout: {0}" -f $stdoutPath))
+            [Console]::Error.WriteLine(("stderr: {0}" -f $stderrPath))
+            foreach ($entry in @(@("stderr", $stderrPath), @("stdout", $stdoutPath))) {
+                $label = $entry[0]
+                $path = $entry[1]
+                if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length -gt 0) {
+                    [Console]::Error.WriteLine(("--- {0} tail ---" -f $label))
+                    Get-Content -LiteralPath $path -Encoding UTF8 -Tail 40 | ForEach-Object { [Console]::Error.WriteLine($_) }
+                }
+            }
+        }
+        exit $exitCode
+    }
+}
+
 function Add-SkippedRecord {
     param(
         [string]$OperationId,
@@ -1029,6 +1149,35 @@ $ProbeArgs | ConvertTo-Json -Compress
                 throw "Invoke-Timed argv smoke failed at index ${i}: expected `$($expectedArgs[$i])`, got `$($actualArgs[$i])`."
             }
         }
+        $retryProbePath = Join-Path $probeDir "installed-status-retry-probe.ps1"
+        $retryMarkerPath = Join-Path $probeDir "installed-status-retry-marker.txt"
+        Remove-Item -LiteralPath $retryMarkerPath -Force -ErrorAction SilentlyContinue
+        Set-Content -LiteralPath $retryProbePath -Encoding UTF8 -Value @'
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$ProbeArgs
+)
+$marker = Join-Path $PSScriptRoot "installed-status-retry-marker.txt"
+if (-not (Test-Path -LiteralPath $marker)) {
+    Set-Content -LiteralPath $marker -Value "seen" -Encoding ascii
+    [Console]::Error.WriteLine("state_store_read_lock_contention")
+    exit 1
+}
+Write-Output '{"status":"pass"}'
+exit 0
+'@
+        Invoke-InstalledVidaStatusWithRetry -Command @($PwshPath, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $retryProbePath) -MaxAttempts 3
+        $statusRecords = @($Records | Where-Object { $_.operation_id -eq "installed-vida-status" })
+        if ($statusRecords.Count -lt 2) {
+            throw "installed-vida-status retry smoke failed: expected at least two attempt records."
+        }
+        if (-not (@($statusRecords | Where-Object { $_.retryable }).Count -ge 1)) {
+            throw "installed-vida-status retry smoke failed: expected one retryable attempt."
+        }
+        if ($statusRecords[-1].exit_status -ne "pass") {
+            throw "installed-vida-status retry smoke failed: final attempt status was $($statusRecords[-1].exit_status)."
+        }
+        Remove-Item -LiteralPath $retryProbePath, $retryMarkerPath -Force -ErrorAction SilentlyContinue
     } elseif ($Mode -eq "script-check") {
         Invoke-DiffWhitespaceCheck
         Invoke-RootReadmeOnlyCheck
@@ -1168,7 +1317,7 @@ $ProbeArgs | ConvertTo-Json -Compress
             if (-not [string]::IsNullOrWhiteSpace($statusStateDir)) {
                 $env:VIDA_STATE_DIR = $statusStateDir
             }
-            Invoke-Timed "installed-vida-status" @((Resolve-InstalledVidaPath), "status", "--json")
+            Invoke-InstalledVidaStatusWithRetry -Command @((Resolve-InstalledVidaPath), "status", "--json")
         } finally {
             if ($null -eq $previousVidaStateDir) {
                 Remove-Item Env:VIDA_STATE_DIR -ErrorAction SilentlyContinue

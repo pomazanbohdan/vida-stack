@@ -115,6 +115,61 @@ function Copy-RequiredFile {
     Copy-Item -LiteralPath $Source -Destination $Destination -Force
 }
 
+function Remove-PathWithRetry {
+    param(
+        [string]$Path,
+        [switch]$Recurse
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        if (-not (Test-Path -LiteralPath $Path)) {
+            return
+        }
+        try {
+            if ($Recurse) {
+                Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            } else {
+                Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+            }
+            if (-not (Test-Path -LiteralPath $Path)) {
+                return
+            }
+        } catch {
+            $lastError = $_
+        }
+        Start-Sleep -Milliseconds (200 * $attempt)
+    }
+    if ($null -ne $lastError) {
+        Fail "Unable to remove stale release path after retries: $Path :: $($lastError.Exception.Message)"
+    }
+    Fail "Unable to remove stale release path after retries: $Path"
+}
+
+function Move-FileReplacingWithRetry {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        try {
+            $parent = Split-Path -Parent $Destination
+            if (-not [string]::IsNullOrWhiteSpace($parent)) {
+                New-Item -ItemType Directory -Force -Path $parent | Out-Null
+            }
+            [System.IO.File]::Move($Source, $Destination, $true)
+            return
+        } catch {
+            $lastError = $_
+            Start-Sleep -Milliseconds (200 * $attempt)
+        }
+    }
+    Fail "Unable to replace release artifact after retries: $Destination :: $($lastError.Exception.Message)"
+}
+
 function Copy-RequiredTree {
     param(
         [string]$Source,
@@ -124,7 +179,7 @@ function Copy-RequiredTree {
         Fail "Missing required directory: $Source"
     }
     if (Test-Path -LiteralPath $Destination) {
-        Remove-Item -LiteralPath $Destination -Recurse -Force
+        Remove-PathWithRetry -Path $Destination -Recurse
     }
     $parent = Split-Path -Parent $Destination
     if (-not [string]::IsNullOrWhiteSpace($parent)) {
@@ -275,10 +330,9 @@ function New-ZipFromPackageRoot {
         [string]$ZipPath
     )
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    if (Test-Path -LiteralPath $ZipPath) {
-        Remove-Item -LiteralPath $ZipPath -Force
-    }
-    $zip = [System.IO.Compression.ZipFile]::Open($ZipPath, [System.IO.Compression.ZipArchiveMode]::Create)
+    $tempZipPath = "$ZipPath.$([System.Guid]::NewGuid().ToString("N")).tmp"
+    Remove-PathWithRetry -Path $tempZipPath
+    $zip = [System.IO.Compression.ZipFile]::Open($tempZipPath, [System.IO.Compression.ZipArchiveMode]::Create)
     try {
         $files = Get-ChildItem -LiteralPath $SourceDir -Recurse -File | Sort-Object FullName
         foreach ($file in $files) {
@@ -291,6 +345,7 @@ function New-ZipFromPackageRoot {
     } finally {
         $zip.Dispose()
     }
+    Move-FileReplacingWithRetry -Source $tempZipPath -Destination $ZipPath
 }
 
 function New-TarGzFromPackageRoot {
@@ -303,18 +358,18 @@ function New-TarGzFromPackageRoot {
     if (-not $tar) {
         return $null
     }
-    if (Test-Path -LiteralPath $TarPath) {
-        Remove-Item -LiteralPath $TarPath -Force
-    }
+    $tempTarPath = "$TarPath.$([System.Guid]::NewGuid().ToString("N")).tmp"
+    Remove-PathWithRetry -Path $tempTarPath
     Push-Location $PackageRoot
     try {
-        & $tar.Source "-czf" $TarPath $ArchiveBase
+        & $tar.Source "-czf" $tempTarPath $ArchiveBase
         if ($LASTEXITCODE -ne 0) {
-            Fail "tar failed while creating $TarPath."
+            Fail "tar failed while creating $tempTarPath."
         }
     } finally {
         Pop-Location
     }
+    Move-FileReplacingWithRetry -Source $tempTarPath -Destination $TarPath
     return $TarPath
 }
 
@@ -456,9 +511,7 @@ try {
         }
     }
 
-    if (Test-Path -LiteralPath $DistDir) {
-        Remove-Item -LiteralPath $DistDir -Recurse -Force
-    }
+    Remove-PathWithRetry -Path $DistDir -Recurse
     New-Item -ItemType Directory -Force -Path (Join-Path $stageDir "bin") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $stageDir "install/assets") | Out-Null
 

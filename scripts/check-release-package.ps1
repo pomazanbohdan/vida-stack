@@ -100,6 +100,10 @@ try {
     New-FixtureBinary -Directory $releaseBinDir -Name "docflow.exe" -VersionLine "docflow $expectedVersion (built fixture)"
     New-FixtureBinary -Directory $releaseBinDir -Name "vida-pi-agent.exe" -VersionLine "vida-pi-agent $expectedVersion (built fixture)"
     New-FixtureBinary -Directory $releaseBinDir -Name "vida-coder.exe" -VersionLine "vida-coder $expectedVersion (built fixture)"
+    New-Item -ItemType Directory -Force -Path (Join-Path $distDir "package/$archiveBase/vida/config/instructions/instruction-contracts") | Out-Null
+    Set-Content -LiteralPath (Join-Path $distDir "package/$archiveBase/vida/config/instructions/instruction-contracts/stale.txt") -Value "stale" -Encoding ascii
+    New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+    Set-Content -LiteralPath (Join-Path $distDir "$archiveBase.zip") -Value "stale archive" -Encoding ascii
 
     $buildScript = Join-Path $RootDir "scripts/build-release.ps1"
     $receiptText = & pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File $buildScript -SkipBuild -Windows -ReleaseBinDir $releaseBinDir -DistDir $distDir -Version $resolvedVersion -Json
