@@ -3022,7 +3022,10 @@ fn trusted_host_bridge_completion_request_context(
         );
     }
     if receipt_target_matches_request {
-        if let Some(authoritative_packet_path) = receipt.downstream_dispatch_packet_path.as_deref()
+        if let Some(authoritative_packet_path) = receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .or(receipt.dispatch_packet_path.as_deref())
         {
             let authoritative_packet_path =
                 crate::runtime_dispatch_state::normalize_persisted_runtime_path(
@@ -11520,6 +11523,116 @@ mod tests {
         .expect("pending bridge request should return completion context");
 
         assert_eq!(context.dispatch_target, "implementer");
+        assert_eq!(
+            context.packet_path,
+            canonicalize_existing_regular_state_path(&root, &packet_path, "packet")
+                .expect("canonical packet")
+                .display()
+                .to_string()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn completed_host_bridge_refresh_allows_original_dispatch_packet_without_downstream_packet() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-completed-original-packet-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let packet_path =
+            root.join("runtime-consumption/dispatch-packets/completed-original-packet.json");
+        let request_path = root.join("host-tool-bridge/requests/completed-original.json");
+        let result_path = root.join("host-tool-bridge/results/completed-original.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/completed-original.json");
+        for path in [&packet_path, &request_path, &result_path, &receipt_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-host-bridge-completed-original-packet",
+                "dispatch_target": "analyst"
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        std::fs::write(
+            &result_path,
+            serde_json::json!({
+                "status": "pass",
+                "execution_state": "executed",
+                "request_id": "completed-original",
+                "run_id": "run-host-bridge-completed-original-packet",
+                "dispatch_target": "analyst",
+                "allowed_next_node": "developer"
+            })
+            .to_string(),
+        )
+        .expect("write result");
+        std::fs::write(
+            &receipt_path,
+            serde_json::json!({
+                "status": "pass",
+                "request_id": "completed-original",
+                "run_id": "run-host-bridge-completed-original-packet",
+                "dispatch_target": "analyst",
+                "allowed_next_node": "developer",
+                "result_path": result_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write receipt");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pass",
+                "request_id": "completed-original",
+                "run_id": "run-host-bridge-completed-original-packet",
+                "task_id": "run-host-bridge-completed-original-packet",
+                "dispatch_target": "analyst",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write request");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-host-bridge-completed-original-packet",
+            "analysis",
+            "analysis",
+        );
+        status.active_node = "analyst".to_string();
+        status.status = "blocked".to_string();
+
+        let mut receipt = sample_receipt("executed");
+        receipt.run_id = "run-host-bridge-completed-original-packet".to_string();
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
+        receipt.downstream_dispatch_packet_path = None;
+
+        let context = trusted_host_bridge_completion_request_context(
+            &root,
+            "run-host-bridge-completed-original-packet",
+            &request_path.display().to_string(),
+            Some(&status),
+            &receipt,
+        )
+        .expect("completed bridge refresh may use original dispatch packet evidence")
+        .expect("completed bridge request should return completion context");
+
+        assert_eq!(context.dispatch_target, "analyst");
         assert_eq!(
             context.packet_path,
             canonicalize_existing_regular_state_path(&root, &packet_path, "packet")
