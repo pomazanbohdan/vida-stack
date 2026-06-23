@@ -1815,8 +1815,7 @@ impl StateStore {
                 || current_stable_fallback.as_deref().is_some_and(|fallback| {
                     let fallback = fallback.trim();
                     !fallback.is_empty() && claim.orchestrator_session_id == fallback
-                })
-                || claim.process_id == Some(std::process::id());
+                });
             if !claim_matches_current_session {
                 continue;
             }
@@ -2089,8 +2088,7 @@ impl StateStore {
                 || current_stable_fallback.is_some_and(|fallback| {
                     let fallback = fallback.trim();
                     !fallback.is_empty() && claim.orchestrator_session_id == fallback
-                })
-                || claim.process_id == Some(std::process::id());
+                });
             if claim_matches_current_session
                 && claim
                     .run_id
