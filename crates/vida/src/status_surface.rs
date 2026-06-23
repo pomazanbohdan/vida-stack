@@ -13,6 +13,8 @@ use crate::status_surface_text_report::{emit_status_text_report, StatusTextRepor
 use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
 const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
+const STATUS_SURFACE_LOCK_PROBE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+const STATUS_SURFACE_LOCK_PROBE_RETRY_DELAY: Duration = Duration::from_millis(50);
 const STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
 const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 1024 * 1024;
 
@@ -279,6 +281,46 @@ pub(crate) fn state_store_lock_present(state_dir: &std::path::Path) -> bool {
     })
 }
 
+pub(crate) fn state_store_lock_present_after_bounded_wait(
+    state_dir: &std::path::Path,
+    timeout: Duration,
+    retry_delay: Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if !state_store_lock_present(state_dir) {
+            return false;
+        }
+        if std::time::Instant::now() >= deadline {
+            return true;
+        }
+        std::thread::sleep(retry_delay);
+    }
+}
+
+async fn open_status_state_store_with_bounded_lock_retry(
+    state_dir: std::path::PathBuf,
+) -> Result<StateStore, state_store::StateStoreError> {
+    let deadline = std::time::Instant::now() + STATUS_SURFACE_LOCK_PROBE_WAIT_TIMEOUT;
+    loop {
+        match StateStore::open_existing_read_only_with_strict_timeout(
+            state_dir.clone(),
+            STATUS_SURFACE_LOCK_TIMEOUT,
+        )
+        .await
+        {
+            Ok(store) => return Ok(store),
+            Err(error) if StateStore::error_is_lock_contention(&error) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(error);
+                }
+                tokio::time::sleep(STATUS_SURFACE_LOCK_PROBE_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 pub(crate) fn degraded_read_lock_toon_text(surface: &str, payload: &serde_json::Value) -> String {
     operator_output::toon_report::render(
         surface,
@@ -312,7 +354,11 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let summary_only = args.summary || matches!(view, "compact" | "summary");
     let field_selection = args.fields.as_deref();
     let selected_output = field_selection.is_some();
-    if state_store_lock_present(&state_dir) {
+    if state_store_lock_present_after_bounded_wait(
+        &state_dir,
+        STATUS_SURFACE_LOCK_PROBE_WAIT_TIMEOUT,
+        STATUS_SURFACE_LOCK_PROBE_RETRY_DELAY,
+    ) {
         return emit_degraded_read_lock_surface(
             "vida status",
             &state_dir,
@@ -425,12 +471,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         }
     }
 
-    match StateStore::open_existing_read_only_with_strict_timeout(
-        state_dir.clone(),
-        STATUS_SURFACE_LOCK_TIMEOUT,
-    )
-    .await
-    {
+    match open_status_state_store_with_bounded_lock_retry(state_dir.clone()).await {
         Ok(store) => match store.storage_metadata_summary().await {
             Ok(storage_metadata) => {
                 let backend_summary = format!(
@@ -2456,10 +2497,12 @@ fn cached_projection_cache_contract(
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
+        fs::{self, OpenOptions},
         sync::{Mutex, OnceLock},
-        time::SystemTime,
+        time::{Duration, SystemTime},
     };
+
+    use fs2::FileExt;
 
     use crate::activation_status::canonical_activation_status;
     use crate::contract_profile_adapter::operator_contracts_consistency_error;
@@ -2639,6 +2682,77 @@ mod tests {
         assert!(output.contains("state_store_read_lock_contention"));
         assert!(serde_json::from_str::<serde_json::Value>(&output).is_err());
         assert!(!output.contains('\x1b'));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn status_lock_probe_waits_for_transient_lock_release() {
+        let state_dir = unique_status_lock_probe_dir("transient");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let lock_path = state_dir.join(".vida-authoritative-open.guard");
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("open guard");
+        file.lock_exclusive().expect("lock guard");
+
+        let release_handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            file.unlock().expect("unlock guard");
+        });
+
+        let still_locked = super::state_store_lock_present_after_bounded_wait(
+            &state_dir,
+            Duration::from_secs(2),
+            Duration::from_millis(25),
+        );
+
+        release_handle.join().expect("release thread should join");
+        assert!(!still_locked);
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn status_lock_probe_reports_lock_after_bounded_wait_expires() {
+        let state_dir = unique_status_lock_probe_dir("held");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let lock_path = state_dir.join(".vida-authoritative-open.guard");
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("open guard");
+        file.lock_exclusive().expect("lock guard");
+
+        let still_locked = super::state_store_lock_present_after_bounded_wait(
+            &state_dir,
+            Duration::from_millis(75),
+            Duration::from_millis(10),
+        );
+
+        file.unlock().expect("unlock guard");
+        assert!(still_locked);
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    fn unique_status_lock_probe_dir(label: &str) -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "vida-status-lock-probe-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        dir
     }
 
     fn restore_vida_session_id(saved: Option<String>) {
