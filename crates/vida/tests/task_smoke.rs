@@ -2349,6 +2349,89 @@ fn task_list_fields_and_default_toon_shape_are_binary_visible() {
 }
 
 #[test]
+fn taskflow_packet_render_fields_default_output_is_binary_visible() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    run_and_assert_success(&["boot"], &state_dir);
+    run_and_assert_success(
+        &[
+            "task",
+            "create",
+            "packet-fields-epic",
+            "Packet fields epic",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--description",
+            "demo",
+            "--notes",
+            "owner=test",
+        ],
+        &state_dir,
+    );
+    run_and_assert_success(
+        &[
+            "task",
+            "create",
+            "packet-fields-demo",
+            "Packet fields demo",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            "packet-fields-epic",
+            "--description",
+            "demo",
+            "--notes",
+            "owner=test",
+        ],
+        &state_dir,
+    );
+    run_and_assert_success(
+        &[
+            "task",
+            "update",
+            "packet-fields-demo",
+            "--owned-path",
+            "crates/vida/src/taskflow_packet.rs",
+        ],
+        &state_dir,
+    );
+    run_and_assert_success(
+        &["taskflow", "run-graph", "dispatch-init", "packet-fields-demo"],
+        &state_dir,
+    );
+
+    let stdout = run_and_assert_success(
+        &[
+            "taskflow",
+            "packet",
+            "render",
+            "packet-fields-demo",
+            "--fields",
+            "run_id,dispatch_packet.path,dispatch_packet.body.route_policy.effective_selected_backend",
+        ],
+        &state_dir,
+    );
+
+    assert!(stdout.starts_with("vida taskflow packet fields\n"));
+    assert!(stdout.contains("  run_id: \"packet-fields-demo\""));
+    assert!(stdout.contains("  dispatch_packet:\n"));
+    assert!(stdout.contains("    path: "));
+    assert!(stdout.contains("      route_policy:\n"));
+    assert!(stdout.contains("        effective_selected_backend: "));
+    assert!(!stdout.trim_start().starts_with('{'));
+    assert!(!stdout.contains("dispatch_receipt"));
+    assert!(!stdout.contains("continue_command"));
+    assert!(!stdout.contains("--json"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn test_cli_support_temp_fixture_snapshots_task_default_toon_and_json() {
     let temp = vida_test_support::temp_fixture_dir();
     let state_dir_path = temp.path().join("state");
