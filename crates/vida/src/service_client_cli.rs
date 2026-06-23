@@ -278,8 +278,16 @@ fn print_result_field(result: &serde_json::Value, field: &str) {
 
 fn print_result_field_as(result: &serde_json::Value, field: &str, label: &str) {
     if let Some(value) = result.get(field).and_then(serde_json::Value::as_str) {
-        println!("  {label}: {value}");
+        println!("  {label}: {}", terminal_safe_text(value));
     }
+}
+
+fn terminal_safe_text(value: &str) -> std::borrow::Cow<'_, str> {
+    if !value.chars().any(char::is_control) {
+        return std::borrow::Cow::Borrowed(value);
+    }
+
+    std::borrow::Cow::Owned(value.chars().flat_map(char::escape_default).collect())
 }
 
 fn family_name(family: &ServiceCliFamily) -> &'static str {
@@ -413,6 +421,32 @@ mod tests {
         assert!(operations.contains(&operations::WIZARD_SESSION_DIFF.to_string()));
         assert!(operations.contains(&operations::JOBS_GET.to_string()));
         assert!(operations.contains(&operations::RECEIPTS_GET.to_string()));
+    }
+
+    #[test]
+    fn default_text_renderer_escapes_terminal_control_characters() {
+        let raw =
+            "redb outbox journal `evil-\u{1b}]52;c;SGFja2Vk\u{7}.redb` failed\nnext-line\twith-tab";
+        let escaped = terminal_safe_text(raw);
+
+        assert_eq!(
+            escaped,
+            "redb outbox journal `evil-\\u{1b}]52;c;SGFja2Vk\\u{7}.redb` failed\\nnext-line\\twith-tab"
+        );
+        assert!(!escaped.contains('\u{1b}'));
+        assert!(!escaped.contains('\u{7}'));
+        assert!(!escaped.contains('\n'));
+        assert!(!escaped.contains('\t'));
+    }
+
+    #[test]
+    fn default_text_renderer_preserves_safe_text() {
+        let raw = "Inspect outbox `outbox-1` failure `network failed`, then requeue.";
+        assert!(matches!(
+            terminal_safe_text(raw),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert_eq!(terminal_safe_text(raw), raw);
     }
 
     #[test]

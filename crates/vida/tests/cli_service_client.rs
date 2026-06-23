@@ -189,6 +189,28 @@ fn cli_job_status_default_output_is_actionable_without_json() {
 }
 
 #[test]
+fn cli_job_status_default_output_escapes_blocker_repair_control_characters() {
+    let journal_path = std::env::temp_dir().join("missing-vida-job-\u{1b}]52;c;SGFja2Vk\u{7}.redb");
+    let output = vida()
+        .env("VIDA_JOB_JOURNAL_PATH", &journal_path)
+        .args(["job", "status"])
+        .output()
+        .expect("job status command should execute");
+    assert!(
+        output.status.success(),
+        "job status should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("job_status: unavailable"));
+    assert!(stdout.contains("repair_action: redb outbox journal"));
+    assert!(stdout.contains("\\u{1b}]52;c;SGFja2Vk\\u{7}"));
+    assert!(!stdout.contains('\u{1b}'));
+    assert!(!stdout.contains('\u{7}'));
+}
+
+#[test]
 fn cli_job_status_default_output_exposes_blocker_repair_without_json() {
     let output = vida()
         .env(
