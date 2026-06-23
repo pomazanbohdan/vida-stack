@@ -2627,7 +2627,7 @@ mod tests {
                     taskflow_core::IssueType::Task,
                 ),
                 TaskRecord::new(
-                    taskflow_core::TaskId::new("vida-b\u{1f}vida-c"),
+                    taskflow_core::TaskId::new("b\u{1f}vida-c"),
                     "B delimiter",
                     taskflow_core::IssueType::Task,
                 ),
@@ -2640,7 +2640,7 @@ mod tests {
                 },
                 DependencyEdge {
                     issue_id: taskflow_core::TaskId::new("vida-a"),
-                    depends_on_id: taskflow_core::TaskId::new("vida-b\u{1f}vida-c"),
+                    depends_on_id: taskflow_core::TaskId::new("b\u{1f}vida-c"),
                     dependency_type: "blocks".to_string(),
                 },
             ],
