@@ -48,6 +48,14 @@ fn task_work_item_kind_value(issue_type: &str) -> serde_json::Value {
         .expect("work item kind should serialize")
 }
 
+fn user_facing_issue_type(issue_type: &str) -> String {
+    match crate::state_store::canonical_work_item_issue_type(issue_type).as_str() {
+        "defect" => "bug".to_string(),
+        "runtime_defect" => "runtime_bug".to_string(),
+        _ => issue_type.trim().to_string(),
+    }
+}
+
 fn task_record_value(task: &TaskRecord) -> serde_json::Value {
     let mut value = serde_json::to_value(task).expect("task record should serialize");
     value["work_item_kind"] = task_work_item_kind_value(&task.issue_type);
@@ -186,7 +194,11 @@ fn print_task_record(render: RenderMode, title: &str, task: &TaskRecord) {
     print_surface_line(render, "status", &task.status);
     print_surface_line(render, "title", &task.title);
     print_surface_line(render, "priority", &task.priority.to_string());
-    print_surface_line(render, "issue type", &task.issue_type);
+    let displayed_issue_type = user_facing_issue_type(&task.issue_type);
+    print_surface_line(render, "issue type", &displayed_issue_type);
+    if displayed_issue_type != task.issue_type {
+        print_surface_line(render, "internal issue type", &task.issue_type);
+    }
     if !task.labels.is_empty() {
         print_surface_line(render, "labels", &task.labels.join(", "));
     }
@@ -497,8 +509,9 @@ fn task_show_toon_value(task: &TaskRecord, view: &str) -> serde_json::Value {
         "status": task.status,
         "title": task.title,
         "priority": task.priority,
-        "issue_type": task.issue_type,
-        "work_item_kind": task_work_item_kind_value(&task.issue_type),
+        "issue_type": user_facing_issue_type(&task.issue_type),
+        "internal_issue_type": (user_facing_issue_type(&task.issue_type) != task.issue_type)
+            .then_some(task.issue_type.clone()),
         "dependencies": task.dependencies.iter().map(|dependency| {
             serde_json::json!({
                 "edge_type": dependency.edge_type.clone(),
@@ -642,7 +655,10 @@ pub(crate) fn task_progress_counts_toon_text(
     let toon_scalar = taskflow_format_toon::sanitize_toon_scalar;
     let lines = [
         format!("task: {}", toon_scalar(&summary.root_task.id)),
-        format!("kind: {}", toon_scalar(&summary.root_task.issue_type)),
+        format!(
+            "kind: {}",
+            toon_scalar(&user_facing_issue_type(&summary.root_task.issue_type))
+        ),
         format!("basis: {}", toon_scalar(&summary.progress_basis)),
         format!(
             "counts: closed={} open={} in_progress={} total={}",
@@ -668,7 +684,10 @@ pub(crate) fn task_progress_toon_text_with_stage_ensemble(
     let toon_scalar = taskflow_format_toon::sanitize_toon_scalar;
     let mut lines = vec![
         format!("task: {}", toon_scalar(&summary.root_task.id)),
-        format!("kind: {}", toon_scalar(&summary.root_task.issue_type)),
+        format!(
+            "kind: {}",
+            toon_scalar(&user_facing_issue_type(&summary.root_task.issue_type))
+        ),
         format!("basis: {}", toon_scalar(&summary.progress_basis)),
         format!(
             "counts: closed={} open={} in_progress={} total={}",
@@ -1405,7 +1424,11 @@ pub(crate) fn print_task_direct_children(
 
     print_surface_line(render, "children", &tree.children.len().to_string());
     for child in &tree.children {
-        let issue_type = child.child_issue_type.as_deref().unwrap_or("unknown");
+        let issue_type = child
+            .child_issue_type
+            .as_deref()
+            .map(user_facing_issue_type)
+            .unwrap_or_else(|| "unknown".to_string());
         let state = if child.cycle {
             "cycle"
         } else if child.missing {
@@ -1463,7 +1486,7 @@ fn task_children_toon_text(tree: &TaskDependencyTreeNode) -> String {
     struct ChildRow<'a> {
         id: &'a str,
         state: &'a str,
-        issue_type: &'a str,
+        issue_type: String,
         priority: serde_json::Value,
         title: &'a str,
     }
@@ -1472,7 +1495,11 @@ fn task_children_toon_text(tree: &TaskDependencyTreeNode) -> String {
         .children
         .iter()
         .map(|child| {
-            let issue_type = child.child_issue_type.as_deref().unwrap_or("unknown");
+            let issue_type = child
+                .child_issue_type
+                .as_deref()
+                .map(user_facing_issue_type)
+                .unwrap_or_else(|| "unknown".to_string());
             let state = if child.cycle {
                 "cycle"
             } else if child.missing {
@@ -1510,7 +1537,11 @@ fn task_children_toon_text(tree: &TaskDependencyTreeNode) -> String {
 
 fn print_task_dependency_tree_edge(edge: &TaskDependencyTreeEdge, depth: usize) {
     let indent = "  ".repeat(depth);
-    let issue_type = edge.dependency_issue_type.as_deref().unwrap_or("unknown");
+    let issue_type = edge
+        .dependency_issue_type
+        .as_deref()
+        .map(user_facing_issue_type)
+        .unwrap_or_else(|| "unknown".to_string());
     let state = if edge.cycle {
         "cycle"
     } else if edge.missing {
@@ -1537,7 +1568,11 @@ fn print_task_dependency_tree_edge(edge: &TaskDependencyTreeEdge, depth: usize) 
 
 fn print_task_dependency_tree_child(child: &TaskDependencyTreeChild, depth: usize) {
     let indent = "  ".repeat(depth);
-    let issue_type = child.child_issue_type.as_deref().unwrap_or("unknown");
+    let issue_type = child
+        .child_issue_type
+        .as_deref()
+        .map(user_facing_issue_type)
+        .unwrap_or_else(|| "unknown".to_string());
     let state = if child.cycle {
         "cycle"
     } else if child.missing {
@@ -2426,6 +2461,33 @@ mod tests {
         assert_eq!(
             payload["task"]["work_item_kind"]["provider_issue_type"],
             "pr"
+        );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_show_default_toon_uses_bug_label_for_defect_issue_type() {
+        let mut task = sample_task("defect-as-bug");
+        task.issue_type = "defect".to_string();
+
+        let rendered = super::task_show_toon_text(&task, "summary");
+
+        assert!(rendered.contains("issue_type: bug"));
+        assert!(rendered.contains("internal_issue_type: defect"));
+        assert!(!rendered.contains("canonical_issue_type: defect"));
+    }
+
+    #[test]
+    fn task_show_json_preserves_internal_defect_schema_fields() {
+        let mut task = sample_task("defect-json");
+        task.issue_type = "defect".to_string();
+
+        let payload = super::task_show_payload(&task, None, "summary");
+
+        assert_eq!(payload["task"]["issue_type"], "defect");
+        assert_eq!(
+            payload["task"]["work_item_kind"]["canonical_issue_type"],
+            "defect"
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
