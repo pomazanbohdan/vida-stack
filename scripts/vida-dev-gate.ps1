@@ -1,7 +1,9 @@
 param(
-    [ValidateSet("script-check", "quick", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "release-package", "release-install", "target-dir-policy")]
+    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "release-package", "release-install", "target-dir-policy")]
     [string]$Mode = "quick",
     [string]$TestFilter = "",
+    [string[]]$FormatFile = @(),
+    [string[]]$AllowDirtyFile = @(),
     [string]$ReleaseVersion = "",
     [string]$ReleaseBinDir = "",
     [string]$ReleaseSuffix = "",
@@ -234,6 +236,7 @@ Usage:
 Modes:
   script-check      No-Cargo proof for diffs, runtime boundaries, and script syntax.
   quick             Debug source proof: git diff check, cargo fmt, cargo check.
+  scoped-format     Format only explicit -FormatFile Rust files and fail on out-of-scope dirty files.
   focused-nextest   Focused vida package test proof; requires -TestFilter.
   package-nextest   Full vida package test proof with the default nextest profile.
   workspace-nextest Workspace nextest proof with the CI profile.
@@ -249,6 +252,7 @@ Notes:
   release-package accepts explicit -SkipBuild, -Windows, -ReleaseBinDir, -ReleaseVersion, and -ReleaseSuffix flags for packaging already-built release binaries.
   release-package also honors VIDA_RELEASE_SKIP_BUILD=1, VIDA_RELEASE_BIN_DIR=<dir>, and VIDA_RELEASE_SUFFIX=<suffix> for compatibility.
   JSON mode records operation timing and log artifact paths under .vida/data/state/command-timing.
+  scoped-format requires one or more -FormatFile values; add -AllowDirtyFile for intentionally dirty non-Rust task artifacts.
 "@
 }
 
@@ -576,6 +580,81 @@ if ($Help) {
     exit 0
 }
 
+function ConvertTo-RepoRelativePath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+    $fullRoot = [System.IO.Path]::GetFullPath($RootDir).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $candidate = $Path
+    if (-not [System.IO.Path]::IsPathRooted($candidate)) {
+        $candidate = Join-Path $RootDir $candidate
+    }
+    $fullPath = [System.IO.Path]::GetFullPath($candidate)
+    if (-not ($fullPath.Equals($fullRoot, [System.StringComparison]::OrdinalIgnoreCase) -or $fullPath.StartsWith($fullRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase))) {
+        throw "Path is outside repository root: $Path"
+    }
+    return [System.IO.Path]::GetRelativePath($fullRoot, $fullPath).Replace('\', '/')
+}
+
+function Get-GitPorcelainPaths {
+    $paths = New-Object System.Collections.Generic.SortedSet[string]
+    $lines = & $GitPath status --porcelain --untracked-files=all
+    foreach ($line in $lines) {
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.Length -lt 4) {
+            continue
+        }
+        $path = $line.Substring(3).Trim()
+        if ($path.Contains(" -> ")) {
+            $path = ($path -split " -> ")[-1].Trim()
+        }
+        $path = $path.Trim('"').Replace('\', '/')
+        [void]$paths.Add($path)
+    }
+    return [string[]]@($paths)
+}
+
+function Assert-ScopedDirtyFiles {
+    param(
+        [string[]]$AllowedPaths,
+        [string]$Phase
+    )
+
+    $allowed = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in $AllowedPaths) {
+        [void]$allowed.Add($path)
+    }
+    $dirty = Get-GitPorcelainPaths
+    $outOfScope = @($dirty | Where-Object { -not $allowed.Contains($_) })
+    if ($outOfScope.Count -gt 0) {
+        [Console]::Error.WriteLine(("scoped-format {0} found out-of-scope dirty file(s): {1}" -f $Phase, ($outOfScope -join ", ")))
+        exit 2
+    }
+}
+
+function Invoke-ScopedFormat {
+    if ($FormatFile.Count -eq 0) {
+        [Console]::Error.WriteLine("-Mode scoped-format requires at least one -FormatFile <path>.")
+        exit 2
+    }
+
+    $formatFiles = @($FormatFile | ForEach-Object { ConvertTo-RepoRelativePath $_ })
+    $allowFiles = @($AllowDirtyFile | ForEach-Object { ConvertTo-RepoRelativePath $_ })
+    $allowed = @($formatFiles + $allowFiles | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+    Assert-ScopedDirtyFiles -AllowedPaths $allowed -Phase "precheck"
+
+    foreach ($file in $formatFiles) {
+        if (-not $file.EndsWith(".rs", [System.StringComparison]::OrdinalIgnoreCase)) {
+            [Console]::Error.WriteLine("scoped-format only formats Rust source files: $file")
+            exit 2
+        }
+        Invoke-Timed "rustfmt-scoped:$file" @("rustfmt", "--edition", "2024", $file)
+    }
+
+    Assert-ScopedDirtyFiles -AllowedPaths $allowed -Phase "postcheck"
+}
+
 $BuildGuard = $null
 if (Test-ModeNeedsBuildConcurrencyGuard $Mode) {
     . (Join-Path $PSScriptRoot "build-concurrency-guard.ps1")
@@ -669,6 +748,8 @@ try {
         Invoke-Timed "git-diff-check" @($GitPath, "diff", "--check")
         Invoke-Timed "cargo-fmt-check" @("cargo", "fmt", "-p", "vida", "--", "--check")
         Invoke-Timed "cargo-check-vida" @("cargo", "check", "--locked", "-p", "vida")
+    } elseif ($Mode -eq "scoped-format") {
+        Invoke-ScopedFormat
     } elseif ($Mode -eq "focused-nextest") {
         if ($TestFilter.Trim().Length -eq 0) {
             Write-Error "-Mode focused-nextest requires -TestFilter <filter>."
