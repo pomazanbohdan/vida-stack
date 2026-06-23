@@ -642,6 +642,89 @@ function Test-PathInsideRoot {
     return $Path.Equals($Root, $Comparison) -or $Path.StartsWith($Root + [System.IO.Path]::DirectorySeparatorChar, $Comparison)
 }
 
+function Invoke-StaleCargoTargetProcessCleanup {
+    if (-not (Test-IsWindowsHost)) {
+        return
+    }
+
+    $started = Get-Date
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $exitStatus = "pass"
+    $targetRoot = [System.IO.Path]::GetFullPath($CargoTargetDirState.effective_cargo_target_dir).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $stopped = New-Object System.Collections.Generic.List[string]
+    $failed = New-Object System.Collections.Generic.List[string]
+
+    try {
+        if (-not (Test-Path -LiteralPath $targetRoot)) {
+            return
+        }
+
+        $comparison = Get-PathComparison
+        $processes = Get-CimInstance Win32_Process | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+            $_.ProcessId -ne $PID
+        }
+
+        foreach ($process in $processes) {
+            $exePath = $null
+            try {
+                $exePath = [System.IO.Path]::GetFullPath($process.ExecutablePath)
+            } catch {
+                continue
+            }
+            if (-not (Test-PathInsideRoot -Root $targetRoot -Path $exePath -Comparison $comparison)) {
+                continue
+            }
+
+            $label = "{0}({1})" -f $process.Name, $process.ProcessId
+            try {
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+                $deadline = (Get-Date).AddSeconds(5)
+                while ((Get-Date) -lt $deadline) {
+                    if (-not (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue)) {
+                        break
+                    }
+                    Start-Sleep -Milliseconds 100
+                }
+                if (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue) {
+                    [void]$failed.Add($label)
+                } else {
+                    [void]$stopped.Add($label)
+                }
+            } catch {
+                [void]$failed.Add($label)
+            }
+        }
+
+        if ($stopped.Count -gt 0 -and -not $Json) {
+            Write-Output ("[cleanup] stopped stale target process(es): {0}" -f ($stopped.ToArray() -join ", "))
+        }
+        if ($failed.Count -gt 0) {
+            $exitStatus = "fail"
+            [Console]::Error.WriteLine(("stale target process cleanup failed for: {0}" -f ($failed.ToArray() -join ", ")))
+            exit 1
+        }
+    } finally {
+        $sw.Stop()
+        $Records.Add([pscustomobject]@{
+            operation_id = "stale-target-process-cleanup"
+            command_or_surface = "stop executable processes under effective Cargo target dir"
+            cwd_or_context = $RootDir
+            started_at = $started.ToString("o")
+            duration_ms = [int64]$sw.ElapsedMilliseconds
+            exit_status = $exitStatus
+            classification = $(if ($sw.ElapsedMilliseconds -le 2000) { "fast" } elseif ($sw.ElapsedMilliseconds -le 5000) { "watch" } else { "long_gate_expected" })
+            target_dir_policy = $CargoTargetDirState.target_dir_policy
+            effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+            artifact_refs = @()
+            stopped_processes = $stopped.ToArray()
+        })
+    }
+}
+
 function Resolve-ExistingPathTarget {
     param([string]$Path)
 
@@ -773,6 +856,7 @@ $BuildGuard = $null
 if (Test-ModeNeedsBuildConcurrencyGuard $Mode) {
     . (Join-Path $PSScriptRoot "build-concurrency-guard.ps1")
     $BuildGuard = Enter-VidaBuildConcurrencyGuard -RootDir $RootDir -Scope "build"
+    Invoke-StaleCargoTargetProcessCleanup
 }
 
 Push-Location $RootDir
