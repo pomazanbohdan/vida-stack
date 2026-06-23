@@ -2641,7 +2641,7 @@ pub(crate) fn task_stage_ensemble_operator_summary_value(
     let active_stage = latest_attempt.map(|attempt| attempt.stage_id.clone());
     let latest_attempt_status = latest_attempt.map(|attempt| attempt.status.clone());
     let next_command = task_stage_ensemble_next_command(
-        &task.id,
+        task,
         active_stage.as_deref(),
         latest_attempt_status.as_deref(),
         latest_consolidation_receipt_id.as_deref(),
@@ -2667,12 +2667,17 @@ pub(crate) fn task_stage_ensemble_operator_summary_value(
 }
 
 fn task_stage_ensemble_next_command(
-    task_id: &str,
+    task: &state_store::TaskRecord,
     active_stage: Option<&str>,
     latest_attempt_status: Option<&str>,
     latest_consolidation_receipt_id: Option<&str>,
     no_attempts: bool,
 ) -> String {
+    if state_store::work_item_is_program_container(&task.issue_type) {
+        let quoted_task_id = crate::launcher_task_commands::shell_quote(&task.id);
+        return format!("vida task ready --scope {quoted_task_id} --limit 10");
+    }
+    let task_id = &task.id;
     let quoted_task_id = crate::launcher_task_commands::shell_quote(task_id);
     let stage = active_stage.unwrap_or("implementation");
     let quoted_stage = crate::launcher_task_commands::shell_quote(stage);
@@ -13768,6 +13773,28 @@ mod tests {
             provider_mapping: None,
             dependencies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn task_stage_ensemble_next_command_selects_leaf_guidance_for_container_tasks() {
+        let mut task = owned_task_record("epic-runtime", Vec::new());
+        task.issue_type = "epic".to_string();
+
+        let command = super::task_stage_ensemble_next_command(&task, None, None, None, true);
+
+        assert_eq!(command, "vida task ready --scope epic-runtime --limit 10");
+    }
+
+    #[test]
+    fn task_stage_ensemble_next_command_keeps_attempt_dispatch_for_leaf_tasks() {
+        let task = owned_task_record("leaf-task", Vec::new());
+
+        let command = super::task_stage_ensemble_next_command(&task, None, None, None, true);
+
+        assert_eq!(
+            command,
+            "vida task attempt dispatch leaf-task --stage implementation"
+        );
     }
 
     #[test]
