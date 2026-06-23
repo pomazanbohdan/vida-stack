@@ -792,6 +792,11 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "proof commands passed",
         "reported",
         "reports",
+        "not a ",
+        "not an ",
+        "no current",
+        "not current",
+        "rather than",
         "no longer",
         "does not",
         "returns",
@@ -2116,6 +2121,27 @@ mod tests {
             .any(|phrase| phrase
                 .as_str()
                 .is_some_and(|value| value.contains("no blocker codes"))));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_negated_blocker_baseline_context() {
+        let reason = "PR #470 processed and merged. Evidence: gh pr view reports state MERGED, mergedAt 2026-06-23T22:25:19Z, mergeCommit 9b92c28b0ca7df81c4dfcd15dd77bac520dbf91a, head 2384afec2fcfb3ba089f121f93a5da005cfd10c1. Local merged-base proof before merge: git diff --check passed; cargo test -p vida --bin vida runtime_defect_design_backed_seed_uses_configured_first_step --locked -- --test-threads=1 passed. rustfmt --check on taskflow_run_graph.rs failed equally on origin/main baseline, so not a PR-specific blocker. vida task validate-graph passed after merge.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase
+                .as_str()
+                .is_some_and(|value| value.contains("not a pr-specific blocker"))));
     }
 
     #[test]

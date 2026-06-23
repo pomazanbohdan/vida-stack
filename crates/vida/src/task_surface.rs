@@ -11653,6 +11653,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     "telemetry blockers",
                                     &blocker_codes.join(", "),
                                 );
+                                for action in next_actions {
+                                    print_surface_line(command.render, "next", &action);
+                                }
                             }
                             return ExitCode::from(1);
                         }
@@ -11773,6 +11776,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                         "telemetry blockers",
                                         &blocker_codes.join(", "),
                                     );
+                                }
+                                if let Some((_, next_actions)) = &telemetry_feedback_blocker {
+                                    for action in next_actions {
+                                        print_surface_line(command.render, "next", action);
+                                    }
                                 }
                                 if let Some(automation) = &automation {
                                     print_surface_line(
@@ -17503,6 +17511,48 @@ mod tests {
             "status": "closed",
         });
         let reason = "Closed after verification: implementation and tests passed. Evidence: prior close attempt output quoted blocker details: close_feedback_canonical_status_blocked/canonical_gate_blocked and failure-state wording.";
+
+        let telemetry = task_close_host_agent_telemetry(
+            &project_root.join(crate::state_store::default_state_dir()),
+            false,
+            Some(project_root),
+            &task_value,
+            reason,
+            "vida task close",
+        );
+
+        assert_eq!(telemetry["status"], "recorded");
+        assert_eq!(telemetry.get("canonical_status"), None);
+        assert!(task_close_feedback_blocker_summary(&telemetry).is_none());
+        assert_eq!(
+            telemetry["feedback_outcome_inference"]["outcome"],
+            "success"
+        );
+        assert_eq!(
+            telemetry["feedback_outcome_inference"]["failure_markers"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn task_close_feedback_records_advisory_for_negated_blocker_baseline_context() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let project_root = harness.path();
+        fs::write(project_root.join("vida.config.yaml"), "project: test\n")
+            .expect("project marker should write");
+        fs::write(project_root.join("AGENTS.md"), "test project\n")
+            .expect("agents marker should write");
+        fs::create_dir_all(project_root.join(".vida/config"))
+            .expect("config marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/db"))
+            .expect("db marker directory should initialize");
+        fs::create_dir_all(project_root.join(".vida/project"))
+            .expect("project marker directory should initialize");
+        let task_value = serde_json::json!({
+            "id": "task-close-feedback-negated-blocker-baseline",
+            "status": "closed",
+        });
+        let reason = "PR #470 processed and merged. Evidence: gh pr view reports state MERGED, mergedAt 2026-06-23T22:25:19Z, mergeCommit 9b92c28b0ca7df81c4dfcd15dd77bac520dbf91a, head 2384afec2fcfb3ba089f121f93a5da005cfd10c1. Local merged-base proof before merge: git diff --check passed; cargo test -p vida --bin vida runtime_defect_design_backed_seed_uses_configured_first_step --locked -- --test-threads=1 passed. rustfmt --check on taskflow_run_graph.rs failed equally on origin/main baseline, so not a PR-specific blocker. vida task validate-graph passed after merge.";
 
         let telemetry = task_close_host_agent_telemetry(
             &project_root.join(crate::state_store::default_state_dir()),

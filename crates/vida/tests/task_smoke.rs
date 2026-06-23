@@ -17925,6 +17925,34 @@ fn task_close_json_surfaces_canonical_feedback_blockers_without_masking_successf
         .expect("next action should render")
         .contains("resolve the blocked condition"));
 
+    let blocked_default = run_command_capture(
+        &[
+            "task",
+            "close",
+            "feedback-blocked-close",
+            "--reason",
+            "Task remains blocked pending operator evidence.",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !blocked_default.status.success(),
+        "blocked default close should fail closed"
+    );
+    let blocked_default_stdout = String::from_utf8_lossy(&blocked_default.stdout);
+    assert!(
+        blocked_default_stdout.contains("telemetry blockers:"),
+        "{blocked_default_stdout}"
+    );
+    assert!(
+        blocked_default_stdout.contains("close_feedback_canonical_status_blocked"),
+        "{blocked_default_stdout}"
+    );
+    assert!(
+        blocked_default_stdout.contains("next: Resolve the blocked condition"),
+        "{blocked_default_stdout}"
+    );
+
     let _ = fs::remove_dir_all(project_root);
 }
 
