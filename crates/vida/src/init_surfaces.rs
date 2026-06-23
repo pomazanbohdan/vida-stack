@@ -328,6 +328,88 @@ fn agent_init_dispatch_timeout_artifact_refs(
     })
 }
 
+fn agent_init_result_string(result_json: &serde_json::Value, key: &str) -> Option<String> {
+    result_json
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn agent_init_dispatch_timeout_recovery_command(run_id: &str) -> String {
+    format!(
+        "vida taskflow recovery status {}",
+        crate::shell_quote(run_id)
+    )
+}
+
+fn agent_init_dispatch_timeout_retry_command(result_json: &serde_json::Value) -> String {
+    agent_init_result_string(result_json, "source_dispatch_packet_path")
+        .or_else(|| agent_init_result_string(result_json, "dispatch_packet_path"))
+        .map(|packet_path| {
+            let packet_flag = dispatch_packet_flag_for_packet_path(&packet_path);
+            format!(
+                "vida agent-init {} {} --execute-dispatch",
+                packet_flag,
+                crate::shell_quote(&packet_path)
+            )
+        })
+        .unwrap_or_else(|| {
+            "vida agent-init --dispatch-packet <path> --execute-dispatch".to_string()
+        })
+}
+
+fn agent_init_dispatch_timeout_artifact_refs_from_result(
+    run_id: &str,
+    result_json: &serde_json::Value,
+    dispatch_result_path: Option<&str>,
+    timeout_seconds: u64,
+) -> serde_json::Value {
+    let mut artifact_refs =
+        agent_init_dispatch_timeout_artifact_refs(run_id, dispatch_result_path, timeout_seconds);
+    if let Some(object) = artifact_refs.as_object_mut() {
+        for (target, source_keys) in [
+            (
+                "dispatch_packet_path",
+                &["source_dispatch_packet_path", "dispatch_packet_path"][..],
+            ),
+            (
+                "dispatch_result_path",
+                &["dispatch_result_path", "result_path"][..],
+            ),
+            ("receipt_path", &["receipt_path"][..]),
+            (
+                "lane_execution_receipt_path",
+                &["lane_execution_receipt_path", "receipt_path"][..],
+            ),
+            (
+                "selected_backend",
+                &["selected_backend", "backend_id", "activation_agent_type"][..],
+            ),
+            ("activation_agent_type", &["activation_agent_type"][..]),
+            ("activation_runtime_role", &["activation_runtime_role"][..]),
+            ("dispatch_target", &["dispatch_target"][..]),
+        ] {
+            if let Some(value) = source_keys
+                .iter()
+                .find_map(|key| agent_init_result_string(result_json, key))
+            {
+                object.insert(target.to_string(), serde_json::json!(value));
+            }
+        }
+        object.insert(
+            "recovery_command".to_string(),
+            serde_json::json!(agent_init_dispatch_timeout_recovery_command(run_id)),
+        );
+        object.insert(
+            "retry_command".to_string(),
+            serde_json::json!(agent_init_dispatch_timeout_retry_command(result_json)),
+        );
+    }
+    artifact_refs
+}
+
 fn agent_init_dispatch_timeout_blocker_codes(result_json: &serde_json::Value) -> Vec<String> {
     result_json
         .get("blocker_code")
@@ -344,12 +426,17 @@ fn agent_init_dispatch_timeout_blocker_codes(result_json: &serde_json::Value) ->
         })
 }
 
-fn agent_init_dispatch_timeout_next_actions() -> Vec<String> {
+fn agent_init_dispatch_timeout_next_actions(
+    run_id: &str,
+    result_json: &serde_json::Value,
+) -> Vec<String> {
+    let recovery_command = agent_init_dispatch_timeout_recovery_command(run_id);
+    let retry_command = agent_init_dispatch_timeout_retry_command(result_json);
     vec![
-        "Inspect continuation evidence with `vida status` and `vida taskflow recovery latest`."
-            .to_string(),
-        "Keep the timeout dispatch result as blocked evidence before retrying `vida agent-init --execute-dispatch`."
-            .to_string(),
+        format!("Inspect continuation evidence with `{recovery_command}`."),
+        format!(
+            "Keep the timeout dispatch result as blocked evidence before retrying `{retry_command}`."
+        ),
     ]
 }
 
@@ -362,9 +449,13 @@ fn agent_init_dispatch_timeout_operator_envelope(
     warning: Option<&str>,
 ) -> serde_json::Value {
     let blocker_codes = agent_init_dispatch_timeout_blocker_codes(&result_json);
-    let next_actions = agent_init_dispatch_timeout_next_actions();
-    let artifact_refs =
-        agent_init_dispatch_timeout_artifact_refs(run_id, dispatch_result_path, timeout_seconds);
+    let next_actions = agent_init_dispatch_timeout_next_actions(run_id, &result_json);
+    let artifact_refs = agent_init_dispatch_timeout_artifact_refs_from_result(
+        run_id,
+        &result_json,
+        dispatch_result_path,
+        timeout_seconds,
+    );
     if let Some(object) = result_json.as_object_mut() {
         object.insert("dispatch_mode".to_string(), dispatch_mode.clone());
         object.insert(
@@ -415,9 +506,14 @@ fn agent_init_dispatch_timeout_fallback_payload(
             .as_str()
             .to_string(),
     ];
-    let next_actions = agent_init_dispatch_timeout_next_actions();
-    let artifact_refs =
-        agent_init_dispatch_timeout_artifact_refs(run_id, dispatch_result_path, timeout_seconds);
+    let seed = serde_json::json!({});
+    let next_actions = agent_init_dispatch_timeout_next_actions(run_id, &seed);
+    let artifact_refs = agent_init_dispatch_timeout_artifact_refs_from_result(
+        run_id,
+        &seed,
+        dispatch_result_path,
+        timeout_seconds,
+    );
     let mut payload = serde_json::json!({
         "surface": "vida agent-init",
         "status": "blocked",
@@ -456,6 +552,66 @@ fn agent_init_dispatch_timeout_fallback_payload(
     payload
 }
 
+fn render_agent_init_dispatch_timeout_payload(payload: &serde_json::Value) -> String {
+    let mut fields = vec![operator_output::toon_report::OperatorToonField::text(
+        "status",
+        payload["status"].as_str().unwrap_or("blocked"),
+    )];
+    for (field, pointer) in [
+        ("blocker_code", "/blocker_code"),
+        ("run_id", "/artifact_refs/run_id"),
+        ("dispatch_target", "/artifact_refs/dispatch_target"),
+        ("selected_backend", "/artifact_refs/selected_backend"),
+        (
+            "activation_runtime_role",
+            "/artifact_refs/activation_runtime_role",
+        ),
+        (
+            "activation_agent_type",
+            "/artifact_refs/activation_agent_type",
+        ),
+        (
+            "dispatch_packet_path",
+            "/artifact_refs/dispatch_packet_path",
+        ),
+        (
+            "dispatch_result_path",
+            "/artifact_refs/dispatch_result_path",
+        ),
+        ("receipt_path", "/artifact_refs/receipt_path"),
+        ("recovery", "/artifact_refs/recovery_command"),
+        ("retry", "/artifact_refs/retry_command"),
+    ] {
+        if let Some(value) = payload
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            fields.push(operator_output::toon_report::OperatorToonField::text(
+                field, value,
+            ));
+        }
+    }
+    if let Some(blockers) = payload["blocker_codes"].as_array() {
+        if !blockers.is_empty() {
+            fields.push(operator_output::toon_report::OperatorToonField::value(
+                "blocker_codes",
+                serde_json::Value::Array(blockers.clone()),
+            ));
+        }
+    }
+    operator_output::toon_report::render("vida agent-init", fields)
+}
+
+fn emit_agent_init_dispatch_timeout_payload(payload: &serde_json::Value, json_output: bool) {
+    if json_output {
+        crate::print_json_pretty(payload);
+    } else {
+        print!("{}", render_agent_init_dispatch_timeout_payload(payload));
+    }
+}
+
 fn render_agent_init_dispatch_result_from_receipt(
     dispatch_mode: &serde_json::Value,
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -487,12 +643,10 @@ fn render_agent_init_dispatch_result_from_receipt(
     } else if let Some(object) = result_json.as_object_mut() {
         object.insert("dispatch_mode".to_string(), dispatch_mode.clone());
     }
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&result_json)
-                .expect("agent-init dispatch result json should render")
-        );
+    if timeout_seconds.is_some() {
+        emit_agent_init_dispatch_timeout_payload(&result_json, json_output);
+    } else if json_output {
+        crate::print_json_pretty(&result_json);
     } else {
         crate::print_json_pretty(&result_json);
     }
@@ -5336,8 +5490,8 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
                 &mut resume_inputs.dispatch_receipt,
                 receipt_timeout_seconds,
             ) {
-                if json_output {
-                    crate::print_json_pretty(&agent_init_dispatch_timeout_fallback_payload(
+                emit_agent_init_dispatch_timeout_payload(
+                    &agent_init_dispatch_timeout_fallback_payload(
                         dispatch_mode,
                         &resume_inputs.dispatch_receipt.run_id,
                         resume_inputs
@@ -5346,11 +5500,8 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
                             .as_deref(),
                         execute_dispatch_timeout_seconds,
                         Some(&error.to_string()),
-                    ));
-                    return ExitCode::from(1);
-                }
-                eprintln!(
-                    "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion, and failed to materialize timeout receipt: {error}"
+                    ),
+                    json_output,
                 );
                 return ExitCode::from(1);
             }
@@ -5361,45 +5512,36 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
                 execute_dispatch_timeout_seconds,
             )
             .await;
-            if json_output {
-                let dispatch_result_path = resume_inputs
-                    .dispatch_receipt
-                    .dispatch_result_path
-                    .as_deref();
-                let result_json = dispatch_result_path
-                    .and_then(|path| {
-                        std::fs::read_to_string(path)
-                            .ok()
-                            .and_then(|body| serde_json::from_str(&body).ok())
-                    })
-                    .map(|result_json| {
-                        agent_init_dispatch_timeout_operator_envelope(
-                            result_json,
-                            dispatch_mode,
-                            &resume_inputs.dispatch_receipt.run_id,
-                            dispatch_result_path,
-                            execute_dispatch_timeout_seconds,
-                            timeout_warning.as_deref(),
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        agent_init_dispatch_timeout_fallback_payload(
-                            dispatch_mode,
-                            &resume_inputs.dispatch_receipt.run_id,
-                            dispatch_result_path,
-                            execute_dispatch_timeout_seconds,
-                            timeout_warning.as_deref(),
-                        )
-                    });
-                crate::print_json_pretty(&result_json);
-                return ExitCode::from(1);
-            }
-            if let Some(warning) = timeout_warning {
-                eprintln!("{warning}");
-            }
-            eprintln!(
-                "Timed out executing agent-init dispatch packet after {execute_dispatch_timeout_seconds}s total without receipt-backed completion"
-            );
+            let dispatch_result_path = resume_inputs
+                .dispatch_receipt
+                .dispatch_result_path
+                .as_deref();
+            let result_json = dispatch_result_path
+                .and_then(|path| {
+                    std::fs::read_to_string(path)
+                        .ok()
+                        .and_then(|body| serde_json::from_str(&body).ok())
+                })
+                .map(|result_json| {
+                    agent_init_dispatch_timeout_operator_envelope(
+                        result_json,
+                        dispatch_mode,
+                        &resume_inputs.dispatch_receipt.run_id,
+                        dispatch_result_path,
+                        execute_dispatch_timeout_seconds,
+                        timeout_warning.as_deref(),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    agent_init_dispatch_timeout_fallback_payload(
+                        dispatch_mode,
+                        &resume_inputs.dispatch_receipt.run_id,
+                        dispatch_result_path,
+                        execute_dispatch_timeout_seconds,
+                        timeout_warning.as_deref(),
+                    )
+                });
+            emit_agent_init_dispatch_timeout_payload(&result_json, json_output);
             return ExitCode::from(1);
         }
     }
@@ -9301,6 +9443,14 @@ mod agent_init_surface_tests {
                 "status": "blocked",
                 "execution_state": "blocked",
                 "blocker_code": "internal_dispatch_timeout_without_receipt",
+                "source_dispatch_packet_path": "dispatch-packet.json",
+                "dispatch_result_path": "dispatch-result.json",
+                "receipt_path": "dispatch-result.json",
+                "lane_execution_receipt_path": "dispatch-result.json",
+                "selected_backend": "internal_subagents",
+                "activation_agent_type": "internal_subagents",
+                "activation_runtime_role": "worker",
+                "dispatch_target": "implementation",
             }),
             &dispatch_mode,
             "run-timeout",
@@ -9319,9 +9469,71 @@ mod agent_init_surface_tests {
         assert_eq!(payload["shared_fields"]["status"], "blocked");
         assert_eq!(payload["artifact_refs"]["run_id"], "run-timeout");
         assert_eq!(
+            payload["artifact_refs"]["dispatch_packet_path"],
+            "dispatch-packet.json"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["dispatch_result_path"],
+            "dispatch-result.json"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["receipt_path"],
+            "dispatch-result.json"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["lane_execution_receipt_path"],
+            "dispatch-result.json"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["selected_backend"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["activation_runtime_role"],
+            "worker"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["activation_agent_type"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["dispatch_target"],
+            "implementation"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["recovery_command"],
+            "vida taskflow recovery status run-timeout"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["retry_command"],
+            "vida agent-init --dispatch-packet dispatch-packet.json --execute-dispatch"
+        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("first next action")
+            .contains("vida taskflow recovery status run-timeout"));
+        assert!(payload["next_actions"][1]
+            .as_str()
+            .expect("second next action")
+            .contains("vida agent-init --dispatch-packet dispatch-packet.json --execute-dispatch"));
+        assert_eq!(
             payload["timeout_reconciliation_warning"],
             "deferred reconciliation"
         );
+        let rendered = render_agent_init_dispatch_timeout_payload(&payload);
+        assert!(rendered.starts_with("vida agent-init\n"));
+        assert!(rendered.contains("status: blocked"));
+        assert!(rendered.contains("blocker_code: internal_dispatch_timeout_without_receipt"));
+        assert!(rendered.contains("run_id: \"run-timeout\""));
+        assert!(rendered.contains("dispatch_packet_path: \"dispatch-packet.json\""));
+        assert!(rendered.contains("selected_backend: internal_subagents"));
+        assert!(rendered.contains("activation_runtime_role: worker"));
+        assert!(rendered.contains("receipt_path: \"dispatch-result.json\""));
+        assert!(rendered.contains("recovery: \"vida taskflow recovery status run-timeout\""));
+        assert!(rendered.contains(
+            "retry: \"vida agent-init --dispatch-packet dispatch-packet.json --execute-dispatch\""
+        ));
+        assert!(!rendered.contains("--json"));
     }
 
     #[test]
