@@ -10,15 +10,15 @@ mod vida_transport_tarpc;
 #[path = "../src/vida_tui_shell.rs"]
 mod vida_tui_shell;
 
-use ratatui::{Terminal, backend::TestBackend};
+use ratatui::{backend::TestBackend, Terminal};
 use vida_client::VidaClient;
 use vida_contracts::{
-    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaClientKind,
-    VidaCommandEnvelope, VidaIdempotencyKey, VidaOperation, VidaRequestId, VidaResponseStatus,
-    VidaSessionId, operation_spec, operations,
+    operation_spec, operations, VidaClientKind, VidaCommandEnvelope, VidaIdempotencyKey,
+    VidaOperation, VidaRequestId, VidaResponseStatus, VidaSessionId, VIDA_COMMAND_PROTOCOL_VERSION,
+    VIDA_CONTRACTS_SCHEMA_VERSION,
 };
 use vida_transport_tarpc::TarpcLocalIpcVidaClient;
-use vida_tui_shell::{VidaTuiShellSnapshot, render_app_shell};
+use vida_tui_shell::{render_app_shell, VidaTuiShellSnapshot};
 
 struct BlockingTarpcVidaClient {
     runtime: tokio::runtime::Runtime,
@@ -62,7 +62,7 @@ fn ratatui_live_attach_renders_operator_console_from_tarpc_local_socket() {
     assert_eq!(snapshot.wizard_step, "inspect");
     assert_eq!(snapshot.wizard_validation_findings, 0);
     assert_eq!(snapshot.wizard_diff_change_count, 0);
-    assert_eq!(snapshot.job_status, "completed");
+    assert_eq!(snapshot.job_status, "unavailable");
     assert_eq!(snapshot.event_count, 1);
     assert_eq!(snapshot.receipt_count, 1);
     assert_eq!(snapshot.lifecycle_state, "ready");
@@ -77,15 +77,13 @@ fn ratatui_live_attach_renders_operator_console_from_tarpc_local_socket() {
     let rendered = buffer_text(terminal.backend().buffer());
     assert!(rendered.contains("VIDA Operator Console"));
     assert!(rendered.contains("Service: ready | Session: active"));
-    assert!(
-        rendered
-            .contains("Projects: count=1 | active=vida-stack | Worktree: C:\\project\\vida-stack")
-    );
+    assert!(rendered
+        .contains("Projects: count=1 | active=vida-stack | Worktree: C:\\project\\vida-stack"));
     assert!(rendered.contains(
         "Wizard: step=inspect | validation_findings=0 | diff_changes=0 | apply_supported=false"
     ));
     assert!(
-        rendered.contains("Jobs/Events/Receipts: job_status=completed | events=1 | receipts=1")
+        rendered.contains("Jobs/Events/Receipts: job_status=unavailable | events=1 | receipts=1")
     );
     assert!(rendered.contains("Lifecycle: state=ready | binary_fingerprint=local-runtime"));
 }

@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use serde_json::json;
 use vida_contracts::{
-    operations, VidaClaimKind, VidaClientKind, VidaCommandEnvelope, VidaCommandResponse,
+    operation_spec, operations, VidaClientKind, VidaCommandEnvelope, VidaCommandResponse,
     VidaIdempotencyKey, VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId, VidaSessionId,
     VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
 };
@@ -157,7 +157,7 @@ fn envelope_for_request(request: &ServiceCliRequest) -> VidaCommandEnvelope {
         deadline: None,
         client_kind: VidaClientKind::Cli,
         project_ref: request.project_ref.clone(),
-        claim_kind: Some(VidaClaimKind::SharedRead),
+        claim_kind: operation_spec(request.operation).map(|spec| spec.required_claim),
         payload: request.payload.clone(),
         correlation: Some(json!({
             "source": "vida_cli_service_client",
@@ -228,16 +228,57 @@ fn emit_service_client_response(
             "response": response
         }));
     } else {
-        println!(
-            "VIDA {} {} -> {:?}",
-            family_name(&request.family),
-            request.command,
-            response.status
-        );
+        emit_default_service_client_response(request, response);
     }
     match response.error {
         Some(_) => ExitCode::from(1),
         None => ExitCode::SUCCESS,
+    }
+}
+
+fn emit_default_service_client_response(
+    request: &ServiceCliRequest,
+    response: &VidaCommandResponse,
+) {
+    let status = format!("{:?}", response.status).to_ascii_lowercase();
+    if request.family == ServiceCliFamily::Job {
+        println!("vida job {}", request.command);
+        println!("  status: {status}");
+        if let Some(result) = &response.result {
+            print_result_field(result, "job_id");
+            print_result_field_as(result, "status", "job_status");
+            print_result_field(result, "authority");
+            print_result_field(result, "runner");
+            if let Some(next_action) = result
+                .get("job")
+                .and_then(|job| job.get("next_action"))
+                .and_then(serde_json::Value::as_str)
+            {
+                println!("  next_action: {next_action}");
+            }
+            if let Some(blocker) = result.get("job").and_then(|job| job.get("blocker")) {
+                print_result_field(blocker, "code");
+                print_result_field(blocker, "repair_action");
+            }
+        }
+        return;
+    }
+
+    println!(
+        "VIDA {} {} -> {:?}",
+        family_name(&request.family),
+        request.command,
+        response.status
+    );
+}
+
+fn print_result_field(result: &serde_json::Value, field: &str) {
+    print_result_field_as(result, field, field);
+}
+
+fn print_result_field_as(result: &serde_json::Value, field: &str, label: &str) {
+    if let Some(value) = result.get(field).and_then(serde_json::Value::as_str) {
+        println!("  {label}: {value}");
     }
 }
 

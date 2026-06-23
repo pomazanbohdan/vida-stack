@@ -35,6 +35,7 @@ taskflow-format-toon = { path = "../taskflow-format-toon" }
 taskflow-host-bridge = { path = "../taskflow-host-bridge" }
 taskflow-state = { path = "../taskflow-state" }
 taskflow-state-fs = { path = "../taskflow-state-fs" }
+taskflow-state-redb = { path = "../taskflow-state-redb" }
 taskflow-state-surreal = { path = "../taskflow-state-surreal" }
 tarpc = { version = "0.37.0", features = ["serde1", "serde-transport-json", "tokio1"] }
 time = { workspace = true }
@@ -43,6 +44,7 @@ toml_edit = "0.25.12"
 tower = "0.5.3"
 runtime-path-policy = { path = "../runtime-path-policy" }
 vida-contracts = { path = "../vida-contracts" }
+vida-runtime-local = { path = "../vida-runtime-local" }
 
 [dev-dependencies]
 vida-test-support = { path = "../vida-test-support" }

@@ -22,7 +22,7 @@ const PROJECT_AFTER_HELP: &str = "Project operations:\n  vida project list --jso
 
 const WIZARD_AFTER_HELP: &str = "Wizard operations:\n  vida wizard inspect --json\n  vida wizard draft --json\n  vida wizard validate --json\n  vida wizard diff --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
 
-const JOB_AFTER_HELP: &str = "Job operations:\n  vida job status --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
+const JOB_AFTER_HELP: &str = "Job operations:\n  vida job status\n  vida job status --json\n\nOutput:\n  Default output is compact TOON/plain with job status, authority, runner, and next action.\n  Use --json only when a machine-readable payload is required.";
 
 const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
 const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route <route> --expect <text> --json\n\nBrowser proof options:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output";

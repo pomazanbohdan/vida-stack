@@ -2,12 +2,15 @@ use std::{env, path::PathBuf};
 
 use serde_json::json;
 use vida_contracts::{
-    VidaCommandEnvelope, VidaCommandResponse, mvp_operation_registry, operations,
+    mvp_operation_registry, operations, VidaCommandEnvelope, VidaCommandResponse,
+};
+use vida_runtime_local::jobs::{
+    job_status_payload, plan_outbox_job_from_redb, unavailable_job_status, RetryPolicy,
 };
 
 use crate::{
     command_pipeline::VidaCommandPipeline,
-    vida_client::{VidaClient, pass_response, unsupported_operation_response},
+    vida_client::{pass_response, unsupported_operation_response, VidaClient},
 };
 
 #[derive(Debug, Clone)]
@@ -32,12 +35,22 @@ impl VidaClient for InProcessVidaClient {
 #[derive(Debug, Clone)]
 pub(crate) struct LocalRuntimeVidaClient {
     project_root: PathBuf,
+    job_journal_path: Option<PathBuf>,
 }
 
 impl LocalRuntimeVidaClient {
     pub(crate) fn new_ready() -> Self {
         Self {
             project_root: local_project_root(),
+            job_journal_path: local_job_journal_path(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_job_journal_path(project_root: PathBuf, job_journal_path: PathBuf) -> Self {
+        Self {
+            project_root,
+            job_journal_path: Some(job_journal_path),
         }
     }
 
@@ -409,18 +422,50 @@ impl LocalRuntimeVidaClient {
     }
 
     fn jobs_get(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        let job_id = envelope
+            .payload
+            .get("job_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("latest");
+        let job = match self.job_journal_path.as_ref() {
+            Some(path) if path.exists() => {
+                match plan_outbox_job_from_redb(path, job_id, &RetryPolicy::default()) {
+                    Ok(Some(plan)) => job_status_payload(&plan),
+                    Ok(None) => unavailable_job_status(
+                        job_id,
+                        format!(
+                            "job `{job_id}` was not found in redb outbox `{}`",
+                            path.display()
+                        ),
+                    ),
+                    Err(error) => unavailable_job_status(job_id, error),
+                }
+            }
+            Some(path) => unavailable_job_status(
+                job_id,
+                format!("redb outbox journal `{}` does not exist", path.display()),
+            ),
+            None => unavailable_job_status(
+                job_id,
+                "no redb outbox journal path is configured for the local runtime",
+            ),
+        };
+        let status = job
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unavailable")
+            .to_string();
         pass_response(
             envelope,
             json!({
-                "job_id": envelope
-                    .payload
-                    .get("job_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("latest"),
-                "status": "completed",
+                "job_id": job["job_id"].clone(),
+                "status": status,
                 "operation": envelope.operation,
                 "receipt_available": true,
-                "source": "local_runtime_projection"
+                "source": "local_runtime_projection",
+                "authority": "redb_outbox",
+                "runner": "effectum",
+                "job": job
             }),
         )
     }
@@ -481,6 +526,19 @@ fn local_project_root() -> PathBuf {
         .find(|path| path.join("AGENTS.sidecar.md").is_file() || path.join(".vida").is_dir())
         .map(PathBuf::from)
         .unwrap_or(cwd)
+}
+
+fn local_job_journal_path() -> Option<PathBuf> {
+    env::var_os("VIDA_JOB_JOURNAL_PATH")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let path = local_project_root()
+                .join(".vida")
+                .join("data")
+                .join("state")
+                .join("operational-journal.redb");
+            path.exists().then_some(path)
+        })
 }
 
 impl Default for LocalRuntimeVidaClient {

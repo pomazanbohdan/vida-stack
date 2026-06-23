@@ -1,0 +1,16 @@
+[package]
+name = "vida-runtime-local"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+effectum.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+taskflow-contracts = { path = "../taskflow-contracts" }
+taskflow-state = { path = "../taskflow-state" }
+taskflow-state-redb = { path = "../taskflow-state-redb" }
+
+[dev-dependencies]
+tempfile = "3.27.0"

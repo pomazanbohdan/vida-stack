@@ -9,10 +9,10 @@ use taskflow_contracts::{
     VidaProjectionRef, VidaReceiptId, VidaStreamRef, VidaStreamVersion,
 };
 use taskflow_state::{
-    append_request_fingerprint, validate_append_event_streams, JournalAppendReceipt,
-    JournalAppendRequest, JournalArtifactRecord, JournalEventRecord, JournalIdempotencyRecord,
-    JournalIdempotencyState, JournalOutboxRecord, JournalOutboxState, JournalProjectionFailure,
-    OperationalJournal, TaskflowStateError,
+    JournalAppendReceipt, JournalAppendRequest, JournalArtifactRecord, JournalEventRecord,
+    JournalIdempotencyRecord, JournalIdempotencyState, JournalOutboxRecord, JournalOutboxState,
+    JournalProjectionFailure, OperationalJournal, TaskflowStateError, append_request_fingerprint,
+    validate_append_event_streams,
 };
 
 const SCHEMA_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("journal_schema");
@@ -118,6 +118,8 @@ pub struct RedbOutboxEffectRecord {
     pub attempt_count: u64,
     pub claimed_by: Option<String>,
     pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub retry_after: Option<String>,
     pub schema_version: String,
     pub lifecycle_state: String,
 }
@@ -521,6 +523,20 @@ impl RedbOperationalJournal {
             records.push(decode_outbox_effect_record(value.value())?);
         }
         Ok(records)
+    }
+
+    pub fn schedule_outbox_retry(
+        &self,
+        outbox_id: &VidaEventRef,
+        retry_after: Option<String>,
+    ) -> Result<(), TaskflowStateError> {
+        self.update_outbox(outbox_id, |record| {
+            record.state = JournalOutboxState::Pending;
+            record.claimed_by = None;
+            record.failure_reason = None;
+            record.retry_after = retry_after;
+            record.lifecycle_state = outbox_lifecycle_state(&record.state);
+        })
     }
 
     pub fn artifact_index_record(
@@ -1027,6 +1043,7 @@ impl OperationalJournal for RedbOperationalJournal {
                     record.attempt_count += 1;
                     record.claimed_by = Some(consumer_id.to_string());
                     record.failure_reason = None;
+                    record.retry_after = None;
                     record.lifecycle_state = outbox_lifecycle_state(&record.state);
                     claimed.push(record.clone().into_outbox_record());
                     let payload = serde_json::to_vec(&record).map_err(storage_error)?;
@@ -1052,6 +1069,7 @@ impl OperationalJournal for RedbOperationalJournal {
             record.state = JournalOutboxState::Succeeded;
             record.claimed_by = None;
             record.failure_reason = None;
+            record.retry_after = None;
             record.lifecycle_state = outbox_lifecycle_state(&record.state);
         })
     }
@@ -1067,6 +1085,7 @@ impl OperationalJournal for RedbOperationalJournal {
             };
             record.claimed_by = None;
             record.failure_reason = Some(reason);
+            record.retry_after = None;
             record.lifecycle_state = outbox_lifecycle_state(&record.state);
         })
     }
@@ -1193,6 +1212,7 @@ impl RedbOutboxEffectRecord {
             attempt_count: if claimed_by.is_some() { 1 } else { 0 },
             claimed_by,
             failure_reason,
+            retry_after: None,
             schema_version: SCHEMA_VERSION.to_string(),
             lifecycle_state,
         }
@@ -1591,12 +1611,11 @@ mod tests {
     use std::time::Instant;
 
     use super::{
-        classify_redb_journal_error, redb_journal_blocker_operator_payload,
-        redb_projection_health_operator_payload, RedbAppendIdempotencyRecord,
-        RedbOperationalJournal, APPEND_IDEMPOTENCY_TABLE, ARTIFACT_TABLE,
-        EVENTS_BY_GLOBAL_CURSOR_TABLE, EVENTS_BY_STREAM_TABLE, OUTBOX_TABLE,
-        REDB_CORRUPT_PAYLOAD_BLOCKER_CODE, REDB_PROJECTION_FAILURE_BLOCKER_CODE,
-        REDB_SINGLE_WRITER_BLOCKER_CODE,
+        APPEND_IDEMPOTENCY_TABLE, ARTIFACT_TABLE, EVENTS_BY_GLOBAL_CURSOR_TABLE,
+        EVENTS_BY_STREAM_TABLE, OUTBOX_TABLE, REDB_CORRUPT_PAYLOAD_BLOCKER_CODE,
+        REDB_PROJECTION_FAILURE_BLOCKER_CODE, REDB_SINGLE_WRITER_BLOCKER_CODE,
+        RedbAppendIdempotencyRecord, RedbOperationalJournal, classify_redb_journal_error,
+        redb_journal_blocker_operator_payload, redb_projection_health_operator_payload,
     };
     use redb::{ReadableDatabase, ReadableTable, TableDefinition};
     use taskflow_contracts::{
@@ -1606,11 +1625,10 @@ mod tests {
         VidaSchemaVersion, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
     };
     use taskflow_state::{
-        verify_run_workflow_repository_conformance,
-        verify_run_workflow_repository_corrupt_payload_fails_closed, JournalAppendRequest,
-        JournalArtifactRecord, JournalIdempotencyState, JournalOutboxState,
+        JournalAppendRequest, JournalArtifactRecord, JournalIdempotencyState, JournalOutboxState,
         JournalProjectionFailure, OperationalJournal, RunWorkflowJournalRepository,
-        TaskflowStateError,
+        TaskflowStateError, verify_run_workflow_repository_conformance,
+        verify_run_workflow_repository_corrupt_payload_fails_closed,
     };
     use tempfile::tempdir;
 
@@ -1897,10 +1915,12 @@ mod tests {
         let payload = serde_json::to_value(&blocker).expect("blocker should serialize");
 
         assert_eq!(payload["code"], REDB_CORRUPT_PAYLOAD_BLOCKER_CODE);
-        assert!(payload["next_action"]
-            .as_str()
-            .expect("next action")
-            .contains(path.to_string_lossy().as_ref()));
+        assert!(
+            payload["next_action"]
+                .as_str()
+                .expect("next action")
+                .contains(path.to_string_lossy().as_ref())
+        );
         let operator_payload = redb_journal_blocker_operator_payload(&blocker, &path);
         assert_eq!(operator_payload["status"], "blocked");
         assert_eq!(
@@ -1968,9 +1988,11 @@ mod tests {
             let blocker =
                 classify_redb_journal_error(&error, &path).expect("lock error should classify");
             assert_eq!(blocker.code, REDB_SINGLE_WRITER_BLOCKER_CODE);
-            assert!(blocker
-                .next_action
-                .contains("holding the redb journal writer lock"));
+            assert!(
+                blocker
+                    .next_action
+                    .contains("holding the redb journal writer lock")
+            );
         }
     }
 
@@ -2169,6 +2191,51 @@ mod tests {
             failed_after_restart.failure_reason.as_deref(),
             Some("transport failure")
         );
+    }
+
+    #[test]
+    fn redb_outbox_retry_schedule_requeues_failed_effect_and_tracks_attempts() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("append should pass");
+        let first = journal.claim_outbox_batch("worker-1", 1);
+        let outbox_id = first[0].outbox_id.clone();
+        journal
+            .mark_outbox_failed(&outbox_id, "transport failure".to_string())
+            .expect("first failure");
+        journal
+            .schedule_outbox_retry(&outbox_id, Some("2026-06-23T01:00:00Z".to_string()))
+            .expect("schedule retry");
+        drop(journal);
+
+        let mut reopened = RedbOperationalJournal::open(&path).expect("reopen journal");
+        let scheduled = reopened
+            .outbox_effect_record(&outbox_id)
+            .expect("scheduled outbox read")
+            .expect("scheduled outbox row");
+        assert_eq!(scheduled.lifecycle_state, "pending");
+        assert_eq!(
+            scheduled.retry_after.as_deref(),
+            Some("2026-06-23T01:00:00Z")
+        );
+        assert_eq!(scheduled.attempt_count, 1);
+
+        let second = reopened.claim_outbox_batch("worker-2", 1);
+        assert_eq!(second.len(), 1);
+        let claimed_again = reopened
+            .outbox_effect_record(&outbox_id)
+            .expect("claimed outbox read")
+            .expect("claimed outbox row");
+        assert_eq!(claimed_again.attempt_count, 2);
+        assert_eq!(claimed_again.retry_after, None);
+        assert!(matches!(
+            claimed_again.state,
+            JournalOutboxState::Claimed { ref consumer_id } if consumer_id == "worker-2"
+        ));
     }
 
     #[test]
@@ -2543,9 +2610,11 @@ mod tests {
                 .len(),
             1
         );
-        assert!(journal_a
-            .load_stream(&VidaStreamRef("stream-b".to_string()))
-            .is_empty());
+        assert!(
+            journal_a
+                .load_stream(&VidaStreamRef("stream-b".to_string()))
+                .is_empty()
+        );
         assert_eq!(
             journal_b
                 .load_stream(&VidaStreamRef("stream-b".to_string()))
@@ -2623,9 +2692,11 @@ mod tests {
             .health_status()
             .expect_err("duplicate event id must fail health status");
 
-        assert!(error
-            .to_string()
-            .contains("redb journal duplicate event id"));
+        assert!(
+            error
+                .to_string()
+                .contains("redb journal duplicate event id")
+        );
     }
 
     #[test]

@@ -36,9 +36,9 @@ pub(crate) fn run_graph_latest_dispatch_receipt_signal_ambiguous_next_action() -
 
 pub(crate) fn continuation_binding_ambiguous_next_action() -> String {
     let status_command = next_actions::status_command();
-    "Do not continue by heuristic. Inspect `".to_string()
-        + &status_command
-        + "`, then inspect the authoritative run with `vida taskflow run-graph status` using that concrete `run_id`; if user intent already names the next bounded unit, bind it explicitly with `vida taskflow continuation bind` using the cited `task_id` and `run_id` before further implementation."
+    format!(
+        "Do not continue by heuristic. Inspect `{status_command}`, then inspect the authoritative run with `vida taskflow run-graph status` using that concrete `run_id`; if user intent already names the next bounded unit, bind it explicitly with `vida taskflow continuation bind` using the cited `task_id` and `run_id` before further implementation."
+    )
 }
 
 pub(crate) fn blocked_run_graph_status_next_actions(
@@ -133,10 +133,9 @@ pub(crate) fn terminal_next_action_requires_authoritative_run_state(
         }
         None => {
             let status_command = next_actions::status_command();
-            "Do not continue by heuristic. First inspect the authoritative run state with `"
-                .to_string()
-                + &status_command
-                + "`, then inspect the authoritative run with `vida taskflow run-graph status` using that concrete `run_id`; if user intent already names the next bounded unit, bind it explicitly with `vida taskflow continuation bind` using the cited `task_id` and `run_id` before further implementation."
+            format!(
+                "Do not continue by heuristic. First inspect the authoritative run state with `{status_command}`, then inspect the authoritative run with `vida taskflow run-graph status` using that concrete `run_id`; if user intent already names the next bounded unit, bind it explicitly with `vida taskflow continuation bind` using the cited `task_id` and `run_id` before further implementation."
+            )
         }
     }
 }
