@@ -1134,7 +1134,7 @@ pub(crate) fn taskflow_leaf_active_tasks(
     let active_task_ids = tasks
         .iter()
         .filter(|task| {
-            task.status == "in_progress"
+            taskflow_core::canonical_task_status(&task.status) == Some("in_progress")
                 && crate::state_store::work_item_is_active_bounded_unit_candidate(&task.issue_type)
         })
         .map(|task| task.id.as_str())
@@ -2290,6 +2290,23 @@ mod tests {
         );
         assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
         assert!(taskflow_active_work_binding_is_authoritative(&summary));
+    }
+
+    #[test]
+    fn taskflow_active_candidates_canonicalize_in_progress_status_aliases() {
+        let alias_task = task_record(
+            "agent-mode-external-report-receipt-blocker-batch-20260521",
+            "active",
+        );
+
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[alias_task]);
+
+        assert!(!no_taskflow_active_bounded_unit(&taskflow_candidates));
+        assert_eq!(
+            taskflow_candidates[0]["task_id"],
+            "agent-mode-external-report-receipt-blocker-batch-20260521"
+        );
+        assert_eq!(taskflow_candidates[0]["status"], "active");
     }
 
     #[test]
