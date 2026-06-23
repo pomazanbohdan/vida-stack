@@ -573,7 +573,7 @@ function Invoke-RootReadmeOnlyCheck {
     $artifactRefs = @()
     $violations = New-Object System.Collections.Generic.List[string]
 
-    $readmes = & git -C $RootDir ls-files --cached --others --exclude-standard -- '*README.md' 'README.md'
+    $readmes = & git -C $RootDir ls-files --cached --others --exclude-standard -- 'README.md' ':(glob)**/README.md'
     if ($LASTEXITCODE -ne 0) {
         [void]$violations.Add("git ls-files failed while checking README.md placement invariant.")
     } else {
