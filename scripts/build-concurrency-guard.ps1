@@ -34,11 +34,16 @@ function Enter-VidaBuildConcurrencyGuard {
         }
     }
 
+    Assert-VidaBuildGuardLocalPath -LiteralPath $lockPath -Description "lock"
+    Assert-VidaBuildGuardLocalPath -LiteralPath $lockMetadataPath -Description "metadata"
     New-Item -ItemType Directory -Force -Path $lockDir | Out-Null
+    Assert-VidaBuildGuardLocalPath -LiteralPath $lockPath -Description "lock"
+    Assert-VidaBuildGuardLocalPath -LiteralPath $lockMetadataPath -Description "metadata"
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 
     while ($true) {
         try {
+            Assert-VidaBuildGuardLocalPath -LiteralPath $lockPath -Description "lock"
             $stream = [System.IO.File]::Open(
                 $lockPath,
                 [System.IO.FileMode]::OpenOrCreate,
@@ -56,13 +61,14 @@ function Enter-VidaBuildConcurrencyGuard {
             $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
             $stream.Write($bytes, 0, $bytes.Length)
             $stream.Flush()
-            [ordered]@{
+            $metadataJson = [ordered]@{
                 pid = $PID
                 scope = $Scope
                 root = $resolvedRoot
                 started_at = (Get-Date).ToString("o")
                 command = [System.Environment]::CommandLine
-            } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $lockMetadataPath -Encoding utf8
+            } | ConvertTo-Json -Depth 4
+            Set-VidaBuildGuardMetadata -LockMetadataPath $lockMetadataPath -Json $metadataJson
 
             $previousHeld = $env:VIDA_BUILD_SCRIPT_LOCK_HELD
             $previousPath = $env:VIDA_BUILD_SCRIPT_LOCK_PATH
@@ -94,8 +100,8 @@ function Enter-VidaBuildConcurrencyGuard {
         } catch [System.IO.IOException] {
             $owner = Get-VidaBuildGuardLockOwner -LockMetadataPath $lockMetadataPath
             if ($owner -and $owner.lock_owner_status -eq "dead") {
-                Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
-                Remove-Item -LiteralPath $lockMetadataPath -Force -ErrorAction SilentlyContinue
+                Remove-VidaBuildGuardLocalFile -LiteralPath $lockPath
+                Remove-VidaBuildGuardLocalFile -LiteralPath $lockMetadataPath
                 continue
             }
             if ($TimeoutSeconds -le 0 -or (Get-Date) -ge $deadline) {
@@ -106,6 +112,75 @@ function Enter-VidaBuildConcurrencyGuard {
             Start-Sleep -Seconds 1
         }
     }
+}
+
+
+function Test-VidaBuildGuardReparsePoint {
+    param([string]$LiteralPath)
+
+    $item = Get-Item -LiteralPath $LiteralPath -Force -ErrorAction SilentlyContinue
+    return $item -and (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+}
+
+function Assert-VidaBuildGuardLocalPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LiteralPath,
+        [string]$Description = "path"
+    )
+
+    $parentPath = Split-Path -Parent $LiteralPath
+    $segments = New-Object System.Collections.Generic.List[string]
+    $current = [System.IO.Path]::GetFullPath($parentPath)
+    while (-not [string]::IsNullOrWhiteSpace($current)) {
+        [void]$segments.Add($current)
+        $next = Split-Path -Parent $current
+        if ([string]::IsNullOrWhiteSpace($next) -or $next -eq $current) {
+            break
+        }
+        $current = $next
+    }
+
+    for ($index = $segments.Count - 1; $index -ge 0; $index--) {
+        $segment = $segments[$index]
+        if (Test-Path -LiteralPath $segment) {
+            if (Test-VidaBuildGuardReparsePoint -LiteralPath $segment) {
+                throw "Refusing to use build guard $Description because directory is a symlink/reparse point: $segment"
+            }
+        }
+    }
+
+    if (Test-Path -LiteralPath $LiteralPath) {
+        if (Test-VidaBuildGuardReparsePoint -LiteralPath $LiteralPath) {
+            throw "Refusing to use build guard $Description because file is a symlink/reparse point: $LiteralPath"
+        }
+    }
+}
+
+function Set-VidaBuildGuardMetadata {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LockMetadataPath,
+        [Parameter(Mandatory = $true)]
+        [string]$Json
+    )
+
+    Assert-VidaBuildGuardLocalPath -LiteralPath $LockMetadataPath -Description "metadata"
+    $encoding = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($LockMetadataPath, $Json, $encoding)
+}
+
+function Remove-VidaBuildGuardLocalFile {
+    param([string]$LiteralPath)
+
+    if ([string]::IsNullOrWhiteSpace($LiteralPath) -or -not (Test-Path -LiteralPath $LiteralPath)) {
+        return
+    }
+    if (Test-VidaBuildGuardReparsePoint -LiteralPath $LiteralPath) {
+        Write-Warning "Refusing to remove build guard symlink/reparse point: $LiteralPath"
+        return
+    }
+    Remove-Item -LiteralPath $LiteralPath -Force -ErrorAction SilentlyContinue
 }
 
 function Get-VidaBuildGuardLockOwner {
@@ -288,9 +363,9 @@ function Exit-VidaBuildConcurrencyGuard {
     if ($Guard.Stream) {
         $Guard.Stream.Dispose()
     }
-    Remove-Item -LiteralPath $Guard.LockPath -Force -ErrorAction SilentlyContinue
+    Remove-VidaBuildGuardLocalFile -LiteralPath $Guard.LockPath
     if ($Guard.LockMetadataPath) {
-        Remove-Item -LiteralPath $Guard.LockMetadataPath -Force -ErrorAction SilentlyContinue
+        Remove-VidaBuildGuardLocalFile -LiteralPath $Guard.LockMetadataPath
     }
 
     foreach ($entry in @(
