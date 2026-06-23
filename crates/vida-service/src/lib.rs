@@ -47,7 +47,10 @@ impl AcceptedCommandJournal {
     pub fn record_accepted(&self, envelope: &VidaCommandEnvelope) -> Result<AcceptedCommandRecord> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).with_context(|| {
-                format!("create accepted-command journal parent {}", parent.display())
+                format!(
+                    "create accepted-command journal parent {}",
+                    parent.display()
+                )
             })?;
         }
         let record = AcceptedCommandRecord {
@@ -160,7 +163,10 @@ pub fn lifecycle_plan(mode: &str, config: &ServiceDaemonConfig) -> LifecyclePlan
 pub async fn run_foreground_until_shutdown(config: ServiceDaemonConfig) -> Result<()> {
     let timeout = Duration::from_millis(config.shutdown_timeout_ms);
     Toplevel::new(async |subsys: &mut SubsystemHandle| {
-        subsys.start(SubsystemBuilder::new("vida-service-listener", service_listener));
+        subsys.start(SubsystemBuilder::new(
+            "vida-service-listener",
+            service_listener,
+        ));
     })
     .catch_signals()
     .handle_shutdown_requests(timeout)
@@ -248,7 +254,11 @@ mod tests {
         assert!(plan.apply_requires_token);
         assert_eq!(plan.manager_level, "user");
         assert_eq!(plan.restart_policy, "on_failure");
-        assert!(plan.planned_actions.iter().any(|action| action.contains("install")));
+        assert!(
+            plan.planned_actions
+                .iter()
+                .any(|action| action.contains("install"))
+        );
     }
 
     #[tokio::test]

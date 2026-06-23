@@ -9392,10 +9392,7 @@ mod agent_init_surface_tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        std::env::temp_dir().join(format!(
-            "{prefix}-{}-{nanos}",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
     }
 
     #[test]

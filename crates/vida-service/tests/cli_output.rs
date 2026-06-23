@@ -29,8 +29,7 @@ fn lifecycle_plan_json_output_is_machine_readable() {
         .expect("run vida-service lifecycle-plan --json");
 
     assert!(output.status.success());
-    let value: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("stdout is json");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("stdout is json");
     assert_eq!(value["mode"], "dry_run");
     assert_eq!(value["service_name"], "vida-service");
     assert_eq!(value["apply_requires_token"], true);
@@ -48,7 +47,9 @@ fn ipc_matrix_default_and_json_outputs_cover_local_ipc_contract() {
     let stdout = String::from_utf8(default_output.stdout).expect("stdout is utf8");
     assert!(stdout.contains("vida-service ipc-matrix\n"));
     assert!(stdout.contains("  rows: 2\n"));
-    assert!(stdout.contains("windows,interprocess_local_socket_named_pipe,tarpc_length_delimited_json"));
+    assert!(
+        stdout.contains("windows,interprocess_local_socket_named_pipe,tarpc_length_delimited_json")
+    );
     assert!(stdout.contains("unix,interprocess_local_socket,tarpc_length_delimited_json"));
 
     let json_output = vida_service()
@@ -61,9 +62,7 @@ fn ipc_matrix_default_and_json_outputs_cover_local_ipc_contract() {
         serde_json::from_slice(&json_output.stdout).expect("stdout is json");
     let rows = value.as_array().expect("matrix is array");
     assert_eq!(rows.len(), 2);
-    assert!(rows
-        .iter()
-        .all(|row| row["domain_mutation_logic"] == false));
+    assert!(rows.iter().all(|row| row["domain_mutation_logic"] == false));
 }
 
 #[test]

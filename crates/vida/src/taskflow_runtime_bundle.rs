@@ -271,6 +271,8 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         }
         _ => false,
     };
+    let taskflow_active_candidates =
+        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
     let continuation_binding =
         crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
             explicit_continuation_binding.as_ref(),
@@ -282,14 +284,12 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
                 .flatten()
                 .as_deref(),
             continuation_binding_evidence_ambiguous,
-            task_store.open_count == 0
-                && task_store.in_progress_count == 0
-                && task_store.ready_count == 0,
+            crate::continuation_binding_summary::no_taskflow_active_bounded_unit(
+                &taskflow_active_candidates,
+            ),
             latest_run_graph_task_closed,
             latest_run_graph_task_missing,
         );
-    let taskflow_active_candidates =
-        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
     let continuation_binding =
         match crate::orchestrator_session_surface::build_runtime_owner_evidence(store.root(), false)
             .ok()

@@ -1163,6 +1163,12 @@ pub(crate) fn taskflow_leaf_active_tasks(
         .collect()
 }
 
+pub(crate) fn no_taskflow_active_bounded_unit(
+    taskflow_active_candidates: &[serde_json::Value],
+) -> bool {
+    taskflow_active_candidates.is_empty()
+}
+
 pub(crate) fn add_taskflow_active_work_truth(
     mut summary: serde_json::Value,
     taskflow_active_candidates: Vec<serde_json::Value>,
@@ -1425,11 +1431,9 @@ fn priority_epic_sequence_summary(
             ),
             "sequential_only_priority_epic",
             "forbidden_while_priority_epic_active",
-            serde_json::json!([
-                format!(
-                    "Continue or close the active TaskFlow candidate under priority epic `{required_priority_epic_id}` before any later epic or runtime residual work."
-                )
-            ]),
+            serde_json::json!([format!(
+                "Continue or close the active TaskFlow candidate under priority epic `{required_priority_epic_id}` before any later epic or runtime residual work."
+            )]),
         ));
     }
     if priority_candidates.len() > 1 {
@@ -1809,7 +1813,7 @@ mod tests {
     use super::{
         add_taskflow_active_work_truth, add_taskflow_active_work_truth_with_session_claims,
         build_continuation_binding_summary, build_continuation_binding_summary_with_idle_policy,
-        build_continuation_binding_summary_with_task_authority,
+        build_continuation_binding_summary_with_task_authority, no_taskflow_active_bounded_unit,
         taskflow_active_candidates_from_tasks, taskflow_active_work_binding_is_authoritative,
     };
 
@@ -1996,7 +2000,9 @@ mod tests {
                 Some("packets/downstream packet.json"),
             )
             .as_deref(),
-            Some("vida agent-init --downstream-packet 'packets/downstream packet.json' --execute-dispatch")
+            Some(
+                "vida agent-init --downstream-packet 'packets/downstream packet.json' --execute-dispatch"
+            )
         );
     }
 
@@ -2284,6 +2290,34 @@ mod tests {
         );
         assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
         assert!(taskflow_active_work_binding_is_authoritative(&summary));
+    }
+
+    #[test]
+    fn no_active_taskflow_candidate_keeps_ready_backlog_in_idle_selection_state() {
+        let ready_task = task_record("ready-backlog-task", "ready");
+        let open_task = task_record("open-backlog-task", "open");
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[ready_task, open_task]);
+
+        assert!(no_taskflow_active_bounded_unit(&taskflow_candidates));
+
+        let summary = build_continuation_binding_summary_with_task_authority(
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            no_taskflow_active_bounded_unit(&taskflow_candidates),
+            false,
+            false,
+        );
+        let summary = add_taskflow_active_work_truth(summary, taskflow_candidates);
+
+        assert_eq!(summary["status"], "idle");
+        assert_eq!(summary["primary_path"], "idle_project_ready");
+        assert_eq!(summary["pause_boundary_gate"], "allowed_no_active_work");
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
     }
 
     #[test]

@@ -3,8 +3,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use crate::{
-    DiagnosticsArgs, DiagnosticsCommand, DiagnosticsEvidenceCheckArgs, DiagnosticsPostCommitArgs,
-    DiagnosticsRulesCheckArgs, state_store::StateStore,
+    state_store::StateStore, DiagnosticsArgs, DiagnosticsCommand, DiagnosticsEvidenceCheckArgs,
+    DiagnosticsPostCommitArgs, DiagnosticsRulesCheckArgs,
 };
 
 const DIAGNOSTICS_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
@@ -788,11 +788,11 @@ pub(crate) async fn run_diagnostics(args: DiagnosticsArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME, build_evidence_check_diagnostics,
-        build_rules_check_diagnostics, closed_task_active_run_projection_mismatch_next_action,
+        build_evidence_check_diagnostics, build_rules_check_diagnostics,
+        closed_task_active_run_projection_mismatch_next_action,
         compact_host_dispatch_preflight_for_diagnostics, missing_task_actionability,
         post_commit_closed_task_active_run_projection_mismatch, post_commit_default_clear_command,
-        run_post_commit,
+        run_post_commit, POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
     };
     use crate::test_cli_support::guard_current_dir;
     use crate::{
@@ -888,10 +888,8 @@ mod tests {
             &closed_task_ids,
             false,
         ));
-        assert!(
-            closed_task_active_run_projection_mismatch_next_action()
-                .contains("vida task reconcile-closed-runs --limit 25")
-        );
+        assert!(closed_task_active_run_projection_mismatch_next_action()
+            .contains("vida task reconcile-closed-runs --limit 25"));
         assert!(!closed_task_active_run_projection_mismatch_next_action().contains("--json"));
 
         let payload = serde_json::json!({
@@ -909,11 +907,9 @@ mod tests {
             post_commit_default_clear_command(&payload),
             Some("vida task reconcile-closed-runs --limit 25")
         );
-        assert!(
-            !post_commit_default_clear_command(&payload)
-                .unwrap()
-                .contains("--json")
-        );
+        assert!(!post_commit_default_clear_command(&payload)
+            .unwrap()
+            .contains("--json"));
     }
 
     #[test]

@@ -595,8 +595,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 None
                             } else {
                                 eprintln!(
-                                "Failed to read latest run graph dispatch receipt summary: {error}"
-                            );
+                                    "Failed to read latest run graph dispatch receipt summary: {error}"
+                                );
                                 return ExitCode::from(1);
                             }
                         }
@@ -703,9 +703,6 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-                let no_active_taskflow_work = task_store.open_count == 0
-                    && task_store.in_progress_count == 0
-                    && task_store.ready_count == 0;
                 let explicit_continuation_binding = match store
                     .latest_explicit_run_graph_continuation_binding_for_current_session()
                     .await
@@ -879,6 +876,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
                         &all_tasks,
                     );
+                let no_active_taskflow_work =
+                    crate::continuation_binding_summary::no_taskflow_active_bounded_unit(
+                        &taskflow_active_candidates,
+                    );
                 let latest_run_graph_task_orthogonal_to_taskflow =
                     latest_run_graph_task_orthogonal_to_taskflow_active_work(
                         latest_run_graph_status
@@ -964,8 +965,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         Ok(summary) => summary,
                         Err(error) => {
                             eprintln!(
-                                    "Failed to read runtime-consumption dispatch receipt fallback: {error}"
-                                );
+                                "Failed to read runtime-consumption dispatch receipt fallback: {error}"
+                            );
                             return ExitCode::from(1);
                         }
                     }
@@ -1952,10 +1953,6 @@ async fn refresh_cached_status_projection_runtime_fields(
                     .as_ref()
                     .map(|receipt| receipt.run_id.as_str()),
             );
-    let task_store = store.task_store_summary().await.ok()?;
-    let no_active_taskflow_work = task_store.open_count == 0
-        && task_store.in_progress_count == 0
-        && task_store.ready_count == 0;
     let explicit_continuation_binding = match store
         .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
@@ -1994,6 +1991,10 @@ async fn refresh_cached_status_projection_runtime_fields(
     };
     let taskflow_active_candidates =
         crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
+    let no_active_taskflow_work =
+        crate::continuation_binding_summary::no_taskflow_active_bounded_unit(
+            &taskflow_active_candidates,
+        );
     let exception_takeover_matches_active_taskflow_work =
         exception_takeover_metadata_matches_taskflow_active_work(
             store.root(),
@@ -3145,8 +3146,7 @@ mod tests {
             "cached status projection must not pair a fresh explicit binding with predecessor write-guard authority"
         );
         assert_ne!(
-            payload["root_session_write_guard"]["latest_lane_status"],
-            "lane_completed",
+            payload["root_session_write_guard"]["latest_lane_status"], "lane_completed",
             "cached status projection must refresh or fail closed instead of keeping predecessor lane completion state"
         );
 
