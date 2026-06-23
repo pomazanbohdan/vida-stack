@@ -676,13 +676,41 @@ fn completed_host_bridge_completion_request_for_state_root(
     if !execution_state.is_some_and(host_bridge_completed_result_execution_state_is_admissible) {
         return false;
     }
+    if result
+        .get("artifact_kind")
+        .and_then(serde_json::Value::as_str)
+        != Some("host_tool_bridge_result")
+    {
+        return false;
+    }
+    if result
+        .pointer("/execution_evidence/receipt_backed")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return false;
+    }
+    if result
+        .get("source_dispatch_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        return false;
+    }
     for field in ["request_id", "run_id", "dispatch_target"] {
-        let request_value = host_bridge_request_string(request, field).map(str::trim);
-        let result_value = result
+        let Some(request_value) = host_bridge_request_string(request, field).map(str::trim) else {
+            return false;
+        };
+        let Some(result_value) = result
             .get(field)
             .and_then(serde_json::Value::as_str)
-            .map(str::trim);
-        if request_value.is_some() && result_value.is_some() && request_value != result_value {
+            .map(str::trim)
+        else {
+            return false;
+        };
+        if request_value.is_empty() || result_value.is_empty() || request_value != result_value {
             return false;
         }
     }
@@ -4621,11 +4649,12 @@ mod tests {
     use super::{
         agent_dispatch_next_effective_materialize_packets, agent_status_runtime_task_stale_code,
         apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
-        canonical_host_bridge_request_path, configured_dev_team_first_step_for_task,
-        dev_team_sequence, dev_team_sequence_for_task, dev_team_sequence_for_work_item,
-        dispatch_target_for_agent_dispatch_lane, host_bridge_adapter_payload,
-        host_bridge_changed_files_from_artifact, host_bridge_completion_lane_args,
-        host_bridge_normalized_implementation_artifact_path,
+        canonical_host_bridge_request_path,
+        completed_host_bridge_completion_request_for_state_root,
+        configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
+        dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
+        host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
+        host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path, materialize_configured_agent_dispatch_lane,
@@ -4643,6 +4672,39 @@ mod tests {
     use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use crate::{AgentDispatchNextArgs, AgentHostBridgeArgs};
     use std::process::ExitCode;
+
+    #[test]
+    fn completed_host_bridge_completion_request_rejects_forged_result_without_provenance() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path();
+        let result_path = state_root.join("host-tool-bridge/results/forged.json");
+        std::fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("result parent should be created");
+        std::fs::write(
+            &result_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "status": "pass",
+                "execution_state": "executed",
+                "allowed_next_node": "developer"
+            }))
+            .expect("result should serialize"),
+        )
+        .expect("forged result should write");
+
+        let request = serde_json::json!({
+            "status": "completed",
+            "dispatch_transport": "host_tool_bridge",
+            "result_path": result_path.display().to_string(),
+            "request_id": "req-forged",
+            "run_id": "run-forged",
+            "dispatch_target": "implementer"
+        });
+
+        assert!(
+            !completed_host_bridge_completion_request_for_state_root(state_root, &request),
+            "completed preview refresh evidence must require artifact kind, receipt-backed evidence, source packet path, and mandatory identity fields"
+        );
+    }
 
     #[test]
     fn agent_status_blocks_closed_runtime_task_target() {

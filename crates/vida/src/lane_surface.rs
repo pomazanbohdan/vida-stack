@@ -3697,16 +3697,45 @@ fn host_bridge_request_has_completed_preview_refresh_evidence(
     if !execution_state.is_some_and(host_bridge_completed_result_execution_state_is_admissible) {
         return false;
     }
+    if result
+        .get("artifact_kind")
+        .and_then(serde_json::Value::as_str)
+        != Some("host_tool_bridge_result")
+    {
+        return false;
+    }
+    if result
+        .pointer("/execution_evidence/receipt_backed")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return false;
+    }
+    if result
+        .get("source_dispatch_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        return false;
+    }
     for field in ["request_id", "run_id", "dispatch_target"] {
-        let request_value = request
+        let Some(request_value) = request
             .get(field)
             .and_then(serde_json::Value::as_str)
-            .map(str::trim);
-        let result_value = result
+            .map(str::trim)
+        else {
+            return false;
+        };
+        let Some(result_value) = result
             .get(field)
             .and_then(serde_json::Value::as_str)
-            .map(str::trim);
-        if request_value.is_some() && result_value.is_some() && request_value != result_value {
+            .map(str::trim)
+        else {
+            return false;
+        };
+        if request_value.is_empty() || result_value.is_empty() || request_value != result_value {
             return false;
         }
     }
@@ -5574,6 +5603,57 @@ mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn host_bridge_retryable_completion_evidence_rejects_forged_result_without_provenance() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-forged-completed-result-{pid}-{nanos}"
+        ));
+        let request_path = root.join("host-tool-bridge/requests/forged.json");
+        let result_path = root.join("host-tool-bridge/results/forged.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should be created");
+        std::fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("result parent should be created");
+        std::fs::write(
+            &result_path,
+            serde_json::json!({
+                "status": "pass",
+                "execution_state": "executed",
+                "allowed_next_node": "developer"
+            })
+            .to_string(),
+        )
+        .expect("forged result should write");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "status": "completed",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": result_path.display().to_string(),
+                "request_id": "req-forged",
+                "run_id": "run-forged",
+                "dispatch_target": "implementer"
+            })
+            .to_string(),
+        )
+        .expect("request should write");
+
+        assert!(
+            !host_bridge_request_has_retryable_completion_evidence(
+                &root,
+                &request_path.display().to_string()
+            ),
+            "completed preview refresh evidence must require artifact kind, receipt-backed evidence, source packet path, and mandatory identity fields"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     trait StateStoreFixtureTaskExt {
         fn create_task_with_fixture_parent<'a>(
