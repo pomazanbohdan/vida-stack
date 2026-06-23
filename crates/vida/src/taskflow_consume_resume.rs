@@ -20028,6 +20028,16 @@ agent_system:
         active_status.resume_target = "dispatch.coach".to_string();
         active_status.recovery_ready = true;
         store
+            .acquire_current_session_run_graph_claim_for_test(
+                "active-exception-takeover-claim",
+                active_run_id,
+                "task-active-exception",
+                "run-graph-continuation-ownership",
+                "crates/vida/src/taskflow_consume_resume.rs",
+            )
+            .await
+            .expect("current session should claim active exception fixture");
+        store
             .record_run_graph_status(&active_status)
             .await
             .expect("persist active exception status");
@@ -20228,6 +20238,16 @@ agent_system:
             )
             .await
             .expect("persist current continuation binding");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "current-ready-handoff-claim",
+                current_run_id,
+                "task-current-ready-handoff",
+                "run-graph-continuation-ownership",
+                "crates/vida/src/taskflow_consume_resume.rs",
+            )
+            .await
+            .expect("current session should claim ready handoff fixture");
 
         let reconciled_stale_status = store
             .run_graph_status(stale_run_id)

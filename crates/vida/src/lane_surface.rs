@@ -5803,6 +5803,16 @@ mod tests {
             .record_run_graph_dispatch_receipt(&receipt)
             .await
             .expect("persist dispatch receipt");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "lane-exception-takeover-activate-claim",
+                run_id,
+                run_id,
+                "lane-exception-takeover",
+                "crates/vida/src/lane_surface.rs",
+            )
+            .await
+            .expect("current session should claim lane activate fixture");
         drop(store);
         wait_for_state_unlock(&root);
 
@@ -7308,6 +7318,16 @@ mod tests {
             .record_run_graph_dispatch_receipt(&receipt)
             .await
             .expect("persist exception-recorded receipt");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "lane-exception-takeover-supersede-claim",
+                run_id,
+                run_id,
+                "lane-exception-takeover",
+                "crates/vida/src/lane_surface.rs",
+            )
+            .await
+            .expect("current session should claim lane supersede fixture");
         drop(store);
         wait_for_state_unlock(&root);
 
@@ -7531,6 +7551,16 @@ mod tests {
             .record_run_graph_dispatch_receipt(&receipt)
             .await
             .expect("persist dispatch receipt");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "lane-exception-takeover-activate-claim",
+                run_id,
+                run_id,
+                "lane-exception-takeover",
+                "crates/vida/src/lane_surface.rs",
+            )
+            .await
+            .expect("current session should claim lane activate fixture");
         drop(store);
         wait_for_state_unlock(&root);
 
@@ -13284,6 +13314,16 @@ mod tests {
         };
         write_exception_takeover_metadata(store.root(), run_id, &metadata)
             .expect("persist exception takeover metadata");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "lane-complete-exception-takeover-claim",
+                run_id,
+                run_id,
+                "lane-exception-takeover",
+                "crates/vida/src/lane_surface.rs",
+            )
+            .await
+            .expect("current session should claim lane complete fixture");
         drop(store);
         wait_for_state_unlock(&root);
 

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const VIDA_CONTRACTS_SCHEMA_VERSION: &str = "vida-contracts-v1";
 pub const VIDA_COMMAND_PROTOCOL_VERSION: &str = "vida-command-v1";
 pub const VIDA_RUNTIME_CONTRACTS_V1_SCHEMA_VERSION: &str = "vida-runtime-contracts-v1";
+pub const VIDA_RUNTIME_ENGINE_CONTRACT_VERSION: &str = "vida-runtime-engine-v1";
 
 pub mod operations {
     pub const SERVICE_HELLO: &str = "vida.service.hello";
@@ -257,6 +258,106 @@ pub fn unsupported_operation_problem(operation_id: &str) -> VidaProblem {
         instance: None,
         related_receipt: None,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeEngineCapability {
+    DurableTimers,
+    KeyedSerialization,
+    Signals,
+    Jobs,
+    EventExport,
+    StrongReads,
+    OfflineMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RuntimeEngineCapabilitySupport {
+    pub capability: RuntimeEngineCapability,
+    pub supported: bool,
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocker_code: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RuntimeEngineCapabilities {
+    pub contract_version: String,
+    pub engine_id: String,
+    pub engine_kind: String,
+    pub capabilities: Vec<RuntimeEngineCapabilitySupport>,
+}
+
+impl RuntimeEngineCapabilities {
+    #[must_use]
+    pub fn supports(&self, capability: RuntimeEngineCapability) -> bool {
+        self.capabilities
+            .iter()
+            .any(|entry| entry.capability == capability && entry.supported)
+    }
+
+    #[must_use]
+    pub fn unsupported(&self, capability: RuntimeEngineCapability) -> Option<&str> {
+        self.capabilities
+            .iter()
+            .find(|entry| entry.capability == capability && !entry.supported)
+            .and_then(|entry| entry.blocker_code.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RuntimeEngineHealth {
+    pub engine_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub blocker_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RuntimeQueryRequest {
+    pub operation: VidaOperation,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RuntimeWatchRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<VidaEventCursor>,
+    pub required_capability: RuntimeEngineCapability,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RuntimeWatchPlan {
+    pub stream_kind: String,
+    pub replayable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<VidaEventCursor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeEngineError {
+    UnsupportedCapability {
+        capability: RuntimeEngineCapability,
+        blocker_code: String,
+        remediation: String,
+    },
+    UnsupportedOperation {
+        operation: VidaOperation,
+        blocker_code: String,
+    },
+}
+
+pub type RuntimeEngineResult<T> = Result<T, RuntimeEngineError>;
+
+pub trait RuntimeEngine {
+    fn capabilities(&self) -> RuntimeEngineCapabilities;
+    fn health(&self) -> RuntimeEngineHealth;
+    fn execute(&self, envelope: VidaCommandEnvelope) -> RuntimeEngineResult<VidaCommandResponse>;
+    fn query(&self, request: RuntimeQueryRequest) -> RuntimeEngineResult<serde_json::Value>;
+    fn watch(&self, request: RuntimeWatchRequest) -> RuntimeEngineResult<RuntimeWatchPlan>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

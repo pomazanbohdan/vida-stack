@@ -616,6 +616,7 @@ mod tests {
         let guard = canonical_root_session_write_guard_defaults();
         let mut receipt = sample_receipt();
         receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.supersedes_receipt_id = Some("receipt-activate-1".to_string());
 
         let merged = merge_live_exception_takeover_write_guard(
             guard,

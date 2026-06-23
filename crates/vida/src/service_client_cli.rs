@@ -264,6 +264,37 @@ fn emit_default_service_client_response(
         return;
     }
 
+    if request.family == ServiceCliFamily::Service && request.command == "capabilities" {
+        println!("vida service capabilities");
+        println!("  status: {status}");
+        if let Some(result) = &response.result {
+            if let Some(engine) = result.get("engine_capabilities") {
+                print_result_field(engine, "engine_id");
+                print_result_field(engine, "engine_kind");
+                print_result_field_as(engine, "contract_version", "engine_contract");
+                if let Some(capabilities) = engine
+                    .get("capabilities")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    println!(
+                        "  capabilities[{}]{{capability,supported,mode,blocker_code}}:",
+                        capabilities.len()
+                    );
+                    for capability in capabilities {
+                        println!(
+                            "    {},{},{},{}",
+                            json_field_as_str(capability, "capability"),
+                            json_field_as_bool_string(capability, "supported"),
+                            json_field_as_str(capability, "mode"),
+                            json_field_as_str(capability, "blocker_code")
+                        );
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     println!(
         "VIDA {} {} -> {:?}",
         family_name(&request.family),
@@ -288,6 +319,21 @@ fn terminal_safe_text(value: &str) -> std::borrow::Cow<'_, str> {
     }
 
     std::borrow::Cow::Owned(value.chars().flat_map(char::escape_default).collect())
+}
+
+fn json_field_as_str<'a>(value: &'a serde_json::Value, field: &str) -> &'a str {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+}
+
+fn json_field_as_bool_string(value: &serde_json::Value, field: &str) -> &'static str {
+    match value.get(field).and_then(serde_json::Value::as_bool) {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "",
+    }
 }
 
 fn family_name(family: &ServiceCliFamily) -> &'static str {

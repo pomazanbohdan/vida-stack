@@ -331,8 +331,24 @@ pub(crate) fn exception_takeover_dispatch_blocker_superseded_by_completed_node(
             .supersedes_receipt_id
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
-        && status.status == "completed"
+        && status_has_sealed_completed_node(status)
         && status.active_node == receipt.dispatch_target
+}
+
+fn status_has_sealed_completed_node(status: &crate::state_store::RunGraphStatus) -> bool {
+    status.status == "completed"
+        && status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        && status.lifecycle_stage.ends_with("_complete")
+        && status.handoff_state == "none"
+        && status.context_state == "sealed"
+        && status.checkpoint_kind == "none"
+        && status.resume_target == "none"
+        && !status.recovery_ready
 }
 
 pub(crate) fn dispatch_receipt_downstream_blockers_superseded_by_ready_handoff_fields(
@@ -911,6 +927,32 @@ mod tests {
         status.active_node = "developer".to_string();
         assert!(
             !exception_takeover_dispatch_blocker_superseded_by_completed_node(&status, &receipt)
+        );
+    }
+
+    #[test]
+    fn inconsistent_completed_status_does_not_supersede_exception_takeover_blocker() {
+        let mut status = terminal_status_for("run-exception");
+        status.task_id = "task-exception".to_string();
+        status.active_node = "implementer".to_string();
+        status.next_node = Some("coach".to_string());
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.context_state = "open".to_string();
+        status.resume_target = "dispatch.implementer_lane".to_string();
+        status.recovery_ready = true;
+
+        let mut receipt =
+            crate::state_store::RunGraphDispatchReceiptStored::from(receipt_for("run-exception"));
+        receipt.dispatch_target = "implementer".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = Some("lane_exception_takeover".to_string());
+        receipt.blocker_code = Some("operator_exception_takeover".to_string());
+        receipt.exception_path_receipt_id = Some("exception-receipt".to_string());
+        receipt.supersedes_receipt_id = Some("superseded-receipt".to_string());
+
+        assert!(
+            !exception_takeover_dispatch_blocker_superseded_by_completed_node(&status, &receipt),
+            "a resumable or inconsistent completed status must keep the blocked receipt authoritative"
         );
     }
 

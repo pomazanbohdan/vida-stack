@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
@@ -589,6 +590,7 @@ impl RedbOperationalJournal {
         snapshot: &taskflow_state_fs::TaskSnapshot,
     ) -> Result<RedbTaskflowSnapshotParity, TaskflowStateError> {
         let normalized = normalize_taskflow_snapshot(snapshot);
+        validate_taskflow_snapshot_storage_keys(&normalized)?;
         let write = self.db.begin_write().map_err(storage_error)?;
         {
             let mut tasks = write
@@ -622,7 +624,7 @@ impl RedbOperationalJournal {
             }
         }
         write.commit().map_err(storage_error)?;
-        Ok(taskflow_snapshot_fingerprint(&normalized))
+        self.taskflow_snapshot_parity(&normalized)
     }
 
     pub fn export_taskflow_snapshot(
@@ -731,11 +733,7 @@ impl OperationalJournal for RedbOperationalJournal {
                         receipt_id: record.result_ref.clone(),
                         conflict_reason: None,
                     };
-                    let lifecycle_payload =
-                        serde_json::to_vec(&lifecycle).map_err(storage_error)?;
-                    idempotency
-                        .insert(ledger_key.0.as_str(), lifecycle_payload.as_slice())
-                        .map_err(storage_error)?;
+                    write_idempotency_lifecycle(&mut idempotency, lifecycle)?;
                     Ok(record.receipt)
                 } else {
                     let reason =
@@ -758,11 +756,7 @@ impl OperationalJournal for RedbOperationalJournal {
                         receipt_id: record.result_ref.clone(),
                         conflict_reason: Some(reason),
                     };
-                    let lifecycle_payload =
-                        serde_json::to_vec(&lifecycle).map_err(storage_error)?;
-                    idempotency
-                        .insert(ledger_key.0.as_str(), lifecycle_payload.as_slice())
-                        .map_err(storage_error)?;
+                    write_idempotency_lifecycle(&mut idempotency, lifecycle)?;
                     Err(TaskflowStateError::IdempotencyConflict(
                         ledger_key.0.clone(),
                     ))
@@ -899,10 +893,7 @@ impl OperationalJournal for RedbOperationalJournal {
                     receipt_id: idempotency_record.result_ref,
                     conflict_reason: None,
                 };
-                let lifecycle_payload = serde_json::to_vec(&lifecycle).map_err(storage_error)?;
-                idempotency
-                    .insert(ledger_key.0.as_str(), lifecycle_payload.as_slice())
-                    .map_err(storage_error)?;
+                write_idempotency_lifecycle(&mut idempotency, lifecycle)?;
                 Ok(receipt)
             }
         };
@@ -1321,6 +1312,32 @@ fn normalize_taskflow_snapshot(
     }
 }
 
+fn validate_taskflow_snapshot_storage_keys(
+    snapshot: &taskflow_state_fs::TaskSnapshot,
+) -> Result<(), TaskflowStateError> {
+    let mut task_ids = BTreeSet::new();
+    for task in &snapshot.tasks {
+        if !task_ids.insert(task.id.as_str().to_string()) {
+            return Err(TaskflowStateError::Storage(format!(
+                "taskflow snapshot import rejected duplicate task id: {}",
+                task.id.as_str()
+            )));
+        }
+    }
+
+    let mut dependency_keys = BTreeSet::new();
+    for dependency in &snapshot.dependencies {
+        let key = task_dependency_key(dependency);
+        if !dependency_keys.insert(key.clone()) {
+            return Err(TaskflowStateError::Storage(format!(
+                "taskflow snapshot import rejected duplicate dependency key: {key}"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 fn taskflow_snapshot_fingerprint(
     snapshot: &taskflow_state_fs::TaskSnapshot,
 ) -> RedbTaskflowSnapshotParity {
@@ -1378,8 +1395,9 @@ fn reconcile_artifact_record(
     }
 
     let materialized_path = project_root.join(&record.path);
-    let content = match std::fs::read(&materialized_path) {
-        Ok(content) => content,
+    let root = project_root.canonicalize().map_err(storage_error)?;
+    let metadata = match std::fs::symlink_metadata(&materialized_path) {
+        Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(RedbArtifactReconciliationRecord {
                 artifact_ref: record.artifact_ref,
@@ -1390,6 +1408,32 @@ fn reconcile_artifact_record(
                 detail: Some("artifact path is not materialized".to_string()),
             });
         }
+        Err(error) => return Err(storage_error(error)),
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Ok(RedbArtifactReconciliationRecord {
+            artifact_ref: record.artifact_ref,
+            path: record.path,
+            expected_content_hash: record.content_hash,
+            computed_content_hash: None,
+            status: "out_of_root".to_string(),
+            detail: Some("artifact path must be a regular file under the project root".to_string()),
+        });
+    }
+    let materialized_path = materialized_path.canonicalize().map_err(storage_error)?;
+    if !materialized_path.starts_with(&root) {
+        return Ok(RedbArtifactReconciliationRecord {
+            artifact_ref: record.artifact_ref,
+            path: record.path,
+            expected_content_hash: record.content_hash,
+            computed_content_hash: None,
+            status: "out_of_root".to_string(),
+            detail: Some("artifact path must remain under the project root".to_string()),
+        });
+    }
+
+    let content = match std::fs::read(&materialized_path) {
+        Ok(content) => content,
         Err(error) => return Err(storage_error(error)),
     };
     let computed = content_hash_for_expected(&record.content_hash, &content);
@@ -1485,6 +1529,26 @@ fn append_receipt_ref(key: &VidaIdempotencyKey, receipt: &JournalAppendReceipt) 
         "redb-append:{}:{}",
         key.0, receipt.stream_version.0
     ))
+}
+
+fn write_idempotency_lifecycle(
+    table: &mut redb::Table<'_, &str, &[u8]>,
+    record: JournalIdempotencyRecord,
+) -> Result<(), TaskflowStateError> {
+    if let Some(existing) = table.get(record.key.0.as_str()).map_err(storage_error)? {
+        let existing: JournalIdempotencyRecord =
+            serde_json::from_slice(existing.value()).map_err(storage_error)?;
+        if existing.command_id != record.command_id {
+            return Err(TaskflowStateError::IdempotencyConflict(record.key.0));
+        }
+    }
+
+    let key = record.key.0.clone();
+    let lifecycle_payload = serde_json::to_vec(&record).map_err(storage_error)?;
+    table
+        .insert(key.as_str(), lifecycle_payload.as_slice())
+        .map_err(storage_error)?;
+    Ok(())
 }
 
 fn stable_hash_hex(input: &str) -> String {
@@ -1903,6 +1967,44 @@ mod tests {
     }
 
     #[test]
+    fn append_rejects_idempotency_key_reserved_by_another_command() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        let key = VidaIdempotencyKey("shared-key".to_string());
+        let victim_command = VidaCommandRef("command-victim".to_string());
+
+        journal
+            .record_idempotency_started(key.clone(), victim_command.clone())
+            .expect("victim reservation should pass");
+
+        let mut attacker_request = append_request(0, vec![event(1)], Vec::new());
+        attacker_request.idempotency_key = key.clone();
+        attacker_request.command_id = VidaCommandRef("command-attacker".to_string());
+        attacker_request.causation_id = Some(attacker_request.command_id.clone());
+        let error = journal
+            .append(attacker_request)
+            .expect_err("attacker append must not overwrite victim idempotency row");
+
+        assert_eq!(
+            error,
+            TaskflowStateError::IdempotencyConflict("shared-key".to_string())
+        );
+        let command_ledger = journal
+            .idempotency_record(&key)
+            .expect("victim idempotency record should remain");
+        assert_eq!(command_ledger.command_id, victim_command);
+        assert_eq!(command_ledger.state, JournalIdempotencyState::Started);
+        assert_eq!(command_ledger.receipt_id, None);
+        assert_eq!(
+            journal
+                .load_stream(&VidaStreamRef("stream-1".to_string()))
+                .len(),
+            0
+        );
+    }
+
+    #[test]
     fn corrupt_payload_blocker_serializes_operator_json() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("journal.redb");
@@ -2295,6 +2397,52 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn artifact_hash_reconciliation_rejects_symlink_escape() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let artifact_dir = dir.path().join("artifacts");
+        fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+        let outside = dir
+            .path()
+            .parent()
+            .expect("temp parent")
+            .join(format!("outside-secret-{}.txt", std::process::id()));
+        fs::write(
+            &outside,
+            b"outside secret
+",
+        )
+        .expect("write outside secret");
+        let symlink_path = artifact_dir.join("secret_link.txt");
+        std::os::unix::fs::symlink(&outside, &symlink_path).expect("create symlink");
+
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal
+            .append(append_request(0, vec![event(1)], Vec::new()))
+            .expect("append should pass");
+        journal.index_artifact(JournalArtifactRecord {
+            artifact_ref: taskflow_contracts::VidaArtifactRef("artifact-symlink".to_string()),
+            content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            path: "artifacts/secret_link.txt".to_string(),
+        });
+
+        let reconciled = journal
+            .reconcile_artifact_hashes(dir.path())
+            .expect("artifact reconcile symlink");
+        assert_eq!(reconciled.len(), 1);
+        assert_eq!(reconciled[0].status, "out_of_root");
+        assert_eq!(reconciled[0].computed_content_hash, None);
+        assert_eq!(
+            reconciled[0].detail.as_deref(),
+            Some("artifact path must be a regular file under the project root")
+        );
+
+        fs::remove_file(&outside).expect("remove outside secret");
+    }
+
+    #[test]
     fn sha256_hash_helper_matches_known_digest() {
         assert_eq!(
             super::sha256_hex(b"abc"),
@@ -2488,6 +2636,105 @@ mod tests {
         assert_eq!(exported.tasks.len(), 1);
         assert_eq!(exported.tasks[0].id.as_str(), "vida-root");
         assert!(exported.dependencies.is_empty());
+    }
+
+    #[test]
+    fn redb_shadow_replace_rejects_duplicate_task_ids() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+        let duplicate = taskflow_state_fs::TaskSnapshot {
+            tasks: vec![
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-duplicate"),
+                    "First",
+                    taskflow_core::IssueType::Task,
+                ),
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-duplicate"),
+                    "Second",
+                    taskflow_core::IssueType::Task,
+                ),
+            ],
+            dependencies: Vec::new(),
+        };
+
+        let error = journal
+            .replace_taskflow_snapshot(&duplicate)
+            .expect_err("duplicate task ids must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("taskflow snapshot import rejected duplicate task id: vida-duplicate")
+        );
+        assert!(
+            journal
+                .export_taskflow_snapshot()
+                .expect("export should pass")
+                .tasks
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn redb_shadow_replace_rejects_colliding_dependency_keys() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+        let colliding = taskflow_state_fs::TaskSnapshot {
+            tasks: vec![
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-a\u{1f}b"),
+                    "A",
+                    taskflow_core::IssueType::Task,
+                ),
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-c"),
+                    "C",
+                    taskflow_core::IssueType::Task,
+                ),
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("vida-a"),
+                    "A delimiter",
+                    taskflow_core::IssueType::Task,
+                ),
+                TaskRecord::new(
+                    taskflow_core::TaskId::new("b\u{1f}vida-c"),
+                    "B delimiter",
+                    taskflow_core::IssueType::Task,
+                ),
+            ],
+            dependencies: vec![
+                DependencyEdge {
+                    issue_id: taskflow_core::TaskId::new("vida-a\u{1f}b"),
+                    depends_on_id: taskflow_core::TaskId::new("vida-c"),
+                    dependency_type: "blocks".to_string(),
+                },
+                DependencyEdge {
+                    issue_id: taskflow_core::TaskId::new("vida-a"),
+                    depends_on_id: taskflow_core::TaskId::new("b\u{1f}vida-c"),
+                    dependency_type: "blocks".to_string(),
+                },
+            ],
+        };
+
+        let error = journal
+            .replace_taskflow_snapshot(&colliding)
+            .expect_err("colliding dependency storage keys must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("taskflow snapshot import rejected duplicate dependency key")
+        );
+        assert!(
+            journal
+                .export_taskflow_snapshot()
+                .expect("export should pass")
+                .dependencies
+                .is_empty()
+        );
     }
 
     #[test]
