@@ -19,8 +19,9 @@ use vida_client::VidaClient;
 use vida_client_inprocess::{InProcessVidaClient, LocalRuntimeVidaClient};
 use vida_contracts::{
     operation_spec, operations, VidaApplyToken, VidaClientKind, VidaCommandEnvelope,
-    VidaIdempotencyKey, VidaOperation, VidaRequestId, VidaResponseStatus, VidaSessionId,
-    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
+    VidaIdempotencyKey, VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId,
+    VidaResponseStatus, VidaSessionId, VIDA_COMMAND_PROTOCOL_VERSION,
+    VIDA_CONTRACTS_SCHEMA_VERSION,
 };
 
 fn envelope(operation: &str) -> VidaCommandEnvelope {
@@ -46,7 +47,25 @@ fn envelope(operation: &str) -> VidaCommandEnvelope {
 }
 
 fn execute(operation: &str) -> vida_contracts::VidaCommandResponse {
-    InProcessVidaClient::new_ready().execute(envelope(operation))
+    let mut command = envelope(operation);
+    command.project_ref = Some(local_project_ref());
+    InProcessVidaClient::new_ready().execute(command)
+}
+
+fn local_project_ref() -> VidaProjectRef {
+    let cwd = std::env::current_dir().expect("current dir");
+    let root = cwd
+        .ancestors()
+        .find(|path| path.join("AGENTS.sidecar.md").is_file() || path.join(".vida").is_dir())
+        .unwrap_or(&cwd);
+    let project_id = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("vida-stack")
+        .to_string();
+    VidaProjectRef::ProjectId {
+        project_id: VidaProjectId(project_id),
+    }
 }
 
 #[test]
@@ -210,6 +229,43 @@ fn local_runtime_project_registry_and_status_use_current_worktree() {
         status["actor"]["mutation_intent_serialization"]["apply_execution_supported"],
         false
     );
+}
+
+#[test]
+fn local_runtime_project_scoped_reads_require_matching_project_ref() {
+    for operation in [
+        operations::PROJECT_RESOLVE,
+        operations::PROJECT_STATUS,
+        operations::WIZARD_SCHEMA_GET,
+        operations::RECEIPTS_GET,
+        operations::MATERIALIZATION_MANIFEST_GET,
+        operations::MATERIALIZATION_DRIFT_CLASSIFY,
+        operations::MATERIALIZATION_UPDATE_PLAN,
+        operations::MATERIALIZATION_RECEIPTS_LIST,
+        operations::ORCHESTRATION_CONTROL_PLANE_SUMMARY_GET,
+    ] {
+        let missing_ref = InProcessVidaClient::new_ready().execute(envelope(operation));
+        assert_eq!(
+            missing_ref.status,
+            VidaResponseStatus::Blocked,
+            "{operation}"
+        );
+        assert_eq!(missing_ref.blockers[0].code, "project_ref_required");
+        assert!(missing_ref.result.is_none(), "{operation}");
+
+        let mut unknown_project = envelope(operation);
+        unknown_project.project_ref = Some(VidaProjectRef::ProjectId {
+            project_id: VidaProjectId("definitely-not-local".to_string()),
+        });
+        let unknown_ref = InProcessVidaClient::new_ready().execute(unknown_project);
+        assert_eq!(
+            unknown_ref.status,
+            VidaResponseStatus::Blocked,
+            "{operation}"
+        );
+        assert_eq!(unknown_ref.blockers[0].code, "project_not_registered");
+        assert!(unknown_ref.result.is_none(), "{operation}");
+    }
 }
 
 #[test]

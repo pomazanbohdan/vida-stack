@@ -2,7 +2,8 @@ use std::{env, path::PathBuf};
 
 use serde_json::json;
 use vida_contracts::{
-    mvp_operation_registry, operations, VidaCommandEnvelope, VidaCommandResponse,
+    mvp_operation_registry, operations, VidaCommandEnvelope, VidaCommandResponse, VidaProblem,
+    VidaProblemSeverity, VidaProjectRef,
 };
 use vida_runtime_local::engine::local_runtime_capabilities;
 use vida_runtime_local::jobs::{
@@ -11,7 +12,7 @@ use vida_runtime_local::jobs::{
 
 use crate::{
     command_pipeline::VidaCommandPipeline,
-    vida_client::{pass_response, unsupported_operation_response, VidaClient},
+    vida_client::{pass_response, problem_response, unsupported_operation_response, VidaClient},
 };
 
 #[derive(Debug, Clone)]
@@ -80,13 +81,37 @@ impl LocalRuntimeVidaClient {
         })
     }
 
-    fn requested_project(&self, envelope: &VidaCommandEnvelope) -> String {
+    fn resolve_local_project(&self, envelope: &VidaCommandEnvelope) -> Result<(), VidaProblem> {
+        let Some(project_ref) = envelope.project_ref.as_ref() else {
+            return Err(project_resolution_ambiguous_problem());
+        };
+        let local_project_id = self.project_id();
+        let root_path = self.project_root.display().to_string();
+        let matches_local_project = match project_ref {
+            VidaProjectRef::ProjectId { project_id } => project_id.0 == local_project_id,
+            VidaProjectRef::RegistryEntry { registry_entry_id } => {
+                registry_entry_id == &local_project_id
+            }
+            VidaProjectRef::RootPath {
+                root_path: requested,
+            } => requested == &root_path,
+        };
+        if matches_local_project {
+            Ok(())
+        } else {
+            Err(project_not_found_problem(project_ref))
+        }
+    }
+
+    fn requested_project(&self, envelope: &VidaCommandEnvelope) -> Option<String> {
         envelope
-            .payload
-            .get("project")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| self.project_id())
+            .project_ref
+            .as_ref()
+            .map(|project_ref| match project_ref {
+                VidaProjectRef::ProjectId { project_id } => project_id.0.clone(),
+                VidaProjectRef::RegistryEntry { registry_entry_id } => registry_entry_id.clone(),
+                VidaProjectRef::RootPath { root_path } => root_path.clone(),
+            })
     }
 
     fn service_status(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
@@ -234,6 +259,9 @@ impl LocalRuntimeVidaClient {
     }
 
     fn project_resolve(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        if let Err(problem) = self.resolve_local_project(envelope) {
+            return problem_response(envelope, problem);
+        }
         pass_response(
             envelope,
             json!({
@@ -244,6 +272,9 @@ impl LocalRuntimeVidaClient {
     }
 
     fn project_status(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        if let Err(problem) = self.resolve_local_project(envelope) {
+            return problem_response(envelope, problem);
+        }
         let project = self.project_entry();
         pass_response(
             envelope,
@@ -269,6 +300,9 @@ impl LocalRuntimeVidaClient {
     }
 
     fn wizard_schema(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        if let Err(problem) = self.resolve_local_project(envelope) {
+            return problem_response(envelope, problem);
+        }
         pass_response(
             envelope,
             json!({
@@ -298,6 +332,9 @@ impl LocalRuntimeVidaClient {
     }
 
     fn wizard_session(&self, envelope: &VidaCommandEnvelope, step: &str) -> VidaCommandResponse {
+        if let Err(problem) = self.resolve_local_project(envelope) {
+            return problem_response(envelope, problem);
+        }
         let inputs =
             envelope.payload.get("inputs").cloned().unwrap_or_else(
                 || json!({ "project_root": self.project_root.display().to_string() }),
@@ -322,6 +359,9 @@ impl LocalRuntimeVidaClient {
     }
 
     fn materialization_manifest(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        if let Err(problem) = self.resolve_local_project(envelope) {
+            return problem_response(envelope, problem);
+        }
         pass_response(
             envelope,
             json!({
@@ -337,6 +377,9 @@ impl LocalRuntimeVidaClient {
     }
 
     fn materialization_drift(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        if let Err(problem) = self.resolve_local_project(envelope) {
+            return problem_response(envelope, problem);
+        }
         pass_response(
             envelope,
             json!({
@@ -360,6 +403,9 @@ impl LocalRuntimeVidaClient {
     }
 
     fn materialization_update_plan(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        if let Err(problem) = self.resolve_local_project(envelope) {
+            return problem_response(envelope, problem);
+        }
         pass_response(
             envelope,
             json!({
@@ -386,6 +432,9 @@ impl LocalRuntimeVidaClient {
         &self,
         envelope: &VidaCommandEnvelope,
     ) -> VidaCommandResponse {
+        if let Err(problem) = self.resolve_local_project(envelope) {
+            return problem_response(envelope, problem);
+        }
         pass_response(
             envelope,
             json!({
@@ -475,6 +524,9 @@ impl LocalRuntimeVidaClient {
     }
 
     fn receipts_get(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        if let Err(problem) = self.resolve_local_project(envelope) {
+            return problem_response(envelope, problem);
+        }
         pass_response(
             envelope,
             json!({
@@ -543,6 +595,50 @@ fn local_job_journal_path() -> Option<PathBuf> {
                 .join("operational-journal.redb");
             path.exists().then_some(path)
         })
+}
+
+fn project_resolution_ambiguous_problem() -> VidaProblem {
+    VidaProblem {
+        problem_type: "https://vida.dev/problems/project-resolution-ambiguous".to_string(),
+        title: "Project resolution is ambiguous".to_string(),
+        detail: "Provide a project_ref before reading project-scoped state.".to_string(),
+        code: "project_resolution_ambiguous".to_string(),
+        severity: VidaProblemSeverity::Error,
+        retryable: false,
+        blockers: vec![vida_contracts::VidaBlocker {
+            code: "project_ref_required".to_string(),
+            scope: Some("project_ref".to_string()),
+            next_actions: vec![
+                "Retry with a concrete project_id, registry_entry_id, or root_path.".to_string(),
+            ],
+        }],
+        remediation: vec![
+            "Call vida.project.registry.list before project-scoped reads.".to_string(),
+        ],
+        instance: None,
+        related_receipt: None,
+    }
+}
+
+fn project_not_found_problem(project_ref: &VidaProjectRef) -> VidaProblem {
+    VidaProblem {
+        problem_type: "https://vida.dev/problems/project-not-found".to_string(),
+        title: "Project was not found".to_string(),
+        detail: format!("No local project registry entry matched `{project_ref:?}`."),
+        code: "project_not_found".to_string(),
+        severity: VidaProblemSeverity::Error,
+        retryable: false,
+        blockers: vec![vida_contracts::VidaBlocker {
+            code: "project_not_registered".to_string(),
+            scope: Some("project_ref".to_string()),
+            next_actions: vec![
+                "Register or discover the project before reading project status.".to_string(),
+            ],
+        }],
+        remediation: vec!["Call vida.project.registry.discover and retry.".to_string()],
+        instance: None,
+        related_receipt: None,
+    }
 }
 
 impl Default for LocalRuntimeVidaClient {
