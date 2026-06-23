@@ -2777,6 +2777,14 @@ fn cli_help_description_inventory_covers_agent_and_task_operator_options() {
                 "--json",
             ][..],
         ),
+        (
+            &["task", "tree", "--help"][..],
+            &[
+                "--full",
+                "Include recursive tree nodes and descendant progress totals",
+                "--json",
+            ][..],
+        ),
     ] {
         let output = run_command_capture(args, &state_dir);
         assert!(
@@ -3034,6 +3042,33 @@ fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
         "parent-child"
     );
 
+    let grandchild = run_command_json(
+        &[
+            "task",
+            "create",
+            "sandbox-grandchild",
+            "Sandbox grandchild",
+            "--parent-id",
+            "sandbox-child",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(grandchild["status"], "pass");
+
+    let closed_grandchild = run_command_json(
+        &[
+            "task",
+            "close",
+            "sandbox-grandchild",
+            "--reason",
+            "factual sandbox grandchild complete",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed_grandchild["status"], "pass");
+
     let parent_children = run_command_json(
         &["task", "children", "sandbox-parent", "--full", "--json"],
         &state_dir,
@@ -3068,6 +3103,33 @@ fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
         parent_tree["children"][0]["labels"][0],
         "child-verification"
     );
+
+    let parent_tree_full = run_command_json(
+        &["task", "tree", "sandbox-parent", "--full", "--json"],
+        &state_dir,
+    );
+    assert_eq!(parent_tree_full["status"], "pass");
+    assert_eq!(parent_tree_full["tree_depth"], "recursive_full");
+    assert_eq!(parent_tree_full["view"], "full");
+    assert_eq!(parent_tree_full["progress"]["descendant_count"], 2);
+    assert_eq!(parent_tree_full["progress"]["closed_count"], 1);
+    assert_eq!(parent_tree_full["progress"]["remaining_count"], 1);
+    assert_eq!(
+        parent_tree_full["children"][0]["node"]["task"]["id"],
+        "sandbox-child"
+    );
+    assert_eq!(
+        parent_tree_full["children"][0]["node"]["children"][0]["child_id"],
+        "sandbox-grandchild"
+    );
+
+    let parent_tree_full_text =
+        run_and_assert_success(&["task", "tree", "sandbox-parent", "--full"], &state_dir);
+    assert!(parent_tree_full_text.contains("tree_depth: recursive_full"));
+    assert!(parent_tree_full_text.contains("progress:"));
+    assert!(parent_tree_full_text.contains("closed_count: 1"));
+    assert!(parent_tree_full_text.contains("descendant_count: 2"));
+    assert!(parent_tree_full_text.contains("remaining_count: 1"));
 
     let graph = run_command_json(&["task", "validate-graph", "--json"], &state_dir);
     assert_eq!(graph["status"], "pass");

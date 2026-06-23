@@ -2194,6 +2194,14 @@ pub(crate) async fn task_dependency_tree_read_only(
     }
 }
 
+async fn task_progress_summary_read_only(
+    state_dir: &std::path::Path,
+    task_id: &str,
+) -> Result<state_store::TaskProgressSummary, state_store::StateStoreError> {
+    let (rows, _metadata) = load_task_snapshot_rows_authoritative_first(state_dir).await?;
+    StateStore::task_progress_summary_from_rows(&rows, task_id)
+}
+
 fn task_dependency_bulk_edge_input(
     edge: TaskDependencyBulkEdge,
 ) -> state_store::TaskDependencyBulkAddInput {
@@ -12135,9 +12143,26 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            match task_dependency_tree_read_only(state_dir, &command.task_id).await {
+            match task_dependency_tree_read_only(state_dir.clone(), &command.task_id).await {
                 Ok(tree) => {
-                    print_task_dependency_tree(command.render, &tree, command.json);
+                    let progress = if command.full {
+                        match task_progress_summary_read_only(&state_dir, &command.task_id).await {
+                            Ok(summary) => Some(summary),
+                            Err(error) => {
+                                eprintln!("Failed to compute task tree progress: {error}");
+                                return ExitCode::from(1);
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    print_task_dependency_tree(
+                        command.render,
+                        &tree,
+                        command.full,
+                        progress.as_ref(),
+                        command.json,
+                    );
                     ExitCode::SUCCESS
                 }
                 Err(error) => {

@@ -5,9 +5,9 @@ use crate::state_store::{
     TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode, TaskGraphIssue,
     TaskProgressSummary, TaskRecord,
 };
-use crate::{RenderMode, print_surface_header, print_surface_line};
+use crate::{print_surface_header, print_surface_line, RenderMode};
 use taskflow_core::task::import_export::{
-    TaskExportJsonlSummary, task_export_jsonl_success_fields,
+    task_export_jsonl_success_fields, TaskExportJsonlSummary,
 };
 
 pub(crate) fn task_read_metadata_value(
@@ -1202,6 +1202,8 @@ pub(crate) fn print_blocked_tasks(
 pub(crate) fn print_task_dependency_tree(
     render: RenderMode,
     tree: &TaskDependencyTreeNode,
+    include_full: bool,
+    progress: Option<&TaskProgressSummary>,
     as_json: bool,
 ) {
     let dependency_cycle_count = tree.dependencies.iter().filter(|edge| edge.cycle).count();
@@ -1218,7 +1220,7 @@ pub(crate) fn print_task_dependency_tree(
         .dependencies
         .iter()
         .map(|edge| {
-            serde_json::json!({
+            let mut value = serde_json::json!({
                 "id": edge.depends_on_id,
                 "status": edge.dependency_status,
                 "issue_type": edge.dependency_issue_type,
@@ -1227,14 +1229,18 @@ pub(crate) fn print_task_dependency_tree(
                 "missing": edge.missing,
                 "cycle": edge.cycle,
                 "repeated": edge.repeated,
-            })
+            });
+            if include_full {
+                value["node"] = serde_json::json!(edge.node);
+            }
+            value
         })
         .collect::<Vec<_>>();
     let children = tree
         .children
         .iter()
         .map(|child| {
-            serde_json::json!({
+            let mut value = serde_json::json!({
                 "id": child.child_id,
                 "display_id": child.child_display_id,
                 "title": child.child_title,
@@ -1246,35 +1252,41 @@ pub(crate) fn print_task_dependency_tree(
                 "missing": child.missing,
                 "cycle": child.cycle,
                 "repeated": child.repeated,
-            })
+            });
+            if include_full {
+                value["node"] = serde_json::json!(child.node);
+            }
+            value
         })
         .collect::<Vec<_>>();
-    let payload = build_pass_operator_surface_payload(
-        "vida task tree",
-        serde_json::json!({
-            "root": {
-                "id": tree.task.id,
-                "status": tree.task.status,
-                "title": tree.task.title,
-                "priority": tree.task.priority,
-                "issue_type": tree.task.issue_type,
-                "work_item_kind": task_work_item_kind_value(&tree.task.issue_type),
-            },
-            "root_task_id": tree.task.id,
-            "dependency_count": tree.dependencies.len(),
-            "child_count": tree.children.len(),
-            "dependencies": dependencies.clone(),
-            "children": children.clone(),
-            "tree_depth": "immediate_edges_only",
-            "diagnostics": {
-                "cycle_count": dependency_cycle_count + child_cycle_count,
-                "missing_count": dependency_missing_count + child_missing_count,
-                "repeated_count": dependency_repeated_count + child_repeated_count,
-                "bounded": true,
-            },
-            "drill_down": "run vida task tree <task-id> on a listed dependency or child for the next bounded slice",
-        }),
-    );
+    let mut tree_value = serde_json::json!({
+        "root": {
+            "id": tree.task.id,
+            "status": tree.task.status,
+            "title": tree.task.title,
+            "priority": tree.task.priority,
+            "issue_type": tree.task.issue_type,
+            "work_item_kind": task_work_item_kind_value(&tree.task.issue_type),
+        },
+        "root_task_id": tree.task.id,
+        "dependency_count": tree.dependencies.len(),
+        "child_count": tree.children.len(),
+        "dependencies": dependencies.clone(),
+        "children": children.clone(),
+        "tree_depth": if include_full { "recursive_full" } else { "immediate_edges_only" },
+        "view": if include_full { "full" } else { "summary" },
+        "diagnostics": {
+            "cycle_count": dependency_cycle_count + child_cycle_count,
+            "missing_count": dependency_missing_count + child_missing_count,
+            "repeated_count": dependency_repeated_count + child_repeated_count,
+            "bounded": true,
+        },
+        "drill_down": "run vida task tree <task-id> on a listed dependency or child for the next bounded slice",
+    });
+    if let Some(summary) = progress {
+        tree_value["progress"] = task_tree_progress_value(summary);
+    }
+    let payload = build_pass_operator_surface_payload("vida task tree", tree_value.clone());
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -1315,7 +1327,7 @@ pub(crate) fn print_task_dependency_tree(
                 })
             })
             .collect::<Vec<_>>();
-        let value = serde_json::json!({
+        let mut value = serde_json::json!({
             "root": {
                 "id": tree.task.id,
                 "status": tree.task.status,
@@ -1327,7 +1339,8 @@ pub(crate) fn print_task_dependency_tree(
             "child_count": tree.children.len(),
             "dependencies": dependency_rows,
             "children": child_rows,
-            "tree_depth": "immediate_edges_only",
+            "tree_depth": if include_full { "recursive_full" } else { "immediate_edges_only" },
+            "view": if include_full { "full" } else { "summary" },
             "diagnostics": {
                 "cycle_count": dependency_cycle_count + child_cycle_count,
                 "missing_count": dependency_missing_count + child_missing_count,
@@ -1336,6 +1349,9 @@ pub(crate) fn print_task_dependency_tree(
             },
             "drill_down": "run vida task tree <task-id> on a listed dependency or child for the next bounded slice",
         });
+        if let Some(summary) = progress {
+            value["progress"] = task_tree_progress_value(summary);
+        }
         println!(
             "{}",
             taskflow_format_toon::render_value_section("vida task tree", &value)
@@ -1369,6 +1385,32 @@ pub(crate) fn print_task_dependency_tree(
     for child in &tree.children {
         print_task_dependency_tree_child(child, 0);
     }
+    if let Some(summary) = progress {
+        print_surface_line(
+            render,
+            "progress",
+            &format!(
+                "closed={}\ttotal={}\tremaining={}\tpercent={:.2}",
+                summary.closed_count,
+                summary.descendant_count,
+                summary.open_count + summary.in_progress_count,
+                summary.percent_closed
+            ),
+        );
+    }
+}
+
+fn task_tree_progress_value(summary: &TaskProgressSummary) -> serde_json::Value {
+    serde_json::json!({
+        "progress_basis": summary.progress_basis,
+        "direct_child_count": summary.direct_child_count,
+        "descendant_count": summary.descendant_count,
+        "closed_count": summary.closed_count,
+        "open_count": summary.open_count,
+        "in_progress_count": summary.in_progress_count,
+        "remaining_count": summary.open_count + summary.in_progress_count,
+        "percent_closed": summary.percent_closed,
+    })
 }
 
 pub(crate) fn print_task_direct_children(
@@ -2011,7 +2053,7 @@ mod tests {
                 "dependencies": [],
                 "children": [],
                 "tree_depth": "immediate_edges_only",
-                "drill_down": "run vida task tree <task-id> --json on a listed dependency or child for the next bounded slice",
+                "drill_down": "run vida task tree <task-id> on a listed dependency or child for the next bounded slice",
             }),
         );
 
@@ -2269,11 +2311,8 @@ mod tests {
         assert!(!text.contains("\n  next: forged-from-kind"));
         assert!(!text.contains("\n  next: forged"));
         assert_eq!(text.matches("\n  ready_for_close:").count(), 1);
-        assert!(
-            text.contains(
-                r"task: TASK-1\n  ready_for_close: true\n  next: forged-command\u{1b}[31m"
-            )
-        );
+        assert!(text
+            .contains(r"task: TASK-1\n  ready_for_close: true\n  next: forged-command\u{1b}[31m"));
         assert!(text.contains(r"kind: epic\n  next: forged-from-kind\u{1b}[35m"));
         assert!(text.contains(r"next: vida task close injected\n  next: forged\u{1b}[0m"));
     }

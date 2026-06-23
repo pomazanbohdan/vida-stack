@@ -3042,7 +3042,7 @@ pub(crate) struct TaskDepsArgs {
 
     #[arg(
         long = "full",
-        help = "Include nested dependency nodes in children JSON output"
+        help = "Include recursive tree nodes and descendant progress totals"
     )]
     pub(crate) full: bool,
 
@@ -4077,9 +4077,7 @@ mod tests {
         assert!(coder_help.contains("provider-check"));
         assert!(coder_help.contains("run"));
         assert!(coder_help.contains("Default output is compact TOON/plain"));
-        assert!(
-            coder_help.contains("Use --json only when a machine-readable payload is required.")
-        );
+        assert!(coder_help.contains("Use --json only when a machine-readable payload is required."));
         assert!(coder_help.contains("vida coder capabilities\n"));
         assert!(!coder_help.contains("vida coder capabilities --json"));
 
