@@ -1211,6 +1211,43 @@ fn agent_init_execute_dispatch_resume_error_payload(
     })
 }
 
+fn agent_init_execute_dispatch_resume_error_plain_lines(
+    payload: &serde_json::Value,
+) -> Vec<String> {
+    let mut lines = vec![
+        "vida agent-init".to_string(),
+        "  status: blocked".to_string(),
+    ];
+    if let Some(blocker_code) = payload["blocker_code"].as_str() {
+        lines.push(format!("  blocker_code: {blocker_code}"));
+    }
+    if let Some(run_id) = payload["run_id"].as_str() {
+        lines.push(format!("  run_id: {run_id}"));
+    }
+    if let Some(mode) = payload["dispatch_mode"]["mode"].as_str() {
+        lines.push(format!("  dispatch_mode: {mode}"));
+    }
+    if let Some(path) = payload["dispatch_result_path"].as_str() {
+        lines.push(format!("  dispatch_result_path: {path}"));
+    }
+    if let Some(actions) = payload["next_actions"].as_array() {
+        lines.push(format!("  next_actions[{}]:", actions.len()));
+        for action in actions.iter().filter_map(serde_json::Value::as_str) {
+            lines.push(format!("    {action}"));
+        }
+    }
+    lines.push(
+        "  full_output_machine_command: vida agent-init --execute-dispatch --json".to_string(),
+    );
+    lines
+}
+
+fn emit_agent_init_execute_dispatch_resume_error_plain(payload: &serde_json::Value) {
+    for line in agent_init_execute_dispatch_resume_error_plain_lines(payload) {
+        println!("{line}");
+    }
+}
+
 fn agent_init_execute_dispatch_resume_error_payload_with_receipt_evidence(
     dispatch_mode: &serde_json::Value,
     error: &str,
@@ -6047,7 +6084,13 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                         );
                                         return ExitCode::from(1);
                                     }
-                                    eprintln!("{error}");
+                                    let dispatch_mode =
+                                        agent_init_dispatch_mode(&args, &serde_json::Value::Null);
+                                    let payload = agent_init_execute_dispatch_resume_error_payload(
+                                        &dispatch_mode,
+                                        &error,
+                                    );
+                                    emit_agent_init_execute_dispatch_resume_error_plain(&payload);
                                     return ExitCode::from(1);
                                 }
                             }
@@ -6064,7 +6107,13 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                 );
                                 return ExitCode::from(1);
                             }
-                            eprintln!("{error}");
+                            let dispatch_mode =
+                                agent_init_dispatch_mode(&args, &serde_json::Value::Null);
+                            let payload = agent_init_execute_dispatch_resume_error_payload(
+                                &dispatch_mode,
+                                &error,
+                            );
+                            emit_agent_init_execute_dispatch_resume_error_plain(&payload);
                             return ExitCode::from(1);
                         }
                     }
@@ -6099,7 +6148,23 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                 );
                                 return ExitCode::from(1);
                             }
-                            eprintln!("{error}");
+                            let dispatch_mode =
+                                agent_init_dispatch_mode(&args, &serde_json::Value::Null);
+                            let (receipt_evidence, result_artifact) =
+                                agent_init_execute_dispatch_resume_error_receipt_evidence(
+                                    &store,
+                                    &error,
+                                    args.dispatch_packet.as_deref(),
+                                )
+                                .await;
+                            let payload =
+                                agent_init_execute_dispatch_resume_error_payload_with_receipt_evidence(
+                                    &dispatch_mode,
+                                    &error,
+                                    receipt_evidence.as_ref(),
+                                    result_artifact.as_ref(),
+                                );
+                            emit_agent_init_execute_dispatch_resume_error_plain(&payload);
                             return ExitCode::from(1);
                         }
                     }
@@ -6331,7 +6396,14 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                             );
                                             return ExitCode::from(1);
                                         }
-                                        eprintln!("{error}");
+                                        let payload =
+                                            agent_init_execute_dispatch_resume_error_payload(
+                                                &dispatch_mode,
+                                                &error,
+                                            );
+                                        emit_agent_init_execute_dispatch_resume_error_plain(
+                                            &payload,
+                                        );
                                         return ExitCode::from(1);
                                     }
                                 }
@@ -6346,7 +6418,11 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                     );
                                     return ExitCode::from(1);
                                 }
-                                eprintln!("{error}");
+                                let payload = agent_init_execute_dispatch_resume_error_payload(
+                                    &dispatch_mode,
+                                    &error,
+                                );
+                                emit_agent_init_execute_dispatch_resume_error_plain(&payload);
                                 return ExitCode::from(1);
                             }
                         }
@@ -6405,7 +6481,21 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                     );
                                     return ExitCode::from(1);
                                 }
-                                eprintln!("{error}");
+                                let (receipt_evidence, result_artifact) =
+                                    agent_init_execute_dispatch_resume_error_receipt_evidence(
+                                        &store,
+                                        &error,
+                                        args.dispatch_packet.as_deref(),
+                                    )
+                                    .await;
+                                let payload =
+                                    agent_init_execute_dispatch_resume_error_payload_with_receipt_evidence(
+                                        &dispatch_mode,
+                                        &error,
+                                        receipt_evidence.as_ref(),
+                                        result_artifact.as_ref(),
+                                    );
+                                emit_agent_init_execute_dispatch_resume_error_plain(&payload);
                                 return ExitCode::from(1);
                             }
                         }
@@ -9208,6 +9298,32 @@ mod agent_init_surface_tests {
             .as_str()
             .expect("third action should render")
             .contains("vida taskflow route explain"));
+    }
+
+    #[test]
+    fn agent_init_execute_dispatch_resume_error_plain_output_is_compact() {
+        let payload = agent_init_execute_dispatch_resume_error_payload(
+            &serde_json::json!({
+                "mode": "dispatch_packet",
+                "execution_dispatch": true
+            }),
+            "Run-graph resume gate denied for `compact-output-run`: recovery_ready is false\n{\"large\":\"payload\",\"nested\":{\"should_not_print\":true}}",
+        );
+
+        let lines = agent_init_execute_dispatch_resume_error_plain_lines(&payload);
+        let rendered = lines.join("\n");
+
+        assert!(lines.len() <= 10);
+        assert_eq!(lines[0], "vida agent-init");
+        assert!(rendered.contains("status: blocked"));
+        assert!(rendered.contains("blocker_code: run_graph_recovery_not_ready"));
+        assert!(rendered.contains("run_id: compact-output-run"));
+        assert!(rendered.contains("dispatch_mode: dispatch_packet"));
+        assert!(rendered.contains("next_actions[3]:"));
+        assert!(rendered
+            .contains("full_output_machine_command: vida agent-init --execute-dispatch --json"));
+        assert!(!rendered.contains("should_not_print"));
+        assert!(!rendered.contains("\"large\""));
     }
 
     #[test]

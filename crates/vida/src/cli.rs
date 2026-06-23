@@ -30,6 +30,7 @@ const SESSION_AFTER_HELP: &str = "Session operations:\n  vida session triage\n  
 const QUALITY_AFTER_HELP: &str = "Quality operations:\n  vida quality gate --prepush\n  vida quality gate --prepush --advise\n  vida quality gate --prepush --json --advise\n\nOptions:\n  --prepush                        Evaluate the pre-push quality gate advisor\n  --advise                         Include remediation guidance\n  --coverage-file <path>           Read LCOV coverage evidence from this file\n  --coverage-threshold <percent>   Coverage threshold used for covered-line deficit math\n  --project-root <path>            Repository root used for git dirty/changed file evidence\n  --json                           Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive --reinit\n  vida state reset --archive --reinit --json\n  vida state reset --archive --reinit --state-dir <path> --json\n\nOptions:\n  --archive             Rename the current state root to a timestamped sibling archive before reset\n  --reinit              Recreate the authoritative state spine after archive\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output\n\nOutput:\n  Default output is compact plain text for operators.\n  Use --json for machine-readable automation.";
 const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
+const AGENT_INIT_AFTER_HELP: &str = "Agent init operations:\n  vida agent-init\n  vida agent-init --dispatch-packet <packet-path> --execute-dispatch\n  vida agent-init --auto-dispatch-packet --execute-dispatch\n\nOutput:\n  Default blocked output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload or full blocked evidence is required.";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--execution-mode container_only` marks a work-pool/container task as non-executable by the scheduler\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
@@ -117,7 +118,8 @@ pub(crate) enum Command {
     #[command(about = "render the compiled startup view for the orchestrator lane")]
     OrchestratorInit(InitArgs),
     #[command(
-        about = "render the bounded startup view or packet activation view for a worker/agent lane"
+        about = "render the bounded startup view or packet activation view for a worker/agent lane",
+        after_help = AGENT_INIT_AFTER_HELP
     )]
     AgentInit(AgentInitArgs),
     #[command(about = "preview delegated agent lane selection without executing dispatch")]
@@ -4189,6 +4191,10 @@ mod tests {
         assert_help_has_no_blank_description_rows("agent-init", &agent_init_help);
         assert!(agent_init_help.contains("Optional request text"));
         assert!(agent_init_help.contains("Execute the packet handoff"));
+        assert!(agent_init_help.contains("Default blocked output is compact TOON/plain"));
+        assert!(agent_init_help.contains(
+            "Use --json only when a machine-readable payload or full blocked evidence is required"
+        ));
 
         let reclaim_error =
             Cli::try_parse_from(["vida", "orchestrator-session", "reclaim", "--help"])
