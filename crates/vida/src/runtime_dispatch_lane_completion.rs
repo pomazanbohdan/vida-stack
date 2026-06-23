@@ -55,6 +55,7 @@ mod tests {
     use super::{
         runtime_lane_completion_summary_blocker_code,
         write_runtime_lane_completion_result_with_summary,
+        write_runtime_lane_completion_result_with_summary_and_next,
     };
 
     #[test]
@@ -238,6 +239,34 @@ mod tests {
             let _ = fs::remove_dir_all(&state_root);
         }
     }
+    #[test]
+    fn completion_result_preserves_explicit_pass_next_node() {
+        let state_root = std::env::temp_dir().join(format!(
+            "vida-lane-completion-explicit-next-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&state_root);
+
+        let result_path = write_runtime_lane_completion_result_with_summary_and_next(
+            &state_root,
+            "run-analyst",
+            "analyst",
+            "receipt-1",
+            "packet.json",
+            None,
+            Some("developer"),
+        )
+        .expect("completion result should write");
+        let body: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&result_path).expect("completion result should be readable"),
+        )
+        .expect("completion result should decode");
+
+        assert_eq!(body["status"], "pass");
+        assert_eq!(body["allowed_next_node"], "developer");
+
+        let _ = fs::remove_dir_all(&state_root);
+    }
 }
 
 pub(crate) fn write_runtime_lane_completion_result_with_summary(
@@ -247,6 +276,26 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary(
     receipt_id: &str,
     source_dispatch_packet_path: &str,
     summary: Option<&str>,
+) -> Result<String, String> {
+    write_runtime_lane_completion_result_with_summary_and_next(
+        state_root,
+        run_id,
+        completed_target,
+        receipt_id,
+        source_dispatch_packet_path,
+        summary,
+        None,
+    )
+}
+
+pub(crate) fn write_runtime_lane_completion_result_with_summary_and_next(
+    state_root: &Path,
+    run_id: &str,
+    completed_target: &str,
+    receipt_id: &str,
+    source_dispatch_packet_path: &str,
+    summary: Option<&str>,
+    allowed_next_node: Option<&str>,
 ) -> Result<String, String> {
     let result_dir = state_root
         .join("runtime-consumption")
@@ -261,10 +310,17 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary(
     let result_path = result_dir.join(format!("{safe_run_id}-{ts}.json"));
     let blocker_code = runtime_lane_completion_summary_blocker_code(completed_target, summary);
     let blocker_codes = blocker_code.iter().cloned().collect::<Vec<_>>();
+    let pass_allowed_next_node = if blocker_code.is_none() {
+        allowed_next_node
+            .map(str::trim)
+            .filter(|target| !target.is_empty())
+    } else {
+        None
+    };
     let verdict_fields = taskflow_host_bridge::host_bridge_result_verdict_fields_for_gate(
         completed_target,
         &blocker_codes,
-        None,
+        pass_allowed_next_node,
     );
     let execution_state = if blocker_code.is_some() {
         "blocked"

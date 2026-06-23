@@ -644,6 +644,37 @@ fn retryable_host_bridge_completion_request(
         })
 }
 
+fn host_bridge_completion_allowed_next_node(
+    request: &serde_json::Value,
+    state_root: Option<&Path>,
+) -> Option<String> {
+    for field in ["allowed_next_node", "downstream_dispatch_target"] {
+        if let Some(target) = host_bridge_request_string(request, field)
+            .map(str::trim)
+            .filter(|target| !target.is_empty())
+        {
+            return Some(target.to_string());
+        }
+    }
+    let packet_path = host_bridge_request_string(request, "packet_path")?;
+    let packet_path = state_root
+        .and_then(|state_root| canonical_state_artifact_path(state_root, packet_path, true).ok())
+        .unwrap_or_else(|| std::path::PathBuf::from(packet_path));
+    let packet =
+        read_canonical_host_bridge_json_artifact(&packet_path, "host bridge packet").ok()?;
+    for field in ["allowed_next_node", "downstream_dispatch_target"] {
+        if let Some(target) = packet
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|target| !target.is_empty())
+        {
+            return Some(target.to_string());
+        }
+    }
+    None
+}
+
 fn host_bridge_adapter_payload(
     request_path: &Path,
     request: &serde_json::Value,
@@ -660,14 +691,23 @@ fn host_bridge_adapter_payload(
             let dispatch_target = request.dispatch_target.as_str();
             format!("{run_id}-{dispatch_target}-host-bridge-receipt")
         };
-        format!(
+        let mut command = format!(
             "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --host-bridge-summary {}",
             crate::shell_quote(&request.run_id),
             crate::shell_quote(&receipt_id),
             crate::shell_quote(&request_path.display().to_string()),
             crate::shell_quote("<host-agent-id>"),
             crate::shell_quote("parent host adapter completed receipt-backed execution")
-        )
+        );
+        if let Some(target) =
+            host_bridge_completion_allowed_next_node(&effective_request, state_root)
+        {
+            command.push_str(&format!(
+                " --allowed-next-node {}",
+                crate::shell_quote(&target)
+            ));
+        }
+        command
     } else {
         "repair host bridge request run_id before completion".to_string()
     };
@@ -4902,7 +4942,7 @@ mod tests {
         assert!(completion_command.contains("--host-bridge-request"));
         assert!(completion_command.contains("--host-agent-id '<host-agent-id>'"));
         assert!(completion_command.contains("--host-bridge-summary"));
-        assert!(!completion_command.contains("--allowed-next-node"));
+        assert!(completion_command.contains("--allowed-next-node designer"));
         assert!(!completion_command.contains("--blocker-codes"));
         let _ = std::fs::remove_dir_all(&root);
     }

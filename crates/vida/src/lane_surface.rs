@@ -2672,6 +2672,7 @@ struct HostBridgeCompletionEvidence {
     result_path: String,
     receipt_path: String,
     execution_state: String,
+    allowed_next_node: Option<String>,
     blocker_code: Option<String>,
     blocker_codes: Vec<String>,
 }
@@ -3871,6 +3872,7 @@ fn materialize_host_bridge_completion_evidence(
         &blocker_codes,
         pass_allowed_next_node,
     );
+    let result_allowed_next_node = result_verdict.allowed_next_node.clone();
     let result = serde_json::json!({
         "artifact_kind": "host_tool_bridge_result",
         "schema_version": 1,
@@ -3885,7 +3887,7 @@ fn materialize_host_bridge_completion_evidence(
         "blocker_code": blocker_code.clone(),
         "blocker_codes": blocker_codes.clone(),
         "rework_target": result_verdict.rework_target,
-        "allowed_next_node": result_verdict.allowed_next_node,
+        "allowed_next_node": result_allowed_next_node.clone(),
         "host_agent_id": host_agent_id,
         "summary": summary,
         "implementation_artifacts": implementation_artifacts.artifacts.clone(),
@@ -3937,6 +3939,7 @@ fn materialize_host_bridge_completion_evidence(
         "request_path": canonical_request_path.display().to_string(),
         "result_path": result_path.display().to_string(),
         "source_dispatch_packet_path": packet_path,
+        "allowed_next_node": result_allowed_next_node,
         "implementation_artifact_source": implementation_artifacts.source,
         "implementation_artifact_refs": implementation_artifacts.artifact_refs,
         "scope_validation": implementation_scope_validation.clone(),
@@ -3995,6 +3998,7 @@ fn materialize_host_bridge_completion_evidence(
         result_path: result_path.display().to_string(),
         receipt_path: receipt_path.display().to_string(),
         execution_state: verdict.execution_state,
+        allowed_next_node: pass_allowed_next_node.map(str::to_string),
         blocker_code: blocker_code.clone(),
         blocker_codes,
     })
@@ -4771,14 +4775,41 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     &completed_target,
                     host_bridge_summary,
                 );
+            let effective_allowed_next_node = allowed_next_node
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    supplied_completion_result
+                        .as_ref()
+                        .and_then(|result| result.get("allowed_next_node"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                })
+                .or_else(|| {
+                    host_bridge_evidence
+                        .as_ref()
+                        .and_then(|evidence| evidence.allowed_next_node.clone())
+                })
+                .or_else(|| {
+                    receipt
+                        .downstream_dispatch_target
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                });
             let completion_result_path =
-                match crate::runtime_dispatch_state::write_runtime_lane_completion_result_with_summary(
+                match crate::runtime_dispatch_lane_completion::write_runtime_lane_completion_result_with_summary_and_next(
                     store.root(),
                     run_id,
                     &completed_target,
                     receipt_id,
                     &validated_packet_path,
                     host_bridge_summary,
+                    effective_allowed_next_node.as_deref(),
                 ) {
                     Ok(path) => path,
                     Err(error) => {
@@ -4876,6 +4907,12 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 {
                     dispatch_command.push_str(&format!(
                         " --host-bridge-summary {}",
+                        crate::shell_quote(value)
+                    ));
+                }
+                if let Some(value) = effective_allowed_next_node.as_deref() {
+                    dispatch_command.push_str(&format!(
+                        " --allowed-next-node {}",
                         crate::shell_quote(value)
                     ));
                 }
