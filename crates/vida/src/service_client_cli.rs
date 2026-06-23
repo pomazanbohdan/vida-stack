@@ -254,7 +254,7 @@ fn emit_default_service_client_response(
                 .and_then(|job| job.get("next_action"))
                 .and_then(serde_json::Value::as_str)
             {
-                println!("  next_action: {next_action}");
+                println!("  next_action: {}", terminal_safe_text(next_action));
             }
             if let Some(blocker) = result.get("job").and_then(|job| job.get("blocker")) {
                 print_result_field(blocker, "code");
