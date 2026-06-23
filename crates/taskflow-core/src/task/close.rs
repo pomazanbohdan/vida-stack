@@ -5,7 +5,7 @@ pub fn canonical_owned_paths(paths: Vec<String>) -> Vec<String> {
     let mut canonical = Vec::new();
     for path in paths {
         let trimmed = path.trim().trim_end_matches('/').to_string();
-        if trimmed.is_empty() {
+        if trimmed.is_empty() || !is_safe_literal_repo_path(&trimmed) {
             continue;
         }
         if !canonical.contains(&trimmed) {
@@ -13,6 +13,28 @@ pub fn canonical_owned_paths(paths: Vec<String>) -> Vec<String> {
         }
     }
     canonical
+}
+
+fn is_safe_literal_repo_path(path: &str) -> bool {
+    if path == "."
+        || path == ".."
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.starts_with(':')
+        || path.contains(['*', '?', '['])
+    {
+        return false;
+    }
+
+    let mut has_component = false;
+    for component in path.split('/') {
+        if component.is_empty() || matches!(component, "." | "..") {
+            return false;
+        }
+        has_component = true;
+    }
+
+    has_component
 }
 
 #[must_use]
@@ -35,7 +57,7 @@ pub fn task_close_commit_file_strings(
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_owned_paths, task_close_commit_file_strings};
+    use super::{canonical_owned_paths, is_safe_literal_repo_path, task_close_commit_file_strings};
 
     #[test]
     fn canonical_owned_paths_trims_dedupes_and_drops_empty_values() {
@@ -53,6 +75,33 @@ mod tests {
                 "crates/taskflow-core/src/task".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn canonical_owned_paths_drops_broad_or_pathspec_like_values() {
+        let paths = canonical_owned_paths(vec![
+            ".".to_string(),
+            "..".to_string(),
+            "src/../secret.txt".to_string(),
+            "/tmp/secret.txt".to_string(),
+            ":(glob)*".to_string(),
+            "src/*.rs".to_string(),
+            "src/[a].rs".to_string(),
+            "src/file?.rs".to_string(),
+            "src/main.rs".to_string(),
+        ]);
+
+        assert_eq!(paths, vec!["src/main.rs".to_string()]);
+    }
+
+    #[test]
+    fn safe_literal_repo_path_rejects_empty_components_and_magic() {
+        assert!(is_safe_literal_repo_path("crates/vida/src/task_surface.rs"));
+        assert!(is_safe_literal_repo_path("docs/process"));
+        assert!(!is_safe_literal_repo_path("."));
+        assert!(!is_safe_literal_repo_path("src//main.rs"));
+        assert!(!is_safe_literal_repo_path(":(literal)src/main.rs"));
+        assert!(!is_safe_literal_repo_path("src/*.rs"));
     }
 
     #[test]

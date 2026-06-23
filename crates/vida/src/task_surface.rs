@@ -14795,6 +14795,78 @@ mod tests {
     }
 
     #[test]
+    fn task_close_commit_rejects_broad_explicit_pathspec() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let repo_root = std::env::temp_dir().join(format!(
+            "vida-task-close-commit-broad-pathspec-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&repo_root).expect("create temp repo");
+        let run_git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo_root)
+                .output()
+                .expect("git command should run")
+        };
+        assert!(run_git(&["init"]).status.success());
+        assert!(
+            run_git(&["config", "user.email", "vida-test@example.invalid"])
+                .status
+                .success()
+        );
+        assert!(
+            run_git(&["config", "user.name", "VIDA Test"])
+                .status
+                .success()
+        );
+        std::fs::write(repo_root.join("secret.txt"), "old\n").expect("write secret");
+        assert!(run_git(&["add", "."]).status.success());
+        assert!(run_git(&["commit", "-m", "initial"]).status.success());
+        std::fs::write(repo_root.join("secret.txt"), "new secret\n").expect("modify secret");
+
+        let task = owned_task_record("task-owned", vec!["."]);
+        let receipt = task_close_automation_receipt(
+            &crate::TaskCloseArgs {
+                task_id: "task-owned".to_string(),
+                reason: Some("done".to_string()),
+                reason_file: None,
+                source: None,
+                release: false,
+                install: false,
+                install_target: "current".to_string(),
+                skip_release_build: false,
+                source_binary: None,
+                install_root: None,
+                commit: true,
+                push: false,
+                include_global_progress: false,
+                stage_owned: true,
+                commit_files: Vec::new(),
+                commit_message: Some("reject broad pathspec".to_string()),
+                state_dir: None,
+                render: crate::RenderMode::Plain,
+                json: true,
+            },
+            Some(&repo_root),
+            Some(&task),
+        );
+
+        assert_eq!(receipt.status, "blocked");
+        let git = receipt.git.expect("git receipt should be present");
+        assert_eq!(git.status, "blocked");
+        assert_eq!(git.blocker_codes, vec!["dirty_ownership_ambiguous"]);
+        assert!(git.explicit_files.is_empty());
+        let status = String::from_utf8(run_git(&["status", "--short"]).stdout)
+            .expect("git status should be utf8");
+        assert!(status.contains("secret.txt"));
+        let _ = std::fs::remove_dir_all(&repo_root);
+    }
+
+    #[test]
     fn task_close_commit_with_explicit_file_ignores_unrelated_dirty_worktree() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
