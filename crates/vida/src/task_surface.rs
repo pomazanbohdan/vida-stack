@@ -1730,22 +1730,37 @@ async fn task_takeover_status_receipt(
 
 fn print_task_takeover_status(render: RenderMode, receipt: &TaskTakeoverStatusReceipt) {
     print_surface_header(render, "vida task takeover status");
-    print_surface_line(render, "status", &receipt.status);
-    print_surface_line(render, "task", &receipt.task_id);
-    print_surface_line(render, "allowed", &receipt.allowed.to_string());
-    print_surface_line(
-        render,
-        "takeover state",
-        &receipt.local_exception_takeover_state,
-    );
-    print_surface_line(
-        render,
-        "root local write",
-        &receipt.root_local_write_allowed.to_string(),
-    );
-    if let Some(command) = receipt.recommended_command.as_deref() {
-        print_surface_line(render, "recommended command", command);
+    for (label, value) in task_takeover_status_default_lines(receipt) {
+        print_surface_line(render, label, &value);
     }
+}
+
+fn task_takeover_status_default_lines(
+    receipt: &TaskTakeoverStatusReceipt,
+) -> Vec<(&'static str, String)> {
+    let mut lines = vec![
+        ("status", receipt.status.clone()),
+        ("task", receipt.task_id.clone()),
+        ("allowed", receipt.allowed.to_string()),
+        (
+            "takeover state",
+            receipt.local_exception_takeover_state.clone(),
+        ),
+        (
+            "root local write",
+            receipt.root_local_write_allowed.to_string(),
+        ),
+    ];
+    if !receipt.blocker_codes.is_empty() {
+        lines.push(("blocker_codes", receipt.blocker_codes.join(", ")));
+    }
+    if let Some(command) = receipt.recommended_command.as_deref() {
+        lines.push(("recommended command", command.to_string()));
+    }
+    for action in &receipt.next_actions {
+        lines.push(("next action", action.clone()));
+    }
+    lines
 }
 
 fn print_task_block_receipt(render: RenderMode, receipt: &TaskBlockReceipt, as_json: bool) {
@@ -12286,10 +12301,11 @@ mod tests {
         task_handoff_receipt_root, task_json_success_status, task_next_lawful_apply_strategy,
         task_next_lawful_receipt, task_next_lawful_select_ready_candidate_receipt,
         task_owned_status_receipt, task_parent_id, task_progress_summary_for_basis,
-        task_ready_authoritative_first, task_takeover_status_receipt,
-        task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
-        TaskCloseAutomationReceipt, TaskContinuationCandidate, TaskProofAttachBrowserReceipt,
-        TaskProofAttachEvidenceReceipt, ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_ready_authoritative_first, task_takeover_status_default_lines,
+        task_takeover_status_receipt, task_update_planner_metadata_arg,
+        validate_task_handoff_accept_receipt, TaskCloseAutomationReceipt,
+        TaskContinuationCandidate, TaskProofAttachBrowserReceipt, TaskProofAttachEvidenceReceipt,
+        ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -13050,6 +13066,27 @@ mod tests {
                 .blocker_codes
                 .contains(&"latest_lane_task_mismatch".to_string()));
             assert_ne!(receipt.lane["task_id"], "foreign-latest-task");
+        });
+    }
+
+    #[test]
+    fn task_takeover_status_default_output_includes_blocker_codes() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            let task = owned_task_record("requested-task-without-lane", vec!["crates/vida/src"]);
+            let receipt =
+                task_takeover_status_receipt(&store, &task, None, Some("task_id"), false).await;
+            let lines = task_takeover_status_default_lines(&receipt);
+
+            assert!(lines.iter().any(|(label, value)| *label == "blocker_codes"
+                && value.contains("missing_lane_receipt")));
+            assert!(lines.iter().any(|(label, value)| *label == "next action"
+                && value.contains("vida lane show requested-task-without-lane")));
         });
     }
 
