@@ -6321,6 +6321,51 @@ async fn derive_seeded_run_graph_status_with_stage(
     set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_read_launcher_snapshot");
     let snapshot = read_seed_launcher_activation_snapshot(store).await?;
     let bounded_task = store.show_task(&bounded_task_id).await.ok();
+    if let Some(task) = bounded_task
+        .as_ref()
+        .filter(|task| task_has_configured_dev_team_dispatch_identity(task))
+    {
+        let activation_bundle = activation_bundle_with_dev_team_readiness(&snapshot);
+        if let Some(route) =
+            crate::dev_team_sequence_contract::configured_dev_team_first_step_for_task(
+                &activation_bundle,
+                task,
+            )
+        {
+            set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_dev_team_route_selection");
+            let mut selection = configured_dev_team_lane_selection_from_snapshot(
+                &snapshot,
+                activation_bundle,
+                request_text,
+                &route,
+            );
+            selection.execution_plan =
+                build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, &selection);
+            inject_configured_dev_team_route_into_execution_plan(
+                &mut selection.execution_plan,
+                &route,
+            );
+            inject_task_planner_metadata(&mut selection, &task.planner_metadata);
+            if let Some(path) =
+                existing_design_backed_task_design_doc_path(store, &bounded_task_id).await
+            {
+                inject_tracked_design_doc_path(&mut selection.execution_plan, &path);
+            }
+            set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_dev_team_route_status");
+            let mut status = seeded_run_graph_status_from_role_selection(
+                requested_run_id,
+                &bounded_task_id,
+                &selection,
+                &snapshot,
+            )?;
+            apply_configured_dev_team_route_to_status(&mut status, &selection, &route);
+            return Ok(TaskflowRunGraphSeedPayload {
+                request_text: request_text.to_string(),
+                role_selection: selection,
+                status,
+            });
+        }
+    }
     if skip_design_override {
         set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_task_metadata_selection");
         let mut selection =
@@ -6376,51 +6421,6 @@ async fn derive_seeded_run_graph_status_with_stage(
             design_backed_payload.request_text = request_text.to_string();
         }
         return Ok(design_backed_payload);
-    }
-    if let Some(task) = bounded_task
-        .as_ref()
-        .filter(|task| task_has_configured_dev_team_dispatch_identity(task))
-    {
-        let activation_bundle = activation_bundle_with_dev_team_readiness(&snapshot);
-        if let Some(route) =
-            crate::dev_team_sequence_contract::configured_dev_team_first_step_for_task(
-                &activation_bundle,
-                task,
-            )
-        {
-            set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_dev_team_route_selection");
-            let mut selection = configured_dev_team_lane_selection_from_snapshot(
-                &snapshot,
-                activation_bundle,
-                request_text,
-                &route,
-            );
-            selection.execution_plan =
-                build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, &selection);
-            inject_configured_dev_team_route_into_execution_plan(
-                &mut selection.execution_plan,
-                &route,
-            );
-            inject_task_planner_metadata(&mut selection, &task.planner_metadata);
-            if let Some(path) =
-                existing_design_backed_task_design_doc_path(store, &bounded_task_id).await
-            {
-                inject_tracked_design_doc_path(&mut selection.execution_plan, &path);
-            }
-            set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_dev_team_route_status");
-            let mut status = seeded_run_graph_status_from_role_selection(
-                requested_run_id,
-                &bounded_task_id,
-                &selection,
-                &snapshot,
-            )?;
-            apply_configured_dev_team_route_to_status(&mut status, &selection, &route);
-            return Ok(TaskflowRunGraphSeedPayload {
-                request_text: request_text.to_string(),
-                role_selection: selection,
-                status,
-            });
-        }
     }
     let mut payload = design_backed_payload;
     set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_status_from_role_selection");
@@ -12953,7 +12953,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn derive_seeded_run_graph_routes_runtime_defect_design_backed_implementation_to_worker()
+    async fn runtime_defect_design_backed_seed_uses_configured_first_step()
     {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -13003,20 +13003,23 @@ mod tests {
         .await
         .expect("seed should be generated");
 
-        assert_eq!(payload.role_selection.selected_role, "worker");
+        assert_eq!(payload.role_selection.selected_role, "business_analyst");
         assert!(payload.role_selection.conversational_mode.is_none());
         assert_eq!(
             payload.role_selection.reason,
-            "auto_explicit_implementation_request"
+            "configured_dev_team_first_step_dispatch_init"
         );
-        assert_eq!(
-            payload.role_selection.tracked_flow_entry.as_deref(),
-            Some("dev-pack")
+        assert!(
+            payload
+                .role_selection
+                .matched_terms
+                .iter()
+                .any(|term| term == "dev_team_flow_id:runtime_defect_remediation")
         );
-        assert_eq!(payload.status.task_class, "implementation");
-        assert_eq!(payload.status.route_task_class, "implementation");
-        assert_ne!(payload.status.next_node.as_deref(), Some("specification"));
-        assert_ne!(payload.status.next_node.as_deref(), Some("analyst"));
+        assert_eq!(payload.status.task_class, "specification");
+        assert_eq!(payload.status.route_task_class, "specification");
+        assert_eq!(payload.status.next_node.as_deref(), Some("analyst"));
+        assert_eq!(payload.status.handoff_state, "awaiting_analyst");
         let design_doc_path =
             payload.role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
                 .as_str()
