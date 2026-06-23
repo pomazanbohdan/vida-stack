@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "release-package", "release-install", "target-dir-policy")]
+    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "release-package", "release-install", "target-dir-policy", "invoke-timed-argv-smoke")]
     [string]$Mode = "quick",
     [string]$TestFilter = "",
     [string[]]$FormatFile = @(),
@@ -339,6 +339,49 @@ function Resolve-CommandPath {
     return $Name
 }
 
+function ConvertTo-WindowsProcessArgument {
+    param([AllowNull()][string]$Argument)
+
+    if ($null -eq $Argument -or $Argument.Length -eq 0) {
+        return '""'
+    }
+    if ($Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashCount = 0
+    foreach ($char in $Argument.ToCharArray()) {
+        if ($char -eq '\') {
+            $backslashCount += 1
+            continue
+        }
+        if ($char -eq '"') {
+            [void]$builder.Append(('\' * (($backslashCount * 2) + 1)))
+            [void]$builder.Append('"')
+            $backslashCount = 0
+            continue
+        }
+        if ($backslashCount -gt 0) {
+            [void]$builder.Append(('\' * $backslashCount))
+            $backslashCount = 0
+        }
+        [void]$builder.Append($char)
+    }
+    if ($backslashCount -gt 0) {
+        [void]$builder.Append(('\' * ($backslashCount * 2)))
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Join-WindowsProcessArguments {
+    param([string[]]$Arguments)
+
+    return (($Arguments | ForEach-Object { ConvertTo-WindowsProcessArgument $_ }) -join " ")
+}
+
 $GitPath = Resolve-CommandPath "git" @("C:\Program Files\Git\cmd\git.exe")
 $PwshPath = Resolve-CommandPath "pwsh" @(
     "C:\Program Files\PowerShell\7\pwsh.exe",
@@ -373,7 +416,7 @@ function Invoke-Timed {
     try {
         $process = Start-Process `
             -FilePath $exe `
-            -ArgumentList $args `
+            -ArgumentList (Join-WindowsProcessArguments $args) `
             -WorkingDirectory $RootDir `
             -RedirectStandardOutput $stdoutPath `
             -RedirectStandardError $stderrPath `
@@ -878,6 +921,35 @@ try {
             effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
             artifact_refs = @()
         })
+    } elseif ($Mode -eq "invoke-timed-argv-smoke") {
+        $probeDir = Join-Path $RootDir ".vida\data\state\command-timing"
+        New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+        $probePath = Join-Path $probeDir "invoke-timed-argv-probe.ps1"
+        Set-Content -LiteralPath $probePath -Encoding UTF8 -Value @'
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$ProbeArgs
+)
+$ProbeArgs | ConvertTo-Json -Compress
+'@
+        $expectedArgs = @("alpha beta", "-dash-like", 'quote"value', "semi;colon")
+        Invoke-Timed "invoke-timed-argv-smoke" (@($PwshPath, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $probePath) + $expectedArgs)
+        $latestRecord = $Records[$Records.Count - 1]
+        $stdoutPath = $latestRecord.artifact_refs[0]
+        $convertedArgs = Get-Content -LiteralPath $stdoutPath -Encoding UTF8 -Raw | ConvertFrom-Json
+        if ($convertedArgs -is [System.Array]) {
+            $actualArgs = [string[]]$convertedArgs
+        } else {
+            $actualArgs = @($convertedArgs)
+        }
+        if ($actualArgs.Count -ne $expectedArgs.Count) {
+            throw "Invoke-Timed argv smoke failed: expected $($expectedArgs.Count) args, got $($actualArgs.Count)."
+        }
+        for ($i = 0; $i -lt $expectedArgs.Count; $i++) {
+            if ($actualArgs[$i] -ne $expectedArgs[$i]) {
+                throw "Invoke-Timed argv smoke failed at index ${i}: expected `$($expectedArgs[$i])`, got `$($actualArgs[$i])`."
+            }
+        }
     } elseif ($Mode -eq "script-check") {
         Invoke-DiffWhitespaceCheck
         Invoke-RootReadmeOnlyCheck
