@@ -865,6 +865,32 @@ function Get-GitPorcelainPaths {
     return [string[]]@($paths)
 }
 
+function Get-ChangedRustSourceFiles {
+    $paths = New-Object System.Collections.Generic.SortedSet[string]
+    foreach ($path in (Get-GitPorcelainPaths)) {
+        if ([string]::IsNullOrWhiteSpace($path) -or
+            -not $path.EndsWith(".rs", [System.StringComparison]::OrdinalIgnoreCase) -or
+            $path.StartsWith(".vida/cargo-target/", [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        $fullPath = Join-Path $RootDir $path
+        if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
+            [void]$paths.Add($path)
+        }
+    }
+    return [string[]]@($paths)
+}
+
+function Invoke-ChangedRustfmtCheck {
+    [string[]]$changedRustFiles = @(Get-ChangedRustSourceFiles)
+    if ($changedRustFiles.Count -eq 0) {
+        Add-SkippedRecord "cargo-fmt-check" "no changed Rust source files"
+        return
+    }
+
+    Invoke-Timed "cargo-fmt-check" (@("rustfmt", "--edition", "2024", "--check") + $changedRustFiles)
+}
+
 function Assert-ScopedDirtyFiles {
     param(
         [string[]]$AllowedPaths,
@@ -1026,7 +1052,7 @@ $ProbeArgs | ConvertTo-Json -Compress
         }
     } elseif ($Mode -eq "quick") {
         Invoke-Timed "git-diff-check" @($GitPath, "diff", "--check")
-        Invoke-Timed "cargo-fmt-check" @("cargo", "fmt", "-p", "vida", "--", "--check")
+        Invoke-ChangedRustfmtCheck
         Invoke-Timed "cargo-check-vida" @("cargo", "check", "--locked", "-p", "vida")
     } elseif ($Mode -eq "scoped-format") {
         Invoke-ScopedFormat
