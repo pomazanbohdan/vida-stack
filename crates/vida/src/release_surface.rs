@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
@@ -380,7 +381,9 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
                 skipped: false,
                 command: Some(command),
                 exit_code: status.code(),
-                progress_path: progress_path.as_ref().map(|path| path.display().to_string()),
+                progress_path: progress_path
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
                 artifact_refs: progress_path
                     .as_ref()
                     .map(|path| vec![path.display().to_string()])
@@ -397,7 +400,9 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
                 skipped: false,
                 command: Some(command),
                 exit_code: status.code(),
-                progress_path: progress_path.as_ref().map(|path| path.display().to_string()),
+                progress_path: progress_path
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
                 artifact_refs: progress_path
                     .as_ref()
                     .map(|path| vec![path.display().to_string()])
@@ -413,7 +418,9 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
                 skipped: false,
                 command: Some(command),
                 exit_code: None,
-                progress_path: progress_path.as_ref().map(|path| path.display().to_string()),
+                progress_path: progress_path
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
                 artifact_refs: progress_path
                     .as_ref()
                     .map(|path| vec![path.display().to_string()])
@@ -454,9 +461,9 @@ fn write_release_install_progress_event(
     exit_code: Option<i32>,
 ) -> io::Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        ensure_safe_release_state_dir(parent)?;
     }
-    let mut file = fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut file = open_release_artifact_for_append(path)?;
     let event = serde_json::json!({
         "surface": "vida release install",
         "status": status,
@@ -471,14 +478,113 @@ fn write_release_install_progress_event(
     writeln!(file, "{event}")?;
     let latest_path = release_install_progress_latest_path();
     if let Some(parent) = latest_path.parent() {
-        fs::create_dir_all(parent)?;
+        ensure_safe_release_state_dir(parent)?;
     }
     let latest_body = serde_json::to_string_pretty(&event)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    fs::write(&latest_path, latest_body)
-        .and_then(|_| fs::write(latest_path.with_extension("path"), path.display().to_string()))?;
+    write_release_artifact_atomically(&latest_path, latest_body.as_bytes())?;
+    write_release_artifact_atomically(
+        &latest_path.with_extension("path"),
+        path.display().to_string().as_bytes(),
+    )?;
     Ok(())
 }
+
+fn ensure_safe_release_state_dir(path: &Path) -> io::Result<()> {
+    reject_existing_symlinks_in_path(path)?;
+    fs::create_dir_all(path)?;
+    reject_existing_symlinks_in_path(path)
+}
+
+fn reject_existing_symlinks_in_path(path: &Path) -> io::Result<()> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        if current.exists() {
+            reject_symlink_path(&current)?;
+        }
+    }
+    Ok(())
+}
+
+fn reject_symlink_path(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("release artifact path uses a symlink: {}", path.display()),
+        ));
+    }
+    Ok(())
+}
+
+fn open_release_artifact_for_append(path: &Path) -> io::Result<fs::File> {
+    if path.exists() {
+        reject_symlink_path(path)?;
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    apply_no_follow_open_options(&mut options);
+    options.open(path)
+}
+
+fn write_release_artifact_atomically(path: &Path, body: &[u8]) -> io::Result<()> {
+    if path.exists() {
+        reject_symlink_path(path)?;
+    }
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("release artifact path has no parent: {}", path.display()),
+        )
+    })?;
+    ensure_safe_release_state_dir(parent)?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "release artifact path has invalid file name: {}",
+                    path.display()
+                ),
+            )
+        })?;
+    let temp_path = parent.join(format!(
+        ".{file_name}.{}.tmp",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    ));
+    let write_result = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        apply_no_follow_open_options(&mut options);
+        let mut file = options.open(&temp_path)?;
+        file.write_all(body)?;
+        file.sync_all()?;
+        if path.exists() {
+            reject_symlink_path(path)?;
+        }
+        fs::rename(&temp_path, path)
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result
+}
+
+#[cfg(unix)]
+fn apply_no_follow_open_options(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.custom_flags(libc::O_NOFOLLOW);
+}
+
+#[cfg(not(unix))]
+fn apply_no_follow_open_options(_options: &mut OpenOptions) {}
 
 #[derive(Debug)]
 struct BlockedRelease {
@@ -1094,6 +1200,20 @@ mod tests {
     use crate::cli::Cli;
     use crate::temp_state::TempStateHarness;
     use clap::Parser;
+    use std::sync::{Mutex, OnceLock};
+
+    fn release_progress_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("release progress test lock should not be poisoned")
+    }
+
+    fn clean_release_progress_latest_markers() {
+        let latest_path = release_install_progress_latest_path();
+        let _ = fs::remove_file(&latest_path);
+        let _ = fs::remove_file(latest_path.with_extension("path"));
+    }
 
     #[test]
     fn release_install_help_exposes_options() {
@@ -1184,6 +1304,8 @@ mod tests {
 
     #[test]
     fn release_install_progress_event_writes_durable_jsonl_artifact() {
+        let _guard = release_progress_test_lock();
+        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
         let progress_path = harness.path().join("release-install-progress.jsonl");
         let command = release_build_command();
@@ -1206,8 +1328,64 @@ mod tests {
         assert_eq!(passed["status"], "pass");
         assert_eq!(passed["exit_code"], 0);
         assert_eq!(passed["progress_path"], progress_path.display().to_string());
-        let _ = fs::remove_file(release_install_progress_latest_path());
-        let _ = fs::remove_file(release_install_progress_latest_path().with_extension("path"));
+        clean_release_progress_latest_markers();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_install_progress_event_rejects_symlink_progress_artifact() {
+        let _guard = release_progress_test_lock();
+        clean_release_progress_latest_markers();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let victim = harness.path().join("victim.jsonl");
+        let progress_path = harness.path().join("progress-link.jsonl");
+        fs::write(&victim, "unchanged").expect("victim should write");
+        std::os::unix::fs::symlink(&victim, &progress_path).expect("symlink should write");
+
+        let error = write_release_install_progress_event(
+            &progress_path,
+            "started",
+            &release_build_command(),
+            None,
+        )
+        .expect_err("symlinked progress artifact should be rejected");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            fs::read_to_string(&victim).expect("victim should read"),
+            "unchanged"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_install_progress_event_rejects_symlink_latest_marker() {
+        let _guard = release_progress_test_lock();
+        clean_release_progress_latest_markers();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let progress_path = harness.path().join("release-install-progress.jsonl");
+        let latest_path = release_install_progress_latest_path();
+        let victim = harness.path().join("victim-latest.json");
+        if let Some(parent) = latest_path.parent() {
+            fs::create_dir_all(parent).expect("latest parent should write");
+        }
+        fs::write(&victim, "unchanged").expect("victim should write");
+        std::os::unix::fs::symlink(&victim, &latest_path).expect("latest symlink should write");
+
+        let error = write_release_install_progress_event(
+            &progress_path,
+            "started",
+            &release_build_command(),
+            None,
+        )
+        .expect_err("symlinked latest marker should be rejected");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            fs::read_to_string(&victim).expect("victim should read"),
+            "unchanged"
+        );
+        clean_release_progress_latest_markers();
     }
 
     #[test]

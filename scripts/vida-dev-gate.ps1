@@ -410,6 +410,7 @@ function Invoke-Timed {
     }
     $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    Assert-NoReparsePointInPath -Root $RootDir -Path $logDir -OriginalPath $logDir
     $safeId = $OperationId -replace '[^A-Za-z0-9_.-]', '-'
     $stdoutPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.out.txt" -f $safeId, $started)
     $stderrPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.err.txt" -f $safeId, $started)
@@ -422,7 +423,7 @@ function Invoke-Timed {
             stdout_path = $stdoutPath
             stderr_path = $stderrPath
             started_at = $started.ToString("o")
-        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $latestArtifactPath -Encoding UTF8
+        } | ConvertTo-Json -Depth 5 | Write-SafeStateFile -Path $latestArtifactPath
         [Console]::Error.WriteLine(("[progress] {0} artifacts ready before wait" -f $OperationId))
         [Console]::Error.WriteLine(("stdout: {0}" -f $stdoutPath))
         [Console]::Error.WriteLine(("stderr: {0}" -f $stderrPath))
@@ -833,6 +834,34 @@ function Assert-NoReparsePointInPath {
         $item = Get-Item -LiteralPath $current -Force
         if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
             throw "Path uses a symlink or reparse point inside repository root: $OriginalPath"
+        }
+    }
+}
+
+function Write-SafeStateFile {
+    param(
+        [string]$Path,
+        [Parameter(ValueFromPipeline = $true)]
+        [string]$Value
+    )
+
+    process {
+        $parent = Split-Path -Parent $Path
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        Assert-NoReparsePointInPath -Root $RootDir -Path $parent -OriginalPath $parent
+        Assert-NoReparsePointInPath -Root $RootDir -Path $Path -OriginalPath $Path
+        $leaf = Split-Path -Leaf $Path
+        $tempPath = Join-Path $parent (".{0}.{1}.tmp" -f $leaf, [System.Guid]::NewGuid().ToString("N"))
+        try {
+            Set-Content -LiteralPath $tempPath -Encoding UTF8 -Value $Value
+            Assert-NoReparsePointInPath -Root $RootDir -Path $tempPath -OriginalPath $tempPath
+            Assert-NoReparsePointInPath -Root $RootDir -Path $Path -OriginalPath $Path
+            [System.IO.File]::Move($tempPath, $Path, $true)
+        }
+        finally {
+            if (Test-Path -LiteralPath $tempPath) {
+                Remove-Item -LiteralPath $tempPath -Force
+            }
         }
     }
 }
