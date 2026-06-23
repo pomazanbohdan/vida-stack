@@ -1973,6 +1973,26 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
     let import_stdout =
         run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
     assert_json_status_pass(&import_stdout);
+    let close_stdout = run_and_assert_success(
+        &[
+            "task",
+            "close",
+            "vida-c",
+            "--reason",
+            "fixture complete",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_json_status_pass(&close_stdout);
+    let closed_show_stdout =
+        run_and_assert_success(&["task", "show", "vida-c", "--json"], &state_dir);
+    let closed_show: Value =
+        serde_json::from_str(&closed_show_stdout).expect("closed task show json should parse");
+    assert_eq!(
+        closed_show["task"]["status"], "closed",
+        "{closed_show_stdout}"
+    );
 
     let list_stdout = run_and_assert_success(&["task", "list", "--all", "--json"], &state_dir);
     assert!(
@@ -2366,6 +2386,45 @@ fn task_list_fields_and_default_toon_shape_are_binary_visible() {
 }
 
 #[test]
+fn task_list_status_closed_includes_closed_rows_by_default() {
+    let state_dir = unique_state_dir();
+    let jsonl_path = format!("{state_dir}/closed-issues.jsonl");
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    fs::write(
+        &jsonl_path,
+        concat!(
+            "{\"id\":\"vida-root-closed-filter\",\"title\":\"Closed filter root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+            "{\"id\":\"vida-open\",\"title\":\"Open task\",\"description\":\"open\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-open\",\"depends_on_id\":\"vida-root-closed-filter\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+            "{\"id\":\"vida-closed\",\"title\":\"Closed task\",\"description\":\"closed\",\"status\":\"closed\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"closed_at\":\"2026-03-08T00:10:00Z\",\"close_reason\":\"done\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-closed\",\"depends_on_id\":\"vida-root-closed-filter\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+        ),
+    )
+    .expect("write closed task jsonl");
+
+    let import_stdout =
+        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
+    assert_json_status_pass(&import_stdout);
+
+    let closed_toon_stdout =
+        run_and_assert_success(&["task", "list", "--status", "closed"], &state_dir);
+    assert!(closed_toon_stdout.starts_with("vida task list\n  task_count: 1"));
+    assert!(closed_toon_stdout.contains("\n  tasks[1]{id,status,priority,title}:"));
+    assert!(closed_toon_stdout.contains("\n    \"vida-closed\",closed,3,Closed task"));
+    assert!(!closed_toon_stdout.contains("vida-open"));
+
+    let closed_json_stdout = run_and_assert_success(
+        &["task", "list", "--status", "closed", "--json"],
+        &state_dir,
+    );
+    let closed_json: Value =
+        serde_json::from_str(&closed_json_stdout).expect("closed task list json should parse");
+    assert_eq!(closed_json["task_count"], 1);
+    assert_eq!(closed_json["tasks"][0]["id"], "vida-closed");
+    assert_eq!(closed_json["tasks"][0]["status"], "closed");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn taskflow_packet_render_fields_default_output_is_binary_visible() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -2418,7 +2477,12 @@ fn taskflow_packet_render_fields_default_output_is_binary_visible() {
         &state_dir,
     );
     run_and_assert_success(
-        &["taskflow", "run-graph", "dispatch-init", "packet-fields-demo"],
+        &[
+            "taskflow",
+            "run-graph",
+            "dispatch-init",
+            "packet-fields-demo",
+        ],
         &state_dir,
     );
 
@@ -16943,13 +17007,7 @@ fn task_list_show_ready_prefer_authoritative_state_over_stale_snapshot() {
     assert!(help.contains("compact, summary, or full"));
 
     let invalid = run_command_capture(
-        &[
-            "task",
-            "show",
-            "vida-authoritative",
-            "--view",
-            "everything",
-        ],
+        &["task", "show", "vida-authoritative", "--view", "everything"],
         &state_dir,
     );
     assert!(!invalid.status.success());
@@ -16978,7 +17036,10 @@ fn task_list_show_ready_prefer_authoritative_state_over_stale_snapshot() {
     assert_eq!(ready_limited["limit"], 1);
     assert_eq!(ready_limited["truncated_tasks"], true);
     assert_eq!(
-        ready_limited["tasks"].as_array().expect("tasks array").len(),
+        ready_limited["tasks"]
+            .as_array()
+            .expect("tasks array")
+            .len(),
         1
     );
 
@@ -17001,7 +17062,10 @@ fn task_list_show_ready_prefer_authoritative_state_over_stale_snapshot() {
 
     let ready_help = run_and_assert_success(&["task", "ready", "--help"], &state_dir);
     for expected in ["--limit", "--view", "--fields", "--json"] {
-        assert!(ready_help.contains(expected), "missing help option {expected}");
+        assert!(
+            ready_help.contains(expected),
+            "missing help option {expected}"
+        );
     }
 
     let _ = fs::remove_dir_all(&state_dir);
