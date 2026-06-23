@@ -114,28 +114,28 @@ fn cli_service_first_families_emit_vida_client_operations() {
             "vida.project.status",
         ),
         (
-            &["wizard", "inspect", "--json"][..],
+            &["wizard", "inspect", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.schema.get",
         ),
         (
-            &["wizard", "draft", "--json"][..],
+            &["wizard", "draft", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.session.start",
         ),
         (
-            &["wizard", "validate", "--json"][..],
+            &["wizard", "validate", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.session.validate",
         ),
         (
-            &["wizard", "diff", "--json"][..],
+            &["wizard", "diff", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.session.diff",
         ),
         (&["job", "status", "--json"][..], "job", "vida.jobs.get"),
         (
-            &["receipt", "get", "--json"][..],
+            &["receipt", "get", "--project", "vida-stack", "--json"][..],
             "receipt",
             "vida.receipts.get",
         ),
