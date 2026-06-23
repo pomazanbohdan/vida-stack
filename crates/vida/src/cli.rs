@@ -1606,7 +1606,7 @@ pub(crate) enum TaskProofCommand {
     #[command(
         name = "attach-evidence",
         about = "attach structured proof evidence to one task",
-        after_help = "Examples:\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --evidence \"test log\"\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --json\n\nOptions:\n  --proof-target <text> Proof target this evidence satisfies\n  --result <result>     Proof result: pass, fail, or blocked\n  --command <command>   Command or artifact command equivalent; defaults to --proof-target\n  --artifact-ref <path> Receipt, log, screenshot, or artifact path\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
+        after_help = "Examples:\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --evidence \"test log\"\n  vida task proof attach-evidence task-1 --proof-target \"proof a\" --proof-target \"proof b\" --result pass\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --json\n\nOptions:\n  --proof-target <text> Proof target this evidence satisfies; repeat to attach the same evidence to multiple targets\n  --result <result>     Proof result: pass, fail, or blocked\n  --command <command>   Command or artifact command equivalent; defaults to each --proof-target\n  --artifact-ref <path> Receipt, log, screenshot, or artifact path\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
     )]
     AttachEvidence(TaskProofAttachEvidenceArgs),
 }
@@ -1686,9 +1686,10 @@ pub(crate) struct TaskProofAttachEvidenceArgs {
 
     #[arg(
         long = "proof-target",
-        help = "Configured proof target this evidence satisfies"
+        required = true,
+        help = "Configured proof target this evidence satisfies; repeat for bulk attach"
     )]
-    pub(crate) proof_target: String,
+    pub(crate) proof_target: Vec<String>,
 
     #[arg(long = "result", help = "Proof result: pass, fail, or blocked")]
     pub(crate) result: String,
