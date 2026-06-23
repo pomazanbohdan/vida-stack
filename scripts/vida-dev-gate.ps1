@@ -414,6 +414,20 @@ function Invoke-Timed {
     $stdoutPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.out.txt" -f $safeId, $started)
     $stderrPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.err.txt" -f $safeId, $started)
     $artifactRefs = @($stdoutPath, $stderrPath)
+    if ($Mode -eq "release-install") {
+        $latestArtifactPath = Join-Path $logDir "latest-release-install-artifacts.json"
+        [pscustomobject]@{
+            operation_id = $OperationId
+            command_or_surface = ($Command -join " ")
+            stdout_path = $stdoutPath
+            stderr_path = $stderrPath
+            started_at = $started.ToString("o")
+        } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $latestArtifactPath -Encoding UTF8
+        [Console]::Error.WriteLine(("[progress] {0} artifacts ready before wait" -f $OperationId))
+        [Console]::Error.WriteLine(("stdout: {0}" -f $stdoutPath))
+        [Console]::Error.WriteLine(("stderr: {0}" -f $stderrPath))
+        [Console]::Error.WriteLine(("latest: {0}" -f $latestArtifactPath))
+    }
     try {
         $process = Start-Process `
             -FilePath $exe `

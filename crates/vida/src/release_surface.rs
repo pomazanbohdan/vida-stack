@@ -1,11 +1,11 @@
 use std::ffi::OsString;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::{Command, ExitCode};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
@@ -33,6 +33,8 @@ pub(crate) struct ReleaseBuildReceipt {
     pub skipped: bool,
     pub command: Option<Vec<String>>,
     pub exit_code: Option<i32>,
+    pub progress_path: Option<String>,
+    pub artifact_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -88,11 +90,17 @@ fn emit_release_install_receipt(receipt: &ReleaseInstallReceipt, json: bool) -> 
             "release install: pass (installed {} target(s))",
             receipt.installed_targets.len()
         );
+        if let Some(progress_path) = receipt.build.progress_path.as_deref() {
+            println!("progress artifact: {progress_path}");
+        }
     } else {
         eprintln!(
             "release install: blocked ({})",
             receipt.blocker_codes.join(", ")
         );
+        if let Some(progress_path) = receipt.build.progress_path.as_deref() {
+            eprintln!("progress artifact: {progress_path}");
+        }
     }
 
     if receipt.status == "pass" {
@@ -126,6 +134,8 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
                     skipped: args.skip_build,
                     command: None,
                     exit_code: None,
+                    progress_path: None,
+                    artifact_refs: Vec::new(),
                 },
                 receipt,
             );
@@ -345,34 +355,129 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
             skipped: true,
             command: None,
             exit_code: None,
+            progress_path: None,
+            artifact_refs: Vec::new(),
         };
     }
 
     let command = release_build_command();
+    let progress_path = release_install_progress_path();
+    if let Some(path) = progress_path.as_ref() {
+        let _ = write_release_install_progress_event(path, "started", &command, None);
+        eprintln!("release install progress: {}", path.display());
+    }
     match Command::new("cargo")
         .args(command.iter().skip(1).map(String::as_str))
         .current_dir(trusted_workspace_root())
         .status()
     {
-        Ok(status) if status.success() => ReleaseBuildReceipt {
-            status: "pass".to_string(),
-            skipped: false,
-            command: Some(command),
-            exit_code: status.code(),
-        },
-        Ok(status) => ReleaseBuildReceipt {
-            status: "blocked".to_string(),
-            skipped: false,
-            command: Some(command),
-            exit_code: status.code(),
-        },
-        Err(_) => ReleaseBuildReceipt {
-            status: "blocked".to_string(),
-            skipped: false,
-            command: Some(command),
-            exit_code: None,
-        },
+        Ok(status) if status.success() => {
+            if let Some(path) = progress_path.as_ref() {
+                let _ = write_release_install_progress_event(path, "pass", &command, status.code());
+            }
+            ReleaseBuildReceipt {
+                status: "pass".to_string(),
+                skipped: false,
+                command: Some(command),
+                exit_code: status.code(),
+                progress_path: progress_path.as_ref().map(|path| path.display().to_string()),
+                artifact_refs: progress_path
+                    .as_ref()
+                    .map(|path| vec![path.display().to_string()])
+                    .unwrap_or_default(),
+            }
+        }
+        Ok(status) => {
+            if let Some(path) = progress_path.as_ref() {
+                let _ =
+                    write_release_install_progress_event(path, "blocked", &command, status.code());
+            }
+            ReleaseBuildReceipt {
+                status: "blocked".to_string(),
+                skipped: false,
+                command: Some(command),
+                exit_code: status.code(),
+                progress_path: progress_path.as_ref().map(|path| path.display().to_string()),
+                artifact_refs: progress_path
+                    .as_ref()
+                    .map(|path| vec![path.display().to_string()])
+                    .unwrap_or_default(),
+            }
+        }
+        Err(_) => {
+            if let Some(path) = progress_path.as_ref() {
+                let _ = write_release_install_progress_event(path, "blocked", &command, None);
+            }
+            ReleaseBuildReceipt {
+                status: "blocked".to_string(),
+                skipped: false,
+                command: Some(command),
+                exit_code: None,
+                progress_path: progress_path.as_ref().map(|path| path.display().to_string()),
+                artifact_refs: progress_path
+                    .as_ref()
+                    .map(|path| vec![path.display().to_string()])
+                    .unwrap_or_default(),
+            }
+        }
     }
+}
+
+fn release_install_progress_path() -> Option<PathBuf> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    Some(
+        trusted_workspace_root()
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join("release-install-progress")
+            .join(format!("release-install-{stamp}.jsonl")),
+    )
+}
+
+fn release_install_progress_latest_path() -> PathBuf {
+    trusted_workspace_root()
+        .join(".vida")
+        .join("data")
+        .join("state")
+        .join("release-install-progress")
+        .join("latest.json")
+}
+
+fn write_release_install_progress_event(
+    path: &Path,
+    status: &str,
+    command: &[String],
+    exit_code: Option<i32>,
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let event = serde_json::json!({
+        "surface": "vida release install",
+        "status": status,
+        "command": command,
+        "exit_code": exit_code,
+        "progress_path": path.display().to_string(),
+        "recorded_at_unix_ms": SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default(),
+    });
+    writeln!(file, "{event}")?;
+    let latest_path = release_install_progress_latest_path();
+    if let Some(parent) = latest_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let latest_body = serde_json::to_string_pretty(&event)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    fs::write(&latest_path, latest_body)
+        .and_then(|_| fs::write(latest_path.with_extension("path"), path.display().to_string()))?;
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -1078,6 +1183,34 @@ mod tests {
     }
 
     #[test]
+    fn release_install_progress_event_writes_durable_jsonl_artifact() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let progress_path = harness.path().join("release-install-progress.jsonl");
+        let command = release_build_command();
+
+        write_release_install_progress_event(&progress_path, "started", &command, None)
+            .expect("progress start should write");
+        write_release_install_progress_event(&progress_path, "pass", &command, Some(0))
+            .expect("progress pass should write");
+
+        let body = fs::read_to_string(&progress_path).expect("progress artifact should read");
+        let lines = body.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        let started: serde_json::Value =
+            serde_json::from_str(lines[0]).expect("started event should parse");
+        let passed: serde_json::Value =
+            serde_json::from_str(lines[1]).expect("pass event should parse");
+        assert_eq!(started["surface"], "vida release install");
+        assert_eq!(started["status"], "started");
+        assert_eq!(started["command"][0], "cargo");
+        assert_eq!(passed["status"], "pass");
+        assert_eq!(passed["exit_code"], 0);
+        assert_eq!(passed["progress_path"], progress_path.display().to_string());
+        let _ = fs::remove_file(release_install_progress_latest_path());
+        let _ = fs::remove_file(release_install_progress_latest_path().with_extension("path"));
+    }
+
+    #[test]
     fn release_install_path_target_resolves_first_vida_on_path() {
         let harness = TempStateHarness::new().expect("temp harness should initialize");
         let bin_dir = harness.path().join("bin");
@@ -1434,6 +1567,8 @@ mod tests {
                 skipped: true,
                 command: None,
                 exit_code: Some(0),
+                progress_path: None,
+                artifact_refs: Vec::new(),
             },
             BlockedRelease {
                 blocker_code: release_install_error_blocker_code(&detail.error_kind),
