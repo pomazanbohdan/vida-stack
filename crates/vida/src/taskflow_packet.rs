@@ -9,6 +9,15 @@ use crate::{
 
 const TASKFLOW_PACKET_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PacketRenderRequest {
+    requested_run_id: String,
+    requested_task_id: Option<String>,
+    as_json: bool,
+    latest_mode: bool,
+    fields: Option<String>,
+}
+
 fn projection_component(value: &str) -> String {
     value
         .chars()
@@ -48,7 +57,7 @@ fn packet_repair_projection_name(run_id: &str, task_id: &str) -> String {
 }
 
 fn usage() -> &'static str {
-    "Usage: vida taskflow packet render <run-id> [--json]\n       vida taskflow packet task <task-id> [--json]\n       vida taskflow packet latest [--json]\n       vida taskflow packet repair --run-id <run-id> --from-task <task-id> [--json]"
+    "Usage: vida taskflow packet render <run-id> [--fields <field,...>] [--json]\n       vida taskflow packet task <task-id> [--fields <field,...>] [--json]\n       vida taskflow packet latest [--fields <field,...>] [--json]\n       vida taskflow packet repair --run-id <run-id> --from-task <task-id> [--json]"
 }
 
 fn read_packet_body(path: &str) -> Result<serde_json::Value, String> {
@@ -461,6 +470,77 @@ fn parse_packet_repair_args(args: &[String]) -> Result<Option<(String, String, b
     Ok(Some((run_id, task_id, as_json)))
 }
 
+fn parse_packet_render_args(args: &[String]) -> Result<Option<PacketRenderRequest>, String> {
+    let [head, subcommand, rest @ ..] = args else {
+        return Ok(None);
+    };
+    if head != "packet" || !matches!(subcommand.as_str(), "render" | "task" | "latest") {
+        return Ok(None);
+    }
+    if rest
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        return Err(usage().to_string());
+    }
+
+    let mut as_json = false;
+    let mut fields = None;
+    let mut positionals = Vec::new();
+    let mut index = 0;
+    while index < rest.len() {
+        match rest[index].as_str() {
+            "--json" => as_json = true,
+            "--fields" => {
+                index += 1;
+                let Some(value) = rest.get(index) else {
+                    return Err("Missing value for --fields.".to_string());
+                };
+                let value = value.trim();
+                if value.is_empty() {
+                    return Err("Missing value for --fields.".to_string());
+                }
+                fields = Some(value.to_string());
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("Unsupported packet render argument `{other}`."));
+            }
+            other => positionals.push(other.to_string()),
+        }
+        index += 1;
+    }
+
+    let (requested_run_id, requested_task_id, latest_mode) = match subcommand.as_str() {
+        "render" => {
+            if positionals.len() != 1 {
+                return Err("packet render requires exactly one <run-id>.".to_string());
+            }
+            (positionals[0].clone(), None, false)
+        }
+        "task" => {
+            if positionals.len() != 1 {
+                return Err("packet task requires exactly one <task-id>.".to_string());
+            }
+            (positionals[0].clone(), Some(positionals[0].clone()), false)
+        }
+        "latest" => {
+            if !positionals.is_empty() {
+                return Err("packet latest does not accept a positional id.".to_string());
+            }
+            ("latest".to_string(), None, true)
+        }
+        _ => unreachable!("subcommand checked above"),
+    };
+
+    Ok(Some(PacketRenderRequest {
+        requested_run_id,
+        requested_task_id,
+        as_json,
+        latest_mode,
+        fields,
+    }))
+}
+
 fn packet_repair_args_request_json(args: &[String]) -> bool {
     matches!(args, [head, subcommand, ..] if head == "packet" && subcommand == "repair")
         && args.iter().any(|arg| arg == "--json")
@@ -695,44 +775,28 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         }
     }
 
-    let (requested_run_id, requested_task_id, as_json, latest_mode) = match args {
-        [head, subcommand, run_id] if head == "packet" && subcommand == "render" => {
-            (run_id.clone(), None, false, false)
+    let render_request = match parse_packet_render_args(args) {
+        Ok(Some(request)) => request,
+        Ok(None) => {
+            eprintln!("{}", usage());
+            return ExitCode::from(2);
         }
-        [head, subcommand, run_id, flag]
-            if head == "packet" && subcommand == "render" && matches!(flag.as_str(), "--json") =>
-        {
-            (run_id.clone(), None, true, false)
-        }
-        [head, subcommand, task_id] if head == "packet" && subcommand == "task" => {
-            (task_id.clone(), Some(task_id.clone()), false, false)
-        }
-        [head, subcommand, task_id, flag]
-            if head == "packet" && subcommand == "task" && matches!(flag.as_str(), "--json") =>
-        {
-            (task_id.clone(), Some(task_id.clone()), true, false)
-        }
-        [head, subcommand] if head == "packet" && subcommand == "latest" => {
-            ("latest".to_string(), None, false, true)
-        }
-        [head, subcommand, flag]
-            if head == "packet" && subcommand == "latest" && matches!(flag.as_str(), "--json") =>
-        {
-            ("latest".to_string(), None, true, true)
-        }
-        [head, subcommand, flag]
-            if head == "packet"
-                && matches!(subcommand.as_str(), "render" | "latest")
-                && matches!(flag.as_str(), "--help" | "-h") =>
-        {
-            crate::taskflow_layer4::print_taskflow_proxy_help(Some("packet"));
+        Err(error) if error.starts_with("Usage:") => {
+            println!("{error}");
             return ExitCode::SUCCESS;
         }
-        _ => {
+        Err(error) => {
+            eprintln!("{error}");
             eprintln!("{}", usage());
             return ExitCode::from(2);
         }
     };
+    let requested_run_id = render_request.requested_run_id;
+    let requested_task_id = render_request.requested_task_id;
+    let as_json = render_request.as_json;
+    let latest_mode = render_request.latest_mode;
+    let field_selection = render_request.fields;
+    let selected_output = field_selection.is_some();
 
     let state_root = proxy_state_dir();
     let projection_name =
@@ -855,13 +919,29 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         downstream_packet,
     );
 
-    if as_json {
+    if let Some(fields) = field_selection.as_deref() {
+        let selected_payload =
+            operator_output::toon_report::select_fields(payload.clone(), Some(fields));
+        if as_json {
+            crate::print_json_pretty(&selected_payload);
+        } else {
+            println!(
+                "{}",
+                operator_output::toon_report::render_value(
+                    "vida taskflow packet fields",
+                    selected_payload,
+                )
+            );
+        }
+    } else if as_json {
         crate::print_json_pretty(&payload);
-        crate::operator_projection_cache::write_json_projection(
-            &proxy_state_dir(),
-            &projection_name,
-            &payload,
-        );
+        if !selected_output {
+            crate::operator_projection_cache::write_json_projection(
+                &proxy_state_dir(),
+                &projection_name,
+                &payload,
+            );
+        }
     } else {
         print_surface_header(RenderMode::Plain, "vida taskflow packet render");
         if latest_mode {
@@ -948,7 +1028,7 @@ mod tests {
     use super::{
         build_taskflow_packet_render_payload, build_taskflow_packet_repair_payload,
         hydrate_dispatch_packet_owned_paths_from_task, packet_repair_projection_name,
-        parse_packet_repair_args, repair_delivery_task_packet_identity,
+        parse_packet_render_args, parse_packet_repair_args, repair_delivery_task_packet_identity,
         repair_persisted_dispatch_packet_from_task, resolve_latest_packet_run_id,
         resolve_packet_render_run_id, run_taskflow_packet,
     };
@@ -959,6 +1039,100 @@ mod tests {
     use std::fs;
     use std::process::ExitCode;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn packet_render_args_accept_field_selection_with_json() {
+        let args = vec![
+            "packet".to_string(),
+            "render".to_string(),
+            "run-impl".to_string(),
+            "--fields".to_string(),
+            "dispatch_packet.path,dispatch_receipt.dispatch_target".to_string(),
+            "--json".to_string(),
+        ];
+
+        let request = parse_packet_render_args(&args)
+            .expect("render args parse")
+            .expect("render request");
+
+        assert_eq!(request.requested_run_id, "run-impl");
+        assert_eq!(request.requested_task_id, None);
+        assert!(request.as_json);
+        assert!(!request.latest_mode);
+        assert_eq!(
+            request.fields.as_deref(),
+            Some("dispatch_packet.path,dispatch_receipt.dispatch_target")
+        );
+    }
+
+    #[test]
+    fn packet_render_field_selection_extracts_compact_dispatch_fields() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-impl".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-14T00:00:00Z".to_string(),
+        };
+        let payload = build_taskflow_packet_render_payload(
+            "run-impl",
+            "run-impl",
+            &receipt,
+            None,
+            "/tmp/dispatch-packet.json",
+            serde_json::json!({
+                "route_policy": {
+                    "effective_selected_backend": "internal_subagents",
+                    "owner_function": "write_runtime_dispatch_packet"
+                },
+                "large_runtime_artifact": "x".repeat(4096),
+            }),
+            None,
+        );
+
+        let selected = operator_output::toon_report::select_fields(
+            payload,
+            Some(
+                "run_id,dispatch_packet.path,dispatch_packet.body.route_policy.effective_selected_backend",
+            ),
+        );
+
+        assert_eq!(selected["run_id"], "run-impl");
+        assert_eq!(
+            selected["dispatch_packet"]["path"],
+            "/tmp/dispatch-packet.json"
+        );
+        assert_eq!(
+            selected["dispatch_packet"]["body"]["route_policy"]["effective_selected_backend"],
+            "internal_subagents"
+        );
+        assert!(selected["dispatch_packet"]["body"]
+            .get("large_runtime_artifact")
+            .is_none());
+    }
 
     #[test]
     fn packet_render_payload_preserves_persisted_selected_backend_truth() {
