@@ -31,6 +31,27 @@ pub(crate) struct ProtocolViewRender {
 pub(crate) async fn run_protocol(args: super::ProtocolArgs) -> ExitCode {
     match args.command {
         super::ProtocolCommand::View(view) => {
+            if view.names.is_empty() {
+                if view.json {
+                    crate::print_json_pretty(&serde_json::json!({
+                        "surface": "vida protocol view",
+                        "status": "blocked",
+                        "blocker_codes": ["protocol_view_target_required"],
+                        "next_actions": [
+                            "vida protocol view <protocol-id>",
+                            "Use `vida protocol view system-maps/protocol.index` to inspect available protocol ids."
+                        ],
+                        "artifact_refs": {"surface": "vida protocol view"}
+                    }));
+                } else {
+                    println!("vida protocol view");
+                    println!("  status: blocked");
+                    println!("  blocker: protocol_view_target_required");
+                    println!("  next: vida protocol view <protocol-id>");
+                    println!("  index: vida protocol view system-maps/protocol.index");
+                }
+                return ExitCode::from(2);
+            }
             let mut renders = Vec::with_capacity(view.names.len());
             for name in &view.names {
                 let render = match render_protocol_view_target(name) {

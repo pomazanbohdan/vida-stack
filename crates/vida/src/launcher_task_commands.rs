@@ -103,7 +103,7 @@ pub(crate) fn build_task_ensure_command(
 }
 
 pub(crate) fn build_task_show_command(task_id: &str) -> String {
-    format!("vida task show {task_id} --json")
+    format!("vida task show {task_id}")
 }
 
 pub(crate) fn build_task_close_command(task_id: &str, reason: &str) -> String {

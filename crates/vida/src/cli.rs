@@ -6,7 +6,7 @@ const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
-const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task tree <task-id> --json\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run --json\n  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida task reparent-children <from-parent-id> <to-parent-id> --json\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id> --json\n  vida task critical-path --json\n  vida taskflow help parallelism\n\nLarge-batch transport:\n  Use `vida task import --file tasks.jsonl --dry-run` for many task creates instead of pasting oversized shell payloads.\n  Use JSONL/NDJSON files for large batches and `vida task dep add-bulk --edge-file edges.txt --dry-run` for many dependency edges.\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
+const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready\n  vida task next\n  vida task show <task-id>\n  vida task progress <task-id>\n  vida task deps <task-id>\n  vida task tree <task-id>\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run\n  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\"\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\"\n  vida task reparent-children <from-parent-id> <to-parent-id>\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id>\n  vida task critical-path\n  vida taskflow help parallelism\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n\nLarge-batch transport:\n  Use `vida task import --file tasks.jsonl --dry-run` for many task creates instead of pasting oversized shell payloads.\n  Use JSONL/NDJSON files for large batches and `vida task dep add-bulk --edge-file edges.txt --dry-run` for many dependency edges.\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary` for the default operator summary; add `--json` only for machine-readable scheduling fields.\n  Missing execution semantics never imply safe parallel execution.";
 
 const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
 
@@ -640,8 +640,9 @@ pub(crate) struct AgentHostBridgeArgs {
 
     #[arg(
         long = "summary",
+        alias = "host-bridge-summary",
         requires = "complete",
-        help = "Receipt summary from the parent host adapter"
+        help = "Receipt summary from the parent host adapter; --host-bridge-summary is accepted as a lane-completion alias"
     )]
     pub(crate) summary: Option<String>,
 
@@ -1693,7 +1694,6 @@ pub(crate) struct TaskProofAttachEvidenceArgs {
 
     #[arg(
         long = "proof-target",
-        required = true,
         help = "Configured proof target this evidence satisfies; repeat for bulk attach"
     )]
     pub(crate) proof_target: Vec<String>,
@@ -2786,7 +2786,6 @@ pub(crate) struct TaskSplitArgs {
 
     #[arg(
         long = "child",
-        required = true,
         help = "Child spec in `<task-id>:<title>` form. Repeat for multiple bounded children."
     )]
     pub(crate) children: Vec<String>,
@@ -3315,7 +3314,7 @@ pub(crate) enum ProtocolCommand {
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct ProtocolViewArgs {
-    #[arg(required = true, num_args = 1..)]
+    #[arg(num_args = 0..)]
     pub(crate) names: Vec<String>,
 
     #[arg(long = "json")]
@@ -3996,6 +3995,31 @@ mod tests {
         );
         assert!(host_bridge.json);
 
+        let parsed_host_bridge_alias = Cli::try_parse_from([
+            "vida",
+            "agent",
+            "host-bridge",
+            "--request",
+            "/tmp/host-bridge-request.json",
+            "--complete",
+            "--host-agent-id",
+            "agent-1",
+            "--host-bridge-summary",
+            "done through alias",
+        ])
+        .expect("agent host-bridge summary alias should parse");
+        let Some(super::Command::Agent(agent_args)) = parsed_host_bridge_alias.command else {
+            panic!("agent command should parse");
+        };
+        let crate::AgentCommand::HostBridge(host_bridge_alias) = agent_args.command else {
+            panic!("agent host-bridge command should parse");
+        };
+        assert!(host_bridge_alias.complete);
+        assert_eq!(
+            host_bridge_alias.summary.as_deref(),
+            Some("done through alias")
+        );
+
         let parsed_host_bridge_attach = Cli::try_parse_from([
             "vida",
             "agent",
@@ -4053,7 +4077,9 @@ mod tests {
         assert!(coder_help.contains("provider-check"));
         assert!(coder_help.contains("run"));
         assert!(coder_help.contains("Default output is compact TOON/plain"));
-        assert!(coder_help.contains("Use --json only when a machine-readable payload is required."));
+        assert!(
+            coder_help.contains("Use --json only when a machine-readable payload is required.")
+        );
         assert!(coder_help.contains("vida coder capabilities\n"));
         assert!(!coder_help.contains("vida coder capabilities --json"));
 

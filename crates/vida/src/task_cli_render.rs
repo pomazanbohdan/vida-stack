@@ -5,9 +5,9 @@ use crate::state_store::{
     TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode, TaskGraphIssue,
     TaskProgressSummary, TaskRecord,
 };
-use crate::{print_surface_header, print_surface_line, RenderMode};
+use crate::{RenderMode, print_surface_header, print_surface_line};
 use taskflow_core::task::import_export::{
-    task_export_jsonl_success_fields, TaskExportJsonlSummary,
+    TaskExportJsonlSummary, task_export_jsonl_success_fields,
 };
 
 pub(crate) fn task_read_metadata_value(
@@ -91,6 +91,19 @@ fn task_record_list_toon_text(surface: &str, tasks: &[TaskRecord], fields: Optio
         "tasks": rows,
     });
     taskflow_format_toon::render_value_section(surface, &value)
+}
+
+fn non_empty_string_value(value: &str) -> serde_json::Value {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::String(trimmed.to_string())
+    }
+}
+
+fn non_empty_optional_string_value(value: Option<&str>) -> serde_json::Value {
+    value.map_or(serde_json::Value::Null, non_empty_string_value)
 }
 
 fn optional_work_item_kind_value(issue_type: Option<&str>) -> serde_json::Value {
@@ -385,10 +398,7 @@ pub(crate) fn print_task_ready(
     }
 
     if matches!(render, RenderMode::Plain) {
-        println!(
-            "{}",
-            task_ready_limited_toon_text(tasks, fields, limit)
-        );
+        println!("{}", task_ready_limited_toon_text(tasks, fields, limit));
         return;
     }
 
@@ -400,7 +410,11 @@ pub(crate) fn print_task_ready(
     }
     print_surface_line(render, "ready count", &tasks.len().to_string());
     if let Some(limit) = limit {
-        print_surface_line(render, "reported ready count", &display_tasks.len().to_string());
+        print_surface_line(
+            render,
+            "reported ready count",
+            &display_tasks.len().to_string(),
+        );
         print_surface_line(render, "limit", &limit.to_string());
         print_surface_line(
             render,
@@ -472,6 +486,41 @@ pub(crate) fn task_show_payload(
     )
 }
 
+fn task_show_toon_value(task: &TaskRecord, view: &str) -> serde_json::Value {
+    if view == "full" {
+        return task_record_value(task);
+    }
+
+    serde_json::json!({
+        "id": task.id,
+        "display_id": task.display_id,
+        "status": task.status,
+        "title": task.title,
+        "priority": task.priority,
+        "issue_type": task.issue_type,
+        "work_item_kind": task_work_item_kind_value(&task.issue_type),
+        "dependencies": task.dependencies.iter().map(|dependency| {
+            serde_json::json!({
+                "edge_type": dependency.edge_type.clone(),
+                "depends_on_id": dependency.depends_on_id.clone(),
+            })
+        }).collect::<Vec<_>>(),
+        "description": non_empty_string_value(&task.description),
+        "notes": non_empty_optional_string_value(task.notes.as_deref()),
+        "owned_paths": task.planner_metadata.owned_paths.clone(),
+        "acceptance_targets": task.planner_metadata.acceptance_targets.clone(),
+        "proof_targets": task.planner_metadata.proof_targets.clone(),
+    })
+}
+
+fn task_show_toon_text(task: &TaskRecord, view: &str) -> String {
+    let value = serde_json::json!({
+        "view": view,
+        "task": task_show_toon_value(task, view),
+    });
+    taskflow_format_toon::render_value_section("vida task show", &value)
+}
+
 pub(crate) fn print_task_show(
     render: RenderMode,
     task: &TaskRecord,
@@ -488,11 +537,8 @@ pub(crate) fn print_task_show(
         return;
     }
 
-    if view == "full" && matches!(render, RenderMode::Plain) {
-        println!(
-            "{}",
-            taskflow_format_toon::render_value_section("vida task show", &payload)
-        );
+    if matches!(render, RenderMode::Plain) {
+        println!("{}", task_show_toon_text(task, view));
         return;
     }
 
@@ -1659,11 +1705,9 @@ pub(crate) fn print_task_dependency_bulk_add_result_for_surface(
             "Inspect the failed dependency edge, repair missing tasks or invalid graph edges, then rerun `{retry_command}`."
         )]
     } else {
-        vec![
-            format!(
-                "Inspect failed and unapplied edges, repair missing tasks or invalid graph edges, then rerun `{surface}` with only the missing edges."
-            ),
-        ]
+        vec![format!(
+            "Inspect failed and unapplied edges, repair missing tasks or invalid graph edges, then rerun `{surface}` with only the missing edges."
+        )]
     };
     let payload = build_operator_surface_payload(
         surface,
@@ -2190,8 +2234,11 @@ mod tests {
         assert!(!text.contains("\n  next: forged-from-kind"));
         assert!(!text.contains("\n  next: forged"));
         assert_eq!(text.matches("\n  ready_for_close:").count(), 1);
-        assert!(text
-            .contains(r"task: TASK-1\n  ready_for_close: true\n  next: forged-command\u{1b}[31m"));
+        assert!(
+            text.contains(
+                r"task: TASK-1\n  ready_for_close: true\n  next: forged-command\u{1b}[31m"
+            )
+        );
         assert!(text.contains(r"kind: epic\n  next: forged-from-kind\u{1b}[35m"));
         assert!(text.contains(r"next: vida task close injected\n  next: forged\u{1b}[0m"));
     }
@@ -2381,6 +2428,29 @@ mod tests {
             "pr"
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_show_default_toon_includes_self_contained_task_details() {
+        let mut task = sample_task("task-detail");
+        task.description = "Fix the default task detail surface".to_string();
+        task.notes = Some("owner=operator; stop=default output is actionable".to_string());
+        task.planner_metadata.owned_paths = vec!["crates/vida/src/task_cli_render.rs".to_string()];
+        task.planner_metadata.acceptance_targets =
+            vec!["default task show includes runnable context".to_string()];
+        task.planner_metadata.proof_targets =
+            vec!["cargo test -p vida task_show_default_toon".to_string()];
+
+        let rendered = super::task_show_toon_text(&task, "summary");
+
+        assert!(rendered.contains("description"));
+        assert!(rendered.contains("Fix the default task detail surface"));
+        assert!(rendered.contains("notes"));
+        assert!(rendered.contains("owner=operator"));
+        assert!(rendered.contains("owned_paths[1]"));
+        assert!(rendered.contains("acceptance_targets[1]"));
+        assert!(rendered.contains("proof_targets[1]"));
+        assert!(!rendered.contains("--json"));
     }
 
     #[test]

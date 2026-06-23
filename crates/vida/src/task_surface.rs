@@ -1575,7 +1575,7 @@ async fn task_takeover_status_receipt(
                 vec![format!(
                     "Bind or inspect the correct bounded unit before local writes: `{}` and `{}`.",
                     operator_output::command_text::human_command(&format!(
-                        "vida task show {} --json",
+                        "vida task show {}",
                         crate::shell_quote(&task.id)
                     )),
                     operator_output::command_text::human_command("vida lane show --latest --json")
@@ -5610,6 +5610,34 @@ async fn run_task_split_like(command: TaskSplitArgs, surface: &str) -> ExitCode 
         .state_dir
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
+    if command.children.is_empty() {
+        if command.json {
+            crate::print_json_pretty(&serde_json::json!({
+                "surface": surface,
+                "status": "blocked",
+                "blocker_codes": ["task_split_child_required"],
+                "next_actions": [
+                    format!("{surface} {} --child <child-id>:\"<title>\" --reason {}", crate::shell_quote(&command.task_id), crate::shell_quote(&command.reason)),
+                    "Use `vida task split --help` for the child-spec format."
+                ],
+                "artifact_refs": {"surface": surface}
+            }));
+        } else {
+            print_surface_header(command.render, surface);
+            print_surface_line(command.render, "status", "blocked");
+            print_surface_line(command.render, "blocker", "task_split_child_required");
+            print_surface_line(
+                command.render,
+                "next",
+                &format!(
+                    "{surface} {} --child <child-id>:\"<title>\" --reason {}",
+                    crate::shell_quote(&command.task_id),
+                    crate::shell_quote(&command.reason)
+                ),
+            );
+        }
+        return ExitCode::from(2);
+    }
     let child_specs = match taskflow_core::task::split::parse_split_child_specs(&command.children) {
         Ok(specs) => specs,
         Err(error) => {
@@ -10368,7 +10396,35 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             TaskProofCommand::AttachEvidence(command) => {
                 let proof_targets = parse_proof_target_values(&command.proof_target);
                 if proof_targets.is_empty() {
-                    eprintln!("at least one non-empty --proof-target is required");
+                    if command.json {
+                        crate::print_json_pretty(&serde_json::json!({
+                            "surface": "vida task proof attach-evidence",
+                            "status": "blocked",
+                            "blocker_codes": ["task_proof_target_required"],
+                            "next_actions": [
+                                format!(
+                                    "vida task proof attach-evidence {} --proof-target \"<proof target>\" --result {}",
+                                    crate::shell_quote(&command.task_id),
+                                    crate::shell_quote(&command.result)
+                                ),
+                                "Use `vida task proof status <task-id>` to inspect configured proof targets."
+                            ],
+                            "artifact_refs": {"surface": "vida task proof attach-evidence"}
+                        }));
+                    } else {
+                        print_surface_header(command.render, "vida task proof attach-evidence");
+                        print_surface_line(command.render, "status", "blocked");
+                        print_surface_line(command.render, "blocker", "task_proof_target_required");
+                        print_surface_line(
+                            command.render,
+                            "next",
+                            &format!(
+                                "vida task proof attach-evidence {} --proof-target \"<proof target>\" --result {}",
+                                crate::shell_quote(&command.task_id),
+                                crate::shell_quote(&command.result)
+                            ),
+                        );
+                    }
                     return ExitCode::from(2);
                 }
                 let result = match normalize_browser_proof_result(&command.result) {
@@ -13150,7 +13206,10 @@ mod tests {
                 receipt.local_exception_takeover_state,
                 "admissible_not_active"
             );
-            assert_eq!(receipt.reason, "exception takeover is not active for this task");
+            assert_eq!(
+                receipt.reason,
+                "exception takeover is not active for this task"
+            );
             assert_eq!(
                 receipt.blocker_codes,
                 vec!["exception_takeover_not_active".to_string()]

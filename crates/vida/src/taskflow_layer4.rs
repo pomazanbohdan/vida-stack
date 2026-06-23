@@ -303,7 +303,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  none | close_epic | reconcile | recover_lane | run_gate");
             println!();
             println!("Failure modes:");
-            println!("  Missing or unreadable authoritative state fails closed with next_action=reconcile.");
+            println!(
+                "  Missing or unreadable authoritative state fails closed with next_action=reconcile."
+            );
             return;
         }
         Some("receipt-pack") => {
@@ -1454,7 +1456,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-task",
             why: "Task inspection should read one canonical record from the runtime store before mutation.",
-            command: "vida task show <task-id> --json",
+            command: "vida task show <task-id>",
             failure_modes: "Unknown task ids fail closed in the delegated runtime.",
         };
     }
