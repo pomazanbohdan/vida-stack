@@ -43,6 +43,8 @@ pub enum TaskflowStateError {
     Storage(String),
     #[error("journal payload decode error: {0}")]
     PayloadDecode(String),
+    #[error("run workflow journal replay validation error: {0}")]
+    JournalReplayValidation(String),
 }
 
 pub trait TaskStore {
@@ -251,14 +253,21 @@ impl<'a, J: OperationalJournal> RunWorkflowJournalRepository<'a, J> {
     ) -> Result<RunWorkflowAggregate, TaskflowStateError> {
         let stream_id = run_workflow_stream_id(run_id);
         let mut aggregate = RunWorkflowAggregate::new(run_id, task_id);
-        for event in self.journal.load_stream(&stream_id) {
-            let event: RunWorkflowEvent = serde_json::from_value(event.payload)
+        for envelope in self.journal.load_stream(&stream_id) {
+            validate_run_workflow_envelope_metadata(
+                &envelope,
+                &stream_id,
+                run_id,
+                aggregate.version + 1,
+            )?;
+            let event: RunWorkflowEvent = serde_json::from_value(envelope.payload)
                 .map_err(|error| TaskflowStateError::PayloadDecode(error.to_string()))?;
+            let replayed = replay_run_workflow_event(&aggregate, &event)?;
             aggregate = RunWorkflowAggregate::from_snapshot(
                 run_id,
                 task_id,
-                event.state_after,
-                aggregate.version + 1,
+                replayed.state_after,
+                envelope.stream_version.0,
             );
         }
         Ok(aggregate)
@@ -269,6 +278,7 @@ impl<'a, J: OperationalJournal> RunWorkflowJournalRepository<'a, J> {
         aggregate_before: &RunWorkflowAggregate,
         event: RunWorkflowEvent,
     ) -> Result<JournalAppendReceipt, TaskflowStateError> {
+        let event = replay_run_workflow_event(aggregate_before, &event)?;
         let next_version = aggregate_before.version + 1;
         let stream_id = run_workflow_stream_id(&aggregate_before.run_id);
         let command_id = VidaCommandRef(format!(
@@ -307,6 +317,66 @@ impl<'a, J: OperationalJournal> RunWorkflowJournalRepository<'a, J> {
             ),
         })
     }
+}
+
+fn validate_run_workflow_envelope_metadata(
+    envelope: &VidaDomainEventEnvelope,
+    stream_id: &VidaStreamRef,
+    run_id: &str,
+    expected_stream_version: u64,
+) -> Result<(), TaskflowStateError> {
+    if envelope.schema_id != VidaSchemaId("taskflow.run_workflow.event".to_string()) {
+        return Err(TaskflowStateError::JournalReplayValidation(format!(
+            "unexpected schema_id {} for run workflow event",
+            envelope.schema_id.0
+        )));
+    }
+    if envelope.event_version != VidaSchemaVersion(1) {
+        return Err(TaskflowStateError::JournalReplayValidation(format!(
+            "unexpected event_version {} for run workflow event",
+            envelope.event_version.0
+        )));
+    }
+    if envelope.stream_id != *stream_id {
+        return Err(TaskflowStateError::JournalReplayValidation(format!(
+            "event stream {} does not match expected stream {}",
+            envelope.stream_id.0, stream_id.0
+        )));
+    }
+    if envelope.aggregate_id != VidaAggregateRef(run_id.to_string()) {
+        return Err(TaskflowStateError::JournalReplayValidation(format!(
+            "event aggregate {} does not match run {}",
+            envelope.aggregate_id.0, run_id
+        )));
+    }
+    if envelope.stream_version != VidaStreamVersion(expected_stream_version) {
+        return Err(TaskflowStateError::JournalReplayValidation(format!(
+            "event stream_version {} does not match expected {}",
+            envelope.stream_version.0, expected_stream_version
+        )));
+    }
+    Ok(())
+}
+
+fn replay_run_workflow_event(
+    aggregate_before: &RunWorkflowAggregate,
+    persisted: &RunWorkflowEvent,
+) -> Result<RunWorkflowEvent, TaskflowStateError> {
+    if persisted.state_before != aggregate_before.state {
+        return Err(TaskflowStateError::JournalReplayValidation(format!(
+            "event state_before {:?} does not match aggregate state {:?}",
+            persisted.state_before, aggregate_before.state
+        )));
+    }
+
+    let mut replay = aggregate_before.clone();
+    let expected = replay.handle(persisted.command.clone());
+    if &expected != persisted {
+        return Err(TaskflowStateError::JournalReplayValidation(
+            "persisted event does not match run workflow state machine replay".to_string(),
+        ));
+    }
+    Ok(expected)
 }
 
 fn run_workflow_stream_id(run_id: &str) -> VidaStreamRef {
@@ -704,9 +774,17 @@ mod tests {
         DependencyEdge, TaskRecord, VidaAggregateRef, VidaArtifactRef, VidaCommandRef,
         VidaDomainEventEnvelope, VidaEffectIntent, VidaEffectRef, VidaEventCursor, VidaEventRef,
         VidaIdempotencyKey, VidaOperation, VidaProjectionCheckpoint, VidaProjectionRef,
-        VidaReceiptId, VidaStreamRef, VidaStreamVersion, VidaTimestamp,
+        VidaReceiptId, VidaSchemaId, VidaSchemaVersion, VidaStreamRef, VidaStreamVersion,
+        VidaTimestamp,
     };
-    use taskflow_core::{IssueType, TaskId};
+    use taskflow_core::{
+        IssueType, TaskId,
+        role_step::TaskRoleStep,
+        run_workflow::{
+            RunWorkflowAggregate, RunWorkflowCommand, RunWorkflowEffectIntent, RunWorkflowEvent,
+            RunWorkflowState,
+        },
+    };
 
     #[test]
     fn in_memory_store_round_trips_task_records() {
@@ -975,6 +1053,122 @@ mod tests {
             "run-031-corrupt",
         )
         .expect("corrupt payload must fail closed");
+    }
+
+    #[test]
+    fn run_workflow_repository_load_rejects_forged_terminal_state() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let run_id = "run-031-forged";
+        let command_id = VidaCommandRef(format!("run-workflow:{run_id}:1"));
+        let forged = RunWorkflowEvent {
+            command: RunWorkflowCommand::Close,
+            state_before: RunWorkflowState::Idle,
+            state_after: RunWorkflowState::Completed,
+            effect_intents: vec![RunWorkflowEffectIntent::RecordTerminal],
+            blocker_code: None,
+        };
+
+        journal
+            .append(JournalAppendRequest {
+                stream_id: VidaStreamRef(format!("run-workflow:{run_id}")),
+                expected_stream_version: Some(VidaStreamVersion(0)),
+                command_id: command_id.clone(),
+                idempotency_key: VidaIdempotencyKey(format!(
+                    "{command_id}:1",
+                    command_id = command_id.0
+                )),
+                causation_id: None,
+                correlation_id: Some("ldr-031".to_string()),
+                events: vec![VidaDomainEventEnvelope {
+                    schema_id: VidaSchemaId("taskflow.run_workflow.event".to_string()),
+                    event_version: VidaSchemaVersion(1),
+                    event_id: VidaEventRef(format!("{}:event", command_id.0)),
+                    command_id: Some(command_id),
+                    causation_id: None,
+                    stream_id: VidaStreamRef(format!("run-workflow:{run_id}")),
+                    stream_version: VidaStreamVersion(1),
+                    aggregate_id: VidaAggregateRef(run_id.to_string()),
+                    occurred_at: VidaTimestamp("version-1".to_string()),
+                    payload: serde_json::to_value(forged).expect("forged event should serialize"),
+                    trace: serde_json::json!({}),
+                }],
+                effect_intents: Vec::new(),
+            })
+            .expect("raw append should set up forged journal event");
+
+        let error = RunWorkflowJournalRepository::new(&mut journal)
+            .load(run_id, "ldr-031")
+            .expect_err("forged terminal state must fail closed");
+        assert!(matches!(
+            error,
+            TaskflowStateError::JournalReplayValidation(_)
+        ));
+    }
+
+    #[test]
+    fn run_workflow_repository_load_rejects_non_sequential_metadata() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let run_id = "run-031-gap";
+        let stream_id = VidaStreamRef(format!("run-workflow:{run_id}"));
+        let command_id = VidaCommandRef(format!("run-workflow:{run_id}:2"));
+        let mut aggregate = RunWorkflowAggregate::new(run_id, "ldr-031");
+        let valid_event = aggregate.handle(RunWorkflowCommand::Start {
+            first_step: TaskRoleStep::planning(),
+        });
+
+        journal
+            .append(JournalAppendRequest {
+                stream_id: stream_id.clone(),
+                expected_stream_version: Some(VidaStreamVersion(0)),
+                command_id: command_id.clone(),
+                idempotency_key: VidaIdempotencyKey(format!("{}:2", command_id.0)),
+                causation_id: None,
+                correlation_id: Some("ldr-031".to_string()),
+                events: vec![VidaDomainEventEnvelope {
+                    schema_id: VidaSchemaId("taskflow.run_workflow.event".to_string()),
+                    event_version: VidaSchemaVersion(1),
+                    event_id: VidaEventRef(format!("{}:event", command_id.0)),
+                    command_id: Some(command_id),
+                    causation_id: None,
+                    stream_id,
+                    stream_version: VidaStreamVersion(2),
+                    aggregate_id: VidaAggregateRef(run_id.to_string()),
+                    occurred_at: VidaTimestamp("version-2".to_string()),
+                    payload: serde_json::to_value(valid_event).expect("event should serialize"),
+                    trace: serde_json::json!({}),
+                }],
+                effect_intents: Vec::new(),
+            })
+            .expect("raw append should set up metadata gap");
+
+        let error = RunWorkflowJournalRepository::new(&mut journal)
+            .load(run_id, "ldr-031")
+            .expect_err("non-sequential stream_version must fail closed");
+        assert!(matches!(
+            error,
+            TaskflowStateError::JournalReplayValidation(_)
+        ));
+    }
+
+    #[test]
+    fn run_workflow_repository_append_rejects_caller_forged_event() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let aggregate = RunWorkflowAggregate::new("run-031-append-forged", "ldr-031");
+        let forged = RunWorkflowEvent {
+            command: RunWorkflowCommand::Close,
+            state_before: RunWorkflowState::Idle,
+            state_after: RunWorkflowState::Completed,
+            effect_intents: vec![RunWorkflowEffectIntent::RecordTerminal],
+            blocker_code: None,
+        };
+
+        let error = RunWorkflowJournalRepository::new(&mut journal)
+            .append(&aggregate, forged)
+            .expect_err("append must validate events against the state machine");
+        assert!(matches!(
+            error,
+            TaskflowStateError::JournalReplayValidation(_)
+        ));
     }
 
     fn append_request(
