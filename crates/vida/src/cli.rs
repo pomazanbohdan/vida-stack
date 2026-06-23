@@ -2969,8 +2969,7 @@ pub(crate) struct TaskNextLawfulArgs {
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskProgressArgs {
     #[arg(
-        help = "Task id whose progress should be inspected; omit when using --epics",
-        required_unless_present = "epics"
+        help = "Task id whose progress should be inspected; omit when using --epics, or omit all selectors to see actionable progress commands"
     )]
     pub(crate) task_id: Option<String>,
 

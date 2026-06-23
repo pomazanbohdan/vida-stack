@@ -37,6 +37,23 @@ fn unique_test_id(prefix: &str) -> String {
     format!("{}-{}-{}-{}", prefix, std::process::id(), nanos, counter)
 }
 
+fn run_and_assert_failure(args: &[&str], state_dir: &str) -> (String, String) {
+    let output = vida()
+        .args(args)
+        .env("VIDA_STATE_DIR", state_dir)
+        .output()
+        .expect("run vida command");
+    assert!(
+        !output.status.success(),
+        "expected vida command to fail: {:?}",
+        args
+    );
+    (
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    )
+}
+
 fn project_bound_state_dir() -> (String, String) {
     let project_root = unique_state_dir();
     let state_dir = format!("{project_root}/.vida/data/state");
@@ -8501,6 +8518,39 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
     assert_eq!(shown["task"]["notes"], "planning round trip proof");
 
     let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_progress_no_args_outputs_actionable_default_guidance() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let (stdout, stderr) = run_and_assert_failure(&["task", "progress"], &state_dir);
+
+    assert!(stdout.starts_with("vida task progress\n"));
+    assert!(stdout.contains("status: blocked"));
+    assert!(stdout.contains("blocker_codes[1]: task_progress_selector_required"));
+    assert!(stdout.contains("reason: task progress needs either a task id or --epics"));
+    assert!(stdout.contains("vida task progress <task-id>"));
+    assert!(stdout.contains("vida task progress --epics"));
+    assert!(!stdout.trim_start().starts_with('{'));
+    assert!(!stdout.contains("--json"));
+    assert!(
+        stderr.trim().is_empty(),
+        "default guidance should render on stdout without clap stderr: {stderr}"
+    );
+
+    let json = run_command_json_allow_failure(&["task", "progress", "--json"], &state_dir).0;
+    assert_eq!(json["surface"], "vida task progress");
+    assert_eq!(json["status"], "blocked");
+    assert_eq!(
+        json["blocker_codes"],
+        serde_json::json!(["task_progress_selector_required"])
+    );
+    assert_eq!(
+        json["recommended_commands"],
+        serde_json::json!(["vida task progress <task-id>", "vida task progress --epics"])
+    );
 }
 
 #[test]

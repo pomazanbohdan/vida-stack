@@ -10003,8 +10003,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             } else {
                 let Some(task_id) = command.task_id.as_deref() else {
-                    eprintln!("Task id is required unless --epics is set");
-                    return ExitCode::from(1);
+                    crate::task_cli_render::print_task_progress_missing_selector(
+                        command.render,
+                        command.json,
+                    );
+                    return ExitCode::from(2);
                 };
                 let basis = match task_progress_basis_arg(&command.basis) {
                     Ok(basis) => basis,

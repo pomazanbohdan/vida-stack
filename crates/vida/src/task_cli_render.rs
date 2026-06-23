@@ -677,6 +677,60 @@ pub(crate) fn print_task_progress(
     print_task_progress_with_stage_ensemble(render, summary, None, as_json, false);
 }
 
+pub(crate) fn print_task_progress_missing_selector(render: RenderMode, as_json: bool) {
+    let payload = serde_json::json!({
+        "surface": "vida task progress",
+        "status": "blocked",
+        "blocker_codes": ["task_progress_selector_required"],
+        "reason": "task progress needs either a task id or --epics",
+        "next_actions": [
+            "Run `vida task progress <task-id>` to inspect one task.",
+            "Run `vida task progress --epics` to inspect open epic progress."
+        ],
+        "recommended_commands": [
+            "vida task progress <task-id>",
+            "vida task progress --epics"
+        ]
+    });
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task progress missing selector should render as json",
+    ) {
+        return;
+    }
+
+    if matches!(render, RenderMode::Plain) {
+        println!(
+            "{}",
+            taskflow_format_toon::render_section(
+                "vida task progress",
+                &[
+                    "status: blocked",
+                    "blocker_codes[1]: task_progress_selector_required",
+                    "reason: task progress needs either a task id or --epics",
+                    "next_actions[2]:",
+                    "  - vida task progress <task-id>",
+                    "  - vida task progress --epics",
+                ]
+                .join("\n  "),
+            )
+        );
+        return;
+    }
+
+    print_surface_header(render, "vida task progress");
+    print_surface_line(render, "status", "blocked");
+    print_surface_line(render, "blocker_codes", "task_progress_selector_required");
+    print_surface_line(
+        render,
+        "reason",
+        "task progress needs either a task id or --epics",
+    );
+    print_surface_line(render, "next action", "vida task progress <task-id>");
+    print_surface_line(render, "next action", "vida task progress --epics");
+}
+
 pub(crate) fn print_task_progress_with_stage_ensemble(
     render: RenderMode,
     summary: &TaskProgressSummary,
