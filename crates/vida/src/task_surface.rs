@@ -9049,6 +9049,14 @@ fn print_task_attempt_payload(
                         payload["stages"].clone(),
                     ),
                     operator_output::toon_report::OperatorToonField::value(
+                        "binding_error_kind",
+                        payload["binding_error_kind"].clone(),
+                    ),
+                    operator_output::toon_report::OperatorToonField::value(
+                        "binding_error",
+                        payload["binding_error"].clone(),
+                    ),
+                    operator_output::toon_report::OperatorToonField::value(
                         "blocker_codes",
                         payload["blocker_codes"].clone(),
                     ),
@@ -9254,6 +9262,9 @@ fn task_attempt_error_payload(
     attempt_id: Option<&str>,
     error: &state_store::StateStoreError,
 ) -> serde_json::Value {
+    let error_text = error.to_string();
+    let binding_error_kind = task_attempt_binding_error_kind(&error_text);
+    let next_action = task_attempt_binding_next_action(binding_error_kind);
     let blocker = match error {
         state_store::StateStoreError::MissingTask { .. } => {
             crate::release1_contracts::BlockerCode::NextActionTargetMissing
@@ -9274,18 +9285,46 @@ fn task_attempt_error_payload(
     task_attempt_operator_payload(
         surface,
         vec![crate::release1_contracts::blocker_code_str(blocker).to_string()],
-        vec![
-            "Inspect the task binding with `vida task show <task-id>` and retry with a live leaf task, matching stage id, and canonical attempt status."
-                .to_string(),
-        ],
+        vec![next_action.to_string()],
         artifact_refs,
         serde_json::json!({
             "attempt": serde_json::Value::Null,
             "stage_summary": serde_json::Value::Null,
-            "error": error.to_string(),
+            "error": error_text,
+            "binding_error": error_text,
+            "binding_error_kind": binding_error_kind,
             "canonical_task_notes_mutated": false,
         }),
     )
+}
+
+fn task_attempt_binding_error_kind(error: &str) -> &'static str {
+    if error.contains("is closed") {
+        "closed_task_binding"
+    } else if error.contains("stale_task_binding") || error.contains("freshness") {
+        "stale_task_binding"
+    } else if error.contains("requires a leaf task") {
+        "container_task_binding"
+    } else {
+        "invalid_task_attempt_binding"
+    }
+}
+
+fn task_attempt_binding_next_action(kind: &str) -> &'static str {
+    match kind {
+        "closed_task_binding" => {
+            "The task is already closed; inspect `vida task progress <task-id>` for historical attempt state or retry with an open leaf task."
+        }
+        "stale_task_binding" => {
+            "The attempt is stale for the current task update timestamp; inspect `vida task progress <task-id>` and dispatch a fresh attempt before transitioning."
+        }
+        "container_task_binding" => {
+            "Select an open leaf task with `vida task ready --scope <container-task-id> --limit 10`, then run the attempt command on that leaf task."
+        }
+        _ => {
+            "Inspect the task binding with `vida task show <task-id>` and retry with a live leaf task, matching stage id, and canonical attempt status."
+        }
+    }
 }
 
 fn task_attempt_operator_payload(
@@ -13795,6 +13834,36 @@ mod tests {
             command,
             "vida task attempt dispatch leaf-task --stage implementation"
         );
+    }
+
+    #[test]
+    fn task_attempt_binding_error_kind_classifies_closed_stale_and_container_bindings() {
+        assert_eq!(
+            super::task_attempt_binding_error_kind(
+                "task attempt binding is stale because task `ldr-041` is closed"
+            ),
+            "closed_task_binding"
+        );
+        assert_eq!(
+            super::task_attempt_binding_error_kind(
+                "stale_task_binding: attempt `a` freshness `old` does not match task `t` updated_at `new`"
+            ),
+            "stale_task_binding"
+        );
+        assert_eq!(
+            super::task_attempt_binding_error_kind(
+                "task attempt binding requires a leaf task, got `epic-a` of type `epic`"
+            ),
+            "container_task_binding"
+        );
+    }
+
+    #[test]
+    fn task_attempt_binding_next_action_is_specific_for_closed_task_binding() {
+        let next_action = super::task_attempt_binding_next_action("closed_task_binding");
+
+        assert!(next_action.contains("already closed"));
+        assert!(next_action.contains("vida task progress <task-id>"));
     }
 
     #[test]
