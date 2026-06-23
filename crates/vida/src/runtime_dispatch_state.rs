@@ -6592,9 +6592,12 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             .map(str::trim)
             .filter(|value| !value.is_empty() && *value != "next")
         {
-            if let Some(target_resolution) =
-                resolve_runtime_dispatch_target(&role_selection.execution_plan, explicit_target)
-            {
+            if let Some(target_resolution) = lawful_explicit_downstream_dispatch_target(
+                &role_selection.execution_plan,
+                &execution_lane_sequence,
+                receipt,
+                explicit_target,
+            ) {
                 let missing_owned_scope = request_missing_owned_write_scope_for_dispatch_target(
                     store,
                     role_selection,
@@ -7097,6 +7100,35 @@ pub(crate) async fn derive_downstream_dispatch_preview(
         }
         _ => (None, None, None, false, Vec::new()),
     }
+}
+
+fn lawful_explicit_downstream_dispatch_target(
+    execution_plan: &serde_json::Value,
+    execution_lane_sequence: &[String],
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    explicit_target: &str,
+) -> Option<RuntimeDispatchTargetResolution> {
+    let target_resolution = resolve_runtime_dispatch_target(execution_plan, explicit_target)?;
+    let target = target_resolution.dispatch_target.as_str();
+    let current_index = execution_lane_sequence_index_for_target(
+        execution_lane_sequence,
+        &receipt.dispatch_target,
+        receipt.downstream_dispatch_last_target.as_deref(),
+    );
+
+    if let Some(current_index) = current_index {
+        return execution_lane_sequence
+            .get(current_index + 1)
+            .and_then(|next_target| resolve_runtime_dispatch_target(execution_plan, next_target))
+            .filter(|next_resolution| next_resolution.dispatch_target == target)
+            .map(|_| target_resolution);
+    }
+
+    execution_lane_sequence
+        .first()
+        .and_then(|first_target| resolve_runtime_dispatch_target(execution_plan, first_target))
+        .filter(|first_resolution| first_resolution.dispatch_target == target)
+        .map(|_| target_resolution)
 }
 
 fn execution_lane_sequence_index_for_target(
@@ -15906,6 +15938,92 @@ host_environment:
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("junior".to_string()),
             recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(crate::StateStore::open(
+                harness.path().join(crate::state_store::default_state_dir()),
+            ))
+            .expect("state store should initialize");
+        let (target, _command, _note, ready, blockers) = runtime.block_on(
+            derive_downstream_dispatch_preview(&store, &role_selection, &receipt),
+        );
+        assert_eq!(target.as_deref(), Some("coach"));
+        assert!(ready);
+        assert!(blockers.is_empty());
+    }
+
+    #[test]
+    fn explicit_downstream_target_cannot_skip_execution_lane_sequence() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach", "verification"],
+                        "implementer_activation": {
+                            "completion_blocker": "pending_implementation_evidence",
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        },
+                        "coach_activation": {
+                            "completion_blocker": "pending_review_clean_evidence",
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "coach"
+                        },
+                        "verifier_activation": {
+                            "completion_blocker": "pending_verification_evidence",
+                            "activation_agent_type": "senior",
+                            "activation_runtime_role": "verifier"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-dev-skip-attempt".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-06-23T00:00:00Z".to_string(),
         };
 
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
