@@ -6475,22 +6475,10 @@ fn task_close_git_automation_receipt(
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
-    let ignored_dirty_files = Vec::new();
-    if command.commit {
+    let ignored_dirty_files = if command.commit {
         match dirty_paths_for_repo(&repo_root) {
             Ok(dirty_paths) => {
-                let ambiguous: Vec<String> = dirty_paths
-                    .into_iter()
-                    .filter(|path| !path_is_explicitly_owned(path, &explicit_files))
-                    .collect();
-                if !ambiguous.is_empty() {
-                    return blocked_task_close_git_receipt(
-                        explicit_files,
-                        commit_message,
-                        "dirty_ownership_ambiguous",
-                        "Clean unrelated dirty files or include only the owned paths with repeated `--commit-file` values.",
-                    );
-                }
+                task_close_ignored_dirty_files_for_explicit_commit(dirty_paths, &explicit_files)
             }
             Err(_) => {
                 return blocked_task_close_git_receipt(
@@ -6501,7 +6489,11 @@ fn task_close_git_automation_receipt(
                 );
             }
         }
+    } else {
+        Vec::new()
+    };
 
+    if command.commit {
         let stage_files: Vec<std::path::PathBuf> = explicit_files
             .iter()
             .map(std::path::PathBuf::from)
@@ -6762,6 +6754,16 @@ fn task_close_commit_allowlist_next_actions(ignored_dirty_files: &[String]) -> V
             ignored_dirty_files.len()
         )]
     }
+}
+
+fn task_close_ignored_dirty_files_for_explicit_commit(
+    dirty_paths: Vec<String>,
+    explicit_files: &[String],
+) -> Vec<String> {
+    dirty_paths
+        .into_iter()
+        .filter(|path| !path_is_explicitly_owned(path, explicit_files))
+        .collect()
 }
 
 fn blocked_task_close_git_receipt(
@@ -12393,8 +12395,8 @@ mod tests {
         task_close_automation_is_blocked, task_close_automation_receipt,
         task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
         task_close_epic_progress_summary, task_close_feedback_blocker_summary,
-        task_close_host_agent_telemetry, task_close_result_payload,
-        task_close_uses_isolated_state_dir, task_continuation_candidate,
+        task_close_host_agent_telemetry, task_close_ignored_dirty_files_for_explicit_commit,
+        task_close_result_payload, task_close_uses_isolated_state_dir, task_continuation_candidate,
         task_create_planner_metadata_arg, task_create_semantics_mismatch,
         task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
         task_exception_takeover_metadata_path, task_exception_takeover_owned_write_scope,
@@ -14671,6 +14673,109 @@ mod tests {
             ]
         );
         assert!(task_close_commit_allowlist_next_actions(&[]).is_empty());
+    }
+
+    #[test]
+    fn task_close_commit_allowlist_ignores_unrelated_dirty_files() {
+        let ignored = task_close_ignored_dirty_files_for_explicit_commit(
+            vec![
+                "crates/vida/src/task_surface.rs".to_string(),
+                "AGENTS.md".to_string(),
+                "docs/process/index.md".to_string(),
+            ],
+            &["crates/vida/src/task_surface.rs".to_string()],
+        );
+
+        assert_eq!(
+            ignored,
+            vec!["AGENTS.md".to_string(), "docs/process/index.md".to_string()]
+        );
+        assert_eq!(
+            task_close_commit_allowlist_next_actions(&ignored),
+            vec![
+                "Ignored 2 unrelated dirty file(s) because explicit `--commit-file` allowlist was supplied."
+            ]
+        );
+    }
+
+    #[test]
+    fn task_close_commit_with_explicit_file_ignores_unrelated_dirty_worktree() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let repo_root = std::env::temp_dir().join(format!(
+            "vida-task-close-commit-allowlist-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(repo_root.join("src")).expect("create temp repo");
+        let run_git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo_root)
+                .output()
+                .expect("git command should run")
+        };
+        assert!(run_git(&["init"]).status.success());
+        assert!(
+            run_git(&["config", "user.email", "vida-test@example.invalid"])
+                .status
+                .success()
+        );
+        assert!(
+            run_git(&["config", "user.name", "VIDA Test"])
+                .status
+                .success()
+        );
+        std::fs::write(repo_root.join("src/owned.txt"), "old\n").expect("write owned");
+        std::fs::write(repo_root.join("unrelated.txt"), "old\n").expect("write unrelated");
+        assert!(run_git(&["add", "."]).status.success());
+        assert!(run_git(&["commit", "-m", "initial"]).status.success());
+        std::fs::write(repo_root.join("src/owned.txt"), "new\n").expect("modify owned");
+        std::fs::write(repo_root.join("unrelated.txt"), "new\n").expect("modify unrelated");
+
+        let task = owned_task_record("task-owned", vec!["src/owned.txt"]);
+        let receipt = task_close_automation_receipt(
+            &crate::TaskCloseArgs {
+                task_id: "task-owned".to_string(),
+                reason: Some("done".to_string()),
+                reason_file: None,
+                source: None,
+                release: false,
+                install: false,
+                install_target: "current".to_string(),
+                skip_release_build: false,
+                source_binary: None,
+                install_root: None,
+                commit: true,
+                push: false,
+                include_global_progress: false,
+                stage_owned: false,
+                commit_files: vec![std::path::PathBuf::from("src/owned.txt")],
+                commit_message: Some("close explicit file".to_string()),
+                state_dir: None,
+                render: crate::RenderMode::Plain,
+                json: true,
+            },
+            Some(&repo_root),
+            Some(&task),
+        );
+
+        assert_eq!(receipt.status, "pass");
+        let git = receipt.git.expect("git receipt should be present");
+        assert_eq!(git.status, "pass");
+        assert_eq!(git.blocker_codes, Vec::<String>::new());
+        assert_eq!(
+            git.next_actions,
+            vec![
+                "Ignored 1 unrelated dirty file(s) because explicit `--commit-file` allowlist was supplied."
+            ]
+        );
+        let status = String::from_utf8(run_git(&["status", "--short"]).stdout)
+            .expect("git status should be utf8");
+        assert!(!status.contains("src/owned.txt"));
+        assert!(status.contains("unrelated.txt"));
+        let _ = std::fs::remove_dir_all(&repo_root);
     }
 
     #[test]
