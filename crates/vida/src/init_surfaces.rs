@@ -40,6 +40,7 @@ const LAUNCHER_BOOTSTRAP_MUTATION_TIMEOUT_SECONDS: u64 = 30;
 const AGENT_INIT_EXECUTE_DISPATCH_MISSING_PACKET_ERROR: &str =
     "Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`.";
 const AGENT_INIT_PACKET_ARG_READ_LIMIT_BYTES: u64 = 1024 * 1024;
+const AGENT_INIT_DISPATCH_RESULT_ARTIFACT_READ_LIMIT_BYTES: u64 = 1024 * 1024;
 static AGENT_INIT_READ_SURFACE_GUARD: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 fn emit_agent_init_invalid_role(
@@ -1437,6 +1438,7 @@ async fn agent_init_execute_dispatch_resume_error_receipt_evidence(
     store: &StateStore,
     error: &str,
     requested_dispatch_packet_path: Option<&str>,
+    include_result_artifact: bool,
 ) -> (
     Option<crate::state_store::RunGraphDispatchReceipt>,
     Option<serde_json::Value>,
@@ -1456,12 +1458,54 @@ async fn agent_init_execute_dispatch_resume_error_receipt_evidence(
         .await
         .ok()
         .flatten();
-    let result_artifact = receipt
-        .as_ref()
-        .and_then(|receipt| receipt.dispatch_result_path.as_deref())
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok());
+    let result_artifact = if include_result_artifact {
+        receipt
+            .as_ref()
+            .and_then(|receipt| receipt.dispatch_result_path.as_deref())
+            .and_then(|path| safe_read_agent_init_dispatch_result_artifact_json(store.root(), path))
+    } else {
+        None
+    };
     (receipt, result_artifact)
+}
+
+fn safe_read_agent_init_dispatch_result_artifact_json(
+    state_root: &Path,
+    result_path: &str,
+) -> Option<serde_json::Value> {
+    let trimmed = result_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = Path::new(trimmed);
+    let candidate = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        state_root.join(candidate)
+    };
+    let state_root = std::fs::canonicalize(state_root).ok()?;
+    let candidate = std::fs::canonicalize(candidate).ok()?;
+    if !candidate.starts_with(&state_root) {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(&candidate).ok()?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > AGENT_INIT_DISPATCH_RESULT_ARTIFACT_READ_LIMIT_BYTES
+    {
+        return None;
+    }
+    let file = std::fs::File::open(&candidate).ok()?;
+    let mut body = String::new();
+    let mut limited = std::io::Read::take(
+        file,
+        AGENT_INIT_DISPATCH_RESULT_ARTIFACT_READ_LIMIT_BYTES + 1,
+    );
+    std::io::Read::read_to_string(&mut limited, &mut body).ok()?;
+    if body.len() as u64 > AGENT_INIT_DISPATCH_RESULT_ARTIFACT_READ_LIMIT_BYTES {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(&body).ok()
 }
 
 fn orchestrator_init_projection_name(full: bool) -> &'static str {
@@ -6136,6 +6180,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                         &store,
                                         &error,
                                         args.dispatch_packet.as_deref(),
+                                        true,
                                     )
                                     .await;
                                 crate::print_json_pretty(
@@ -6155,6 +6200,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                     &store,
                                     &error,
                                     args.dispatch_packet.as_deref(),
+                                    false,
                                 )
                                 .await;
                             let payload =
@@ -6469,6 +6515,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                             &store,
                                             &error,
                                             args.dispatch_packet.as_deref(),
+                                            true,
                                         )
                                         .await;
                                     crate::print_json_pretty(
@@ -6486,6 +6533,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                         &store,
                                         &error,
                                         args.dispatch_packet.as_deref(),
+                                        false,
                                     )
                                     .await;
                                 let payload =
@@ -9324,6 +9372,75 @@ mod agent_init_surface_tests {
             .contains("full_output_machine_command: vida agent-init --execute-dispatch --json"));
         assert!(!rendered.contains("should_not_print"));
         assert!(!rendered.contains("\"large\""));
+    }
+
+    fn unique_init_surface_temp_root(prefix: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn safe_agent_init_dispatch_result_artifact_reader_accepts_state_root_regular_json() {
+        let root = unique_init_surface_temp_root("vida-agent-init-safe-artifact");
+        std::fs::create_dir_all(&root).expect("state root should be created");
+        let artifact_path = root.join("dispatch-result.json");
+        std::fs::write(&artifact_path, r#"{"status":"blocked"}"#)
+            .expect("artifact should be written");
+
+        let artifact = safe_read_agent_init_dispatch_result_artifact_json(
+            &root,
+            artifact_path.to_str().expect("utf8 artifact path"),
+        )
+        .expect("safe in-root artifact should be read");
+
+        assert_eq!(artifact["status"], "blocked");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn safe_agent_init_dispatch_result_artifact_reader_rejects_outside_root() {
+        let root = unique_init_surface_temp_root("vida-agent-init-safe-artifact-root");
+        let outside = unique_init_surface_temp_root("vida-agent-init-safe-artifact-outside");
+        std::fs::create_dir_all(&root).expect("state root should be created");
+        std::fs::create_dir_all(&outside).expect("outside root should be created");
+        let artifact_path = outside.join("dispatch-result.json");
+        std::fs::write(&artifact_path, r#"{"status":"blocked"}"#)
+            .expect("artifact should be written");
+
+        assert!(safe_read_agent_init_dispatch_result_artifact_json(
+            &root,
+            artifact_path.to_str().expect("utf8 artifact path"),
+        )
+        .is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn safe_agent_init_dispatch_result_artifact_reader_rejects_oversized_file() {
+        let root = unique_init_surface_temp_root("vida-agent-init-safe-artifact-oversized");
+        std::fs::create_dir_all(&root).expect("state root should be created");
+        let artifact_path = root.join("dispatch-result.json");
+        std::fs::write(
+            &artifact_path,
+            vec![b' '; (AGENT_INIT_DISPATCH_RESULT_ARTIFACT_READ_LIMIT_BYTES + 1) as usize],
+        )
+        .expect("oversized artifact should be written");
+
+        assert!(safe_read_agent_init_dispatch_result_artifact_json(
+            &root,
+            artifact_path.to_str().expect("utf8 artifact path"),
+        )
+        .is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

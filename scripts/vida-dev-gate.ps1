@@ -364,26 +364,46 @@ function Invoke-Timed {
     if ($Command.Length -gt 1) {
         $args = $Command[1..($Command.Length - 1)]
     }
+    $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $safeId = $OperationId -replace '[^A-Za-z0-9_.-]', '-'
+    $stdoutPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.out.txt" -f $safeId, $started)
+    $stderrPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.err.txt" -f $safeId, $started)
+    $artifactRefs = @($stdoutPath, $stderrPath)
     try {
-        if ($Json) {
-            $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
-            New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-            $safeId = $OperationId -replace '[^A-Za-z0-9_.-]', '-'
-            $logPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.log" -f $safeId, $started)
-            $previousErrorActionPreference = $ErrorActionPreference
-            $ErrorActionPreference = "Continue"
-            try {
-                & $exe @args *> $logPath
-            } finally {
-                $ErrorActionPreference = $previousErrorActionPreference
-            }
-            $artifactRefs = @($logPath)
-        } else {
-            & $exe @args
-        }
-        $exitCode = $LASTEXITCODE
+        $process = Start-Process `
+            -FilePath $exe `
+            -ArgumentList $args `
+            -WorkingDirectory $RootDir `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -NoNewWindow `
+            -Wait `
+            -PassThru
+        $exitCode = $process.ExitCode
         if ($null -eq $exitCode) {
             $exitCode = 0
+        }
+        if (-not $Json -and $exitCode -eq 0) {
+            if ((Test-Path -LiteralPath $stdoutPath) -and (Get-Item -LiteralPath $stdoutPath).Length -gt 0) {
+                Get-Content -LiteralPath $stdoutPath -Encoding UTF8 | ForEach-Object { Write-Output $_ }
+            }
+            if ((Test-Path -LiteralPath $stderrPath) -and (Get-Item -LiteralPath $stderrPath).Length -gt 0) {
+                Get-Content -LiteralPath $stderrPath -Encoding UTF8 | ForEach-Object { [Console]::Error.WriteLine($_) }
+            }
+        }
+        if (-not $Json -and $exitCode -ne 0) {
+            [Console]::Error.WriteLine(("[fail] {0} exited with code {1}" -f $OperationId, $exitCode))
+            [Console]::Error.WriteLine(("stdout: {0}" -f $stdoutPath))
+            [Console]::Error.WriteLine(("stderr: {0}" -f $stderrPath))
+            foreach ($entry in @(@("stderr", $stderrPath), @("stdout", $stdoutPath))) {
+                $label = $entry[0]
+                $path = $entry[1]
+                if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length -gt 0) {
+                    [Console]::Error.WriteLine(("--- {0} tail ---" -f $label))
+                    Get-Content -LiteralPath $path -Encoding UTF8 -Tail 40 | ForEach-Object { [Console]::Error.WriteLine($_) }
+                }
+            }
         }
     } catch {
         $exitCode = 1
@@ -497,7 +517,7 @@ function Invoke-RootReadmeOnlyCheck {
 
     $readmes = Get-ChildItem -LiteralPath $RootDir -Filter "README.md" -Recurse -Force -File |
         Where-Object {
-            $relative = [System.IO.Path]::GetRelativePath($RootDir, $_.FullName).Replace("\", "/")
+            $relative = Get-RelativePathCompat -Root $RootDir -Path $_.FullName
             $relative -ne "README.md" -and
                 -not $relative.StartsWith(".git/") -and
                 -not $relative.StartsWith("target/") -and
@@ -505,7 +525,7 @@ function Invoke-RootReadmeOnlyCheck {
                 -not $relative.StartsWith(".vida/cargo-target/")
         }
     foreach ($readme in $readmes) {
-        [void]$violations.Add(("{0}: nested README.md is not allowed; use index.md or a semantic document name." -f [System.IO.Path]::GetRelativePath($RootDir, $readme.FullName).Replace("\", "/")))
+        [void]$violations.Add(("{0}: nested README.md is not allowed; use index.md or a semantic document name." -f (Get-RelativePathCompat -Root $RootDir -Path $readme.FullName)))
     }
 
     $sw.Stop()
@@ -557,7 +577,7 @@ function Get-ChangedBashScripts {
 
 function New-NextestCommand {
     param(
-        [string[]]$Args
+        [string[]]$NextestArgs
     )
 
     $command = New-Object System.Collections.Generic.List[string]
@@ -565,7 +585,7 @@ function New-NextestCommand {
     $command.Add("nextest")
     $command.Add("run")
     $command.Add("--locked")
-    foreach ($arg in $Args) {
+    foreach ($arg in $NextestArgs) {
         $command.Add($arg)
     }
     if ($Jobs -gt 0) {
@@ -580,22 +600,199 @@ if ($Help) {
     exit 0
 }
 
+function Get-PathComparison {
+    if ($IsWindows -or ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT)) {
+        return [System.StringComparison]::OrdinalIgnoreCase
+    }
+    return [System.StringComparison]::Ordinal
+}
+
+function Get-RelativePathCompat {
+    param(
+        [string]$Root,
+        [string]$Path
+    )
+
+    $method = [System.IO.Path].GetMethod("GetRelativePath", [type[]]@([string], [string]))
+    if ($null -ne $method) {
+        return [System.IO.Path]::GetRelativePath($Root, $Path).Replace('\', '/')
+    }
+
+    $fullRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if ($fullPath.Equals($fullRoot, (Get-PathComparison))) {
+        return "."
+    }
+    $rootWithSeparator = $fullRoot + [System.IO.Path]::DirectorySeparatorChar
+    $rootUri = New-Object System.Uri($rootWithSeparator)
+    $pathUri = New-Object System.Uri($fullPath)
+    if ($rootUri.Scheme -ne $pathUri.Scheme) {
+        return $fullPath.Replace('\', '/')
+    }
+    return [System.Uri]::UnescapeDataString($rootUri.MakeRelativeUri($pathUri).ToString()).Replace('\', '/')
+}
+
+function Test-PathInsideRoot {
+    param(
+        [string]$Root,
+        [string]$Path,
+        [System.StringComparison]$Comparison
+    )
+
+    return $Path.Equals($Root, $Comparison) -or $Path.StartsWith($Root + [System.IO.Path]::DirectorySeparatorChar, $Comparison)
+}
+
+function Invoke-StaleCargoTargetProcessCleanup {
+    if (-not (Test-IsWindowsHost)) {
+        return
+    }
+
+    $started = Get-Date
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $exitStatus = "pass"
+    $targetRoot = [System.IO.Path]::GetFullPath($CargoTargetDirState.effective_cargo_target_dir).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $stopped = New-Object System.Collections.Generic.List[string]
+    $failed = New-Object System.Collections.Generic.List[string]
+
+    try {
+        if (-not (Test-Path -LiteralPath $targetRoot)) {
+            return
+        }
+
+        $comparison = Get-PathComparison
+        $processes = Get-CimInstance Win32_Process | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+            $_.ProcessId -ne $PID
+        }
+
+        foreach ($process in $processes) {
+            $exePath = $null
+            try {
+                $exePath = [System.IO.Path]::GetFullPath($process.ExecutablePath)
+            } catch {
+                continue
+            }
+            if (-not (Test-PathInsideRoot -Root $targetRoot -Path $exePath -Comparison $comparison)) {
+                continue
+            }
+
+            $label = "{0}({1})" -f $process.Name, $process.ProcessId
+            try {
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+                $deadline = (Get-Date).AddSeconds(5)
+                while ((Get-Date) -lt $deadline) {
+                    if (-not (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue)) {
+                        break
+                    }
+                    Start-Sleep -Milliseconds 100
+                }
+                if (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue) {
+                    [void]$failed.Add($label)
+                } else {
+                    [void]$stopped.Add($label)
+                }
+            } catch {
+                [void]$failed.Add($label)
+            }
+        }
+
+        if ($stopped.Count -gt 0 -and -not $Json) {
+            Write-Output ("[cleanup] stopped stale target process(es): {0}" -f ($stopped.ToArray() -join ", "))
+        }
+        if ($failed.Count -gt 0) {
+            $exitStatus = "fail"
+            [Console]::Error.WriteLine(("stale target process cleanup failed for: {0}" -f ($failed.ToArray() -join ", ")))
+            exit 1
+        }
+    } finally {
+        $sw.Stop()
+        $Records.Add([pscustomobject]@{
+            operation_id = "stale-target-process-cleanup"
+            command_or_surface = "stop executable processes under effective Cargo target dir"
+            cwd_or_context = $RootDir
+            started_at = $started.ToString("o")
+            duration_ms = [int64]$sw.ElapsedMilliseconds
+            exit_status = $exitStatus
+            classification = $(if ($sw.ElapsedMilliseconds -le 2000) { "fast" } elseif ($sw.ElapsedMilliseconds -le 5000) { "watch" } else { "long_gate_expected" })
+            target_dir_policy = $CargoTargetDirState.target_dir_policy
+            effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+            artifact_refs = @()
+            stopped_processes = $stopped.ToArray()
+        })
+    }
+}
+
+function Resolve-ExistingPathTarget {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item -is [System.IO.DirectoryInfo]) {
+        return $item.FullName
+    }
+
+    $target = $item
+    if ($item.PSObject.Methods.Name -contains "ResolveLinkTarget") {
+        $resolved = $item.ResolveLinkTarget($true)
+        if ($null -ne $resolved) {
+            $target = $resolved
+        }
+    }
+
+    return $target.FullName
+}
+
+function Assert-NoReparsePointInPath {
+    param(
+        [string]$Root,
+        [string]$Path,
+        [string]$OriginalPath
+    )
+
+    $relativePath = Get-RelativePathCompat -Root $Root -Path $Path
+    $segments = @($relativePath -split "[/\\]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne "." })
+    $current = $Root
+    foreach ($segment in $segments) {
+        $current = Join-Path $current $segment
+        if (-not (Test-Path -LiteralPath $current)) {
+            return
+        }
+        $item = Get-Item -LiteralPath $current -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Path uses a symlink or reparse point inside repository root: $OriginalPath"
+        }
+    }
+}
+
 function ConvertTo-RepoRelativePath {
     param([string]$Path)
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
         return $null
     }
+    $comparison = Get-PathComparison
     $fullRoot = [System.IO.Path]::GetFullPath($RootDir).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
     $candidate = $Path
     if (-not [System.IO.Path]::IsPathRooted($candidate)) {
         $candidate = Join-Path $RootDir $candidate
     }
     $fullPath = [System.IO.Path]::GetFullPath($candidate)
-    if (-not ($fullPath.Equals($fullRoot, [System.StringComparison]::OrdinalIgnoreCase) -or $fullPath.StartsWith($fullRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase))) {
+    if (-not (Test-PathInsideRoot -Root $fullRoot -Path $fullPath -Comparison $comparison)) {
         throw "Path is outside repository root: $Path"
     }
-    return [System.IO.Path]::GetRelativePath($fullRoot, $fullPath).Replace('\', '/')
+    Assert-NoReparsePointInPath -Root $fullRoot -Path $fullPath -OriginalPath $Path
+    $resolvedPath = Resolve-ExistingPathTarget $fullPath
+    $fullResolvedPath = [System.IO.Path]::GetFullPath($resolvedPath)
+    if (-not (Test-PathInsideRoot -Root $fullRoot -Path $fullResolvedPath -Comparison $comparison)) {
+        throw "Path resolves outside repository root: $Path"
+    }
+    return Get-RelativePathCompat -Root $fullRoot -Path $fullPath
 }
 
 function Get-GitPorcelainPaths {
@@ -659,6 +856,7 @@ $BuildGuard = $null
 if (Test-ModeNeedsBuildConcurrencyGuard $Mode) {
     . (Join-Path $PSScriptRoot "build-concurrency-guard.ps1")
     $BuildGuard = Enter-VidaBuildConcurrencyGuard -RootDir $RootDir -Scope "build"
+    Invoke-StaleCargoTargetProcessCleanup
 }
 
 Push-Location $RootDir
@@ -755,13 +953,17 @@ try {
             Write-Error "-Mode focused-nextest requires -TestFilter <filter>."
             exit 2
         }
-        if ($TestFilter.Trim().Length -gt 0) {
-            Invoke-Timed "nextest-focused" (New-NextestCommand @("-p", "vida", "--profile", "default", $TestFilter))
+        $trimmedTestFilter = $TestFilter.Trim()
+        if ($trimmedTestFilter.Length -gt 0) {
+            if (-not $Json) {
+                Write-Output ("focused-nextest filter: {0}" -f $trimmedTestFilter)
+            }
+            Invoke-Timed "nextest-focused" (New-NextestCommand -NextestArgs @("-p", "vida", "--profile", "default", $trimmedTestFilter))
         }
     } elseif ($Mode -eq "package-nextest") {
-        Invoke-Timed "nextest-package-vida" (New-NextestCommand @("-p", "vida", "--profile", "default"))
+        Invoke-Timed "nextest-package-vida" (New-NextestCommand -NextestArgs @("-p", "vida", "--profile", "default"))
     } elseif ($Mode -eq "workspace-nextest") {
-        Invoke-Timed "nextest-workspace" (New-NextestCommand @("--workspace", "--profile", "ci"))
+        Invoke-Timed "nextest-workspace" (New-NextestCommand -NextestArgs @("--workspace", "--profile", "ci"))
     } elseif ($Mode -eq "doc-test") {
         Invoke-Timed "cargo-doc-tests" @("cargo", "test", "--workspace", "--doc", "--locked")
     } elseif ($Mode -eq "build-debug") {
