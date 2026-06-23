@@ -580,20 +580,89 @@ if ($Help) {
     exit 0
 }
 
+function Get-PathComparison {
+    if ($IsWindows -or ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT)) {
+        return [System.StringComparison]::OrdinalIgnoreCase
+    }
+    return [System.StringComparison]::Ordinal
+}
+
+function Test-PathInsideRoot {
+    param(
+        [string]$Root,
+        [string]$Path,
+        [System.StringComparison]$Comparison
+    )
+
+    return $Path.Equals($Root, $Comparison) -or $Path.StartsWith($Root + [System.IO.Path]::DirectorySeparatorChar, $Comparison)
+}
+
+function Resolve-ExistingPathTarget {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item -is [System.IO.DirectoryInfo]) {
+        return $item.FullName
+    }
+
+    $target = $item
+    if ($item.PSObject.Methods.Name -contains "ResolveLinkTarget") {
+        $resolved = $item.ResolveLinkTarget($true)
+        if ($null -ne $resolved) {
+            $target = $resolved
+        }
+    }
+
+    return $target.FullName
+}
+
+function Assert-NoReparsePointInPath {
+    param(
+        [string]$Root,
+        [string]$Path,
+        [string]$OriginalPath
+    )
+
+    $relativePath = [System.IO.Path]::GetRelativePath($Root, $Path)
+    $segments = @($relativePath -split "[/\\]+" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne "." })
+    $current = $Root
+    foreach ($segment in $segments) {
+        $current = Join-Path $current $segment
+        if (-not (Test-Path -LiteralPath $current)) {
+            return
+        }
+        $item = Get-Item -LiteralPath $current -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Path uses a symlink or reparse point inside repository root: $OriginalPath"
+        }
+    }
+}
+
 function ConvertTo-RepoRelativePath {
     param([string]$Path)
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
         return $null
     }
+    $comparison = Get-PathComparison
     $fullRoot = [System.IO.Path]::GetFullPath($RootDir).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
     $candidate = $Path
     if (-not [System.IO.Path]::IsPathRooted($candidate)) {
         $candidate = Join-Path $RootDir $candidate
     }
     $fullPath = [System.IO.Path]::GetFullPath($candidate)
-    if (-not ($fullPath.Equals($fullRoot, [System.StringComparison]::OrdinalIgnoreCase) -or $fullPath.StartsWith($fullRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase))) {
+    if (-not (Test-PathInsideRoot -Root $fullRoot -Path $fullPath -Comparison $comparison)) {
         throw "Path is outside repository root: $Path"
+    }
+    Assert-NoReparsePointInPath -Root $fullRoot -Path $fullPath -OriginalPath $Path
+    $resolvedPath = Resolve-ExistingPathTarget $fullPath
+    $fullResolvedPath = [System.IO.Path]::GetFullPath($resolvedPath)
+    if (-not (Test-PathInsideRoot -Root $fullRoot -Path $fullResolvedPath -Comparison $comparison)) {
+        throw "Path resolves outside repository root: $Path"
     }
     return [System.IO.Path]::GetRelativePath($fullRoot, $fullPath).Replace('\', '/')
 }
