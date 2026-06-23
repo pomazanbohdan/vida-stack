@@ -6582,6 +6582,43 @@ pub(crate) async fn derive_downstream_dispatch_preview(
     let dispatch_contract = &role_selection.execution_plan["development_flow"]["dispatch_contract"];
     let lane_sequence = dispatch_contract_lane_sequence(dispatch_contract);
     let execution_lane_sequence = dispatch_contract_execution_lane_sequence(dispatch_contract);
+    if matches!(receipt.dispatch_status.as_str(), "executed" | "pass")
+        && (dispatch_receipt_has_execution_evidence(receipt)
+            || dispatch_receipt_allows_synthetic_lane_completion(receipt))
+    {
+        if let Some(explicit_target) = receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "next")
+        {
+            if let Some(target_resolution) =
+                resolve_runtime_dispatch_target(&role_selection.execution_plan, explicit_target)
+            {
+                let missing_owned_scope = request_missing_owned_write_scope_for_dispatch_target(
+                    store,
+                    role_selection,
+                    receipt,
+                    &target_resolution.dispatch_target,
+                )
+                .await;
+                return (
+                    Some(target_resolution.dispatch_target.clone()),
+                    Some("vida agent-init".to_string()),
+                    Some(format!(
+                        "after `{}` evidence is recorded, activate explicitly allowed `{}` for the next bounded lane",
+                        receipt.dispatch_target, target_resolution.dispatch_target
+                    )),
+                    !missing_owned_scope,
+                    if missing_owned_scope {
+                        vec![missing_owned_write_scope_blocker()]
+                    } else {
+                        Vec::new()
+                    },
+                );
+            }
+        }
+    }
     match receipt.dispatch_target.as_str() {
         "spec-pack" if agent_only_development => (
             Some(
@@ -17701,6 +17738,82 @@ host_environment:
                 .as_deref()
                 .expect("downstream packet should be written");
             let packet = read_json(harness.path(), packet_path);
+            assert_eq!(
+                packet["delivery_task_packet"]["owned_paths"],
+                serde_json::json!(owned_paths)
+            );
+        });
+    }
+
+    #[test]
+    fn refresh_downstream_dispatch_preview_honors_explicit_allowed_next_target() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let owned_paths = vec!["crates/vida/src/runtime_dispatch_state.rs".to_string()];
+            let role_selection =
+                configured_first_step_role_selection(Some("developer"), Some("developer"));
+            let run_graph_bootstrap = json!({ "run_id": "run-explicit-allowed-next-preview" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-explicit-allowed-next-preview".to_string(),
+                dispatch_target: "analyst".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/analyst-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("developer".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analyst".to_string()),
+                downstream_dispatch_last_target: Some("analyst".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-23T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview_with_owned_paths(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+                &owned_paths,
+            )
+            .await
+            .expect("preview should honor explicit allowed next target");
+
+            assert_eq!(
+                receipt.downstream_dispatch_target.as_deref(),
+                Some("developer")
+            );
+            assert!(receipt.downstream_dispatch_ready);
+            assert!(receipt.downstream_dispatch_blockers.is_empty());
+            let packet_path = receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .expect("downstream packet should be written");
+            let packet = read_json(harness.path(), packet_path);
+            assert_eq!(packet["dispatch_target"], "developer");
+            assert_eq!(packet["downstream_dispatch_target"], "developer");
             assert_eq!(
                 packet["delivery_task_packet"]["owned_paths"],
                 serde_json::json!(owned_paths)

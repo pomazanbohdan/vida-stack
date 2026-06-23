@@ -64,9 +64,61 @@ pub fn select_fields(value: serde_json::Value, fields: Option<&str>) -> serde_js
     for field in wanted {
         if let Some(value) = object.get(field) {
             selected.insert(field.to_string(), value.clone());
+        } else if let Some(value) = select_dotted_field(&value, field) {
+            insert_dotted_field(&mut selected, field, value);
         }
     }
     serde_json::Value::Object(selected)
+}
+
+fn select_dotted_field(value: &serde_json::Value, field: &str) -> Option<serde_json::Value> {
+    let mut current = value;
+    let mut saw_segment = false;
+    for segment in field.split('.').map(str::trim) {
+        if segment.is_empty() {
+            return None;
+        }
+        saw_segment = true;
+        current = current.as_object()?.get(segment)?;
+    }
+    saw_segment.then(|| current.clone())
+}
+
+fn insert_dotted_field(
+    selected: &mut serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    value: serde_json::Value,
+) {
+    let segments = field
+        .split('.')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    insert_dotted_segments(selected, &segments, value);
+}
+
+fn insert_dotted_segments(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    segments: &[&str],
+    value: serde_json::Value,
+) {
+    match segments {
+        [] => {}
+        [leaf] => {
+            object.insert((*leaf).to_string(), value);
+        }
+        [head, tail @ ..] => {
+            let entry = object
+                .entry((*head).to_string())
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            if !entry.is_object() {
+                *entry = serde_json::Value::Object(serde_json::Map::new());
+            }
+            if let Some(child) = entry.as_object_mut() {
+                insert_dotted_segments(child, tail, value);
+            }
+        }
+    }
 }
 
 fn sanitize_value(value: serde_json::Value) -> serde_json::Value {
@@ -191,5 +243,43 @@ mod tests {
         );
         assert_eq!(selected["ready_count"], 2);
         assert_eq!(selected["status"], "pass");
+    }
+
+    #[test]
+    fn select_fields_returns_requested_nested_fields() {
+        let value = serde_json::json!({
+            "status": "pass",
+            "continuation_binding": {
+                "status": "bound",
+                "primary_path": "taskflow_selection_path",
+                "active_bounded_unit": {
+                    "task_id": "bug-1"
+                }
+            },
+            "next_lawful_dispatch_action": {
+                "status": "preview_required",
+                "command": "vida agent dispatch-next --dev-team"
+            }
+        });
+
+        let selected = select_fields(
+            value,
+            Some(
+                "status,continuation_binding.status,continuation_binding.active_bounded_unit.task_id,next_lawful_dispatch_action.status",
+            ),
+        );
+
+        assert_eq!(selected["status"], "pass");
+        assert_eq!(selected["continuation_binding"]["status"], "bound");
+        assert_eq!(
+            selected["continuation_binding"]["active_bounded_unit"]["task_id"],
+            "bug-1"
+        );
+        assert_eq!(
+            selected["next_lawful_dispatch_action"]["status"],
+            "preview_required"
+        );
+        assert!(selected["continuation_binding"]["primary_path"].is_null());
+        assert!(selected["next_lawful_dispatch_action"]["command"].is_null());
     }
 }
