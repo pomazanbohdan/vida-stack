@@ -1,8 +1,10 @@
+[CmdletBinding()]
 param(
     [string]$Version = "",
     [string]$ReleaseBinDir = "",
     [string]$ReleaseSuffix = "",
     [string]$DistDir = "",
+    [switch]$Install,
     [switch]$SkipBuild,
     [switch]$Windows,
     [switch]$Json,
@@ -26,6 +28,7 @@ Options:
   -ReleaseBinDir <dir>  Directory containing existing release binaries for -SkipBuild.
   -ReleaseSuffix <id>   Artifact suffix. -Windows defaults this to windows-x86_64.
   -DistDir <dir>        Output directory. Defaults to ./dist.
+  -Install              Not supported here. Install with: pwsh -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 upgrade -Archive .\dist\<archive>.zip -Force
   -Json                 Emit a machine-readable packaging receipt.
 
 Windows skip-build example:
@@ -369,6 +372,10 @@ function Test-ZipContainsBinaries {
 if ($Help) {
     Show-Help
     exit 0
+}
+
+if ($Install) {
+    Fail "-Install is not supported by scripts/build-release.ps1. This script only builds release archives. Install the built Windows archive with: pwsh -NoProfile -ExecutionPolicy Bypass -File install\install.ps1 upgrade -Archive .\dist\<archive>.zip -Force"
 }
 
 try {
