@@ -597,6 +597,22 @@ fn host_bridge_packet_is_empty_object(canonical_packet_path: Option<&Path>) -> b
         .unwrap_or(false)
 }
 
+fn host_bridge_complete_can_defer_missing_dispatch_receipt(blockers: &[String]) -> bool {
+    blockers.len() == 1
+        && blockers[0] == taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing.as_str()
+}
+
+fn host_bridge_payload_should_show_completion_command(payload: &serde_json::Value) -> bool {
+    payload["status"].as_str() == Some(release1_pass_status())
+        || payload["blocker_codes"].as_array().is_some_and(|blockers| {
+            blockers.len() == 1
+                && blockers[0].as_str()
+                    == Some(
+                        taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing.as_str(),
+                    )
+        })
+}
+
 fn retryable_host_bridge_completion_request_for_state_root(
     state_root: &Path,
     request: &serde_json::Value,
@@ -783,6 +799,8 @@ fn emit_host_bridge_payload(payload: &serde_json::Value, as_json: bool) -> ExitC
                     operator_output::command_text::human_command(command),
                 ));
             }
+        }
+        if host_bridge_payload_should_show_completion_command(payload) {
             if let Some(command) = payload["host_bridge"]["completion_command"].as_str() {
                 fields.push(operator_output::toon_report::OperatorToonField::text(
                     "completion",
@@ -4045,6 +4063,11 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                         .as_str()
                 });
             }
+            if command.complete
+                && host_bridge_complete_can_defer_missing_dispatch_receipt(&provenance_blockers)
+            {
+                provenance_blockers.clear();
+            }
             let payload = host_bridge_adapter_payload(
                 &operator_request_path,
                 &request,
@@ -5578,6 +5601,215 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[tokio::test]
+    async fn host_bridge_complete_uses_lane_complete_when_only_dispatch_receipt_preflight_is_missing(
+    ) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-complete-missing-preflight-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let run_id = "run-host-bridge-complete-missing-preflight";
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge complete missing preflight receipt",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "specification",
+            "specification",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = "developer".to_string();
+        status.next_node = Some("developer".to_string());
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "developer_blocked".to_string();
+        status.policy_gate = "host_tool_bridge_adapter_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "dispatch.developer".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let request_path = root.join("host-tool-bridge/requests/request.json");
+        let receipt_packet_path =
+            root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = root.join("host-tool-bridge/results/result.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/receipt.json");
+        for path in [
+            &request_path,
+            &receipt_packet_path,
+            &result_path,
+            &receipt_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(
+            &receipt_packet_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": "analyst",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": {
+                    "packet_id": "run-host-bridge-complete-missing-preflight::analyst::delivery",
+                    "task_id": run_id,
+                    "backlog_id": run_id,
+                    "goal": "Complete host bridge wrapper regression",
+                    "scope_in": ["host bridge wrapper completion"],
+                    "read_only_paths": ["crates/vida/src/agent_dispatch_surface.rs"],
+                    "definition_of_done": ["host bridge wrapper completion succeeds"],
+                    "verification_command": "vida lane complete",
+                    "proof_target": "executed dispatch receipt",
+                    "stop_rules": ["stop after lane completion"],
+                    "blocking_question": "Does wrapper completion reuse lane complete?"
+                },
+                "request_text": "complete host bridge wrapper regression",
+                "activation_runtime_role": "worker",
+                "selected_backend": "internal_subagents"
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("write packet");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-complete-missing-preflight",
+            "run_id": run_id,
+            "task_id": run_id,
+            "dispatch_target": "analyst",
+            "task_class": "specification",
+            "packet_path": receipt_packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string(),
+            "allowed_next_node": "designer"
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("write request");
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "analyst".to_string(),
+                dispatch_status: super::release1_blocked_status().to_string(),
+                lane_status: crate::LaneStatus::LaneRunning.as_str().to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+                dispatch_packet_path: Some(receipt_packet_path.display().to_string()),
+                dispatch_result_path: None,
+                blocker_code: Some("lane_completion_blocked_by_summary".to_string()),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("internal_subagents".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-23T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("record lane completion receipt");
+        drop(store);
+
+        assert!(
+            super::host_bridge_complete_can_defer_missing_dispatch_receipt(&[
+                "host_bridge_dispatch_receipt_missing".to_string()
+            ])
+        );
+
+        let exit = run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: Vec::new(),
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: None,
+            consolidation_receipt_id: None,
+            complete: true,
+            host_agent_id: Some("agent-1".to_string()),
+            summary: Some("parent host completed analyst bridge".to_string()),
+            decision: Some("pass".to_string()),
+            verdict: Some("pass".to_string()),
+            allowed_next_node: Some("designer".to_string()),
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            result_file: None,
+            receipt_id: Some("host-bridge-wrapper-complete-1".to_string()),
+            json: true,
+            state_dir: Some(root.clone()),
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let store = state_store::StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt")
+            .expect("receipt should exist");
+        assert_eq!(after.dispatch_status, "executed");
+        assert_eq!(after.lane_status, crate::LaneStatus::LaneCompleted.as_str());
+        assert_eq!(
+            after.downstream_dispatch_target.as_deref(),
+            Some("designer")
+        );
+        assert_eq!(
+            after.dispatch_result_path.as_deref(),
+            Some(result_path.to_str().unwrap())
+        );
+        assert_eq!(
+            after.downstream_dispatch_trace_path.as_deref(),
+            Some(receipt_path.to_str().unwrap())
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn host_bridge_state_root_infers_from_project_state_request_path() {
         let nanos = std::time::SystemTime::now()
@@ -5938,6 +6170,72 @@ mod tests {
             .expect("completion command")
             .contains("--decision"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_blocked_missing_receipt_default_surface_keeps_completion_command() {
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-missing",
+            "run_id": "run-missing",
+            "dispatch_target": "analyst",
+            "packet_path": "packet.json",
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": "request.json",
+            "result_path": "result.json",
+            "receipt_path": "receipt.json"
+        });
+        let payload = host_bridge_adapter_payload(
+            std::path::Path::new("request.json"),
+            &request,
+            vec![
+                taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing
+                    .as_str()
+                    .to_string(),
+            ],
+            None,
+        );
+
+        assert_eq!(payload["status"], super::release1_blocked_status());
+        assert!(super::host_bridge_payload_should_show_completion_command(
+            &payload
+        ));
+        let command = payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command");
+        assert!(command.starts_with("vida lane complete run-missing "));
+        assert!(command.contains("--host-bridge-request request.json"));
+        assert!(!command.contains("--json"));
+
+        let mixed_blocker_payload = host_bridge_adapter_payload(
+            std::path::Path::new("request.json"),
+            &request,
+            vec![
+                taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing
+                    .as_str()
+                    .to_string(),
+                "host_bridge_result_path_unbounded".to_string(),
+            ],
+            None,
+        );
+        assert!(!super::host_bridge_payload_should_show_completion_command(
+            &mixed_blocker_payload
+        ));
+
+        let other_blocker_payload = host_bridge_adapter_payload(
+            std::path::Path::new("request.json"),
+            &request,
+            vec!["host_bridge_result_path_unbounded".to_string()],
+            None,
+        );
+        assert!(!super::host_bridge_payload_should_show_completion_command(
+            &other_blocker_payload
+        ));
     }
 
     #[test]
