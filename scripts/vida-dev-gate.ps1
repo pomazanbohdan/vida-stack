@@ -371,15 +371,24 @@ function Invoke-Timed {
     $stderrPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.err.txt" -f $safeId, $started)
     $artifactRefs = @($stdoutPath, $stderrPath)
     try {
-        $process = Start-Process `
-            -FilePath $exe `
-            -ArgumentList $args `
-            -WorkingDirectory $RootDir `
-            -RedirectStandardOutput $stdoutPath `
-            -RedirectStandardError $stderrPath `
-            -NoNewWindow `
-            -Wait `
-            -PassThru
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $exe
+        $startInfo.WorkingDirectory = $RootDir
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        foreach ($arg in $args) {
+            [void]$startInfo.ArgumentList.Add($arg)
+        }
+
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        [void]$process.Start()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        [System.IO.File]::WriteAllText($stdoutPath, $stdoutTask.GetAwaiter().GetResult(), [System.Text.Encoding]::UTF8)
+        [System.IO.File]::WriteAllText($stderrPath, $stderrTask.GetAwaiter().GetResult(), [System.Text.Encoding]::UTF8)
         $exitCode = $process.ExitCode
         if ($null -eq $exitCode) {
             $exitCode = 0
