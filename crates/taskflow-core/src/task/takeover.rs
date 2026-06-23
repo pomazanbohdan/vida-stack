@@ -21,6 +21,7 @@ impl ExceptionTakeoverStateLabel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum ExceptionTakeoverEvidenceCase {
     MissingReceiptEvidence,
+    CompletedLane,
     SupersededReceipt,
     RecordedWithClearGate,
     TakeoverLane,
@@ -40,6 +41,7 @@ pub fn exception_takeover_transition_table()
 -> EnumMap<ExceptionTakeoverEvidenceCase, Option<ExceptionTakeoverStateLabel>> {
     enum_map! {
         ExceptionTakeoverEvidenceCase::MissingReceiptEvidence => None,
+        ExceptionTakeoverEvidenceCase::CompletedLane => Some(ExceptionTakeoverStateLabel::AdmissibleNotActive),
         ExceptionTakeoverEvidenceCase::SupersededReceipt => Some(ExceptionTakeoverStateLabel::Active),
         ExceptionTakeoverEvidenceCase::RecordedWithClearGate => Some(ExceptionTakeoverStateLabel::AdmissibleNotActive),
         ExceptionTakeoverEvidenceCase::TakeoverLane => Some(ExceptionTakeoverStateLabel::AdmissibleNotActive),
@@ -53,6 +55,9 @@ pub fn classify_exception_takeover_evidence(
 ) -> ExceptionTakeoverEvidenceCase {
     if !has_nonempty_value(input.exception_path_receipt_id) {
         return ExceptionTakeoverEvidenceCase::MissingReceiptEvidence;
+    }
+    if input.lane_status == "lane_completed" {
+        return ExceptionTakeoverEvidenceCase::CompletedLane;
     }
     if has_nonempty_value(input.supersedes_receipt_id) {
         return ExceptionTakeoverEvidenceCase::SupersededReceipt;
@@ -184,6 +189,9 @@ mod tests {
         if !has_nonempty_test_value(receipt_id) {
             return ExceptionTakeoverEvidenceCase::MissingReceiptEvidence;
         }
+        if lane_status == "lane_completed" {
+            return ExceptionTakeoverEvidenceCase::CompletedLane;
+        }
         if has_nonempty_test_value(supersedes_id) {
             return ExceptionTakeoverEvidenceCase::SupersededReceipt;
         }
@@ -247,7 +255,12 @@ mod tests {
 
         #[test]
         fn exception_takeover_transition_superseded_receipt_is_active(
-            lane_status in lane_status_strategy(),
+            lane_status in prop_oneof![
+                Just(""),
+                Just("lane_exception_recorded"),
+                Just("lane_exception_takeover"),
+                Just("unknown_lane_status"),
+            ],
             gate in gate_strategy(),
         ) {
             let input = ExceptionTakeoverDecisionInput {
@@ -266,6 +279,25 @@ mod tests {
                 Some(ExceptionTakeoverStateLabel::Active)
             );
         }
+    }
+
+    #[test]
+    fn exception_takeover_transition_completed_lane_is_not_active() {
+        let input = ExceptionTakeoverDecisionInput {
+            lane_status: "lane_completed",
+            exception_path_receipt_id: Some("receipt-1"),
+            supersedes_receipt_id: Some("supersede-1"),
+            local_exception_takeover_gate: Some("delegated_cycle_clear"),
+        };
+
+        assert_eq!(
+            classify_exception_takeover_evidence(input),
+            ExceptionTakeoverEvidenceCase::CompletedLane
+        );
+        assert_eq!(
+            exception_takeover_state(input),
+            Some(ExceptionTakeoverStateLabel::AdmissibleNotActive)
+        );
     }
 
     #[test]

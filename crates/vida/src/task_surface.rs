@@ -9,23 +9,22 @@ use crate::taskflow_proxy::paths_intersect;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use taskflow_core::task::block::{append_task_block_note, normalize_task_block_list};
 use taskflow_core::task::dependencies::{
-    parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines, TaskDependencyBulkEdge,
+    TaskDependencyBulkEdge, parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines,
 };
 use taskflow_core::task::import_export::{
-    task_import_jsonl_success_fields, task_replace_jsonl_success_fields, TaskImportJsonlSummary,
-    TaskReplaceJsonlSummary,
+    TaskImportJsonlSummary, TaskReplaceJsonlSummary, task_import_jsonl_success_fields,
+    task_replace_jsonl_success_fields,
 };
 use taskflow_core::task::progress::{
-    parse_task_progress_basis,
-    task_progress_summary_from_rows as core_task_progress_summary_from_rows, TaskProgressRow,
-    TaskProgressSummary as CoreTaskProgressSummary,
+    TaskProgressRow, TaskProgressSummary as CoreTaskProgressSummary, parse_task_progress_basis,
+    task_progress_summary_from_rows as core_task_progress_summary_from_rows,
 };
 use taskflow_core::task::verify::{
-    all_structured_task_proof_targets_satisfied, append_task_browser_proof_note,
-    append_task_proof_evidence_note, append_task_verify_note, canonical_task_proof_result,
-    normalized_task_verify_evidence, structured_task_proof_evidence_match,
-    task_browser_proof_target, task_reports_runtime_proof_blocker, task_verify_labels,
-    TaskBrowserProofArtifact,
+    TaskBrowserProofArtifact, all_structured_task_proof_targets_satisfied,
+    append_task_browser_proof_note, append_task_proof_evidence_note, append_task_verify_note,
+    canonical_task_proof_result, normalized_task_verify_evidence,
+    structured_task_proof_evidence_match, task_browser_proof_target,
+    task_reports_runtime_proof_blocker, task_verify_labels,
 };
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -1496,9 +1495,10 @@ async fn task_takeover_status_receipt(
                 "no run-graph lane evidence is available for takeover status of task `{}`",
                 task.id
             ),
-            recommended_command: Some(operator_output::command_text::human_command(
-                &format!("vida lane show {} --json", crate::shell_quote(&task.id)),
-            )),
+            recommended_command: Some(operator_output::command_text::human_command(&format!(
+                "vida lane show {} --json",
+                crate::shell_quote(&task.id)
+            ))),
             next_actions: vec![format!(
                 "Run `{}` to inspect task-scoped lane evidence before attempting exception takeover.",
                 operator_output::command_text::human_command(&format!(
@@ -1527,34 +1527,42 @@ async fn task_takeover_status_receipt(
     });
     let (summary, takeover_state) = match summary {
         Some(summary) => {
-            let state = crate::release1_contracts::exception_takeover_state(
-                summary.exception_path_receipt_id.as_deref(),
-                summary.supersedes_receipt_id.as_deref(),
-                recovery_gate,
+            let receipt = taskflow_authority::exception_takeover::ExceptionTakeoverReceipt {
+                lane_status: summary.lane_status.as_str(),
+                exception_path_receipt_id: summary.exception_path_receipt_id.as_deref(),
+                supersedes_receipt_id: summary.supersedes_receipt_id.as_deref(),
+            };
+            let recovery = recovery_gate.map(|local_exception_takeover_gate| {
+                taskflow_authority::exception_takeover::ExceptionTakeoverRecovery {
+                    local_exception_takeover_gate,
+                }
+            });
+            let state = taskflow_authority::exception_takeover::exception_takeover_state_label(
+                Some(&receipt),
+                recovery.as_ref(),
             );
             (Some(summary), state)
         }
-        None => (
-            None,
-            crate::release1_contracts::ExceptionTakeoverState::NotRecorded,
-        ),
+        None => (None, None),
     };
     let task_matches_lane = status.task_id.trim() == task.id.trim();
-    let receipt_recorded =
-        takeover_state == crate::release1_contracts::ExceptionTakeoverState::ReceiptRecorded;
-    let state_label = taskflow_core::task::takeover::exception_takeover_state_label(
-        takeover_state.is_active(),
-        receipt_recorded,
-    )
-    .to_string();
+    let receipt_recorded = takeover_state
+        == Some(
+            taskflow_authority::exception_takeover::ExceptionTakeoverStateLabel::ReceiptRecorded,
+        );
+    let takeover_active = takeover_state
+        == Some(taskflow_authority::exception_takeover::ExceptionTakeoverStateLabel::Active);
+    let state_label = takeover_state
+        .map(taskflow_authority::exception_takeover::ExceptionTakeoverStateLabel::as_str)
+        .unwrap_or("not_recorded")
+        .to_string();
     let metadata_paths = summary
         .as_ref()
-        .filter(|_| takeover_state.is_active())
+        .filter(|_| takeover_active)
         .map(|summary| task_exception_takeover_owned_write_scope(store.root(), summary))
         .unwrap_or_default();
     let paths = metadata_paths;
-    let root_local_write_allowed =
-        task_matches_lane && takeover_state.is_active() && !paths.is_empty();
+    let root_local_write_allowed = task_matches_lane && takeover_active && !paths.is_empty();
     let allowed = root_local_write_allowed;
     let (reason, blocker_codes, next_actions, recommended_command, recommended_surface) =
         if !task_matches_lane {
@@ -1586,9 +1594,7 @@ async fn task_takeover_status_receipt(
             None,
             None,
         )
-        } else if takeover_state
-            == crate::release1_contracts::ExceptionTakeoverState::ReceiptRecorded
-        {
+        } else if receipt_recorded {
             let command = summary.as_ref().and_then(|summary| {
                 summary
                     .exception_path_receipt_id
@@ -1618,7 +1624,7 @@ async fn task_takeover_status_receipt(
             command.map(|command| operator_output::command_text::human_command(&command)),
             Some("vida lane supersede".to_string()),
         )
-        } else if takeover_state.is_active() && paths.is_empty() {
+        } else if takeover_active && paths.is_empty() {
             (
                 "exception takeover is active but receipt-bound owned_write_scope could not be read"
                     .to_string(),
@@ -1639,7 +1645,7 @@ async fn task_takeover_status_receipt(
                 )),
                 Some("vida lane show".to_string()),
             )
-        } else {
+        } else if state_label == "not_recorded" {
             let command = format!(
                 "vida lane takeover-ready {}",
                 crate::shell_quote(&status.run_id)
@@ -1647,6 +1653,18 @@ async fn task_takeover_status_receipt(
             (
                 "exception takeover is not recorded for this task".to_string(),
                 vec!["exception_takeover_not_recorded".to_string()],
+                vec![command.clone()],
+                Some(command),
+                Some("vida lane takeover-ready".to_string()),
+            )
+        } else {
+            let command = format!(
+                "vida lane takeover-ready {}",
+                crate::shell_quote(&status.run_id)
+            );
+            (
+                "exception takeover is not active for this task".to_string(),
+                vec!["exception_takeover_not_active".to_string()],
                 vec![command.clone()],
                 Some(command),
                 Some("vida lane takeover-ready".to_string()),
@@ -1885,10 +1903,12 @@ fn print_task_evidence_proof_receipt(
 }
 
 fn task_import_jsonl_error_payload(path: &str, error: &str) -> serde_json::Value {
-    let blocker_codes = vec![crate::release1_contracts::blocker_code_value(
-        crate::release1_contracts::BlockerCode::DependencyGraphIssues,
-    )
-    .unwrap_or_else(|| "dependency_graph_issues".to_string())];
+    let blocker_codes = vec![
+        crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::DependencyGraphIssues,
+        )
+        .unwrap_or_else(|| "dependency_graph_issues".to_string()),
+    ];
     let retry_command =
         operator_output::command_text::human_command("vida task import-jsonl <path> --json");
     let next_actions = vec![format!(
@@ -3103,9 +3123,7 @@ fn task_close_feedback_blocker_summary(
         "awaiting_approval" => {
             "Satisfy the approval requirement described in the close reason, then rerun `vida task close ...`."
         }
-        _ => {
-            "Resolve the deferred canonical close condition, then rerun `vida task close ...`."
-        }
+        _ => "Resolve the deferred canonical close condition, then rerun `vida task close ...`.",
     };
     Some((
         vec![
@@ -3557,7 +3575,7 @@ fn task_bulk_string_list_from_value(
                     _ => {
                         return Err(format!(
                             "field `{field_name}` array entries must be strings"
-                        ))
+                        ));
                     }
                 }
             }
@@ -9174,10 +9192,12 @@ fn task_attempt_store_error_payload(
 ) -> serde_json::Value {
     task_attempt_operator_payload(
         surface,
-        vec![crate::release1_contracts::blocker_code_str(
-            crate::release1_contracts::BlockerCode::ProjectActivationUnknown,
-        )
-        .to_string()],
+        vec![
+            crate::release1_contracts::blocker_code_str(
+                crate::release1_contracts::BlockerCode::ProjectActivationUnknown,
+            )
+            .to_string(),
+        ],
         vec![
             "Run `vida project-activator` or `vida boot` before recording task attempts."
                 .to_string(),
@@ -9831,43 +9851,44 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         let task_id_was_requested = requested_task_id
                             .as_ref()
                             .is_some_and(|value| !value.trim().is_empty());
-                        let (status_override, lane_source) =
-                            if let Some(run_id) = command.run_id.as_deref() {
-                                match store.run_graph_status(run_id).await {
-                                    Ok(status) => (Some(status), Some("run_id")),
-                                    Err(error) => {
-                                        eprintln!("Failed to inspect run graph status: {error}");
-                                        return ExitCode::from(1);
-                                    }
+                        let (status_override, lane_source) = if let Some(run_id) =
+                            command.run_id.as_deref()
+                        {
+                            match store.run_graph_status(run_id).await {
+                                Ok(status) => (Some(status), Some("run_id")),
+                                Err(error) => {
+                                    eprintln!("Failed to inspect run graph status: {error}");
+                                    return ExitCode::from(1);
                                 }
-                            } else if let Some(task_id) = requested_task_id
-                                .as_deref()
-                                .map(str::trim)
-                                .filter(|value| !value.is_empty())
-                            {
-                                match store.latest_run_graph_status_for_task(task_id).await {
-                                    Ok(status) => (status, Some("task_id")),
-                                    Err(error) => {
-                                        eprintln!(
+                            }
+                        } else if let Some(task_id) = requested_task_id
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                        {
+                            match store.latest_run_graph_status_for_task(task_id).await {
+                                Ok(status) => (status, Some("task_id")),
+                                Err(error) => {
+                                    eprintln!(
                                         "Failed to inspect task-scoped run graph status: {error}"
                                     );
-                                        return ExitCode::from(1);
-                                    }
+                                    return ExitCode::from(1);
                                 }
-                            } else {
-                                let current = store
-                                    .latest_run_graph_status_for_current_session()
-                                    .await
-                                    .ok()
-                                    .flatten();
-                                match current {
-                                    Some(status) => (Some(status), Some("current_session")),
-                                    None => (
-                                        store.latest_run_graph_status().await.ok().flatten(),
-                                        Some("latest"),
-                                    ),
-                                }
-                            };
+                            }
+                        } else {
+                            let current = store
+                                .latest_run_graph_status_for_current_session()
+                                .await
+                                .ok()
+                                .flatten();
+                            match current {
+                                Some(status) => (Some(status), Some("current_session")),
+                                None => (
+                                    store.latest_run_graph_status().await.ok().flatten(),
+                                    Some("latest"),
+                                ),
+                            }
+                        };
                         let Some(task_id) = requested_task_id
                             .filter(|value| !value.trim().is_empty())
                             .or_else(|| {
@@ -12298,6 +12319,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
+        ADAPTIVE_REPLAN_FINDING_KINDS, TaskCloseAutomationReceipt, TaskContinuationCandidate,
+        TaskProofAttachBrowserReceipt, TaskProofAttachEvidenceReceipt,
         blocked_runtime_recovery_task_next_lawful_receipt, blocked_task_next_lawful_receipt,
         build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
         build_split_mutation_preview, canonical_json_string_array_entries,
@@ -12325,20 +12348,18 @@ mod tests {
         task_owned_status_receipt, task_parent_id, task_progress_summary_for_basis,
         task_ready_authoritative_first, task_takeover_status_default_lines,
         task_takeover_status_receipt, task_update_planner_metadata_arg,
-        validate_task_handoff_accept_receipt, TaskCloseAutomationReceipt,
-        TaskContinuationCandidate, TaskProofAttachBrowserReceipt, TaskProofAttachEvidenceReceipt,
-        ADAPTIVE_REPLAN_FINDING_KINDS,
+        validate_task_handoff_accept_receipt,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::EnvVarGuard;
     use crate::test_cli_support::cli;
     use crate::test_cli_support::guard_current_dir;
-    use crate::test_cli_support::EnvVarGuard;
     use std::fs;
     use std::process::ExitCode;
     use taskflow_core::task::verify::{
-        append_task_browser_proof_note, task_browser_proof_target, TaskBrowserProofArtifact,
         TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION, TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
+        TaskBrowserProofArtifact, append_task_browser_proof_note, task_browser_proof_target,
     };
 
     async fn create_task_for_test(
@@ -12643,9 +12664,11 @@ mod tests {
             plan.result.validation_errors[0].field.as_deref(),
             Some("parent_id")
         );
-        assert!(plan.result.validation_errors[0]
-            .reason
-            .contains("requires parent_id"));
+        assert!(
+            plan.result.validation_errors[0]
+                .reason
+                .contains("requires parent_id")
+        );
         assert_eq!(plan.result.planned_count, 0);
         let payload = super::task_bulk_import_result_payload(&plan.result);
         assert_eq!(payload["status"], "blocked");
@@ -12789,10 +12812,12 @@ mod tests {
                     .await
                     .expect("reconcile should inspect legacy state");
                 assert_eq!(dry_run.progress_basis, "descendants_excluding_root");
-                assert!(dry_run
-                    .closed_epics
-                    .iter()
-                    .all(|row| row.epic_id != "legacy-epic"));
+                assert!(
+                    dry_run
+                        .closed_epics
+                        .iter()
+                        .all(|row| row.epic_id != "legacy-epic")
+                );
                 let blocked = dry_run
                     .blocked_epics
                     .iter()
@@ -12809,10 +12834,12 @@ mod tests {
                     reconcile_epics_from_descendant_progress(&store, true, false)
                         .await
                         .expect("close-if-complete should still block legacy state");
-                assert!(close_if_complete
-                    .closed_epics
-                    .iter()
-                    .all(|row| row.epic_id != "legacy-epic"));
+                assert!(
+                    close_if_complete
+                        .closed_epics
+                        .iter()
+                        .all(|row| row.epic_id != "legacy-epic")
+                );
                 let epic = store
                     .show_task("legacy-epic")
                     .await
@@ -13030,6 +13057,116 @@ mod tests {
     }
 
     #[test]
+    fn task_takeover_status_blocks_completed_lane_exception_scope() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            let task = owned_task_record(
+                "task-takeover-completed-lane",
+                vec!["crates/vida/src/task_surface.rs"],
+            );
+            let run_id = "task-takeover-completed-lane";
+            let metadata_path = task_exception_takeover_metadata_path(harness.path(), run_id)
+                .expect("metadata path");
+            fs::create_dir_all(metadata_path.parent().expect("metadata dir should exist"))
+                .expect("metadata dir should create");
+            fs::write(
+                &metadata_path,
+                serde_json::json!({
+                    "run_id": run_id,
+                    "dispatch_target": "implementer",
+                    "source_exception_path_receipt_id": "takeover-receipt",
+                    "owned_write_scope": ["crates/vida/src/task_surface.rs"]
+                })
+                .to_string(),
+            )
+            .expect("metadata should write");
+            let status = state_store::RunGraphStatus {
+                run_id: run_id.to_string(),
+                task_id: task.id.clone(),
+                task_class: "implementation".to_string(),
+                active_node: "closure".to_string(),
+                next_node: None,
+                status: "completed".to_string(),
+                route_task_class: "implementation".to_string(),
+                selected_backend: "internal_subagents".to_string(),
+                lane_id: "implementer".to_string(),
+                lifecycle_stage: "closure_complete".to_string(),
+                policy_gate: "not_required".to_string(),
+                handoff_state: "none".to_string(),
+                context_state: "sealed".to_string(),
+                checkpoint_kind: "none".to_string(),
+                resume_target: "none".to_string(),
+                recovery_ready: false,
+            };
+            store
+                .record_run_graph_status(&status)
+                .await
+                .expect("run graph status should persist");
+            store
+                .record_run_graph_dispatch_receipt(&state_store::RunGraphDispatchReceipt {
+                    run_id: status.run_id.clone(),
+                    dispatch_target: "implementer".to_string(),
+                    dispatch_status: "executed".to_string(),
+                    lane_status: "lane_completed".to_string(),
+                    supersedes_receipt_id: Some("takeover-receipt".to_string()),
+                    exception_path_receipt_id: Some("takeover-receipt".to_string()),
+                    dispatch_kind: "agent_lane".to_string(),
+                    dispatch_surface: Some("vida agent-init".to_string()),
+                    dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+                    dispatch_packet_path: None,
+                    dispatch_result_path: None,
+                    blocker_code: None,
+                    downstream_dispatch_target: None,
+                    downstream_dispatch_command: None,
+                    downstream_dispatch_note: None,
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: Vec::new(),
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: None,
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("junior".to_string()),
+                    activation_runtime_role: Some("implementer".to_string()),
+                    selected_backend: Some("internal_subagents".to_string()),
+                    recorded_at: "2026-06-23T00:00:00Z".to_string(),
+                })
+                .await
+                .expect("dispatch receipt should persist");
+
+            let receipt =
+                task_takeover_status_receipt(&store, &task, Some(status), Some("run_id"), true)
+                    .await;
+
+            assert_eq!(receipt.status, "blocked");
+            assert_eq!(
+                receipt.local_exception_takeover_state,
+                "admissible_not_active"
+            );
+            assert_eq!(receipt.reason, "exception takeover is not active for this task");
+            assert_eq!(
+                receipt.blocker_codes,
+                vec!["exception_takeover_not_active".to_string()]
+            );
+            assert!(!receipt.allowed);
+            assert!(!receipt.root_local_write_allowed);
+            assert!(receipt.paths.is_empty());
+            assert_eq!(receipt.lane["lane_status"], "lane_completed");
+            assert_eq!(
+                receipt.root_write_guard["root_local_write_allowed_for_only_these_paths"],
+                serde_json::json!([])
+            );
+        });
+    }
+
+    #[test]
     fn task_takeover_status_for_requested_task_does_not_fall_back_to_foreign_latest_lane() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -13084,9 +13221,11 @@ mod tests {
                 receipt.blocker_codes,
                 vec!["missing_lane_receipt".to_string()]
             );
-            assert!(!receipt
-                .blocker_codes
-                .contains(&"latest_lane_task_mismatch".to_string()));
+            assert!(
+                !receipt
+                    .blocker_codes
+                    .contains(&"latest_lane_task_mismatch".to_string())
+            );
             assert_ne!(receipt.lane["task_id"], "foreign-latest-task");
         });
     }
@@ -13254,9 +13393,10 @@ mod tests {
             assert_eq!(task.close_reason, None);
             assert!(task.labels.contains(&"source-fixed".to_string()));
             assert!(task.labels.contains(&"tests-green".to_string()));
-            assert!(task
-                .labels
-                .contains(&"proof-blocked-by-runtime".to_string()));
+            assert!(
+                task.labels
+                    .contains(&"proof-blocked-by-runtime".to_string())
+            );
             assert!(!task.labels.contains(&"runtime-proof-blocked".to_string()));
             assert_eq!(
                 task.planner_metadata.proof_targets,
@@ -13867,10 +14007,12 @@ mod tests {
             payload["proof_targets"][0]["legacy_close_reason_match"],
             true
         );
-        assert!(payload["proof_targets"][0]["evidence_detail"]
-            .as_str()
-            .expect("evidence detail should render")
-            .contains("structured proof evidence is required"));
+        assert!(
+            payload["proof_targets"][0]["evidence_detail"]
+                .as_str()
+                .expect("evidence detail should render")
+                .contains("structured proof evidence is required")
+        );
         assert_eq!(payload["proof_targets"][1]["status"], "missing_evidence");
         assert_eq!(
             payload["missing_targets"],
@@ -13942,10 +14084,12 @@ mod tests {
             payload["proof_targets"][0]["evidence_source"],
             "inherited_child_task_proof_evidence"
         );
-        assert!(payload["proof_targets"][0]["evidence_detail"]
-            .as_str()
-            .expect("inherited detail should render")
-            .contains("closed-child-proof-task"));
+        assert!(
+            payload["proof_targets"][0]["evidence_detail"]
+                .as_str()
+                .expect("inherited detail should render")
+                .contains("closed-child-proof-task")
+        );
     }
 
     #[test]
@@ -14359,10 +14503,12 @@ mod tests {
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["configured_proof_target_count"], 0);
         assert_eq!(payload["missing_proof"], false);
-        assert!(payload["next_required_command"]
-            .as_str()
-            .expect("next command should render")
-            .contains("vida task update proofless-task --proof-target"));
+        assert!(
+            payload["next_required_command"]
+                .as_str()
+                .expect("next command should render")
+                .contains("vida task update proofless-task --proof-target")
+        );
     }
 
     #[test]
@@ -14374,8 +14520,10 @@ mod tests {
             .as_str()
             .expect("next command should render");
 
-        assert!(next_required_command
-            .contains("vida task update 'safe; touch /tmp/vida_pwned #' --proof-target"));
+        assert!(
+            next_required_command
+                .contains("vida task update 'safe; touch /tmp/vida_pwned #' --proof-target")
+        );
         assert!(!next_required_command.contains("vida task update safe; touch"));
     }
 
@@ -14390,8 +14538,10 @@ mod tests {
             .as_str()
             .expect("next command should render");
 
-        assert!(next_required_command
-            .contains("vida task proof status 'safe; touch /tmp/vida_pwned #'"));
+        assert!(
+            next_required_command
+                .contains("vida task proof status 'safe; touch /tmp/vida_pwned #'")
+        );
         assert!(!next_required_command.contains("vida task proof status safe; touch"));
     }
 
@@ -14590,10 +14740,12 @@ mod tests {
                 "cargo check -p vida --bin vida"
             ]
         );
-        assert!(receipt
-            .receipt_path
-            .replace('\\', "/")
-            .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json"));
+        assert!(
+            receipt
+                .receipt_path
+                .replace('\\', "/")
+                .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json")
+        );
         assert_eq!(receipt.receipt_root, receipt_root.display().to_string());
         assert_eq!(receipt.isolation, "project_state_dir");
         validate_task_handoff_accept_receipt(&receipt)
@@ -14766,17 +14918,19 @@ mod tests {
                     receipt["receipt_root"],
                     isolated_state_dir.join("receipts").display().to_string()
                 );
-                assert!(receipt["receipt_path"]
-                    .as_str()
-                    .expect("receipt path should be string")
-                    .replace('\\', "/")
-                    .starts_with(
-                        isolated_handoff_receipts
-                            .to_str()
-                            .expect("receipt dir should be utf8")
-                            .replace('\\', "/")
-                            .as_str()
-                    ));
+                assert!(
+                    receipt["receipt_path"]
+                        .as_str()
+                        .expect("receipt path should be string")
+                        .replace('\\', "/")
+                        .starts_with(
+                            isolated_handoff_receipts
+                                .to_str()
+                                .expect("receipt dir should be utf8")
+                                .replace('\\', "/")
+                                .as_str()
+                        )
+                );
             })
             .expect("high-stack receipt test thread should spawn")
             .join()
@@ -14804,10 +14958,12 @@ mod tests {
         );
         assert_eq!(receipt.binding_source, None);
         assert!(receipt.blocker_codes.is_empty());
-        assert!(receipt
-            .source_surfaces
-            .iter()
-            .any(|surface| surface == "vida task next-lawful"));
+        assert!(
+            receipt
+                .source_surfaces
+                .iter()
+                .any(|surface| surface == "vida task next-lawful")
+        );
     }
 
     #[test]
@@ -14875,10 +15031,12 @@ mod tests {
             receipt.bind_command.as_deref(),
             Some("vida taskflow run-graph dispatch-init task-a --json")
         );
-        assert!(receipt
-            .why_not_auto_bound
-            .as_deref()
-            .is_some_and(|reason| reason.contains("multiple ready candidates")));
+        assert!(
+            receipt
+                .why_not_auto_bound
+                .as_deref()
+                .is_some_and(|reason| reason.contains("multiple ready candidates"))
+        );
     }
 
     #[test]
@@ -15016,10 +15174,12 @@ mod tests {
             vec!["select_conflicts_with_active_taskflow_task"]
         );
         assert_eq!(receipt.active_bounded_unit["task_id"], "task-active");
-        assert!(receipt
-            .next_action
-            .as_deref()
-            .is_some_and(|action| action.contains("task-active")));
+        assert!(
+            receipt
+                .next_action
+                .as_deref()
+                .is_some_and(|action| action.contains("task-active"))
+        );
     }
 
     #[test]
@@ -15448,10 +15608,12 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.blocker_codes, vec!["continuation_source_drift"]);
-        assert!(receipt
-            .next_actions
-            .iter()
-            .any(|action| action.contains("consume_continue_after_downstream_chain")));
+        assert!(
+            receipt
+                .next_actions
+                .iter()
+                .any(|action| action.contains("consume_continue_after_downstream_chain"))
+        );
         assert!(receipt.next_action.as_deref().is_some_and(|action| {
             action.contains("vida taskflow recovery status current-run")
                 && !action.contains("--json")
@@ -16144,8 +16306,10 @@ mod tests {
             .next_action
             .as_deref()
             .expect("ready downstream handoff should return a next action");
-        assert!(next_action
-            .contains("vida agent-init --downstream-packet packet.json --execute-dispatch"));
+        assert!(
+            next_action
+                .contains("vida agent-init --downstream-packet packet.json --execute-dispatch")
+        );
         assert!(
             !next_action.contains("--json"),
             "human next-action guidance should prefer the default output mode"
@@ -16513,10 +16677,12 @@ mod tests {
             "taskflow-case-11-actual-agent-autonomy"
         );
         assert_eq!(projection["binding_source"], serde_json::Value::Null);
-        assert!(projection["blocker_codes"]
-            .as_array()
-            .expect("blockers should be an array")
-            .is_empty());
+        assert!(
+            projection["blocker_codes"]
+                .as_array()
+                .expect("blockers should be an array")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -16614,10 +16780,12 @@ mod tests {
             "task-ready-after-stale-closure"
         );
         assert_eq!(projection["binding_source"], serde_json::Value::Null);
-        assert!(projection["blocker_codes"]
-            .as_array()
-            .expect("blockers should be an array")
-            .is_empty());
+        assert!(
+            projection["blocker_codes"]
+                .as_array()
+                .expect("blockers should be an array")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -16748,15 +16916,19 @@ mod tests {
             serde_json::json!(["open_delegated_cycle", "timeout_without_takeover_authority"])
         );
         assert_eq!(projection["bind_command"], serde_json::Value::Null);
-        assert!(projection["ready_task_candidates"]
-            .as_array()
-            .expect("ready candidates should be an array")
-            .iter()
-            .any(|candidate| candidate["task_id"] == "unrelated-ready-task"));
-        assert!(projection["next_action"]
-            .as_str()
-            .is_some_and(|action| action.contains("vida lane show running-run")
-                && !action.contains("--json")));
+        assert!(
+            projection["ready_task_candidates"]
+                .as_array()
+                .expect("ready candidates should be an array")
+                .iter()
+                .any(|candidate| candidate["task_id"] == "unrelated-ready-task")
+        );
+        assert!(
+            projection["next_action"]
+                .as_str()
+                .is_some_and(|action| action.contains("vida lane show running-run")
+                    && !action.contains("--json"))
+        );
     }
 
     #[test]
@@ -16818,9 +16990,11 @@ mod tests {
             isolated_state_dir.display().to_string()
         );
         assert_eq!(telemetry["feedback_store"], "not_recorded");
-        assert!(!project_root
-            .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
-            .exists());
+        assert!(
+            !project_root
+                .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
+                .exists()
+        );
         assert!(!project_root.join(crate::WORKER_STRATEGY_STATE).exists());
     }
 
@@ -17217,10 +17391,12 @@ mod tests {
             vec!["invalid_adaptive_replan_finding_input".to_string()]
         );
         assert_eq!(error.field.as_deref(), Some("finding_kind"));
-        assert!(error
-            .supported_finding_kinds
-            .iter()
-            .any(|kind| kind == "verification_finding"));
+        assert!(
+            error
+                .supported_finding_kinds
+                .iter()
+                .any(|kind| kind == "verification_finding")
+        );
         assert_eq!(error.operator_truth["parsing_and_validation_only"], true);
     }
 
@@ -17699,11 +17875,13 @@ mod tests {
             assert!(first_child.dependencies.iter().any(|dependency| {
                 dependency.depends_on_id == "source-task" && dependency.edge_type == "parent-child"
             }));
-            assert!(store
-                .validate_task_graph()
-                .await
-                .expect("validate")
-                .is_empty());
+            assert!(
+                store
+                    .validate_task_graph()
+                    .await
+                    .expect("validate")
+                    .is_empty()
+            );
         });
     }
 

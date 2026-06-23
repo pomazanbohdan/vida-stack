@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::release1_contracts::{blocker_code_str, BlockerCode};
+use crate::release1_contracts::{BlockerCode, blocker_code_str};
 
 fn looks_like_runtime_root_session_write_guard_candidate(value: &serde_json::Value) -> bool {
     matches!(
@@ -323,10 +323,12 @@ pub(crate) fn merge_live_exception_takeover_write_guard_with_task_authority(
         "latest_run_graph_task_stale".to_string(),
         serde_json::Value::Bool(latest_run_graph_task_stale),
     );
-    let owned_write_scope = if latest_run_graph_task_stale {
-        Vec::new()
-    } else {
+    let active_takeover = !latest_run_graph_task_stale
+        && exception_takeover_is_lawfully_active(latest_receipt, latest_recovery);
+    let owned_write_scope = if active_takeover {
         exception_takeover_owned_write_scope(state_root, latest_receipt)
+    } else {
+        Vec::new()
     };
     guard_obj.insert(
         "root_local_write_allowed_for_only_these_paths".to_string(),
@@ -365,7 +367,7 @@ pub(crate) fn merge_live_exception_takeover_write_guard_with_task_authority(
             "reason".to_string(),
             serde_json::Value::String("latest_run_graph_task_stale".to_string()),
         );
-    } else if exception_takeover_is_lawfully_active(latest_receipt, latest_recovery) {
+    } else if active_takeover {
         guard_obj.insert(
             "status".to_string(),
             serde_json::Value::String("exception_takeover_active".to_string()),
@@ -382,6 +384,19 @@ pub(crate) fn merge_live_exception_takeover_write_guard_with_task_authority(
                 serde_json::Value::String(receipt_id.to_string()),
             );
         }
+    } else {
+        guard_obj.insert(
+            "status".to_string(),
+            serde_json::Value::String("blocked_by_default".to_string()),
+        );
+        guard_obj.insert(
+            "root_local_write_allowed".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        guard_obj.insert(
+            "reason".to_string(),
+            serde_json::Value::String("exception_takeover_not_active".to_string()),
+        );
     }
     guard
 }
@@ -394,8 +409,8 @@ fn runtime_root_session_write_guard_from_snapshot(
     if looks_like_runtime_root_session_write_guard_candidate(direct_guard) {
         return Some(direct_guard.clone());
     }
-    let execution_plan_contract_guard = &snapshot["payload"]["role_selection"]["execution_plan"]
-        ["orchestration_contract"]["root_session_write_guard"];
+    let execution_plan_contract_guard = &snapshot["payload"]["role_selection"]["execution_plan"]["orchestration_contract"]
+        ["root_session_write_guard"];
     if looks_like_runtime_root_session_write_guard_candidate(execution_plan_contract_guard) {
         return Some(execution_plan_contract_guard.clone());
     }
@@ -656,6 +671,7 @@ mod tests {
         let guard = canonical_root_session_write_guard_defaults();
         let mut receipt = sample_receipt();
         receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.supersedes_receipt_id = Some("receipt-1".to_string());
         let merged = merge_live_exception_takeover_write_guard(
             guard,
             &root,
@@ -670,6 +686,65 @@ mod tests {
                 "docs/product/spec/orchestrator-runtime-contract-hardening-design.md"
             ])
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn merge_live_exception_takeover_write_guard_blocks_completed_lane_scope() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-completed-write-scope-{}-{nanos}",
+            std::process::id()
+        ));
+        let metadata_dir = root.join("lane-exception-path-metadata");
+        fs::create_dir_all(&metadata_dir).expect("metadata dir should create");
+        fs::write(
+            metadata_dir.join("run-1.json"),
+            serde_json::json!({
+                "owned_write_scope": ["crates/vida/src/status_surface_write_guard.rs"]
+            })
+            .to_string(),
+        )
+        .expect("metadata should write");
+
+        let guard = serde_json::json!({
+            "status": "exception_takeover_active",
+            "root_session_role": "orchestrator",
+            "lawful_write_surface": "vida agent-init",
+            "explicit_user_ordered_agent_mode_is_sticky": false,
+            "saturation_recovery_required_before_local_fallback": true,
+            "local_fallback_without_lane_recovery_forbidden": true,
+            "host_local_write_capability_is_not_authority": true,
+            "local_write_requires_exception_path": true,
+            "root_local_write_allowed": true,
+            "root_local_write_allowed_for_only_these_paths": ["stale/path.rs"],
+            "required_exception_evidence": "receipt-1",
+            "pre_write_checkpoint_required": true,
+        });
+        let mut receipt = sample_receipt();
+        receipt.lane_status = "lane_completed".to_string();
+        receipt.supersedes_receipt_id = Some("receipt-1".to_string());
+        let merged = merge_live_exception_takeover_write_guard(
+            guard,
+            &root,
+            Some(&receipt),
+            Some(&sample_recovery("delegated_cycle_clear")),
+        );
+
+        assert_eq!(merged["status"], "blocked_by_default");
+        assert_eq!(merged["root_local_write_allowed"], false);
+        assert_eq!(
+            merged["root_local_write_allowed_for_only_these_paths"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            merged["local_exception_takeover_state"],
+            "admissible_not_active"
+        );
+        assert_eq!(merged["reason"], "exception_takeover_not_active");
         let _ = fs::remove_dir_all(root);
     }
 

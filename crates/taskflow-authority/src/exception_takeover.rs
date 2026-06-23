@@ -232,6 +232,27 @@ mod tests {
     }
 
     #[test]
+    fn exception_takeover_state_label_rejects_completed_lane_as_active() {
+        let receipt = ExceptionTakeoverReceipt {
+            lane_status: "lane_completed",
+            supersedes_receipt_id: Some("supersede-1"),
+            ..receipt()
+        };
+
+        assert_eq!(
+            exception_takeover_state_label(
+                Some(&receipt),
+                Some(&recovery("delegated_cycle_clear"))
+            ),
+            Some(ExceptionTakeoverStateLabel::AdmissibleNotActive)
+        );
+        assert!(!exception_takeover_is_lawfully_active(
+            Some(&receipt),
+            Some(&recovery("delegated_cycle_clear"))
+        ));
+    }
+
+    #[test]
     fn exception_takeover_state_label_strings_match_operator_contract() {
         assert_eq!(ExceptionTakeoverStateLabel::Active.as_str(), "active");
         assert_eq!(
