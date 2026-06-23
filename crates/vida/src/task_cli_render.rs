@@ -459,11 +459,13 @@ pub(crate) fn task_ready_payload(
 pub(crate) fn task_show_payload(
     task: &TaskRecord,
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+    view: &str,
 ) -> serde_json::Value {
     build_pass_operator_surface_payload(
         "vida task show",
         serde_json::json!({
             "state_access": task_read_metadata_value(read_metadata),
+            "view": view,
             "task_id": task.id,
             "task": task_record_value(task),
         }),
@@ -475,13 +477,22 @@ pub(crate) fn print_task_show(
     task: &TaskRecord,
     as_json: bool,
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+    view: &str,
 ) {
-    let payload = task_show_payload(task, read_metadata);
+    let payload = task_show_payload(task, read_metadata, view);
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
         "task show should render as json",
     ) {
+        return;
+    }
+
+    if view == "full" && matches!(render, RenderMode::Plain) {
+        println!(
+            "{}",
+            taskflow_format_toon::render_value_section("vida task show", &payload)
+        );
         return;
     }
 
@@ -2304,7 +2315,7 @@ mod tests {
         let mut task = sample_task("pr-1");
         task.issue_type = "pr".to_string();
 
-        let payload = super::task_show_payload(&task, None);
+        let payload = super::task_show_payload(&task, None, "summary");
 
         assert_eq!(payload["task"]["issue_type"], "pr");
         assert_eq!(

@@ -1446,6 +1446,13 @@ pub(crate) struct TaskShowArgs {
     )]
     pub(crate) render: RenderMode,
 
+    #[arg(
+        long = "view",
+        default_value = "summary",
+        help = "Output view for task detail: compact, summary, or full"
+    )]
+    pub(crate) view: String,
+
     #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }

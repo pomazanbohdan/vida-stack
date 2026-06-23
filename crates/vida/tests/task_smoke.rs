@@ -16880,6 +16880,34 @@ fn task_list_show_ready_prefer_authoritative_state_over_stale_snapshot() {
     assert_eq!(shown["state_access"]["mode"], "authoritative_live");
     assert_eq!(shown["state_access"]["degraded"], false);
 
+    let full_view = run_and_assert_success(
+        &["task", "show", "vida-authoritative", "--view", "full"],
+        &state_dir,
+    );
+    assert!(full_view.starts_with("vida task show\n"));
+    assert!(full_view.contains("view: full"));
+    assert!(full_view.contains("work_item_kind:"));
+
+    let help = run_and_assert_success(&["task", "show", "--help"], &state_dir);
+    assert!(help.contains("--view"));
+    assert!(help.contains("compact, summary, or full"));
+
+    let invalid = run_command_capture(
+        &[
+            "task",
+            "show",
+            "vida-authoritative",
+            "--view",
+            "everything",
+        ],
+        &state_dir,
+    );
+    assert!(!invalid.status.success());
+    let invalid_stderr = String::from_utf8_lossy(&invalid.stderr);
+    assert!(invalid_stderr.contains("Invalid task show view `everything`"));
+    assert!(invalid_stderr.contains("Supported views: compact, summary, full"));
+    assert!(invalid_stderr.contains("vida task show vida-authoritative --view full"));
+
     let listed = run_command_json(&["task", "list", "--all", "--json"], &state_dir);
     let listed_task = task_row_by_id(&listed, "vida-authoritative");
     assert_eq!(listed_task["title"], "Live authoritative title");

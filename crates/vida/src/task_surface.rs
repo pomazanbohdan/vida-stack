@@ -9546,7 +9546,20 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            if command.json {
+            let view = match command.view.trim() {
+                "compact" => "compact",
+                "summary" | "" => "summary",
+                "full" => "full",
+                other => {
+                    eprintln!(
+                        "Invalid task show view `{other}`. Supported views: compact, summary, full. Try `vida task show {} --view full`.",
+                        command.task_id
+                    );
+                    return ExitCode::from(2);
+                }
+            };
+            let cache_allowed = command.json && view == "summary";
+            if cache_allowed {
                 let projection_name = task_show_projection_name(&command.task_id);
                 if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
                     &state_dir,
@@ -9569,15 +9582,17 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             match task_show_authoritative_first(state_dir.clone(), &command.task_id).await {
                 Ok((task, metadata)) => {
                     if command.json {
-                        let payload = task_show_payload(&task, Some(&metadata));
+                        let payload = task_show_payload(&task, Some(&metadata), view);
                         crate::print_json_pretty(&payload);
-                        crate::operator_projection_cache::write_json_projection(
-                            &state_dir,
-                            &task_show_projection_name(&command.task_id),
-                            &payload,
-                        );
+                        if cache_allowed {
+                            crate::operator_projection_cache::write_json_projection(
+                                &state_dir,
+                                &task_show_projection_name(&command.task_id),
+                                &payload,
+                            );
+                        }
                     } else {
-                        print_task_show(command.render, &task, false, Some(&metadata));
+                        print_task_show(command.render, &task, false, Some(&metadata), view);
                     }
                     ExitCode::SUCCESS
                 }
