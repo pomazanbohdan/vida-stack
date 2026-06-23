@@ -731,11 +731,7 @@ impl OperationalJournal for RedbOperationalJournal {
                         receipt_id: record.result_ref.clone(),
                         conflict_reason: None,
                     };
-                    let lifecycle_payload =
-                        serde_json::to_vec(&lifecycle).map_err(storage_error)?;
-                    idempotency
-                        .insert(ledger_key.0.as_str(), lifecycle_payload.as_slice())
-                        .map_err(storage_error)?;
+                    write_idempotency_lifecycle(&mut idempotency, lifecycle)?;
                     Ok(record.receipt)
                 } else {
                     let reason =
@@ -758,11 +754,7 @@ impl OperationalJournal for RedbOperationalJournal {
                         receipt_id: record.result_ref.clone(),
                         conflict_reason: Some(reason),
                     };
-                    let lifecycle_payload =
-                        serde_json::to_vec(&lifecycle).map_err(storage_error)?;
-                    idempotency
-                        .insert(ledger_key.0.as_str(), lifecycle_payload.as_slice())
-                        .map_err(storage_error)?;
+                    write_idempotency_lifecycle(&mut idempotency, lifecycle)?;
                     Err(TaskflowStateError::IdempotencyConflict(
                         ledger_key.0.clone(),
                     ))
@@ -899,10 +891,7 @@ impl OperationalJournal for RedbOperationalJournal {
                     receipt_id: idempotency_record.result_ref,
                     conflict_reason: None,
                 };
-                let lifecycle_payload = serde_json::to_vec(&lifecycle).map_err(storage_error)?;
-                idempotency
-                    .insert(ledger_key.0.as_str(), lifecycle_payload.as_slice())
-                    .map_err(storage_error)?;
+                write_idempotency_lifecycle(&mut idempotency, lifecycle)?;
                 Ok(receipt)
             }
         };
@@ -1487,6 +1476,26 @@ fn append_receipt_ref(key: &VidaIdempotencyKey, receipt: &JournalAppendReceipt) 
     ))
 }
 
+fn write_idempotency_lifecycle(
+    table: &mut redb::Table<'_, &str, &[u8]>,
+    record: JournalIdempotencyRecord,
+) -> Result<(), TaskflowStateError> {
+    if let Some(existing) = table.get(record.key.0.as_str()).map_err(storage_error)? {
+        let existing: JournalIdempotencyRecord =
+            serde_json::from_slice(existing.value()).map_err(storage_error)?;
+        if existing.command_id != record.command_id {
+            return Err(TaskflowStateError::IdempotencyConflict(record.key.0));
+        }
+    }
+
+    let key = record.key.0.clone();
+    let lifecycle_payload = serde_json::to_vec(&record).map_err(storage_error)?;
+    table
+        .insert(key.as_str(), lifecycle_payload.as_slice())
+        .map_err(storage_error)?;
+    Ok(())
+}
+
 fn stable_hash_hex(input: &str) -> String {
     stable_hash_bytes_hex(input.as_bytes())
 }
@@ -1900,6 +1909,44 @@ mod tests {
             .expect("command idempotency record");
         assert_eq!(command_ledger.state, JournalIdempotencyState::Conflicted);
         assert!(command_ledger.conflict_reason.is_some());
+    }
+
+    #[test]
+    fn append_rejects_idempotency_key_reserved_by_another_command() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        let key = VidaIdempotencyKey("shared-key".to_string());
+        let victim_command = VidaCommandRef("command-victim".to_string());
+
+        journal
+            .record_idempotency_started(key.clone(), victim_command.clone())
+            .expect("victim reservation should pass");
+
+        let mut attacker_request = append_request(0, vec![event(1)], Vec::new());
+        attacker_request.idempotency_key = key.clone();
+        attacker_request.command_id = VidaCommandRef("command-attacker".to_string());
+        attacker_request.causation_id = Some(attacker_request.command_id.clone());
+        let error = journal
+            .append(attacker_request)
+            .expect_err("attacker append must not overwrite victim idempotency row");
+
+        assert_eq!(
+            error,
+            TaskflowStateError::IdempotencyConflict("shared-key".to_string())
+        );
+        let command_ledger = journal
+            .idempotency_record(&key)
+            .expect("victim idempotency record should remain");
+        assert_eq!(command_ledger.command_id, victim_command);
+        assert_eq!(command_ledger.state, JournalIdempotencyState::Started);
+        assert_eq!(command_ledger.receipt_id, None);
+        assert_eq!(
+            journal
+                .load_stream(&VidaStreamRef("stream-1".to_string()))
+                .len(),
+            0
+        );
     }
 
     #[test]
