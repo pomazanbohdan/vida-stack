@@ -1133,8 +1133,8 @@ pub(crate) fn print_task_dependency_tree(
             "root_task_id": tree.task.id,
             "dependency_count": tree.dependencies.len(),
             "child_count": tree.children.len(),
-            "dependencies": dependencies,
-            "children": children,
+            "dependencies": dependencies.clone(),
+            "children": children.clone(),
             "tree_depth": "immediate_edges_only",
             "diagnostics": {
                 "cycle_count": dependency_cycle_count + child_cycle_count,
@@ -1142,7 +1142,7 @@ pub(crate) fn print_task_dependency_tree(
                 "repeated_count": dependency_repeated_count + child_repeated_count,
                 "bounded": true,
             },
-            "drill_down": "run vida task tree <task-id> --json on a listed dependency or child for the next bounded slice",
+            "drill_down": "run vida task tree <task-id> on a listed dependency or child for the next bounded slice",
         }),
     );
     if crate::surface_render::print_surface_json(
@@ -1150,6 +1150,66 @@ pub(crate) fn print_task_dependency_tree(
         as_json,
         "task dependency tree should render as json",
     ) {
+        return;
+    }
+
+    if matches!(render, RenderMode::Plain) {
+        let dependency_rows = tree
+            .dependencies
+            .iter()
+            .map(|edge| {
+                serde_json::json!({
+                    "id": edge.depends_on_id,
+                    "status": edge.dependency_status,
+                    "edge_type": edge.edge_type,
+                    "issue_type": edge.dependency_issue_type,
+                    "missing": edge.missing,
+                    "cycle": edge.cycle,
+                    "repeated": edge.repeated,
+                })
+            })
+            .collect::<Vec<_>>();
+        let child_rows = tree
+            .children
+            .iter()
+            .map(|child| {
+                serde_json::json!({
+                    "id": child.child_id,
+                    "status": child.child_status,
+                    "issue_type": child.child_issue_type,
+                    "priority": child.child_priority,
+                    "title": child.child_title,
+                    "missing": child.missing,
+                    "cycle": child.cycle,
+                    "repeated": child.repeated,
+                })
+            })
+            .collect::<Vec<_>>();
+        let value = serde_json::json!({
+            "root": {
+                "id": tree.task.id,
+                "status": tree.task.status,
+                "title": tree.task.title,
+                "priority": tree.task.priority,
+                "issue_type": tree.task.issue_type,
+            },
+            "dependency_count": tree.dependencies.len(),
+            "child_count": tree.children.len(),
+            "dependencies": dependency_rows,
+            "children": child_rows,
+            "tree_depth": "immediate_edges_only",
+            "diagnostics": {
+                "cycle_count": dependency_cycle_count + child_cycle_count,
+                "missing_count": dependency_missing_count + child_missing_count,
+                "repeated_count": dependency_repeated_count + child_repeated_count,
+                "bounded": true,
+            },
+            "drill_down": "run vida task tree <task-id> on a listed dependency or child for the next bounded slice",
+        });
+        println!(
+            "{}",
+            taskflow_format_toon::render_value_section("vida task tree", &value)
+        );
         return;
     }
 
