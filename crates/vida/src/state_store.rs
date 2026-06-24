@@ -2612,6 +2612,24 @@ hierarchy: framework,contracts
         ));
 
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "vida-a",
+                title: "Vida A",
+                display_id: None,
+                description: "active run graph task",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create run graph task");
         let status = RunGraphStatus {
             run_id: "run-vida-a".to_string(),
             task_id: "vida-a".to_string(),
@@ -7949,12 +7967,12 @@ hierarchy: framework,contracts
             .run_graph_status("run-closure-ready")
             .await
             .expect("reconciled run graph status should load");
-        assert_eq!(reconciled.active_node, "work-pool-pack");
+        assert_eq!(reconciled.active_node, "dev-pack");
         assert_eq!(reconciled.status, "ready");
-        assert_eq!(reconciled.lifecycle_stage, "work_pool_pack_complete");
-        assert_eq!(reconciled.policy_gate, "not_required");
-        assert_eq!(reconciled.handoff_state, "awaiting_closure");
-        assert_eq!(reconciled.resume_target, "dispatch.closure_lane");
+        assert_eq!(reconciled.lifecycle_stage, "dev_pack_active");
+        assert_eq!(reconciled.policy_gate, "single_task_scope_required");
+        assert_eq!(reconciled.handoff_state, "none");
+        assert_eq!(reconciled.resume_target, "none");
         assert!(reconciled.recovery_ready);
 
         let latest_status = store
@@ -7962,21 +7980,21 @@ hierarchy: framework,contracts
             .await
             .expect("latest reconciled run graph status should load")
             .expect("latest run graph status should exist");
-        assert_eq!(latest_status.active_node, "work-pool-pack");
+        assert_eq!(latest_status.active_node, "dev-pack");
         assert_eq!(latest_status.status, "ready");
-        assert_eq!(latest_status.lifecycle_stage, "work_pool_pack_complete");
-        assert_eq!(latest_status.policy_gate, "not_required");
-        assert_eq!(latest_status.handoff_state, "awaiting_closure");
-        assert_eq!(latest_status.resume_target, "dispatch.closure_lane");
+        assert_eq!(latest_status.lifecycle_stage, "dev_pack_active");
+        assert_eq!(latest_status.policy_gate, "single_task_scope_required");
+        assert_eq!(latest_status.handoff_state, "none");
+        assert_eq!(latest_status.resume_target, "none");
         assert!(latest_status.recovery_ready);
 
         let recovery = store
             .run_graph_recovery_summary("run-closure-ready")
             .await
             .expect("reconciled recovery summary should load");
-        assert_eq!(recovery.active_node, "work-pool-pack");
+        assert_eq!(recovery.active_node, "dev-pack");
         assert_eq!(recovery.resume_status, "ready");
-        assert_eq!(recovery.lifecycle_stage, "work_pool_pack_complete");
+        assert_eq!(recovery.lifecycle_stage, "dev_pack_active");
         assert_eq!(
             recovery.delegation_gate.blocker_code.as_deref(),
             Some("open_delegated_cycle")
@@ -7991,9 +8009,9 @@ hierarchy: framework,contracts
             .await
             .expect("latest reconciled recovery summary should load")
             .expect("latest run graph recovery summary should exist");
-        assert_eq!(latest_recovery.active_node, "work-pool-pack");
+        assert_eq!(latest_recovery.active_node, "dev-pack");
         assert_eq!(latest_recovery.resume_status, "ready");
-        assert_eq!(latest_recovery.lifecycle_stage, "work_pool_pack_complete");
+        assert_eq!(latest_recovery.lifecycle_stage, "dev_pack_active");
         assert_eq!(
             latest_recovery.delegation_gate.blocker_code.as_deref(),
             Some("open_delegated_cycle")

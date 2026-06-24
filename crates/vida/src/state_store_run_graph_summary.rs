@@ -319,6 +319,20 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.recovery_ready = false;
         return Ok(status);
     }
+    if status.next_node.is_none()
+        && status.active_node == receipt.dispatch_target
+        && receipt.dispatch_status == "executed"
+        && receipt.lane_status.as_deref() == Some(crate::LaneStatus::LaneCompleted.as_str())
+        && receipt.downstream_dispatch_ready
+        && receipt.downstream_dispatch_blockers.is_empty()
+    {
+        status.next_node = receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .map(str::trim)
+            .filter(|target| !target.is_empty())
+            .map(str::to_string);
+    }
     if run_graph_authority_transition_kind(&status, &receipt)
         == Some(CoreRunGraphTransitionKind::DownstreamReadyHandoff)
         && downstream_handoff_ready_from_completion_evidence(
@@ -3002,6 +3016,7 @@ impl StateStore {
         } else {
             "blocked".to_string()
         });
+        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
         receipt.downstream_dispatch_note = Some(format!(
             "spec-first feature `{feature_id}` has a closed spec-pack task; continue with work-pool handoff"
         ));

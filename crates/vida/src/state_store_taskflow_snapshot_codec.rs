@@ -309,7 +309,7 @@ mod tests {
         match error {
             StateStoreError::InvalidCanonicalTaskflowExport { reason } => {
                 assert!(reason.contains("task.id"));
-                assert!(reason.contains("EmptyTaskId"));
+                assert!(reason.contains("empty task identifier is not allowed"));
             }
             other => panic!("unexpected error: {other}"),
         }
@@ -323,7 +323,7 @@ mod tests {
         match error {
             StateStoreError::InvalidCanonicalTaskflowExport { reason } => {
                 assert!(reason.contains("dependency.depends_on_id"));
-                assert!(reason.contains("EmptyTaskId"));
+                assert!(reason.contains("empty task identifier is not allowed"));
             }
             other => panic!("unexpected error: {other}"),
         }
