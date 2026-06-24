@@ -792,11 +792,13 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "proof commands passed",
         "reported",
         "reports",
-        "not a ",
-        "not an ",
-        "no current",
-        "not current",
-        "rather than",
+        "not a pr-specific blocker",
+        "not a current blocker",
+        "not an active blocker",
+        "no current blocker",
+        "not current blocker",
+        "rather than a blocker",
+        "rather than blocker",
         "no longer",
         "does not",
         "returns",
@@ -2121,6 +2123,17 @@ mod tests {
             .any(|phrase| phrase
                 .as_str()
                 .is_some_and(|value| value.contains("no blocker codes"))));
+    }
+
+    #[test]
+    fn canonical_close_status_detects_negated_active_blocker_phrase() {
+        let reason = "Not a false positive: blocker prevents closure";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+        assert!(super::ignored_canonical_close_meta_language(reason).is_empty());
     }
 
     #[test]
