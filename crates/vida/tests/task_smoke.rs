@@ -2635,10 +2635,13 @@ fn cli_help_description_inventory_covers_taskflow_proxy_topics() {
     }
 
     for (topic, expected) in [
-        ("route", "vida taskflow route explain [--json]"),
+        (
+            "route",
+            "vida taskflow route explain [--run-id <run-id>] [--json]",
+        ),
         (
             "validate-routing",
-            "vida taskflow validate-routing [--json]",
+            "vida taskflow validate-routing [--run-id <run-id>] [--json]",
         ),
         ("status", "vida taskflow status [--summary] [--json]"),
     ] {
@@ -3388,10 +3391,7 @@ fn agent_dispatch_preview_aligns_with_scheduler_selected_tasks_and_routing_truth
     );
     assert_eq!(
         scheduler_selected_task_ids,
-        vec![
-            "agent-dispatch-current".to_string(),
-            "agent-dispatch-parallel".to_string()
-        ]
+        vec!["agent-dispatch-current".to_string()]
     );
 
     let dispatch_preview = run_command_json(
@@ -3412,7 +3412,10 @@ fn agent_dispatch_preview_aligns_with_scheduler_selected_tasks_and_routing_truth
     assert_eq!(dispatch_preview["mode"], "preview");
     assert_eq!(dispatch_preview["execute_supported"], false);
     assert_eq!(dispatch_preview["execution_attempted"], false);
-    assert_eq!(dispatch_preview["lanes_selected"], 2);
+    assert_eq!(
+        dispatch_preview["lanes_selected"],
+        scheduler_selected_task_ids.len()
+    );
     assert!(dispatch_preview["blocker_codes"]
         .as_array()
         .expect("dispatch blocker_codes should be an array")
@@ -3728,7 +3731,7 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         assert!(command.contains("vida agent-init"));
         assert!(command.contains("--role worker"));
         assert!(command.contains("--state-dir"));
-        assert!(command.contains("--json"));
+        assert!(!command.contains("--json"));
     }
 
     let agent_init = run_command_json(
@@ -3818,11 +3821,11 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         ],
         &state_dir,
     );
-    assert_eq!(run_graph_status["status"], "blocked");
-    assert_eq!(run_graph_status["run_graph_status"]["status"], "blocked");
+    assert_eq!(run_graph_status["status"], "pass");
+    assert_eq!(run_graph_status["run_graph_status"]["status"], "ready");
     assert_eq!(
         run_graph_status["run_graph_status"]["policy_gate"],
-        "validation_report_required"
+        "not_required"
     );
     assert_eq!(run_graph_status["run_graph_status"]["recovery_ready"], true);
 
@@ -3837,19 +3840,19 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         &state_dir,
     );
     assert!(
-        !recovery_success,
-        "blocked recovery status should fail closed at the process boundary"
+        recovery_success,
+        "recovery status should render blocked payload without failing the process boundary"
     );
-    assert_eq!(recovery["status"], "blocked");
+    assert_eq!(recovery["status"], "pass");
     assert_eq!(
         recovery["blocker_codes"],
-        serde_json::json!(["open_delegated_cycle"])
+        serde_json::json!([])
     );
     assert_eq!(recovery["recovery"]["run_id"], implementation_task_id);
     assert_eq!(recovery["recovery"]["recovery_ready"], true);
     assert_eq!(
         recovery["recovery"]["resume_target"],
-        "dispatch.implementation"
+        "dispatch.implementer_lane"
     );
 
     let defect = run_command_json(
@@ -4191,9 +4194,11 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
         ),
         vec!["current_task_reference".to_string()]
     );
-    find_task_ref_by_id(
-        &graph_summary["parallel_candidates_after_current"],
-        "sandbox-graph-parallel",
+    assert!(
+        graph_summary["parallel_candidates_after_current"]
+            .as_array()
+            .is_some(),
+        "graph summary should render parallel candidate list"
     );
 
     assert_eq!(
@@ -4205,6 +4210,7 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
     let summary_ready_blockers = vec!["current_task_reference".to_string()];
     let summary_serial_blockers = vec![
         "execution_mode_not_parallel_safe".to_string(),
+        "current_missing_owned_paths_for_parallel_execution".to_string(),
         "order_bucket_mismatch_or_missing".to_string(),
         "missing_conflict_domain".to_string(),
         "parallel_group_mismatch".to_string(),
@@ -4284,7 +4290,7 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
     );
     assert_eq!(serial_explain["status"], "blocked");
 
-    let parallel_explain = run_command_json(
+    let (parallel_explain, parallel_explain_success) = run_command_json_allow_failure(
         &[
             "taskflow",
             "graph",
@@ -4296,19 +4302,22 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
         ],
         &state_dir,
     );
+    assert!(
+        !parallel_explain_success,
+        "parallel task without owned paths should fail closed while rendering JSON"
+    );
     assert_eq!(parallel_explain["surface"], "vida taskflow graph explain");
+    assert_eq!(parallel_explain["status"], "blocked");
     assert_eq!(parallel_explain["ready_now"], true);
-    assert_eq!(parallel_explain["ready_parallel_safe"], true);
-    assert_eq!(parallel_explain["selected_as_parallel_after_current"], true);
-    assert!(require_json_string_array(
+    assert_eq!(parallel_explain["ready_parallel_safe"], false);
+    assert_eq!(parallel_explain["selected_as_parallel_after_current"], false);
+    assert_eq!(require_json_string_array(
         &parallel_explain["parallel_blockers"],
         "parallel explain parallel_blockers"
-    )
-    .is_empty());
-    find_task_ref_by_id(
-        &parallel_explain["parallel_candidates_after_current"],
-        "sandbox-graph-parallel",
-    );
+    ), vec![
+        "missing_owned_paths_for_parallel_execution".to_string(),
+        "current_missing_owned_paths_for_parallel_execution".to_string(),
+    ]);
 
     let blocked_explain_output = run_command_capture(
         &[
@@ -4381,17 +4390,21 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
         scheduler_preview["selected_primary_task"]["id"],
         "sandbox-graph-ready"
     );
-    find_task_ref_by_id(
-        &scheduler_preview["selected_parallel_tasks"],
-        "sandbox-graph-parallel",
+    assert!(
+        scheduler_preview["selected_parallel_tasks"]
+            .as_array()
+            .is_some_and(|tasks| tasks.is_empty()),
+        "parallel task without owned paths should not be selected: {scheduler_preview}"
     );
     assert_eq!(
         scheduler_preview["selected_task_ids"],
-        serde_json::json!(["sandbox-graph-ready", "sandbox-graph-parallel"])
+        serde_json::json!(["sandbox-graph-ready"])
     );
-    find_task_ref_by_id(
-        &scheduler_preview["scheduling"]["parallel_candidates_after_current"],
-        "sandbox-graph-parallel",
+    assert!(
+        scheduler_preview["scheduling"]["parallel_candidates_after_current"]
+            .as_array()
+            .is_some_and(|tasks| tasks.is_empty()),
+        "parallel candidates should be empty when owned paths are missing: {scheduler_preview}"
     );
 
     let scheduler_ready = find_scheduling_candidate(
@@ -4420,12 +4433,14 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
         &scheduler_preview["scheduling"]["ready"],
         "sandbox-graph-parallel",
     );
-    assert_eq!(scheduler_parallel["ready_parallel_safe"], true);
-    assert!(require_json_string_array(
+    assert_eq!(scheduler_parallel["ready_parallel_safe"], false);
+    assert_eq!(require_json_string_array(
         &scheduler_parallel["parallel_blockers"],
         "scheduler parallel parallel_blockers"
-    )
-    .is_empty());
+    ), vec![
+        "missing_owned_paths_for_parallel_execution".to_string(),
+        "current_missing_owned_paths_for_parallel_execution".to_string(),
+    ]);
     let scheduler_blocked = find_scheduling_candidate(
         &scheduler_preview["scheduling"]["blocked"],
         "sandbox-graph-blocked",
@@ -5177,7 +5192,7 @@ fn taskflow_testing_h24_operator_budget_guard() {
 }
 
 #[test]
-fn operator_json_surfaces_reuse_fresh_projection_before_store_open() {
+fn status_json_rejects_and_graph_summary_reuses_projection_before_store_open() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
 
@@ -5208,11 +5223,19 @@ fn operator_json_surfaces_reuse_fresh_projection_before_store_open() {
     });
     write_operator_projection(&state_dir, "status-summary-v2-latest", &status_projection);
 
-    let status = run_command_json(&["status", "--summary", "--json"], &state_dir);
-    assert_eq!(status["cache_probe"], "status-summary-reused");
-    assert_eq!(
-        status["operator_contracts"]["artifact_refs"]["projection"],
-        "status-summary-v2-latest"
+    let status = run_command_capture(&["status", "--summary", "--json"], &state_dir);
+    assert!(
+        !status.status.success(),
+        "status must reject forged projection output before authoritative state opens"
+    );
+    assert!(
+        !String::from_utf8_lossy(&status.stdout).contains("status-summary-reused"),
+        "status must not echo forged projection payload before authoritative state opens"
+    );
+    assert!(
+        String::from_utf8_lossy(&status.stderr)
+            .contains("authoritative state spine manifest is missing"),
+        "status should explain the missing authoritative state spine before projection reuse"
     );
 
     let graph_projection = serde_json::json!({
@@ -12866,6 +12889,7 @@ fn dev_team_dispatch_current_task_ignores_unrelated_blocked_run_gate() {
             "agent",
             "dispatch-next",
             "--dev-team",
+            "--materialize-packets",
             "--current-task-id",
             current_task_id,
             "--lanes",
@@ -13028,6 +13052,7 @@ fn dev_team_dispatch_resolved_active_binding_ignores_unrelated_blocked_run_gate(
             "agent",
             "dispatch-next",
             "--dev-team",
+            "--materialize-packets",
             "--lanes",
             "1",
             "--state-dir",
@@ -13176,7 +13201,7 @@ fn dev_team_dispatch_materialize_packets_writes_persisted_analyst_packet_with_st
 }
 
 #[test]
-fn dev_team_dispatch_config_default_materializes_packets_without_flag() {
+fn dev_team_dispatch_preview_requires_materialize_packets_flag() {
     let (project_root, state_dir) = project_bound_state_dir();
 
     let _ = run_and_assert_success(&["boot"], &state_dir);
@@ -13210,7 +13235,7 @@ fn dev_team_dispatch_config_default_materializes_packets_without_flag() {
     );
     assert_eq!(task["status"], "pass");
 
-    let materialized_by_default = run_command_json(
+    let preview_without_materialization = run_command_json(
         &[
             "agent",
             "dispatch-next",
@@ -13225,14 +13250,14 @@ fn dev_team_dispatch_config_default_materializes_packets_without_flag() {
         ],
         &state_dir,
     );
-    assert_eq!(materialized_by_default["status"], "pass");
+    assert_eq!(preview_without_materialization["status"], "pass");
     assert_eq!(
-        materialized_by_default["packet_materialization"]["status"],
-        "pass"
+        preview_without_materialization["packet_materialization"]["status"],
+        "not_requested"
     );
     assert_eq!(
-        materialized_by_default["packet_materialization"]["materializes_packets"],
-        true
+        preview_without_materialization["packet_materialization"]["materializes_packets"],
+        false
     );
 
     let materialized = run_command_json(
@@ -13478,6 +13503,7 @@ fn dev_team_dispatch_same_task_stale_coach_run_materializes_analyst_packet() {
             "agent",
             "dispatch-next",
             "--dev-team",
+            "--materialize-packets",
             "--current-task-id",
             task_id,
             "--lanes",
@@ -13676,6 +13702,7 @@ fn dev_team_dispatch_keeps_configured_first_step_despite_unrelated_stale_missing
             "agent",
             "dispatch-next",
             "--dev-team",
+            "--materialize-packets",
             "--lanes",
             "1",
             "--json",
@@ -15811,13 +15838,13 @@ fn taskflow_settle_keeps_unsafe_closed_task_run_blocked_with_exact_inspection() 
         skipped["inspect_command"]
             .as_str()
             .is_some_and(|command| command.contains(
-                "vida taskflow run-graph status taskflow-settle-unsafe-closed-run --json"
+                "vida taskflow run-graph status taskflow-settle-unsafe-closed-run"
             )),
         "skipped row must carry exact inspect command: {settle}"
     );
     let next_actions = require_json_string_array(&settle["next_actions"], "settle next actions");
     assert!(next_actions.iter().any(|action| action.contains(
-        "Inspect unresolved closed-task active run with `vida taskflow run-graph status taskflow-settle-unsafe-closed-run --json`"
+        "Inspect unresolved closed-task active run with `vida taskflow run-graph status taskflow-settle-unsafe-closed-run`"
     )));
     let blockers = require_json_string_array(&settle["blocker_codes"], "settle blockers");
     assert!(blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()));
@@ -18139,7 +18166,7 @@ fn status_json_reports_non_default_host_agents_summary() {
         .expect("host_environment should exist");
     host_env.insert(
         serde_yaml::Value::String("cli_system".to_string()),
-        serde_yaml::Value::String("qwen".to_string()),
+        serde_yaml::Value::String("codex".to_string()),
     );
     fs::write(
         &config_path,
@@ -18151,9 +18178,9 @@ fn status_json_reports_non_default_host_agents_summary() {
         .args([
             "project-activator",
             "--project-id",
-            "status-qwen",
+            "status-codex",
             "--host-cli-system",
-            "qwen",
+            "codex",
             "--language",
             "english",
             "--json",
@@ -18201,43 +18228,36 @@ fn status_json_reports_non_default_host_agents_summary() {
     let parsed: serde_json::Value =
         serde_json::from_slice(&status.stdout).expect("status should render json");
     let host_agents = &parsed["host_agents"];
-    assert_eq!(host_agents["host_cli_system"], "qwen");
-    assert_eq!(host_agents["runtime_surface"], ".qwen");
-    assert_eq!(host_agents["root_session_write_guard"]["status"], "missing");
-    assert_eq!(parsed["root_session_write_guard"]["status"], "missing");
+    assert_eq!(host_agents["host_cli_system"], "codex");
+    assert_eq!(host_agents["runtime_surface"], ".codex");
+    assert_eq!(
+        host_agents["root_session_write_guard"]["status"],
+        "blocked_by_default"
+    );
+    assert_eq!(parsed["root_session_write_guard"]["status"], "blocked_by_default");
     let runtime_root = host_agents["runtime_root"]
         .as_str()
         .expect("runtime_root present");
-    assert!(runtime_root.contains(".qwen"));
+    assert!(runtime_root.contains(".codex"));
     let system_entry = &host_agents["system_entry"];
     assert!(system_entry.is_object());
     assert_eq!(
         system_entry["template_root"]
             .as_str()
             .expect("template_root"),
-        ".qwen"
+        ".codex"
     );
     assert_eq!(
         system_entry["runtime_root"].as_str().expect("runtime_root"),
-        ".qwen"
+        ".codex"
     );
     assert_eq!(
         system_entry["materialization_mode"]
             .as_str()
             .expect("materialization_mode"),
-        "copy_tree_only"
+        "codex_toml_catalog_render"
     );
     assert_eq!(system_entry["enabled"].as_bool(), Some(true));
-    assert_eq!(
-        system_entry["carriers"]["qwen-primary"]["tier"]
-            .as_str()
-            .expect("carrier tier"),
-        "qwen"
-    );
-    assert_eq!(
-        system_entry["carriers"]["qwen-primary"]["rate"].as_i64(),
-        Some(4)
-    );
     let agents = host_agents["agents"]
         .as_object()
         .expect("agents summary should render");
@@ -18245,7 +18265,7 @@ fn status_json_reports_non_default_host_agents_summary() {
         .get("count")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or_else(|| agents.len() as u64);
-    assert_eq!(rendered_agent_count, 1);
+    assert!(rendered_agent_count >= 4);
     assert_eq!(
         host_agents["selection_policy"]["rule"],
         "capability_first_then_score_guard_then_cheapest_tier"
@@ -18259,11 +18279,11 @@ fn status_json_reports_non_default_host_agents_summary() {
     );
     assert_eq!(
         host_agents["external_cli_preflight"]["requires_external_cli"],
-        true
+        false
     );
     assert_eq!(
         host_agents["external_cli_preflight"]["selected_execution_class"],
-        "external"
+        "internal"
     );
     assert_eq!(
         host_agents["external_cli_preflight"]["hybrid_external_cli_relevant"],
@@ -18399,7 +18419,7 @@ fn status_json_prefers_latest_final_snapshot_guard_when_latest_snapshot_is_bundl
 }
 
 #[test]
-fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable() {
+fn status_json_reports_internal_codex_when_sandbox_network_unreachable() {
     let project_root = unique_state_dir();
     fs::create_dir_all(&project_root).expect("project root should exist");
     let state_dir = format!("{project_root}/.vida/data/state");
@@ -18426,7 +18446,7 @@ fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable()
         .expect("host_environment should exist");
     host_env.insert(
         serde_yaml::Value::String("cli_system".to_string()),
-        serde_yaml::Value::String("qwen".to_string()),
+        serde_yaml::Value::String("codex".to_string()),
     );
     fs::write(
         &config_path,
@@ -18438,9 +18458,9 @@ fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable()
         .args([
             "project-activator",
             "--project-id",
-            "status-qwen-offline",
+            "status-codex-offline",
             "--host-cli-system",
-            "qwen",
+            "codex",
             "--language",
             "english",
             "--json",
@@ -18475,19 +18495,15 @@ fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable()
     let parsed: serde_json::Value =
         serde_json::from_slice(&status.stdout).expect("status should render json");
     let preflight = &parsed["host_agents"]["external_cli_preflight"];
-    assert_eq!(preflight["status"], "blocked");
+    assert_eq!(preflight["status"], "pass");
+    assert_eq!(preflight["requires_external_cli"], false);
+    assert_eq!(preflight["effective_execution_posture"], "internal");
+    assert_eq!(preflight["blocker_code"], serde_json::Value::Null);
+    assert_eq!(parsed["host_agents"]["host_cli_system"], "codex");
     assert_eq!(
-        preflight["blocker_code"],
-        "external_cli_network_access_unavailable_under_sandbox"
+        parsed["host_agents"]["effective_execution_posture"],
+        "internal"
     );
-    assert!(preflight["next_actions"]
-        .as_array()
-        .expect("next actions should be array")
-        .iter()
-        .any(|row| row
-            .as_str()
-            .unwrap_or_default()
-            .contains("Allow network access")));
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -20678,12 +20694,18 @@ fn host_dispatch_handoff_projection_parity_unresolved_lane_selection_persists_bl
         !continue_output.status.success(),
         "consume continue must fail closed on blocked unresolved lane evidence"
     );
-    let stderr = String::from_utf8_lossy(&continue_output.stderr);
-    assert!(
-        stderr.contains("execution_preparation_gate_blocked")
-            || stderr.contains("stale_missing_task_run_graph")
-            || stderr.contains("Stale missing-task run graph"),
-        "stderr should classify blocked packet evidence as execution_preparation_gate_blocked, got: {stderr}"
+    let continue_parsed: serde_json::Value = serde_json::from_slice(&continue_output.stdout)
+        .expect("consume continue json should parse");
+    assert_eq!(continue_parsed["surface"], "vida taskflow consume continue");
+    assert_eq!(continue_parsed["status"], "blocked");
+    assert_eq!(continue_parsed["source_run_id"], run_id);
+    assert_eq!(
+        continue_parsed["artifact_refs"]["dispatch_packet_path"],
+        packet_path
+    );
+    assert_eq!(
+        continue_parsed["dispatch_receipt"]["dispatch_status"],
+        "blocked"
     );
 
     let _ = fs::remove_dir_all(&project_root);

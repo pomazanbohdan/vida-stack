@@ -3882,7 +3882,9 @@ fn materialize_host_bridge_completion_evidence(
         ));
     }
     if let Some(summary_blocker_code) = summary_blocker_code {
-        blocker_codes.push(summary_blocker_code);
+        if blocker_codes.is_empty() {
+            blocker_codes.push(summary_blocker_code);
+        }
     }
     let shared_completion =
         materialize_shared_host_bridge_completion_evidence(&HostBridgeCompletionInput {
@@ -4882,8 +4884,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     blocker_codes.extend(evidence.blocker_codes.clone());
                 }
                 blocker_codes.extend(supplied_completion_blocker_codes.clone());
+                let structured_blocker_codes_present = !blocker_codes.is_empty();
                 if let Some(completion_blocker_code) = completion_blocker_code.clone() {
-                    blocker_codes.push(completion_blocker_code);
+                    if !structured_blocker_codes_present {
+                        blocker_codes.push(completion_blocker_code);
+                    }
                 }
                 if blocker_codes.is_empty() {
                     blocker_codes.push(
