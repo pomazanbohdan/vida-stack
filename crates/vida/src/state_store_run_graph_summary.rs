@@ -319,20 +319,6 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.recovery_ready = false;
         return Ok(status);
     }
-    if status.next_node.is_none()
-        && status.active_node == receipt.dispatch_target
-        && receipt.dispatch_status == "executed"
-        && receipt.lane_status.as_deref() == Some(crate::LaneStatus::LaneCompleted.as_str())
-        && receipt.downstream_dispatch_ready
-        && receipt.downstream_dispatch_blockers.is_empty()
-    {
-        status.next_node = receipt
-            .downstream_dispatch_target
-            .as_deref()
-            .map(str::trim)
-            .filter(|target| !target.is_empty())
-            .map(str::to_string);
-    }
     if run_graph_authority_transition_kind(&status, &receipt)
         == Some(CoreRunGraphTransitionKind::DownstreamReadyHandoff)
         && downstream_handoff_ready_from_completion_evidence(
@@ -5293,6 +5279,38 @@ mod tests {
             selected_backend: Some("middle".to_string()),
             recorded_at: "2026-05-21T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    fn downstream_ready_receipt_without_expected_next_node_cannot_select_handoff_target() {
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-untrusted-downstream-target".to_string();
+        status.task_id = "task-untrusted-downstream-target".to_string();
+        status.active_node = "implementer".to_string();
+        status.next_node = None;
+        status.status = "in_progress".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "dispatch.implementer_lane".to_string();
+        status.recovery_ready = true;
+
+        let mut receipt =
+            RunGraphDispatchReceiptStored::from(sample_dispatch_receipt(&status.run_id));
+        receipt.dispatch_target = "implementer".to_string();
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_target = Some("coach".to_string());
+        receipt.downstream_dispatch_blockers.clear();
+
+        let reconciled = reconcile_run_graph_status_with_dispatch_receipt(status, Some(&receipt))
+            .expect("receipt reconciliation should not fail");
+
+        assert_eq!(reconciled.status, "in_progress");
+        assert_eq!(reconciled.active_node, "implementer");
+        assert_eq!(reconciled.next_node, None);
+        assert_eq!(reconciled.handoff_state, "none");
+        assert_eq!(reconciled.resume_target, "dispatch.implementer_lane");
     }
 
     #[test]
