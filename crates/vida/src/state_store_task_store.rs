@@ -1428,6 +1428,7 @@ impl StateStore {
         } else {
             "blocked".to_string()
         });
+        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
         receipt.downstream_dispatch_note = Some(
             "spec-pack task close cleared design/spec blockers; continue with work-pool handoff"
                 .to_string(),
