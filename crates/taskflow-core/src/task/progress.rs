@@ -158,17 +158,28 @@ fn descendant_ids_from_rows(
     task_id: &str,
     direct_child_ids: &[String],
 ) -> BTreeSet<String> {
+    let mut children_by_parent = BTreeMap::<&str, Vec<&str>>::new();
+    for task in rows {
+        if let Some(parent_id) = task.parent_id.as_deref() {
+            children_by_parent
+                .entry(parent_id)
+                .or_default()
+                .push(task.id.as_str());
+        }
+    }
+
     let mut descendant_ids = BTreeSet::<String>::new();
-    let mut frontier = direct_child_ids.to_vec();
+    let mut frontier = direct_child_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     while let Some(parent_id) = frontier.pop() {
-        if !descendant_ids.insert(parent_id.clone()) {
+        if !descendant_ids.insert(parent_id.to_string()) {
             continue;
         }
-        frontier.extend(
-            rows.iter()
-                .filter(|task| task.parent_id.as_deref() == Some(parent_id.as_str()))
-                .map(|task| task.id.clone()),
-        );
+        if let Some(children) = children_by_parent.get(parent_id) {
+            frontier.extend(children.iter().copied());
+        }
     }
     descendant_ids.remove(task_id);
     descendant_ids
@@ -546,6 +557,59 @@ mod tests {
         assert_eq!(summary.closure_candidate_state, "direct_children_remaining");
         assert_eq!(summary.closed_count, 1);
         assert_eq!(summary.percent_closed, 50.0);
+    }
+
+    #[test]
+    fn descendant_progress_scopes_large_snapshots_without_counting_unrelated_rows() {
+        let mut rows = vec![
+            row("parent", "open", "epic", None),
+            row("child", "closed", "task", Some("parent")),
+        ];
+        for index in 0..1_000 {
+            rows.push(row(
+                &format!("unrelated-{index}"),
+                "open",
+                "task",
+                Some("unrelated-root"),
+            ));
+        }
+
+        let summary = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(summary.direct_child_count, 1);
+        assert_eq!(summary.descendant_count, 1);
+        assert_eq!(summary.closed_count, 1);
+        assert_eq!(summary.open_count, 0);
+        assert!(summary.ready_for_close);
+    }
+
+    #[test]
+    fn descendant_progress_terminates_when_descendants_cycle_to_an_ancestor() {
+        let rows = vec![
+            row("parent", "open", "epic", Some("grandchild")),
+            row("child", "closed", "task", Some("parent")),
+            row("grandchild", "closed", "task", Some("child")),
+        ];
+
+        let summary = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(summary.descendant_count, 2);
+        assert_eq!(summary.closed_count, 2);
+        assert!(summary.ready_for_close);
     }
 
     #[test]
