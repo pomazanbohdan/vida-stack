@@ -18,13 +18,13 @@ use crate::state_store::StateStore;
 use crate::surface_render::print_compact_command_families;
 
 use super::{
-    build_runtime_lane_selection_with_store, ensure_launcher_bootstrap, normalize_root_arg,
-    print_surface_header, print_surface_line, state_store, sync_launcher_activation_snapshot,
-    AgentInitArgs, BootArgs, InitArgs, RenderMode,
+    AgentInitArgs, BootArgs, InitArgs, RenderMode, build_runtime_lane_selection_with_store,
+    ensure_launcher_bootstrap, normalize_root_arg, print_surface_header, print_surface_line,
+    state_store, sync_launcher_activation_snapshot,
 };
 use crate::runtime_assignment_policy::{
-    agent_init_explicit_role_selection, agent_init_role_candidates,
-    resolve_agent_init_explicit_role, AgentInitResolvedRole,
+    AgentInitResolvedRole, agent_init_explicit_role_selection, agent_init_role_candidates,
+    resolve_agent_init_explicit_role,
 };
 use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 
@@ -1199,7 +1199,9 @@ async fn start_agent_init_dispatch_worker_and_return(
         )
     })?;
     let result_json = serde_json::from_str::<serde_json::Value>(&result_body).map_err(|error| {
-        format!("Failed to parse in-flight agent-init dispatch result `{dispatch_result_path}`: {error}")
+        format!(
+            "Failed to parse in-flight agent-init dispatch result `{dispatch_result_path}`: {error}"
+        )
     })?;
     let result_json = agent_init_dispatch_started_payload(
         result_json,
@@ -2160,17 +2162,41 @@ fn agent_init_auto_dispatch_binding_task_id(
         .map(ToOwned::to_owned)
 }
 
-async fn agent_init_auto_dispatch_active_task_ids(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentInitAutoDispatchActiveUnit {
+    task_id: String,
+    run_id: String,
+}
+
+fn agent_init_auto_dispatch_binding_active_unit(
+    binding: &crate::state_store::RunGraphContinuationBinding,
+) -> Option<AgentInitAutoDispatchActiveUnit> {
+    let task_id = agent_init_auto_dispatch_binding_task_id(binding)?;
+    let run_id = binding
+        .active_bounded_unit
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| binding.run_id.trim())
+        .to_string();
+    if run_id.is_empty() {
+        return None;
+    }
+    Some(AgentInitAutoDispatchActiveUnit { task_id, run_id })
+}
+
+async fn agent_init_auto_dispatch_active_units(
     store: &state_store::StateStore,
-) -> Result<Vec<String>, String> {
-    if let Some(binding) = store
+) -> Result<Vec<AgentInitAutoDispatchActiveUnit>, String> {
+    if let Some(unit) = store
         .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
         .map_err(|error| format!("Failed to read explicit continuation binding: {error}"))?
         .as_ref()
-        .and_then(agent_init_auto_dispatch_binding_task_id)
+        .and_then(agent_init_auto_dispatch_binding_active_unit)
     {
-        return Ok(vec![binding]);
+        return Ok(vec![unit]);
     }
 
     store
@@ -2183,9 +2209,20 @@ async fn agent_init_auto_dispatch_active_task_ids(
                 .filter(|task| {
                     crate::state_store::work_item_is_active_bounded_unit_candidate(&task.issue_type)
                 })
-                .map(|task| task.id)
+                .map(|task| AgentInitAutoDispatchActiveUnit {
+                    run_id: task.id.clone(),
+                    task_id: task.id,
+                })
                 .collect()
         })
+}
+
+async fn agent_init_auto_dispatch_active_task_ids(
+    store: &state_store::StateStore,
+) -> Result<Vec<String>, String> {
+    agent_init_auto_dispatch_active_units(store)
+        .await
+        .map(|units| units.into_iter().map(|unit| unit.task_id).collect())
 }
 
 fn validate_agent_init_auto_dispatch_active_unit_ids(
@@ -2230,6 +2267,29 @@ fn validate_agent_init_auto_dispatch_active_unit_ids(
     }
 }
 
+fn require_single_agent_init_auto_dispatch_active_unit(
+    active_units: Vec<AgentInitAutoDispatchActiveUnit>,
+) -> Result<AgentInitAutoDispatchActiveUnit, AgentInitAutoDispatchActiveUnitError> {
+    match active_units.as_slice() {
+        [] => Err(AgentInitAutoDispatchActiveUnitError {
+            blocker_code: "auto_dispatch_packet_active_unit_missing",
+            detail: "`--auto-dispatch-packet` requires one active non-container task.".to_string(),
+            active_task_id: None,
+            resolved_run_id: String::new(),
+            lineage_task_ids: Vec::new(),
+        }),
+        [active_unit] => Ok(active_unit.clone()),
+        _ => Err(AgentInitAutoDispatchActiveUnitError {
+            blocker_code: "auto_dispatch_packet_active_unit_ambiguous",
+            detail: "`--auto-dispatch-packet` requires exactly one active non-container task."
+                .to_string(),
+            active_task_id: None,
+            resolved_run_id: String::new(),
+            lineage_task_ids: Vec::new(),
+        }),
+    }
+}
+
 async fn validate_agent_init_auto_dispatch_active_unit(
     store: &state_store::StateStore,
     resume_inputs: &super::taskflow_consume_resume::ResumeInputs,
@@ -2248,6 +2308,40 @@ async fn validate_agent_init_auto_dispatch_active_unit(
         agent_init_auto_dispatch_lineage_task_ids(resume_inputs),
         &resume_inputs.dispatch_receipt.run_id,
     )
+}
+
+async fn resolve_agent_init_auto_dispatch_resume_inputs(
+    store: &state_store::StateStore,
+) -> Result<super::taskflow_consume_resume::ResumeInputs, AgentInitAutoDispatchActiveUnitError> {
+    let active_units = agent_init_auto_dispatch_active_units(store)
+        .await
+        .map_err(|error| AgentInitAutoDispatchActiveUnitError {
+            blocker_code: "auto_dispatch_packet_active_unit_unavailable",
+            detail: error,
+            active_task_id: None,
+            resolved_run_id: String::new(),
+            lineage_task_ids: Vec::new(),
+        })?;
+    let active_unit = require_single_agent_init_auto_dispatch_active_unit(active_units)?;
+    let resume_inputs = super::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
+        store,
+        Some(&active_unit.run_id),
+        None,
+        None,
+    )
+    .await
+    .map_err(|error| AgentInitAutoDispatchActiveUnitError {
+        blocker_code: "auto_dispatch_packet_active_unit_packet_missing",
+        detail: format!(
+            "`--auto-dispatch-packet` resolved active bounded unit `{}` on run `{}` but could not resolve a materialized dispatch packet for that run: {error}. Materialize a dispatch packet for the active unit before retrying auto-dispatch.",
+            active_unit.task_id, active_unit.run_id
+        ),
+        active_task_id: Some(active_unit.task_id.clone()),
+        resolved_run_id: active_unit.run_id.clone(),
+        lineage_task_ids: Vec::new(),
+    })?;
+    validate_agent_init_auto_dispatch_active_unit(store, &resume_inputs).await?;
+    Ok(resume_inputs)
 }
 
 fn agent_init_auto_dispatch_active_unit_blocked_payload(
@@ -2490,11 +2584,11 @@ mod tests {
     use super::*;
     use crate::run;
     use crate::runtime_dispatch_state::{
-        write_runtime_dispatch_packet, RuntimeDispatchPacketContext,
+        RuntimeDispatchPacketContext, write_runtime_dispatch_packet,
     };
     use crate::state_store::{RunGraphDispatchReceipt, RunGraphStatus, StateStore};
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
+    use crate::test_cli_support::{EnvVarGuard, cli, guard_current_dir};
     use clap::CommandFactory;
     use serde_json::json;
     use std::fs;
@@ -3004,7 +3098,9 @@ mod tests {
 
         assert!(command_line.starts_with("\"C:\\Program Files\\VIDA\\vida.exe\""));
         assert!(command_line.contains("--downstream-packet"));
-        assert!(command_line.contains("\"C:\\project\\vida-stack\\.vida\\data\\packet path.json\""));
+        assert!(
+            command_line.contains("\"C:\\project\\vida-stack\\.vida\\data\\packet path.json\"")
+        );
         assert!(command_line.contains("\"quote\\\"inside\""));
         assert!(
             command_line.ends_with("\"trail\\\\\""),
@@ -3232,7 +3328,9 @@ mod tests {
             assert!(
                 body.contains("require an explicit user request")
                     || body.contains("Require an explicit user request")
-                    || body.contains("If the user explicitly orders agent-first or parallel-agent execution"),
+                    || body.contains(
+                        "If the user explicitly orders agent-first or parallel-agent execution"
+                    ),
                 "{name} should require explicit user authorization before launching configured carriers"
             );
             assert!(
@@ -3527,10 +3625,14 @@ mod tests {
             .path()
             .join("vida/config/instructions/bundles/framework-source/framework/agent-definition.md")
             .is_file());
-        assert!(harness
-            .path()
-            .join("vida/config/instructions/bundles/framework-memory-source/framework-memory.md")
-            .is_file());
+        assert!(
+            harness
+                .path()
+                .join(
+                    "vida/config/instructions/bundles/framework-memory-source/framework-memory.md"
+                )
+                .is_file()
+        );
     }
 
     #[test]
@@ -3870,10 +3972,12 @@ mod tests {
                 assert_eq!(parsed["status"], "blocked");
                 assert_eq!(parsed["execution_state"], "bridge_request_pending");
                 assert_eq!(parsed["blocker_code"], "host_tool_bridge_adapter_required");
-                assert!(parsed["blocker_reason"]
-                    .as_str()
-                    .expect("blocker reason should render")
-                    .contains("parent host-agent bridge"));
+                assert!(
+                    parsed["blocker_reason"]
+                        .as_str()
+                        .expect("blocker reason should render")
+                        .contains("parent host-agent bridge")
+                );
 
                 if let Some(original_path) = original_path {
                     std::env::set_var("PATH", original_path);
@@ -5167,8 +5271,10 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                                 store.root(),
                             )
                         };
-                        let selected_payload =
-                            operator_output::toon_report::select_fields(payload.clone(), field_selection);
+                        let selected_payload = operator_output::toon_report::select_fields(
+                            payload.clone(),
+                            field_selection,
+                        );
                         if args.json {
                             println!(
                                 "{}",
@@ -6294,6 +6400,26 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     }
+                } else if args.auto_dispatch_packet {
+                    match resolve_agent_init_auto_dispatch_resume_inputs(&store).await {
+                        Ok(inputs) => inputs,
+                        Err(error) => {
+                            let dispatch_mode =
+                                agent_init_dispatch_mode(&args, &serde_json::Value::Null);
+                            if args.json {
+                                crate::print_json_pretty(
+                                    &agent_init_auto_dispatch_active_unit_blocked_payload(
+                                        &dispatch_mode,
+                                        &error,
+                                        "<unresolved>",
+                                    ),
+                                );
+                            } else {
+                                emit_agent_init_auto_dispatch_active_unit_blocked_plain(&error);
+                            }
+                            return ExitCode::from(1);
+                        }
+                    }
                 } else {
                     match super::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
                         &store,
@@ -6351,24 +6477,6 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 let selection_value = serde_json::to_value(&resume_inputs.role_selection)
                     .unwrap_or(serde_json::Value::Null);
                 let dispatch_mode = agent_init_dispatch_mode(&args, &selection_value);
-                if args.auto_dispatch_packet {
-                    if let Err(error) =
-                        validate_agent_init_auto_dispatch_active_unit(&store, &resume_inputs).await
-                    {
-                        if args.json {
-                            crate::print_json_pretty(
-                                &agent_init_auto_dispatch_active_unit_blocked_payload(
-                                    &dispatch_mode,
-                                    &error,
-                                    &resume_inputs.dispatch_packet_path,
-                                ),
-                            );
-                        } else {
-                            emit_agent_init_auto_dispatch_active_unit_blocked_plain(&error);
-                        }
-                        return ExitCode::from(1);
-                    }
-                }
                 drop(store);
                 return execute_agent_init_dispatch_from_resume_inputs(
                     args.json,
@@ -6536,10 +6644,10 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 .as_bool()
                 .unwrap_or(false)
             {
-                let blocker_code = surface_payload["backend_truth"]["assignment_blocker"]
-                    ["blocker_code"]
-                    .as_str()
-                    .unwrap_or("runtime_assignment_truth_required");
+                let blocker_code =
+                    surface_payload["backend_truth"]["assignment_blocker"]["blocker_code"]
+                        .as_str()
+                        .unwrap_or("runtime_assignment_truth_required");
                 eprintln!(
                     "Agent init requires runtime assignment truth for `{}` mode: {}.",
                     selection["mode"].as_str().unwrap_or("unknown"),
@@ -6605,6 +6713,24 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         }
+                    } else if args.auto_dispatch_packet {
+                        match resolve_agent_init_auto_dispatch_resume_inputs(&store).await {
+                            Ok(inputs) => inputs,
+                            Err(error) => {
+                                if args.json {
+                                    crate::print_json_pretty(
+                                        &agent_init_auto_dispatch_active_unit_blocked_payload(
+                                            &dispatch_mode,
+                                            &error,
+                                            "<unresolved>",
+                                        ),
+                                    );
+                                } else {
+                                    emit_agent_init_auto_dispatch_active_unit_blocked_plain(&error);
+                                }
+                                return ExitCode::from(1);
+                            }
+                        }
                     } else {
                         match super::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
                             &store,
@@ -6614,33 +6740,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         )
                         .await
                         {
-                            Ok(inputs) => {
-                                if args.auto_dispatch_packet {
-                                    if let Err(error) =
-                                        validate_agent_init_auto_dispatch_active_unit(
-                                            &store,
-                                            &inputs,
-                                        )
-                                        .await
-                                    {
-                                        if args.json {
-                                            crate::print_json_pretty(
-                                                &agent_init_auto_dispatch_active_unit_blocked_payload(
-                                                    &dispatch_mode,
-                                                    &error,
-                                                    &inputs.dispatch_packet_path,
-                                                ),
-                                            );
-                                        } else {
-                                            emit_agent_init_auto_dispatch_active_unit_blocked_plain(
-                                                &error,
-                                            );
-                                        }
-                                        return ExitCode::from(1);
-                                    }
-                                }
-                                inputs
-                            }
+                            Ok(inputs) => inputs,
                             Err(error) => {
                                 if args.json {
                                     let (receipt_evidence, result_artifact) =
@@ -7770,10 +7870,10 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
 #[cfg(test)]
 mod agent_init_surface_tests {
     use super::*;
+    use crate::RuntimeConsumptionLaneSelection;
     use crate::run;
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
-    use crate::RuntimeConsumptionLaneSelection;
+    use crate::test_cli_support::{EnvVarGuard, cli, guard_current_dir};
     use std::fs;
     use std::path::Path;
     use std::process::ExitCode;
@@ -8093,6 +8193,36 @@ mod agent_init_surface_tests {
     }
 
     #[test]
+    fn agent_init_auto_dispatch_auto_selection_uses_active_task_before_stale_lineage() {
+        let selected = require_single_agent_init_auto_dispatch_active_unit(vec![
+            AgentInitAutoDispatchActiveUnit {
+                task_id: "active-task-a".to_string(),
+                run_id: "run-active-task-a".to_string(),
+            },
+        ])
+        .expect("single active task should be selected before resume resolution");
+
+        assert_eq!(selected.task_id, "active-task-a");
+        assert_eq!(selected.run_id, "run-active-task-a");
+        validate_agent_init_auto_dispatch_active_unit_ids(
+            vec![selected.task_id],
+            vec!["active-task-a".to_string(), "run-active-task-a".to_string()],
+            "run-active-task-a",
+        )
+        .expect("active lineage should pass after active-task-specific resolution");
+        let stale = validate_agent_init_auto_dispatch_active_unit_ids(
+            vec!["active-task-a".to_string()],
+            vec!["stale-task-b".to_string(), "run-stale-task-b".to_string()],
+            "run-stale-task-b",
+        )
+        .expect_err("explicit stale dispatch packet mismatch must remain blocked");
+        assert_eq!(
+            stale.blocker_code,
+            "auto_dispatch_packet_active_unit_mismatch"
+        );
+    }
+
+    #[test]
     fn agent_init_auto_dispatch_binding_task_id_uses_explicit_active_unit() {
         let binding = crate::state_store::RunGraphContinuationBinding {
             run_id: "stale-run".to_string(),
@@ -8115,6 +8245,144 @@ mod agent_init_surface_tests {
             agent_init_auto_dispatch_binding_task_id(&binding).as_deref(),
             Some("active-task")
         );
+    }
+
+    #[test]
+    fn agent_init_auto_dispatch_binding_active_unit_preserves_distinct_run_id() {
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "binding-row-run".to_string(),
+            task_id: "fallback-task".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": "active-task",
+                "run_id": "run-active-task"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "test".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: None,
+            recorded_at: "2026-06-22T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            agent_init_auto_dispatch_binding_active_unit(&binding),
+            Some(AgentInitAutoDispatchActiveUnit {
+                task_id: "active-task".to_string(),
+                run_id: "run-active-task".to_string(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_init_auto_dispatch_persisted_binding_missing_packet_uses_active_run_id() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = crate::state_store::StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("state store should open");
+        let _thread = EnvVarGuard::set("CODEX_THREAD_ID", "session-auto-dispatch-active");
+        let labels: Vec<String> = Vec::new();
+
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "parent-epic",
+                title: "Parent epic",
+                display_id: None,
+                description: "parent for active auto dispatch task",
+                issue_type: "epic",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent epic");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "active-task",
+                title: "Active task",
+                display_id: None,
+                description: "active auto dispatch task",
+                issue_type: "runtime_defect",
+                status: "in_progress",
+                priority: 1,
+                parent_id: Some("parent-epic"),
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create active task");
+        store
+            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "claim-auto-dispatch-active".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree".to_string(),
+                orchestrator_session_id: "session-auto-dispatch-active".to_string(),
+                process_id: Some(std::process::id()),
+                task_id: Some("active-task".to_string()),
+                run_id: Some("run-active-task".to_string()),
+                lane_id: None,
+                claim_kind: "active_task".to_string(),
+                conflict_domain: Some("task:active-task".to_string()),
+                owned_paths: vec!["crates/vida/src/init_surfaces.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: crate::state_store::LeaseMode::Observe,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire active task claim");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: "run-active-task".to_string(),
+                    task_id: "active-task".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": "active-task",
+                        "run_id": "run-active-task",
+                        "task_status": "in_progress"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "test active task binding".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("continue".to_string()),
+                    recorded_at: "2026-06-25T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist active binding");
+
+        let units = agent_init_auto_dispatch_active_units(&store)
+            .await
+            .expect("active unit should resolve from current session binding");
+        assert_eq!(
+            units,
+            vec![AgentInitAutoDispatchActiveUnit {
+                task_id: "active-task".to_string(),
+                run_id: "run-active-task".to_string(),
+            }]
+        );
+
+        let error = resolve_agent_init_auto_dispatch_resume_inputs(&store)
+            .await
+            .expect_err("missing active packet should fail with active run id");
+        assert_eq!(
+            error.blocker_code,
+            "auto_dispatch_packet_active_unit_packet_missing"
+        );
+        assert_eq!(error.active_task_id.as_deref(), Some("active-task"));
+        assert_eq!(error.resolved_run_id, "run-active-task");
     }
 
     #[test]
@@ -8192,8 +8460,7 @@ mod agent_init_surface_tests {
         );
 
         assert_eq!(
-            contract["sticky_user_execution_intent"]
-                ["agent_first_or_parallel_agent_execution_is_sticky"],
+            contract["sticky_user_execution_intent"]["agent_first_or_parallel_agent_execution_is_sticky"],
             true
         );
         assert_eq!(
@@ -8217,13 +8484,11 @@ mod agent_init_surface_tests {
             "receipt_backed_execution_evidence"
         );
         assert_eq!(
-            contract["write_and_continuation_authority_contract"]
-                ["root_local_write_allowed_is_blanket_authority"],
+            contract["write_and_continuation_authority_contract"]["root_local_write_allowed_is_blanket_authority"],
             false
         );
         assert_eq!(
-            contract["write_and_continuation_authority_contract"]
-                ["continuation_binding_is_independent_of_exception_write_scope"],
+            contract["write_and_continuation_authority_contract"]["continuation_binding_is_independent_of_exception_write_scope"],
             true
         );
     }
@@ -8346,9 +8611,11 @@ mod agent_init_surface_tests {
                 crate::shell_quote("/tmp/dispatch.json")
             )
         );
-        assert!(payload["operator_guidance"]["next_lawful_execution_action"]
-            .as_str()
-            .is_some_and(|value| value.contains("--execute-dispatch")));
+        assert!(
+            payload["operator_guidance"]["next_lawful_execution_action"]
+                .as_str()
+                .is_some_and(|value| value.contains("--execute-dispatch"))
+        );
     }
 
     #[test]
@@ -8547,8 +8814,8 @@ mod agent_init_surface_tests {
     }
 
     #[test]
-    fn downstream_packet_resume_uses_target_runtime_assignment_when_top_level_activation_is_missing(
-    ) {
+    fn downstream_packet_resume_uses_target_runtime_assignment_when_top_level_activation_is_missing()
+     {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let packet_path = harness.path().join("downstream-prover-packet.json");
         let mut role_selection = test_role_selection();
@@ -8891,9 +9158,11 @@ mod agent_init_surface_tests {
             payload["operator_guidance"]["flow_distinctions"][2]["stage"],
             "receipt_backed_worker_execution"
         );
-        assert!(payload["operator_guidance"]["next_lawful_execution_action"]
-            .as_str()
-            .is_some_and(|value| value.contains("scheduler dispatch packet")));
+        assert!(
+            payload["operator_guidance"]["next_lawful_execution_action"]
+                .as_str()
+                .is_some_and(|value| value.contains("scheduler dispatch packet"))
+        );
     }
 
     #[test]
@@ -9376,14 +9645,18 @@ mod agent_init_surface_tests {
             payload["operator_contracts"]["blocker_codes"][0],
             "taskflow_consume_bundle_timeout"
         );
-        assert!(payload["next_actions"][0]
-            .as_str()
-            .unwrap()
-            .contains("vida orchestrator-init"));
-        assert!(!payload["next_actions"][0]
-            .as_str()
-            .unwrap()
-            .contains("vida orchestrator-init --json"));
+        assert!(
+            payload["next_actions"][0]
+                .as_str()
+                .unwrap()
+                .contains("vida orchestrator-init")
+        );
+        assert!(
+            !payload["next_actions"][0]
+                .as_str()
+                .unwrap()
+                .contains("vida orchestrator-init --json")
+        );
         assert_eq!(
             payload["shared_fields"]["artifact_refs"]["timed_out_surface"],
             "build_taskflow_consume_bundle_payload"
@@ -9410,17 +9683,21 @@ mod agent_init_surface_tests {
             payload["operator_contracts"]["blocker_codes"][0],
             "taskflow_consume_bundle_timeout"
         );
-        assert!(payload["next_actions"][0]
-            .as_str()
-            .unwrap()
-            .contains("vida agent-init"));
-        assert!(!payload["next_actions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|action| action
+        assert!(
+            payload["next_actions"][0]
                 .as_str()
-                .is_some_and(|value| value.contains("--json"))));
+                .unwrap()
+                .contains("vida agent-init")
+        );
+        assert!(
+            !payload["next_actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|action| action
+                    .as_str()
+                    .is_some_and(|value| value.contains("--json")))
+        );
         assert_eq!(
             payload["shared_fields"]["artifact_refs"]["timed_out_surface"],
             "build_taskflow_consume_bundle_payload"
@@ -9508,14 +9785,20 @@ mod agent_init_surface_tests {
             payload["artifact_refs"]["retry_command"],
             "vida agent-init --dispatch-packet dispatch-packet.json --execute-dispatch"
         );
-        assert!(payload["next_actions"][0]
-            .as_str()
-            .expect("first next action")
-            .contains("vida taskflow recovery status run-timeout"));
-        assert!(payload["next_actions"][1]
-            .as_str()
-            .expect("second next action")
-            .contains("vida agent-init --dispatch-packet dispatch-packet.json --execute-dispatch"));
+        assert!(
+            payload["next_actions"][0]
+                .as_str()
+                .expect("first next action")
+                .contains("vida taskflow recovery status run-timeout")
+        );
+        assert!(
+            payload["next_actions"][1]
+                .as_str()
+                .expect("second next action")
+                .contains(
+                    "vida agent-init --dispatch-packet dispatch-packet.json --execute-dispatch"
+                )
+        );
         assert_eq!(
             payload["timeout_reconciliation_warning"],
             "deferred reconciliation"
@@ -9554,23 +9837,31 @@ mod agent_init_surface_tests {
             payload["operator_contracts"]["blocker_codes"][0],
             "run_graph_recovery_not_ready"
         );
-        assert!(payload["next_actions"][0]
-            .as_str()
-            .expect("first action should render")
-            .contains("vida taskflow recovery status epic-2-run"));
-        assert!(payload["next_actions"]
-            .as_array()
-            .is_some_and(|actions| actions.iter().all(|action| action
+        assert!(
+            payload["next_actions"][0]
                 .as_str()
-                .is_none_or(|value| !value.contains("--json")))));
-        assert!(payload["next_actions"][1]
-            .as_str()
-            .expect("second action should render")
-            .contains("recovery_ready=true"));
-        assert!(payload["next_actions"][2]
-            .as_str()
-            .expect("third action should render")
-            .contains("vida taskflow route explain"));
+                .expect("first action should render")
+                .contains("vida taskflow recovery status epic-2-run")
+        );
+        assert!(
+            payload["next_actions"]
+                .as_array()
+                .is_some_and(|actions| actions.iter().all(|action| action
+                    .as_str()
+                    .is_none_or(|value| !value.contains("--json"))))
+        );
+        assert!(
+            payload["next_actions"][1]
+                .as_str()
+                .expect("second action should render")
+                .contains("recovery_ready=true")
+        );
+        assert!(
+            payload["next_actions"][2]
+                .as_str()
+                .expect("third action should render")
+                .contains("vida taskflow route explain")
+        );
     }
 
     #[test]
@@ -9593,8 +9884,10 @@ mod agent_init_surface_tests {
         assert!(rendered.contains("run_id: compact-output-run"));
         assert!(rendered.contains("dispatch_mode: dispatch_packet"));
         assert!(rendered.contains("next_actions[3]:"));
-        assert!(rendered
-            .contains("full_output_machine_command: vida agent-init --execute-dispatch --json"));
+        assert!(
+            rendered
+                .contains("full_output_machine_command: vida agent-init --execute-dispatch --json")
+        );
         assert!(!rendered.contains("should_not_print"));
         assert!(!rendered.contains("\"large\""));
     }
@@ -9635,11 +9928,13 @@ mod agent_init_surface_tests {
         std::fs::write(&artifact_path, r#"{"status":"blocked"}"#)
             .expect("artifact should be written");
 
-        assert!(safe_read_agent_init_dispatch_result_artifact_json(
-            &root,
-            artifact_path.to_str().expect("utf8 artifact path"),
-        )
-        .is_none());
+        assert!(
+            safe_read_agent_init_dispatch_result_artifact_json(
+                &root,
+                artifact_path.to_str().expect("utf8 artifact path"),
+            )
+            .is_none()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
@@ -9656,11 +9951,13 @@ mod agent_init_surface_tests {
         )
         .expect("oversized artifact should be written");
 
-        assert!(safe_read_agent_init_dispatch_result_artifact_json(
-            &root,
-            artifact_path.to_str().expect("utf8 artifact path"),
-        )
-        .is_none());
+        assert!(
+            safe_read_agent_init_dispatch_result_artifact_json(
+                &root,
+                artifact_path.to_str().expect("utf8 artifact path"),
+            )
+            .is_none()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -9678,16 +9975,22 @@ mod agent_init_surface_tests {
         let next_actions = payload["next_actions"]
             .as_array()
             .expect("next actions should render");
-        assert!(next_actions
-            .iter()
-            .any(|action| action.as_str().is_some_and(|value| value
-                .contains("vida taskflow consume continue --run-id output-contract-run"))));
-        assert!(next_actions.iter().all(|action| action
-            .as_str()
-            .map_or(true, |value| !value.contains("--json"))));
-        assert!(next_actions.iter().all(|action| action
-            .as_str()
-            .map_or(true, |value| !value.contains("vida agent-init --run-id"))));
+        assert!(
+            next_actions
+                .iter()
+                .any(|action| action.as_str().is_some_and(|value| value
+                    .contains("vida taskflow consume continue --run-id output-contract-run")))
+        );
+        assert!(next_actions.iter().all(|action| {
+            action
+                .as_str()
+                .map_or(true, |value| !value.contains("--json"))
+        }));
+        assert!(next_actions.iter().all(|action| {
+            action
+                .as_str()
+                .map_or(true, |value| !value.contains("vida agent-init --run-id"))
+        }));
     }
 
     #[test]
@@ -9773,14 +10076,18 @@ mod agent_init_surface_tests {
             payload["stale_internal_carrier_receipt_repair"]["repair_command"],
             "vida taskflow run-graph dispatch-init epic-2-run"
         );
-        assert!(payload["next_actions"][0]
-            .as_str()
-            .expect("stale receipt repair action should render first")
-            .contains("Legacy internal carrier receipt detected"));
-        assert!(payload["operator_contracts"]["next_actions"][1]
-            .as_str()
-            .expect("operator repair action should render")
-            .contains("dispatch-init epic-2-run"));
+        assert!(
+            payload["next_actions"][0]
+                .as_str()
+                .expect("stale receipt repair action should render first")
+                .contains("Legacy internal carrier receipt detected")
+        );
+        assert!(
+            payload["operator_contracts"]["next_actions"][1]
+                .as_str()
+                .expect("operator repair action should render")
+                .contains("dispatch-init epic-2-run")
+        );
     }
 
     #[test]

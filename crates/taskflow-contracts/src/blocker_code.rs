@@ -48,6 +48,7 @@ pub enum BlockerCode {
     AutoDispatchPacketActiveUnitMismatch,
     AutoDispatchPacketActiveUnitAmbiguous,
     AutoDispatchPacketActiveUnitUnavailable,
+    AutoDispatchPacketActiveUnitPacketMissing,
 }
 
 impl BlockerCode {
@@ -122,6 +123,9 @@ impl BlockerCode {
             Self::AutoDispatchPacketActiveUnitUnavailable => {
                 "auto_dispatch_packet_active_unit_unavailable"
             }
+            Self::AutoDispatchPacketActiveUnitPacketMissing => {
+                "auto_dispatch_packet_active_unit_packet_missing"
+            }
         }
     }
 
@@ -172,6 +176,7 @@ impl BlockerCode {
             Self::AutoDispatchPacketActiveUnitMismatch,
             Self::AutoDispatchPacketActiveUnitAmbiguous,
             Self::AutoDispatchPacketActiveUnitUnavailable,
+            Self::AutoDispatchPacketActiveUnitPacketMissing,
         ]
     }
 }
