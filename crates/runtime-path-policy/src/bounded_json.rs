@@ -91,6 +91,15 @@ mod tests {
     }
 
     #[test]
+    fn task_attempt_artifact_limit_is_64_kib() {
+        assert_eq!(TASK_ATTEMPT_ARTIFACT_LIMIT, 64 * 1024);
+        assert_eq!(
+            TASK_ATTEMPT_ARTIFACT_LIMIT,
+            TASK_ATTEMPT_ARTIFACT_MAX_BYTES_ALIAS
+        );
+    }
+
+    #[test]
     fn read_json_file_enforces_size_limit() {
         let root = std::env::temp_dir().join(format!(
             "runtime-path-policy-json-limit-{}",

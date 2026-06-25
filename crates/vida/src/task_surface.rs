@@ -8704,32 +8704,19 @@ async fn run_task_attempt_collect(command: TaskAttemptCollectArgs) -> ExitCode {
             {
                 Ok(values) => values,
                 Err(reason) => {
+                    let error = state_store::StateStoreError::InvalidTaskRecord {
+                        reason: format!("attempt_artifact_validation_failed: {reason}"),
+                    };
                     return print_task_attempt_payload(
                         "vida task attempt collect",
                         command.render,
                         command.json,
-                        task_attempt_operator_payload(
+                        task_attempt_artifact_error_payload(
                             "vida task attempt collect",
-                            vec![crate::release1_contracts::blocker_code_str(
-                                crate::release1_contracts::BlockerCode::DispatchPacketContractInvalid,
-                            )
-                            .to_string()],
-                            vec![
-                                "Provide non-empty artifact refs that exist when they point at local files."
-                                    .to_string(),
-                            ],
-                            serde_json::json!({
-                                "surface": "vida task attempt collect",
-                                "task_id": command.task_id,
-                                "stage_id": command.stage_id,
-                                "attempt_id": attempt_id,
-                            }),
-                            serde_json::json!({
-                                "attempt": serde_json::Value::Null,
-                                "stage_summary": serde_json::Value::Null,
-                                "error": format!("attempt_artifact_validation_failed: {reason}"),
-                                "canonical_task_notes_mutated": false,
-                            }),
+                            Some(command.task_id.as_str()),
+                            Some(command.stage_id.as_str()),
+                            Some(attempt_id.as_str()),
+                            &error,
                         ),
                     );
                 }
@@ -8808,13 +8795,23 @@ async fn run_task_attempt_consolidate(command: TaskAttemptConsolidateArgs) -> Ex
                     "vida task attempt consolidate",
                     command.render,
                     command.json,
-                    task_attempt_error_payload(
-                        "vida task attempt consolidate",
-                        Some(command.task_id.as_str()),
-                        Some(command.stage_id.as_str()),
-                        None,
-                        &error,
-                    ),
+                    if task_attempt_error_is_artifact_validation(&error) {
+                        task_attempt_artifact_error_payload(
+                            "vida task attempt consolidate",
+                            Some(command.task_id.as_str()),
+                            Some(command.stage_id.as_str()),
+                            None,
+                            &error,
+                        )
+                    } else {
+                        task_attempt_error_payload(
+                            "vida task attempt consolidate",
+                            Some(command.task_id.as_str()),
+                            Some(command.stage_id.as_str()),
+                            None,
+                            &error,
+                        )
+                    },
                 ),
             }
         }
@@ -9754,6 +9751,51 @@ fn task_attempt_error_payload(
             "error": error_text,
             "binding_error": error_text,
             "binding_error_kind": binding_error_kind,
+            "canonical_task_notes_mutated": false,
+        }),
+    )
+}
+
+fn task_attempt_error_is_artifact_validation(error: &state_store::StateStoreError) -> bool {
+    error
+        .to_string()
+        .contains("attempt_artifact_validation_failed")
+}
+
+fn task_attempt_artifact_error_payload(
+    surface: &str,
+    task_id: Option<&str>,
+    stage_id: Option<&str>,
+    attempt_id: Option<&str>,
+    error: &state_store::StateStoreError,
+) -> serde_json::Value {
+    let error_text = error.to_string();
+    let max_bytes = runtime_path_policy::size_limits::TASK_ATTEMPT_ARTIFACT_MAX_BYTES;
+    let artifact_contract =
+        taskflow_core::task::attempts::stage_attempt_artifact_contract(max_bytes);
+    let next_action =
+        taskflow_core::task::attempts::stage_attempt_artifact_contract_hint(max_bytes);
+    let mut artifact_refs = serde_json::json!({
+        "surface": surface,
+        "task_id": task_id,
+        "stage_id": stage_id,
+    });
+    if let Some(attempt_id) = attempt_id {
+        artifact_refs["attempt_id"] = serde_json::json!(attempt_id);
+    }
+    task_attempt_operator_payload(
+        surface,
+        vec![crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::DispatchPacketContractInvalid,
+        )
+        .to_string()],
+        vec![next_action],
+        artifact_refs,
+        serde_json::json!({
+            "attempt": serde_json::Value::Null,
+            "stage_summary": serde_json::Value::Null,
+            "error": error_text,
+            "artifact_contract": artifact_contract,
             "canonical_task_notes_mutated": false,
         }),
     )

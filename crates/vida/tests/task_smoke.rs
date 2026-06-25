@@ -5552,7 +5552,33 @@ fn assert_task_attempt_collect_blocks_artifact_ref(
         .as_str()
         .expect("blocked artifact error should render")
         .contains("attempt_artifact_validation_failed"));
+    assert_attempt_artifact_contract_guidance(&blocked);
     assert_eq!(blocked["canonical_task_notes_mutated"], false);
+}
+
+fn assert_attempt_artifact_contract_guidance(blocked: &serde_json::Value) {
+    assert_eq!(
+        blocked["artifact_contract"]["artifact_root"],
+        ".vida/data/state or --state-dir"
+    );
+    assert_eq!(
+        blocked["artifact_contract"]["example_ref"],
+        "attempt-artifacts/<attempt-id>.json"
+    );
+    assert_eq!(blocked["artifact_contract"]["max_bytes"], 65_536);
+    assert_eq!(
+        blocked["artifact_contract"]["schema_version"],
+        "stage-attempt-v1"
+    );
+    assert!(blocked["artifact_contract"]["required_fields"]
+        .as_array()
+        .expect("required fields should be array")
+        .contains(&serde_json::json!("attempt_id")));
+    let next_action = blocked["next_actions"][0]
+        .as_str()
+        .expect("next action should be string");
+    assert!(next_action.contains("attempt-artifacts/<attempt-id>.json"));
+    assert!(next_action.contains("observed_facts or facts"));
 }
 
 #[test]
@@ -5879,6 +5905,7 @@ fn task_attempt_dispatch_status_collect_and_stage_status_help_document_output_mo
     assert!(attempt_help.contains("consolidate"));
     assert!(attempt_help.contains("Default output is compact TOON"));
     assert!(attempt_help.contains("--json"));
+    assert!(attempt_help.contains("attempt-artifacts/<attempt-id>.json"));
 
     for subcommand in ["dispatch", "status", "collect", "consolidate"] {
         let help = run_and_assert_success(&["task", "attempt", subcommand, "--help"], &state_dir);
@@ -5890,6 +5917,27 @@ fn task_attempt_dispatch_status_collect_and_stage_status_help_document_output_mo
         assert!(help.contains("--json"));
         assert!(help.contains("--state-dir"));
         assert!(help.contains("compact TOON"));
+    }
+    for subcommand in ["collect", "record", "transition"] {
+        let artifact_ref_help =
+            run_and_assert_success(&["task", "attempt", subcommand, "--help"], &state_dir);
+        for expected in [
+            ".vida/data/state",
+            "64 KiB",
+            "65536 bytes",
+            "stage-attempt-v1",
+            "attempt_id",
+            "task_id",
+            "stage_id",
+            "observed_facts",
+            "facts array",
+            "proof_commands",
+        ] {
+            assert!(
+                artifact_ref_help.contains(expected),
+                "{subcommand} help should document {expected}: {artifact_ref_help}"
+            );
+        }
     }
     let consolidate_help =
         run_and_assert_success(&["task", "attempt", "consolidate", "--help"], &state_dir);
@@ -6118,6 +6166,80 @@ fn task_attempt_collect_validates_artifacts_without_mutating_canonical_task_note
         after["task"]["notes"], before_notes,
         "collect may validate attempt artifacts but must not mutate canonical task notes"
     );
+}
+
+#[test]
+fn task_attempt_collect_reports_artifact_contract_for_missing_fact_array() {
+    let state_dir = unique_state_dir();
+    let task_id = unique_test_id("attempt-collect-contract-missing-facts");
+    create_task_attempt_fixture_with_notes(&state_dir, &task_id);
+    let artifact_dir = format!("{state_dir}/attempt-artifacts");
+    fs::create_dir_all(&artifact_dir).expect("create attempt artifact dir");
+    let artifact_path = format!("{artifact_dir}/analysis-missing-facts.json");
+    fs::write(
+        &artifact_path,
+        serde_json::json!({
+            "schema_version": "stage-attempt-v1",
+            "attempt_id": "attempt-collect-missing-facts",
+            "task_id": &task_id,
+            "stage_id": "analysis",
+            "hypotheses": [],
+            "proof_results": [],
+            "risks": [],
+            "limitations": [],
+            "conflicts": []
+        })
+        .to_string(),
+    )
+    .expect("write missing-facts artifact");
+
+    let record = run_command_json(
+        &[
+            "task",
+            "attempt",
+            "record",
+            &task_id,
+            "--attempt-id",
+            "attempt-collect-missing-facts",
+            "--stage-id",
+            "analysis",
+            "--backend",
+            "internal_codex",
+            "--model-profile",
+            "test-middle",
+            "--isolation",
+            "readonly",
+            "--status",
+            "produced",
+            "--artifact-ref",
+            &artifact_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(record["status"], "pass");
+
+    let (blocked, success) = run_command_json_allow_failure(
+        &[
+            "task", "attempt", "collect", &task_id, "--stage", "analysis", "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!success);
+    assert_eq!(blocked["status"], "blocked");
+    let error = blocked["error"]
+        .as_str()
+        .expect("blocked artifact error should render");
+    assert!(error.contains("observed_facts or facts array"));
+    assert_eq!(
+        blocked["artifact_contract"]["example_ref"],
+        "attempt-artifacts/<attempt-id>.json"
+    );
+    assert!(blocked["next_actions"][0]
+        .as_str()
+        .expect("next action should be string")
+        .contains("attempt-artifacts/<attempt-id>.json"));
+    assert_eq!(blocked["canonical_task_notes_mutated"], false);
 }
 
 #[test]
@@ -6462,6 +6584,7 @@ fn task_attempt_consolidate_fails_closed_for_missing_or_malformed_artifacts() {
         .as_str()
         .expect("error should be string")
         .contains("attempt_artifact_validation_failed"));
+    assert_attempt_artifact_contract_guidance(&missing_blocked);
     assert_eq!(missing_blocked["canonical_task_notes_mutated"], false);
 
     let malformed_state_dir = unique_state_dir();
@@ -6512,6 +6635,7 @@ fn task_attempt_consolidate_fails_closed_for_missing_or_malformed_artifacts() {
         .as_str()
         .expect("error should be string")
         .contains("not valid JSON"));
+    assert_attempt_artifact_contract_guidance(&malformed_blocked);
     assert_eq!(malformed_blocked["canonical_task_notes_mutated"], false);
 }
 
@@ -6707,6 +6831,7 @@ fn task_attempt_implementation_artifact_validation() {
             .as_str()
             .expect("blocked artifact error should render")
             .contains(expected_reason));
+        assert_attempt_artifact_contract_guidance(&blocked);
         assert_eq!(blocked["canonical_task_notes_mutated"], false);
     }
 
@@ -6786,6 +6911,7 @@ fn task_attempt_implementation_artifact_validation() {
         .as_str()
         .expect("consolidate artifact error should render")
         .contains("outside task owned_paths"));
+    assert_attempt_artifact_contract_guidance(&consolidate_blocked);
     assert_eq!(consolidate_blocked["canonical_task_notes_mutated"], false);
 }
 

@@ -1,6 +1,48 @@
 //! Attempt tracking command helpers.
 
 pub const STAGE_ATTEMPT_SCHEMA_VERSION: &str = "stage-attempt-v1";
+pub const STAGE_ATTEMPT_ARTIFACT_ROOT_HELP: &str = ".vida/data/state or --state-dir";
+pub const STAGE_ATTEMPT_ARTIFACT_EXAMPLE_REF: &str = "attempt-artifacts/<attempt-id>.json";
+pub const STAGE_ATTEMPT_ARTIFACT_REQUIRED_FIELDS: &[&str] =
+    &["schema_version", "attempt_id", "task_id", "stage_id"];
+pub const STAGE_ATTEMPT_ARTIFACT_REQUIRED_FACT_ARRAYS: &[&str] = &["observed_facts", "facts"];
+pub const STAGE_ATTEMPT_ARTIFACT_ARRAY_FIELDS: &[&str] = &[
+    "observed_facts",
+    "facts",
+    "hypotheses",
+    "proof_results",
+    "risks",
+    "limitations",
+    "conflicts",
+    "related_files",
+    "changed_files",
+    "proof_commands",
+];
+
+#[must_use]
+pub fn stage_attempt_artifact_contract(max_bytes: u64) -> serde_json::Value {
+    serde_json::json!({
+        "artifact_root": STAGE_ATTEMPT_ARTIFACT_ROOT_HELP,
+        "recommended_directory": "attempt-artifacts/",
+        "example_ref": STAGE_ATTEMPT_ARTIFACT_EXAMPLE_REF,
+        "max_bytes": max_bytes,
+        "schema_version": STAGE_ATTEMPT_SCHEMA_VERSION,
+        "required_fields": STAGE_ATTEMPT_ARTIFACT_REQUIRED_FIELDS,
+        "required_fact_arrays": STAGE_ATTEMPT_ARTIFACT_REQUIRED_FACT_ARRAYS,
+        "array_fields": STAGE_ATTEMPT_ARTIFACT_ARRAY_FIELDS,
+    })
+}
+
+#[must_use]
+pub fn stage_attempt_artifact_contract_hint(max_bytes: u64) -> String {
+    format!(
+        "Provide --artifact-ref {} as a JSON file under {}; max {} bytes; include schema_version={}, attempt_id, task_id, stage_id, and observed_facts or facts array.",
+        STAGE_ATTEMPT_ARTIFACT_EXAMPLE_REF,
+        STAGE_ATTEMPT_ARTIFACT_ROOT_HELP,
+        max_bytes,
+        STAGE_ATTEMPT_SCHEMA_VERSION
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttemptStageNextAction {
@@ -79,15 +121,7 @@ pub fn validate_stage_attempt_artifact_identity(
             "attempt artifact `{artifact_ref}` must include observed_facts or facts array"
         ));
     }
-    for field in [
-        "observed_facts",
-        "facts",
-        "hypotheses",
-        "proof_results",
-        "risks",
-        "limitations",
-        "conflicts",
-    ] {
+    for &field in STAGE_ATTEMPT_ARTIFACT_ARRAY_FIELDS {
         if !json[field].is_null() && !json[field].is_array() {
             return Err(format!(
                 "attempt artifact `{artifact_ref}` field `{field}` must be an array"
@@ -190,6 +224,7 @@ mod tests {
     use super::{
         AttemptStageNextAction, append_json_string_array, attempt_stage_next_action,
         normalize_artifact_refs, normalize_attempt_artifact_repo_path, push_unique,
+        stage_attempt_artifact_contract, stage_attempt_artifact_contract_hint,
         validate_attempt_artifact_changed_files_scope, validate_attempt_artifact_refs,
         validate_stage_attempt_artifact_identity,
     };
@@ -252,6 +287,27 @@ mod tests {
             .is_ok()
         );
 
+        let facts_valid = json!({
+            "schema_version": "stage-attempt-v1",
+            "attempt_id": "attempt-a",
+            "task_id": "task-a",
+            "stage_id": "analysis",
+            "facts": ["fact"],
+            "related_files": [],
+            "changed_files": [],
+            "proof_commands": []
+        });
+        assert!(
+            validate_stage_attempt_artifact_identity(
+                &facts_valid,
+                "attempt-a",
+                "task-a",
+                "analysis",
+                "artifact-a.json"
+            )
+            .is_ok()
+        );
+
         let invalid = json!({
             "schema_version": "stage-attempt-v1",
             "attempt_id": "attempt-a",
@@ -271,6 +327,46 @@ mod tests {
             .unwrap_err()
             .contains("observed_facts")
         );
+
+        let invalid_useful_array = json!({
+            "schema_version": "stage-attempt-v1",
+            "attempt_id": "attempt-a",
+            "task_id": "task-a",
+            "stage_id": "analysis",
+            "observed_facts": ["fact"],
+            "proof_commands": "cargo test"
+        });
+        assert!(
+            validate_stage_attempt_artifact_identity(
+                &invalid_useful_array,
+                "attempt-a",
+                "task-a",
+                "analysis",
+                "artifact-a.json"
+            )
+            .unwrap_err()
+            .contains("proof_commands")
+        );
+    }
+
+    #[test]
+    fn attempt_artifact_contract_payload_and_hint_explain_operator_requirements() {
+        let contract = stage_attempt_artifact_contract(65_536);
+
+        assert_eq!(contract["artifact_root"], ".vida/data/state or --state-dir");
+        assert_eq!(
+            contract["example_ref"],
+            "attempt-artifacts/<attempt-id>.json"
+        );
+        assert_eq!(contract["max_bytes"], 65_536);
+        assert_eq!(contract["schema_version"], "stage-attempt-v1");
+        assert!(
+            contract["required_fields"]
+                .as_array()
+                .expect("required fields should be array")
+                .contains(&serde_json::json!("attempt_id"))
+        );
+        assert!(stage_attempt_artifact_contract_hint(65_536).contains("observed_facts or facts"));
     }
 
     #[test]

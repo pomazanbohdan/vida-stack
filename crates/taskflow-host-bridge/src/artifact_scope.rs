@@ -5,13 +5,11 @@ use serde::{Deserialize, Serialize};
 use crate::errors::HostBridgeError;
 use crate::request::HostBridgeRequest;
 use runtime_path_policy::atomic_write::write_json_replace;
-use runtime_path_policy::bounded_json::read_json_value_file;
+use runtime_path_policy::bounded_json::{TASK_ATTEMPT_ARTIFACT_LIMIT, read_json_value_file};
 use runtime_path_policy::{
     ArtifactPathKind, PathPolicyError, StateRoot, existing_regular_file_under_root,
     new_output_path_under_root,
 };
-
-const MAX_HOST_BRIDGE_ARTIFACT_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostBridgeImplementationArtifact {
@@ -197,7 +195,7 @@ pub fn host_bridge_artifact_file(
     let artifact =
         existing_regular_file_under_root(&state_root, path, ArtifactPathKind::TaskAttemptArtifact)
             .map_err(|error| host_bridge_policy_error(error, "implementation artifact"))?;
-    match read_json_value_file(&artifact, MAX_HOST_BRIDGE_ARTIFACT_BYTES) {
+    match read_json_value_file(&artifact, TASK_ATTEMPT_ARTIFACT_LIMIT) {
         Ok(value) => Ok(Some(value)),
         Err(PathPolicyError::Json { .. }) => Ok(None),
         Err(error) => Err(host_bridge_policy_error(error, "implementation artifact")),

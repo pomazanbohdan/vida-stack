@@ -459,8 +459,6 @@ pub(crate) struct TaskflowImplementationArtifactAuthority {
     pub consolidation_receipt_id: String,
 }
 
-const MAX_ATTEMPT_ARTIFACT_BYTES: u64 = 64 * 1024;
-
 pub(crate) fn validate_attempt_artifact_ref(
     artifact_ref: &str,
     state_root: &std::path::Path,
@@ -488,9 +486,10 @@ pub(crate) fn validate_attempt_artifact_ref(
             state_root.display()
         ));
     }
-    if metadata.len() > MAX_ATTEMPT_ARTIFACT_BYTES {
+    if metadata.len() > runtime_path_policy::size_limits::TASK_ATTEMPT_ARTIFACT_MAX_BYTES {
         return Err(format!(
-            "attempt artifact `{artifact_ref}` exceeds {MAX_ATTEMPT_ARTIFACT_BYTES} bytes"
+            "attempt artifact `{artifact_ref}` exceeds {} bytes",
+            runtime_path_policy::size_limits::TASK_ATTEMPT_ARTIFACT_MAX_BYTES
         ));
     }
 

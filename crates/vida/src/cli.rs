@@ -53,7 +53,10 @@ const TASK_PRUNE_CLOSED_EPICS_ABOUT: &str =
     "archive and prune closed epic task rows without touching runtime receipts";
 const TASK_PRUNE_CLOSED_EPICS_LONG_ABOUT: &str = "Archive and prune only TaskFlow task rows for closed epic/container subtrees.\n\nThe command previews by default. Use --apply to write a JSONL archive of pruned task rows and then delete only those task rows plus their owned task_dependency rows. Runtime receipts, run-graph state, lane state, and non-task runtime state are never removed by this surface.";
 const TASK_PRUNE_CLOSED_EPICS_AFTER_HELP: &str = "Examples:\n  vida task prune-closed-epics\n  vida task prune-closed-epics --apply\n  vida task prune-closed-epics --apply --archive-dir .vida/data/state/task-archives --json\n\nOptions:\n  --apply                Archive and prune eligible closed epic/container task rows; default previews only\n  --archive-dir <path>   Directory for JSONL task-row archives when --apply is set\n  --state-dir <path>     Override the TaskFlow state directory\n  --json                 Emit machine-readable JSON output\n\nOutput:\n  Default output is compact plain text for operators. Use --json for machine-readable automation.";
-const TASK_ATTEMPT_AFTER_HELP: &str = "Examples:\n  vida task attempt dispatch <task-id> --stage-id analysis\n  vida task attempt status <task-id> --stage-id analysis\n  vida task attempt collect <task-id> --stage-id analysis --attempt-id <attempt-id> --artifact-ref report.json --status produced\n  vida task attempt record <task-id> --stage-id analysis --backend vibe --model-profile medium --isolation readonly --freshness snapshot-2026-06-05 --status submitted --artifact-ref report.json\n  vida task attempt transition <attempt-id> --task-id <task-id> --stage-id analysis --status accepted --consolidation-receipt receipt-1\n  vida task attempt summary <task-id> --stage-id analysis\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for machine-readable automation.";
+const TASK_ATTEMPT_AFTER_HELP: &str = "Examples:\n  vida task attempt dispatch <task-id> --stage-id analysis\n  vida task attempt status <task-id> --stage-id analysis\n  vida task attempt collect <task-id> --stage-id analysis --attempt-id <attempt-id> --artifact-ref attempt-artifacts/<attempt-id>.json --status produced\n  vida task attempt record <task-id> --stage-id analysis --backend vibe --model-profile medium --isolation readonly --freshness snapshot-2026-06-05 --status submitted --artifact-ref attempt-artifacts/<attempt-id>.json\n  vida task attempt transition <attempt-id> --task-id <task-id> --stage-id analysis --status accepted --consolidation-receipt receipt-1\n  vida task attempt summary <task-id> --stage-id analysis\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for machine-readable automation.";
+const TASK_ATTEMPT_ARTIFACT_REF_HELP: &str =
+    "State-root-relative or absolute attempt artifact JSON file; accepts repeated flags";
+const TASK_ATTEMPT_ARTIFACT_REF_LONG_HELP: &str = "State-root-relative or absolute attempt artifact JSON file; accepts repeated flags.\n\nContract:\n  Root: .vida/data/state or --state-dir; prefer attempt-artifacts/<attempt-id>.json.\n  Size: max 64 KiB (65536 bytes).\n  JSON: schema_version=stage-attempt-v1, matching attempt_id, task_id, and stage_id.\n  Facts: include observed_facts or facts array.\n  Useful arrays: related_files, changed_files, proof_commands, hypotheses, proof_results, risks, limitations, conflicts.";
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, Default)]
 pub(crate) enum RenderMode {
@@ -2322,7 +2325,8 @@ pub(crate) struct TaskAttemptCollectArgs {
 
     #[arg(
         long = "artifact-ref",
-        help = "Artifact, receipt, report, or patch proposal reference; accepts repeated flags"
+        help = TASK_ATTEMPT_ARTIFACT_REF_HELP,
+        long_help = TASK_ATTEMPT_ARTIFACT_REF_LONG_HELP
     )]
     pub(crate) artifact_refs: Vec<String>,
 
@@ -2489,7 +2493,8 @@ pub(crate) struct TaskAttemptRecordArgs {
 
     #[arg(
         long = "artifact-ref",
-        help = "Artifact, receipt, report, or patch proposal reference; accepts repeated flags"
+        help = TASK_ATTEMPT_ARTIFACT_REF_HELP,
+        long_help = TASK_ATTEMPT_ARTIFACT_REF_LONG_HELP
     )]
     pub(crate) artifact_refs: Vec<String>,
 
@@ -2578,7 +2583,8 @@ pub(crate) struct TaskAttemptTransitionArgs {
 
     #[arg(
         long = "artifact-ref",
-        help = "Artifact, receipt, report, or patch proposal reference; accepts repeated flags"
+        help = TASK_ATTEMPT_ARTIFACT_REF_HELP,
+        long_help = TASK_ATTEMPT_ARTIFACT_REF_LONG_HELP
     )]
     pub(crate) artifact_refs: Vec<String>,
 
