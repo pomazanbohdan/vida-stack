@@ -5,7 +5,7 @@ use crate::state_store::state_store_task_models::{
 };
 use crate::taskflow_run_graph::{
     approval_delegation_transition_kind, clear_run_graph_dispatch_init_fast_cache,
-    is_dispatch_resume_handoff_complete,
+    is_dispatch_resume_handoff_done,
 };
 use crate::RuntimeConsumptionLaneSelection;
 use taskflow_authority::run_graph_evidence::{
@@ -14,7 +14,8 @@ use taskflow_authority::run_graph_evidence::{
     RunGraphCompletionEvidence, RunGraphDownstreamPacketEvidence, RunGraphReworkEvidence,
 };
 use taskflow_authority::run_graph_transition::{
-    admit_run_graph_transition, RunGraphAuthorityInput,
+    admit_run_graph_transition, ready_run_graph_transition, ReadyRunGraphTransitionInput,
+    RunGraphAuthorityInput, RunGraphDispatchTargetFormat,
 };
 use taskflow_core::run_graph::model::{
     DispatchReceiptSnapshot as CoreDispatchReceiptSnapshot,
@@ -230,18 +231,20 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             rework_route_from_completion_evidence(&run_graph_completion_evidence(&receipt))
         {
             let completed_target = normalize_run_graph_node(&receipt.dispatch_target);
-            status.active_node = receipt.dispatch_target.clone();
-            status.next_node = Some(rework_route.allowed_next_node.clone());
-            status.lifecycle_stage = format!("{completed_target}_rework_required");
-            status.policy_gate = rework_route
+            let policy_gate = rework_route
                 .blocker_code
                 .unwrap_or_else(|| receipt.blocker_code.clone().unwrap_or_default());
-            status.handoff_state = format!("awaiting_{}", rework_route.allowed_next_node);
-            status.resume_target = format!("dispatch.{}", rework_route.allowed_next_node);
-            status.context_state = "sealed".to_string();
-            status.checkpoint_kind = "execution_cursor".to_string();
-            status.status = "ready".to_string();
-            status.recovery_ready = true;
+            let transition = ready_transition_input(
+                &status,
+                receipt.dispatch_target.clone(),
+                Some(rework_route.allowed_next_node),
+                format!("{completed_target}_rework_required"),
+                policy_gate,
+                "execution_cursor".to_string(),
+                RunGraphDispatchTargetFormat::Direct,
+                true,
+            );
+            apply_ready_run_graph_transition(&mut status, transition);
             return Ok(status);
         } else if let Some(blocked_source) =
             blocked_source_lane_from_downstream_dispatch_packet(&receipt)
@@ -284,16 +287,17 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.selected_backend = selected_backend.to_string();
         }
         let dispatch_target = normalize_run_graph_node(&receipt.dispatch_target);
-        status.active_node = dispatch_target.clone();
-        status.next_node = Some(dispatch_target.clone());
-        status.status = "ready".to_string();
-        status.lifecycle_stage = format!("{dispatch_target}_dispatch_ready");
-        status.policy_gate = "not_required".to_string();
-        status.handoff_state = format!("awaiting_{dispatch_target}");
-        status.resume_target = format!("dispatch.{dispatch_target}_lane");
-        status.context_state = "sealed".to_string();
-        status.checkpoint_kind = "execution_cursor".to_string();
-        status.recovery_ready = true;
+        let transition = ready_transition_input(
+            &status,
+            dispatch_target.clone(),
+            Some(dispatch_target.clone()),
+            format!("{dispatch_target}_dispatch_ready"),
+            "not_required".to_string(),
+            "execution_cursor".to_string(),
+            RunGraphDispatchTargetFormat::Lane,
+            true,
+        );
+        apply_ready_run_graph_transition(&mut status, transition);
         return Ok(status);
     }
     let closure_dispatch_completed = receipt.dispatch_target == "closure"
@@ -319,12 +323,20 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.recovery_ready = false;
         return Ok(status);
     }
-    if run_graph_authority_transition_kind(&status, &receipt)
+    let downstream_handoff_ready = downstream_handoff_ready_from_completion_evidence(
+        &run_graph_downstream_handoff_evidence(&receipt),
+    );
+    let downstream_handoff_admitted = run_graph_authority_transition_kind(&status, &receipt)
         == Some(CoreRunGraphTransitionKind::DownstreamReadyHandoff)
-        && downstream_handoff_ready_from_completion_evidence(
-            &run_graph_downstream_handoff_evidence(&receipt),
-        )
-    {
+        || (downstream_handoff_ready
+            && (stale_status_can_accept_downstream_ready_handoff(&status, &receipt)
+                || (status.status == "completed"
+                    && receipt.dispatch_status == "executed"
+                    && matches!(
+                        receipt.dispatch_target.as_str(),
+                        "work-pool-pack" | "dev-pack"
+                    ))));
+    if downstream_handoff_admitted && downstream_handoff_ready {
         let completed_target = receipt.dispatch_target.trim();
         let lifecycle_target = normalize_run_graph_node(completed_target);
         let downstream_node = receipt
@@ -348,16 +360,17 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         {
             status.selected_backend = selected_backend.to_string();
         }
-        status.active_node = completed_target.to_string();
-        status.next_node = Some(downstream_node.clone());
-        status.status = "ready".to_string();
-        status.lifecycle_stage = format!("{lifecycle_target}_complete");
-        status.policy_gate = "not_required".to_string();
-        status.handoff_state = format!("awaiting_{downstream_node}");
-        status.resume_target = format!("dispatch.{downstream_node}_lane");
-        status.context_state = "sealed".to_string();
-        status.checkpoint_kind = "execution_cursor".to_string();
-        status.recovery_ready = true;
+        let transition = ready_transition_input(
+            &status,
+            completed_target.to_string(),
+            Some(downstream_node),
+            format!("{lifecycle_target}_complete"),
+            "not_required".to_string(),
+            "execution_cursor".to_string(),
+            RunGraphDispatchTargetFormat::Lane,
+            true,
+        );
+        apply_ready_run_graph_transition(&mut status, transition);
         return Ok(status);
     }
     if status.status == "completed" {
@@ -382,12 +395,70 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             if status.policy_gate == "validation_report_required" {
                 status.policy_gate = "targeted_verification".to_string();
             }
-            status.handoff_state = format!("awaiting_{next_node}");
-            status.resume_target = format!("dispatch.{next_node}_lane");
-            status.recovery_ready = true;
+            let transition = ready_transition_input(
+                &status,
+                status.active_node.clone(),
+                status.next_node.clone(),
+                "analysis_active".to_string(),
+                status.policy_gate.clone(),
+                status.checkpoint_kind.clone(),
+                RunGraphDispatchTargetFormat::Lane,
+                true,
+            );
+            apply_ready_run_graph_transition(&mut status, transition);
         }
     }
     Ok(status)
+}
+
+fn ready_transition_input(
+    status: &RunGraphStatus,
+    active_node: String,
+    next_node: Option<String>,
+    lifecycle_stage: String,
+    policy_gate: String,
+    checkpoint_kind: String,
+    target_format: RunGraphDispatchTargetFormat,
+    recovery_ready: bool,
+) -> ReadyRunGraphTransitionInput {
+    ReadyRunGraphTransitionInput {
+        run_id: status.run_id.clone(),
+        task_id: status.task_id.clone(),
+        task_class: status.task_class.clone(),
+        active_node,
+        next_node,
+        route_task_class: status.route_task_class.clone(),
+        selected_backend: status.selected_backend.clone(),
+        lane_id: status.lane_id.clone(),
+        lifecycle_stage,
+        policy_gate,
+        checkpoint_kind,
+        target_format,
+        recovery_ready,
+    }
+}
+
+fn apply_ready_run_graph_transition(
+    status: &mut RunGraphStatus,
+    input: ReadyRunGraphTransitionInput,
+) {
+    let transition = ready_run_graph_transition(input);
+    status.run_id = transition.run_id;
+    status.task_id = transition.task_id;
+    status.task_class = transition.task_class;
+    status.active_node = transition.active_node;
+    status.next_node = transition.next_node;
+    status.status = transition.status;
+    status.route_task_class = transition.route_task_class;
+    status.selected_backend = transition.selected_backend;
+    status.lane_id = transition.lane_id;
+    status.lifecycle_stage = transition.lifecycle_stage;
+    status.policy_gate = transition.policy_gate;
+    status.handoff_state = transition.handoff_state;
+    status.context_state = transition.context_state;
+    status.checkpoint_kind = transition.checkpoint_kind;
+    status.resume_target = transition.resume_target;
+    status.recovery_ready = transition.recovery_ready;
 }
 
 fn run_graph_authority_transition_kind(
@@ -449,6 +520,17 @@ fn run_graph_downstream_handoff_evidence(
         downstream_dispatch_target: receipt.downstream_dispatch_target.clone(),
         downstream_dispatch_blockers: receipt.downstream_dispatch_blockers.clone(),
     }
+}
+
+fn stale_status_can_accept_downstream_ready_handoff(
+    status: &RunGraphStatus,
+    receipt: &RunGraphDispatchReceiptStored,
+) -> bool {
+    let dispatch_target = receipt.dispatch_target.trim();
+    !dispatch_target.is_empty()
+        && status.active_node == dispatch_target
+        && status.next_node.is_none()
+        && matches!(status.status.as_str(), "blocked" | "executing" | "ready")
 }
 
 fn downstream_rework_evidence_from_completion_result(
@@ -722,7 +804,7 @@ fn ready_dispatch_handoff_matches_downstream_receipt(
 ) -> bool {
     if status.status != "ready"
         || !status.recovery_ready
-        || !is_dispatch_resume_handoff_complete(status)
+        || !is_dispatch_resume_handoff_done(status)
         || receipt.dispatch_status != "executed"
         || receipt
             .blocker_code
@@ -847,10 +929,18 @@ fn active_exception_takeover_receipt_is_behind_status(
     ) {
         return true;
     }
+    let dispatch_target = receipt.dispatch_target.trim();
+    let next_node_matches_dispatch_target = status
+        .next_node
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        == Some(dispatch_target);
     status.status == "ready"
         && status.recovery_ready
         && status.resume_target.starts_with("dispatch.")
-        && status.active_node != receipt.dispatch_target
+        && status.active_node != dispatch_target
+        && !next_node_matches_dispatch_target
 }
 
 fn continuation_binding_active_kind(binding: &RunGraphContinuationBinding) -> Option<&str> {
@@ -1132,6 +1222,22 @@ impl RunGraphRecoverySummary {
             recovery_ready: status.recovery_ready,
             delegation_gate,
         }
+    }
+
+    pub(crate) fn is_terminal_closure(&self) -> bool {
+        self.resume_status == "completed"
+            && self.lifecycle_stage == "closure_complete"
+            && self.active_node == "closure"
+            && self
+                .resume_node
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+            && self.handoff_state == "none"
+            && self.checkpoint_kind == "none"
+            && self.resume_target == "none"
+            && !self.recovery_ready
     }
 
     pub fn as_display(&self) -> String {
@@ -2271,6 +2377,46 @@ impl StateStore {
         status.validate_memory_governance()?;
         self.ensure_current_session_mutation_claim_for_run(&status.run_id)
             .await?;
+        self.record_run_graph_status_after_admission(status).await
+    }
+
+    pub(crate) async fn record_reconciled_terminal_closure_run_graph_status(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<(), StateStoreError> {
+        status.validate_memory_governance()?;
+        Self::ensure_reconciled_terminal_closure_status(status)?;
+        let evidence = self.current_runtime_owner_evidence()?;
+        Self::ensure_runtime_owner_mutation_allowed(&evidence)?;
+        self.record_run_graph_status_after_admission(status).await
+    }
+
+    fn ensure_reconciled_terminal_closure_status(
+        status: &RunGraphStatus,
+    ) -> Result<(), StateStoreError> {
+        let is_reconciled_terminal_closure = status.active_node == "closure"
+            && status.next_node.is_none()
+            && status.status == "completed"
+            && status.lifecycle_stage == "closure_complete"
+            && status.handoff_state == "none"
+            && status.checkpoint_kind == "none"
+            && status.resume_target == "none"
+            && !status.recovery_ready;
+        if is_reconciled_terminal_closure {
+            return Ok(());
+        }
+        Err(StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "closed-run reconciliation can only bypass run ownership for reconciled terminal closure status `{}`",
+                status.run_id
+            ),
+        })
+    }
+
+    async fn record_run_graph_status_after_admission(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<(), StateStoreError> {
         let updated_at = unix_timestamp_nanos().to_string();
         let receipt_recorded_at = updated_at.clone();
         let checkpoint_record_updated_at = updated_at.clone();
@@ -3989,7 +4135,7 @@ impl StateStore {
     ) -> Result<(), StateStoreError> {
         if status.recovery_ready
             && status.resume_target.starts_with("dispatch.")
-            && !is_dispatch_resume_handoff_complete(status)
+            && !is_dispatch_resume_handoff_done(status)
         {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
@@ -4780,6 +4926,11 @@ mod tests {
         std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
     }
 
+    async fn close_store_and_remove_root(store: StateStore, root: std::path::PathBuf) {
+        store.close().await;
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn restore_vida_session_id(saved: Option<String>) {
         unsafe {
             match saved {
@@ -5038,7 +5189,7 @@ mod tests {
             .await
             .expect("task row lookup should succeed"));
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5086,7 +5237,7 @@ mod tests {
             .await
             .expect("active status classifier should succeed"));
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[test]
@@ -5222,7 +5373,7 @@ mod tests {
         crate::taskflow_run_graph::validate_run_graph_resume_gate(&status)
             .expect("state-store reconciled status should pass resume gate");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     fn sample_explicit_binding(
@@ -5298,7 +5449,7 @@ mod tests {
             RunGraphDispatchReceiptStored::from(sample_dispatch_receipt(&status.run_id));
         receipt.dispatch_target = "implementer".to_string();
         receipt.dispatch_status = "executed".to_string();
-        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+        receipt.lane_status = Some(crate::LaneStatus::LaneCompleted.as_str().to_string());
         receipt.downstream_dispatch_ready = true;
         receipt.downstream_dispatch_target = Some("coach".to_string());
         receipt.downstream_dispatch_blockers.clear();
@@ -5449,7 +5600,7 @@ mod tests {
         assert_eq!(projected.handoff_state, "awaiting_developer_rework");
         assert_eq!(projected.resume_target, "dispatch.developer_rework");
 
-        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn reconciled_pack_dispatch_receipt_for_path(packet_path: String) -> RunGraphDispatchReceipt {
@@ -5584,7 +5735,7 @@ mod tests {
             other => panic!("expected InvalidTaskRecord, got {other:?}"),
         }
 
-        let _ = fs::remove_dir_all(root);
+        close_store_and_remove_root(store, root).await;
         let _ = fs::remove_dir_all(external_root);
     }
 
@@ -5618,7 +5769,7 @@ mod tests {
         }
 
         let _ = fs::remove_file(outside_packet);
-        let _ = fs::remove_dir_all(root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5643,7 +5794,7 @@ mod tests {
             other => panic!("expected InvalidTaskRecord, got {other:?}"),
         }
 
-        let _ = fs::remove_dir_all(root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[cfg(unix)]
@@ -5679,7 +5830,7 @@ mod tests {
             other => panic!("expected InvalidTaskRecord, got {other:?}"),
         }
 
-        let _ = fs::remove_dir_all(root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[cfg(windows)]
@@ -5708,7 +5859,7 @@ mod tests {
                     || error.raw_os_error() == Some(1314) =>
             {
                 eprintln!("skipping Windows symlink packet path test: {error}");
-                let _ = fs::remove_dir_all(root);
+                close_store_and_remove_root(store, root).await;
                 return;
             }
             Err(error) => panic!("create packet symlink: {error}"),
@@ -5726,7 +5877,7 @@ mod tests {
             other => panic!("expected InvalidTaskRecord, got {other:?}"),
         }
 
-        let _ = fs::remove_dir_all(root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5746,7 +5897,7 @@ mod tests {
             .expect("in-root packet should be accepted");
 
         assert_eq!(run_graph_bootstrap["marker"], "inside-state-root");
-        let _ = fs::remove_dir_all(root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5771,7 +5922,7 @@ mod tests {
             .expect("relative in-root packet should be accepted");
 
         assert_eq!(run_graph_bootstrap["marker"], "relative-state-root");
-        let _ = fs::remove_dir_all(root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5800,7 +5951,7 @@ mod tests {
             other => panic!("expected InvalidTaskRecord, got {other:?}"),
         }
 
-        let _ = fs::remove_dir_all(root);
+        close_store_and_remove_root(store, root).await;
     }
 
     fn sample_replay_lineage_receipt(
@@ -6154,7 +6305,7 @@ mod tests {
             );
         }
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -6193,7 +6344,7 @@ mod tests {
             .expect("read owner evidence")
             .is_none());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -6311,7 +6462,7 @@ mod tests {
             .await
             .expect("expired claim should not block ownerless classification"));
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -6368,7 +6519,7 @@ mod tests {
         let status_result = owner_store.record_run_graph_status(&foreign_status).await;
         assert!(status_result.is_err());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(owner_store, root).await;
         restore_vida_session_id(saved_session_id);
     }
 
@@ -6426,7 +6577,7 @@ mod tests {
             .await
             .expect("task claim should authorize run continuation mutation");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
     }
 
@@ -6495,7 +6646,7 @@ mod tests {
             .await
             .expect("parent claim should authorize bound child task-as-run mutation");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
     }
 
@@ -6572,7 +6723,7 @@ mod tests {
         assert_eq!(binding.run_id, "run-scope-from-task");
         assert_eq!(binding.task_id, "next-bound-task");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
     }
 
@@ -6673,7 +6824,7 @@ mod tests {
             "legacy same-worktree owner evidence should be adoptable when no live/stale competing owner exists: {result:?}"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(legacy_store, root).await;
         restore_runtime_session_env(saved_env);
     }
 
@@ -6787,7 +6938,7 @@ mod tests {
             "run-current"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
     }
 
@@ -6895,7 +7046,93 @@ mod tests {
         assert_eq!(latest.run_id, "run-open-current");
         assert_eq!(latest.task_id, "task-open-current-run");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn orchestrator_init_does_not_reconcile_open_blocked_run() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-open-blocked-run");
+        }
+        let root = temp_run_graph_root("vida-run-graph-open-blocked-run");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "open-blocked-task",
+                title: "Open blocked task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create open blocked task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "open-blocked-run",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "open-blocked-task".to_string();
+        status.active_node = "developer".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "developer_blocked".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist open blocked run");
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "open-blocked-run-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-open-blocked-run".to_string(),
+                process_id: None,
+                task_id: Some("open-blocked-task".to_string()),
+                run_id: Some("open-blocked-run".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("open-blocked-domain".to_string()),
+                owned_paths: vec!["blocked-scope/path.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire open blocked run claim");
+
+        assert!(
+            !store
+                .run_graph_status_points_to_terminal_task_active(&status)
+                .await
+                .expect("classify open blocked run"),
+            "open blocked runs must not be classified as closed-task projection mismatches"
+        );
+        let latest = store
+            .latest_run_graph_status_for_current_session()
+            .await
+            .expect("read latest status")
+            .expect("open blocked run remains active");
+        assert_eq!(latest.run_id, "open-blocked-run");
+        assert_eq!(latest.task_id, "open-blocked-task");
+        assert_eq!(latest.lifecycle_stage, "developer_blocked");
+
+        close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
     }
 
@@ -7013,7 +7250,7 @@ mod tests {
             .expect("active exception takeover recovery remains current-session latest");
         assert_eq!(recovery.run_id, "run-current-exception-takeover");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
     }
 
@@ -7157,7 +7394,7 @@ mod tests {
             "completed exception takeover must not remain current-session latest"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
     }
 
@@ -7211,7 +7448,7 @@ mod tests {
         assert_eq!(status.run_id, "run-requested-task");
         assert_eq!(status.task_id, "task-requested");
 
-        let _ = fs::remove_dir_all(root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -7291,7 +7528,7 @@ mod tests {
         assert_eq!(scoped.run_id, "run-requested-exception-takeover");
         assert_eq!(scoped.task_id, "task-requested-exception-takeover");
 
-        let _ = fs::remove_dir_all(root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -7359,7 +7596,7 @@ mod tests {
             "run-current-binding"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
     }
 
@@ -7398,7 +7635,7 @@ mod tests {
             "run-owner-evidence-binding"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
     }
 
@@ -7462,7 +7699,7 @@ mod tests {
             "run-owner-evidence-status"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
     }
 
@@ -7537,7 +7774,7 @@ mod tests {
         assert!(reconciled.recovery_ready);
         assert!(reconciled.delegation_gate().delegated_cycle_open);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -7609,7 +7846,7 @@ mod tests {
             assert!(!reconciled.recovery_ready);
         }
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -7689,7 +7926,7 @@ mod tests {
         assert!(!summary.downstream_dispatch_ready);
         assert!(summary.downstream_dispatch_packet_path.is_none());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -7773,7 +8010,7 @@ mod tests {
         assert_eq!(reconciled.resume_target, "dispatch.review_ensemble");
         assert!(reconciled.recovery_ready);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -7856,7 +8093,7 @@ mod tests {
         assert_eq!(reconciled.resume_target, "none");
         assert!(!reconciled.recovery_ready);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -7968,7 +8205,7 @@ mod tests {
             "work_pool_materialization_identity_reconciliation"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -8052,7 +8289,7 @@ mod tests {
         assert_eq!(reconciled.resume_target, "none");
         assert!(!reconciled.recovery_ready);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -8136,7 +8373,7 @@ mod tests {
         assert_eq!(reconciled.selected_backend, "senior");
         assert!(!reconciled.recovery_ready);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -8211,7 +8448,7 @@ mod tests {
         assert!(!reconciled.recovery_ready);
         assert_eq!(reconciled.selected_backend, "internal_subagents");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -8306,7 +8543,7 @@ mod tests {
             .expect("non-superseded status should remain");
         assert_eq!(latest.run_id, "run-active");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -8393,7 +8630,7 @@ mod tests {
             .expect("open-task run should remain latest after stale closed-task run is skipped");
         assert_eq!(latest.run_id, "run-active-open-task");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -8479,7 +8716,7 @@ mod tests {
             );
         assert_eq!(latest.run_id, "run-active-present-task");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -8560,7 +8797,7 @@ mod tests {
         assert_eq!(reconciled.selected_backend, "opencode_cli");
         assert!(!reconciled.recovery_ready);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -8644,7 +8881,7 @@ mod tests {
         assert_eq!(reconciled.resume_target, "none");
         assert!(!reconciled.recovery_ready);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -8741,7 +8978,7 @@ mod tests {
             "clear".to_string()
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -8825,7 +9062,7 @@ mod tests {
         assert_eq!(reconciled.resume_target, "dispatch.implementer_lane");
         assert!(reconciled.recovery_ready);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -8944,7 +9181,7 @@ mod tests {
         );
         assert_eq!(persisted.lane_status, "lane_exception_recorded");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -9029,7 +9266,7 @@ mod tests {
         assert_eq!(reconciled.resume_target, "dispatch.writer_lane");
         assert!(reconciled.recovery_ready);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -9112,7 +9349,7 @@ mod tests {
         assert_eq!(reconciled.resume_target, "dispatch.writer_lane");
         assert!(reconciled.recovery_ready);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -9232,7 +9469,7 @@ mod tests {
         assert!(!persisted.downstream_dispatch_ready);
         assert!(persisted.downstream_dispatch_status.is_none());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -9353,7 +9590,7 @@ mod tests {
         assert!(!persisted.downstream_dispatch_ready);
         assert!(persisted.downstream_dispatch_status.is_none());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -9457,7 +9694,7 @@ mod tests {
         assert_eq!(reconciled.selected_backend, "opencode_cli");
         assert!(!reconciled.recovery_ready);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -9542,7 +9779,7 @@ mod tests {
             "exception takeover receipt should keep closed task out of active projection"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -9631,7 +9868,7 @@ mod tests {
         assert_eq!(latest.active_bounded_unit["kind"], "task_graph_task");
         assert_eq!(latest.active_bounded_unit["task_status"], "in_progress");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -9694,7 +9931,7 @@ mod tests {
             .expect("read latest explicit binding")
             .is_none());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -9834,7 +10071,7 @@ mod tests {
             );
         }
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -9901,7 +10138,7 @@ mod tests {
             "closed explicit task binding must be skipped"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -9968,7 +10205,7 @@ mod tests {
             "closed task_graph_task binding must not remain active"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -10018,7 +10255,7 @@ mod tests {
             serde_json::Value::String("closure".to_string())
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -10098,7 +10335,7 @@ mod tests {
             "stale task-close reconcile binding should fail closed when the run remains open"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -10144,7 +10381,7 @@ mod tests {
         assert_eq!(loaded.resolved_dispatch_target, "closure");
         assert_eq!(loaded.validation_outcome, "pass");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -10210,7 +10447,7 @@ mod tests {
         assert_eq!(latest.run_id, "run-replay-lineage-latest");
         assert_eq!(latest.receipt_id, "receipt-replay-lineage-latest");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -10280,7 +10517,7 @@ mod tests {
             other => panic!("expected InvalidTaskRecord, got {other:?}"),
         }
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -10350,7 +10587,7 @@ mod tests {
         assert_eq!(latest.lineage_kind, "root_dispatch_packet");
         assert_eq!(latest.resume_target, "resume.current_lane");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -10422,7 +10659,7 @@ mod tests {
             .expect("older receipt exists");
         assert_eq!(older.receipt_id, "replay-lineage-run-replay-old");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -10491,7 +10728,7 @@ mod tests {
             "run-projection-checkpoint:execution_cursor:dispatch.coach_lane"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -10542,7 +10779,7 @@ mod tests {
         assert_eq!(latest.last_gapless_position, latest.updated_at);
         assert_eq!(latest.projector_id, "taskflow.run_graph.status_projection");
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -10578,6 +10815,6 @@ mod tests {
             "checkpoint placeholder state must not emit a projection checkpoint record"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 }

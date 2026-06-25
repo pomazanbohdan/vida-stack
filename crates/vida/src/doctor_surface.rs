@@ -371,12 +371,9 @@ fn doctor_operator_blocker_codes(
     }
     if !no_active_taskflow_work
         && !latest_run_graph_task_missing
-        && latest_run_graph_recovery.as_ref().is_some_and(|summary| {
-            !summary.recovery_ready
-                && !(summary.resume_status == "completed"
-                    && summary.lifecycle_stage == "closure_complete"
-                    && summary.resume_target == "none")
-        })
+        && latest_run_graph_recovery
+            .as_ref()
+            .is_some_and(|summary| !summary.recovery_ready && !summary.is_terminal_closure())
     {
         operator_blocker_codes
             .push(blocker_code_str(BlockerCode::RecoveryReadinessBlocked).to_string());

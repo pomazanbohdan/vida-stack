@@ -58,6 +58,14 @@ STATUS_LITERAL_PATTERN = re.compile(
 FUNCTION_PATTERN = re.compile(
     r"\bfn\s+([A-Za-z0-9_]*(?:classif|verdict|status|block|complete|retry|pass|fail)[A-Za-z0-9_]*)\s*\("
 )
+CFG_TEST_ATTR_PATTERN = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
+CFG_TEST_ITEM_START_PATTERN = re.compile(
+    r"\b(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:mod|fn)\s+[A-Za-z0-9_]+\b"
+)
+OUTCOME_CLASSIFIER_NAME_PATTERN = re.compile(
+    r"(^|_)(classif[A-Za-z0-9_]*|verdict|outcome|decision|blocker_code|blocker_codes|fail_closed|terminal|retryable|is|has)($|_)"
+    r"|^(is|has|blocked|completed|terminal|retry|fail|pass)_"
+)
 COMMAND_PATTERN = re.compile(r"\b(?:Command|ClapCommand)::new\(\s*\"([^\"]+)\"")
 ARG_PATTERN = re.compile(r"\bArg::new\(\s*\"([^\"]+)\"")
 SUBCOMMAND_ATTR_PATTERN = re.compile(r"#\s*\[\s*command\s*\(")
@@ -132,6 +140,52 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def iter_rust_lines_by_test_scope(text: str) -> Iterable[tuple[int, str, bool]]:
+    brace_depth = 0
+    test_scope_depth: int | None = None
+    pending_cfg_test = False
+    pending_cfg_test_item = False
+    for index, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if CFG_TEST_ATTR_PATTERN.search(line):
+            pending_cfg_test = True
+        if pending_cfg_test and CFG_TEST_ITEM_START_PATTERN.search(line):
+            pending_cfg_test_item = True
+
+        is_test_scoped = (
+            test_scope_depth is not None or pending_cfg_test or pending_cfg_test_item
+        )
+        yield index, line, is_test_scoped
+
+        open_count = line.count("{")
+        close_count = line.count("}")
+        if pending_cfg_test_item and open_count > 0 and test_scope_depth is None:
+            test_scope_depth = brace_depth + 1
+            pending_cfg_test = False
+            pending_cfg_test_item = False
+
+        brace_depth += open_count - close_count
+        if test_scope_depth is not None and brace_depth < test_scope_depth:
+            test_scope_depth = None
+            pending_cfg_test = False
+            pending_cfg_test_item = False
+        elif pending_cfg_test_item and ";" in line and open_count == 0:
+            pending_cfg_test = False
+            pending_cfg_test_item = False
+        elif (
+            pending_cfg_test
+            and not pending_cfg_test_item
+            and stripped
+            and not stripped.startswith("#")
+            and not stripped.startswith("//")
+        ):
+            pending_cfg_test = False
+
+
+def is_outcome_classifier_name(name: str) -> bool:
+    return bool(OUTCOME_CLASSIFIER_NAME_PATTERN.search(name))
+
+
 def production_loc(files: Iterable[SourceFile]) -> dict[str, object]:
     total = 0
     by_root: dict[str, int] = {target: 0 for target in TARGET_ROOTS}
@@ -139,7 +193,9 @@ def production_loc(files: Iterable[SourceFile]) -> dict[str, object]:
     for item in files:
         count = 0
         in_block = False
-        for raw_line in read_text(item.path).splitlines():
+        for _, raw_line, is_test_scoped in iter_rust_lines_by_test_scope(read_text(item.path)):
+            if is_test_scoped:
+                continue
             line = raw_line.strip()
             if not line:
                 continue
@@ -203,13 +259,18 @@ def inventory_mutations(files: Iterable[SourceFile]) -> list[dict[str, object]]:
 
 def inventory_literals_and_classifiers(files: Iterable[SourceFile]) -> dict[str, object]:
     literals: dict[str, dict[str, object]] = {}
+    cfg_test_literals: dict[str, dict[str, object]] = {}
     classifiers: list[dict[str, object]] = []
+    cfg_test_classifiers: list[dict[str, object]] = []
+    status_helpers: list[dict[str, object]] = []
+    cfg_test_status_helpers: list[dict[str, object]] = []
     for item in files:
-        for index, line in enumerate(read_text(item.path).splitlines(), start=1):
+        for index, line, is_test_scoped in iter_rust_lines_by_test_scope(read_text(item.path)):
+            target_literals = cfg_test_literals if is_test_scoped else literals
             for match in STATUS_LITERAL_PATTERN.finditer(line):
                 value = match.group(1)
                 key = value.lower()
-                entry = literals.setdefault(
+                entry = target_literals.setdefault(
                     key,
                     {"literal": value, "count": 0, "locations": []},
                 )
@@ -220,16 +281,34 @@ def inventory_literals_and_classifiers(files: Iterable[SourceFile]) -> dict[str,
                     locations.append({"path": item.rel, "line": index})
             fn_match = FUNCTION_PATTERN.search(line)
             if fn_match:
-                classifiers.append(
-                    {
-                        "p": item.rel,
-                        "l": index,
-                        "fn": fn_match.group(1),
-                    }
-                )
+                row = {
+                    "p": item.rel,
+                    "l": index,
+                    "fn": fn_match.group(1),
+                }
+                if is_outcome_classifier_name(fn_match.group(1)):
+                    target_classifiers = cfg_test_classifiers if is_test_scoped else classifiers
+                    target_classifiers.append(row)
+                else:
+                    target_helpers = (
+                        cfg_test_status_helpers if is_test_scoped else status_helpers
+                    )
+                    target_helpers.append(row)
     return {
         "status_blocker_literals": [literals[key] for key in sorted(literals)],
         "classifier_functions": sorted(classifiers, key=lambda row: (row["p"], row["l"])),
+        "status_helper_functions": sorted(
+            status_helpers, key=lambda row: (row["p"], row["l"])
+        ),
+        "cfg_test_status_blocker_literals": [
+            cfg_test_literals[key] for key in sorted(cfg_test_literals)
+        ],
+        "cfg_test_classifier_functions": sorted(
+            cfg_test_classifiers, key=lambda row: (row["p"], row["l"])
+        ),
+        "cfg_test_status_helper_functions": sorted(
+            cfg_test_status_helpers, key=lambda row: (row["p"], row["l"])
+        ),
     }
 
 
@@ -325,6 +404,14 @@ def build_baseline(root: Path) -> dict[str, object]:
         "status_and_classifier_inventory": {
             "status_blocker_literal_count": len(literals["status_blocker_literals"]),
             "classifier_function_count": len(literals["classifier_functions"]),
+            "status_helper_function_count": len(literals["status_helper_functions"]),
+            "cfg_test_status_blocker_literal_count": len(
+                literals["cfg_test_status_blocker_literals"]
+            ),
+            "cfg_test_classifier_function_count": len(literals["cfg_test_classifier_functions"]),
+            "cfg_test_status_helper_function_count": len(
+                literals["cfg_test_status_helper_functions"]
+            ),
             "classifier_record_schema": {
                 "p": "path",
                 "l": "line",
@@ -403,6 +490,9 @@ def render_drift_map(baseline: dict[str, object]) -> str:
                 ["targeted_production_loc", baseline["success_metric_baseline"]["targeted_production_loc"]],  # type: ignore[index]
                 ["direct_surface_mutation_candidates", baseline["direct_mutation_inventory"]["count"]],  # type: ignore[index]
                 ["duplicate_classifier_candidates", baseline["success_metric_baseline"]["duplicate_classifier_candidates"]],  # type: ignore[index]
+                ["status_helper_false_positive_candidates", baseline["status_and_classifier_inventory"]["status_helper_function_count"]],  # type: ignore[index]
+                ["cfg_test_classifier_candidates", baseline["status_and_classifier_inventory"]["cfg_test_classifier_function_count"]],  # type: ignore[index]
+                ["cfg_test_status_helper_candidates", baseline["status_and_classifier_inventory"]["cfg_test_status_helper_function_count"]],  # type: ignore[index]
                 ["canonical_cli_leaf_command_candidates", commands["leaf_command_count"]],  # type: ignore[index]
                 ["command_specific_option_candidates", commands["command_specific_option_count"]],  # type: ignore[index]
             ],
@@ -502,7 +592,7 @@ def render_execution_preparation(baseline: dict[str, object], baseline_hash: str
         "",
         "Required proofs/tests/checks: run the inventory twice, compare stable hashes, inspect the host-bridge drift-map section, run TaskFlow graph validation before task closure.",
         "",
-        f"Preparation findings: baseline sha256 `{baseline_hash}`; targeted production LOC `{metrics['targeted_production_loc']}`; direct mutation candidates `{metrics['direct_surface_mutation_candidates']}`; classifier candidates `{metrics['duplicate_classifier_candidates']}`.",
+        f"Preparation findings: baseline sha256 `{baseline_hash}`; targeted production LOC `{metrics['targeted_production_loc']}`; direct mutation candidates `{metrics['direct_surface_mutation_candidates']}`; production outcome classifier candidates `{metrics['duplicate_classifier_candidates']}`; status helper false positives `{baseline['status_and_classifier_inventory']['status_helper_function_count']}`; cfg(test) classifier candidates `{baseline['status_and_classifier_inventory']['cfg_test_classifier_function_count']}`; cfg(test) status helper candidates `{baseline['status_and_classifier_inventory']['cfg_test_status_helper_function_count']}`.",
         "",
         "## change_boundary",
         "",
@@ -565,14 +655,93 @@ def with_footer(
     return body.rstrip() + "\n\n" + "\n".join(footer)
 
 
+def run_self_test() -> int:
+    sample = """
+fn status_is_terminal() { let state = "ready"; }
+fn build_status_payload() { let state = "ready"; }
+#[cfg(test)]
+mod tests {
+    fn test_status_classifier() { let state = "blocked"; }
+    fn build_status_test_payload() { let state = "blocked"; }
+    fn retry_verdict() { let state = "pass"; }
+}
+fn production_verdict() { let state = "completed"; }
+"""
+    production_classifiers: list[str] = []
+    cfg_test_classifiers: list[str] = []
+    production_status_helpers: list[str] = []
+    cfg_test_status_helpers: list[str] = []
+    production_literals = 0
+    cfg_test_literals = 0
+    for _, line, is_test_scoped in iter_rust_lines_by_test_scope(sample):
+        literal_count = len(list(STATUS_LITERAL_PATTERN.finditer(line)))
+        fn_match = FUNCTION_PATTERN.search(line)
+        if is_test_scoped:
+            cfg_test_literals += literal_count
+            if fn_match:
+                if is_outcome_classifier_name(fn_match.group(1)):
+                    cfg_test_classifiers.append(fn_match.group(1))
+                else:
+                    cfg_test_status_helpers.append(fn_match.group(1))
+        else:
+            production_literals += literal_count
+            if fn_match:
+                if is_outcome_classifier_name(fn_match.group(1)):
+                    production_classifiers.append(fn_match.group(1))
+                else:
+                    production_status_helpers.append(fn_match.group(1))
+    expected = {
+        "production_classifiers": ["status_is_terminal", "production_verdict"],
+        "cfg_test_classifiers": ["test_status_classifier", "retry_verdict"],
+        "production_status_helpers": ["build_status_payload"],
+        "cfg_test_status_helpers": ["build_status_test_payload"],
+        "production_status_literal_count": 3,
+        "cfg_test_status_literal_count": 3,
+    }
+    actual = {
+        "production_classifiers": production_classifiers,
+        "cfg_test_classifiers": cfg_test_classifiers,
+        "production_status_helpers": production_status_helpers,
+        "cfg_test_status_helpers": cfg_test_status_helpers,
+        "production_status_literal_count": production_literals,
+        "cfg_test_status_literal_count": cfg_test_literals,
+    }
+    if actual != expected:
+        print(stable_json({"status": "fail", "expected": expected, "actual": actual}), end="")
+        return 1
+    print(
+        stable_json(
+            {
+                "status": "pass",
+                "production_classifier_count": len(production_classifiers),
+                "cfg_test_classifier_count": len(cfg_test_classifiers),
+                "production_status_helper_count": len(production_status_helpers),
+                "cfg_test_status_helper_count": len(cfg_test_status_helpers),
+                "production_status_literal_count": production_literals,
+                "cfg_test_status_literal_count": cfg_test_literals,
+            }
+        ),
+        end="",
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run a focused cfg(test) production-scope regression check and exit.",
+    )
     parser.add_argument(
         "--output-dir",
         default="docs/product/spec/ldrk-baseline",
         help="Directory for generated baseline artifacts.",
     )
     args = parser.parse_args()
+
+    if args.self_test:
+        return run_self_test()
 
     root = repo_root()
     output_dir = (root / args.output_dir).resolve()

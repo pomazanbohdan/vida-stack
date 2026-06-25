@@ -1083,11 +1083,7 @@ impl OperationalJournal for RedbOperationalJournal {
 
     fn record_projection_checkpoint(&mut self, checkpoint: VidaProjectionCheckpoint) {
         let record = RedbProjectionCheckpointRecord::from_checkpoint(checkpoint);
-        let _ = self.write_record(
-            PROJECTION_CHECKPOINT_TABLE,
-            &record.projection_id.0,
-            &record,
-        );
+        let _ = self.write_projection_checkpoint_record(record);
     }
 
     fn record_projection_failure(&mut self, failure: JournalProjectionFailure) {
@@ -1114,6 +1110,35 @@ impl RedbOperationalJournal {
             table
                 .insert(key, payload.as_slice())
                 .map_err(storage_error)?;
+        }
+        write.commit().map_err(storage_error)
+    }
+
+    fn write_projection_checkpoint_record(
+        &self,
+        record: RedbProjectionCheckpointRecord,
+    ) -> Result<(), TaskflowStateError> {
+        let write = self.db.begin_write().map_err(storage_error)?;
+        {
+            let mut table = write
+                .open_table(PROJECTION_CHECKPOINT_TABLE)
+                .map_err(storage_error)?;
+            let mut should_write = true;
+            if let Some(existing) = table
+                .get(record.projection_id.0.as_str())
+                .map_err(storage_error)?
+            {
+                let existing = decode_projection_checkpoint_record(existing.value())?;
+                if projection_checkpoint_record_is_stale(&existing, &record) {
+                    should_write = false;
+                }
+            }
+            if should_write {
+                let payload = serde_json::to_vec(&record).map_err(storage_error)?;
+                table
+                    .insert(record.projection_id.0.as_str(), payload.as_slice())
+                    .map_err(storage_error)?;
+            }
         }
         write.commit().map_err(storage_error)
     }
@@ -1504,6 +1529,17 @@ fn decode_projection_failure_record(
     Ok(RedbProjectionFailureRecord::from_failure(failure, None))
 }
 
+fn projection_checkpoint_record_is_stale(
+    existing: &RedbProjectionCheckpointRecord,
+    candidate: &RedbProjectionCheckpointRecord,
+) -> bool {
+    let existing_cursor = global_cursor_number(&existing.last_global_cursor);
+    let candidate_cursor = global_cursor_number(&candidate.last_global_cursor);
+    candidate_cursor < existing_cursor
+        || (candidate_cursor == existing_cursor
+            && candidate.last_stream_version.0 < existing.last_stream_version.0)
+}
+
 fn global_cursor_number(cursor: &VidaEventCursor) -> usize {
     cursor
         .0
@@ -1672,6 +1708,8 @@ fn sha256_hex(input: &[u8]) -> String {
 mod tests {
     use std::fs;
     use std::path::Path;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
     use std::time::Instant;
 
     use super::{
@@ -1921,6 +1959,70 @@ mod tests {
         assert!(append_ledger.result_hash.is_some());
         assert!(append_ledger.result_ref.is_some());
         let command_ledger = reopened
+            .idempotency_record(&VidaIdempotencyKey("idem-1".to_string()))
+            .expect("command idempotency record");
+        assert_eq!(command_ledger.state, JournalIdempotencyState::Completed);
+        assert_eq!(command_ledger.receipt_id, append_ledger.result_ref);
+    }
+
+    #[test]
+    fn append_retry_registry_dedupes_100_concurrent_callers_and_records_audit_trace() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let journal = Arc::new(Mutex::new(
+            RedbOperationalJournal::create(&path).expect("create journal"),
+        ));
+
+        let first = journal
+            .lock()
+            .expect("journal mutex")
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("first append should pass");
+        let mut handles = Vec::new();
+        for _ in 0..100 {
+            let journal = Arc::clone(&journal);
+            handles.push(thread::spawn(move || {
+                let mut retry_request = append_request(1, vec![event(1)], vec![effect("effect-1")]);
+                retry_request.expected_stream_version = Some(VidaStreamVersion(1));
+                journal
+                    .lock()
+                    .expect("journal mutex")
+                    .append(retry_request)
+                    .expect("same payload retry should return cached receipt")
+            }));
+        }
+
+        for handle in handles {
+            assert_eq!(handle.join().expect("retry worker should finish"), first);
+        }
+
+        let journal = journal.lock().expect("journal mutex");
+        let stream = journal.load_stream(&VidaStreamRef("stream-1".to_string()));
+        assert_eq!(stream.len(), 1);
+        assert_eq!(stream[0].trace["correlation_id"], "correlation-1");
+        let health = journal.health_status().expect("journal health");
+        assert_eq!(health.stream_event_count, 1);
+        assert_eq!(health.global_event_count, 1);
+        assert_eq!(health.outbox_pending_count, 1);
+        let append_ledger: RedbAppendIdempotencyRecord = journal
+            .read_one(APPEND_IDEMPOTENCY_TABLE, "idem-1")
+            .expect("append ledger read")
+            .expect("append ledger row");
+        assert_eq!(append_ledger.status, "completed");
+        assert_eq!(append_ledger.retry_count, 100);
+        assert_eq!(
+            append_ledger.result_ref,
+            Some(super::append_receipt_ref(
+                &VidaIdempotencyKey("idem-1".to_string()),
+                &first
+            ))
+        );
+        assert_eq!(
+            append_ledger.committed_event_cursor,
+            first.last_global_cursor
+        );
+        assert!(append_ledger.result_hash.is_some());
+        let command_ledger = journal
             .idempotency_record(&VidaIdempotencyKey("idem-1".to_string()))
             .expect("command idempotency record");
         assert_eq!(command_ledger.state, JournalIdempotencyState::Completed);
@@ -2581,6 +2683,39 @@ mod tests {
     }
 
     #[test]
+    fn redb_shadow_import_is_idempotent_for_repeated_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let snapshot = taskflow_snapshot_fixture();
+        let journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        let first = journal
+            .replace_taskflow_snapshot(&snapshot)
+            .expect("first import should pass");
+        let second = journal
+            .replace_taskflow_snapshot(&snapshot)
+            .expect("second import should pass");
+        let exported = journal
+            .export_taskflow_snapshot()
+            .expect("export should pass");
+
+        assert_eq!(second.task_count, first.task_count);
+        assert_eq!(second.dependency_count, first.dependency_count);
+        assert_eq!(second.task_hash, first.task_hash);
+        assert_eq!(second.dependency_hash, first.dependency_hash);
+        assert_eq!(
+            serde_json::to_value(&exported.tasks).expect("exported tasks should serialize"),
+            serde_json::to_value(&snapshot.tasks).expect("snapshot tasks should serialize")
+        );
+        assert_eq!(
+            serde_json::to_value(&exported.dependencies)
+                .expect("exported dependencies should serialize"),
+            serde_json::to_value(&snapshot.dependencies)
+                .expect("snapshot dependencies should serialize")
+        );
+    }
+
+    #[test]
     fn redb_shadow_parity_reports_mismatch_for_different_snapshot() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("journal.redb");
@@ -2782,6 +2917,26 @@ mod tests {
         assert_eq!(checkpoint_record.schema_version, "1");
         assert!(!checkpoint_record.input_hash.is_empty());
         assert!(!checkpoint_record.output_hash.is_empty());
+    }
+
+    #[test]
+    fn projection_checkpoint_rejects_out_of_order_older_event_sequence() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        journal.record_projection_checkpoint(projection_checkpoint(4));
+        journal.record_projection_checkpoint(projection_checkpoint(2));
+
+        let checkpoint = journal
+            .projection_checkpoint_record(&VidaProjectionRef("projection-1".to_string()))
+            .expect("checkpoint record read")
+            .expect("checkpoint record");
+        assert_eq!(
+            checkpoint.last_global_cursor,
+            VidaEventCursor("global-4".to_string())
+        );
+        assert_eq!(checkpoint.last_stream_version, VidaStreamVersion(4));
     }
 
     #[test]

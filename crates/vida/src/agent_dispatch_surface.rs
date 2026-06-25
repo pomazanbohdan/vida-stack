@@ -501,7 +501,12 @@ async fn append_host_bridge_dispatch_receipt_blockers(
         }
     };
     let reconciled_blocked_status_matches =
-        host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target).await;
+        host_bridge_request_matches_reconciled_blocked_status(store, run_id, request_target).await
+            || host_bridge_request_matches_reconciled_source_packet(
+                state_root,
+                &receipt,
+                request_target,
+            );
     if reconciled_blocked_status_matches && request_target != Some(receipt.dispatch_target.as_str())
     {
         return;
@@ -585,6 +590,58 @@ async fn host_bridge_request_matches_reconciled_blocked_status(
         || status.resume_target == format!("dispatch.{request_target}"))
         && (status.policy_gate == "host_tool_bridge_adapter_required"
             || status.lifecycle_stage == format!("{request_target}_blocked"))
+}
+
+fn host_bridge_request_matches_reconciled_source_packet(
+    state_root: &Path,
+    receipt: &state_store::RunGraphDispatchReceipt,
+    request_target: Option<&str>,
+) -> bool {
+    let Some(request_target) = request_target
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+    else {
+        return false;
+    };
+    let Some(packet_path) = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return false;
+    };
+    let Ok(packet_path) = canonical_state_artifact_path(state_root, packet_path, true) else {
+        return false;
+    };
+    let Ok(packet) = read_canonical_host_bridge_json_artifact(&packet_path, "dispatch packet")
+    else {
+        return false;
+    };
+    if packet
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        != Some(receipt.run_id.trim())
+    {
+        return false;
+    }
+    let source_target_matches = packet
+        .get("source_dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        == Some(request_target);
+    let source_status = packet
+        .get("source_dispatch_status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let source_blocked = packet
+        .get("source_blocker_code")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    source_target_matches
+        && (source_blocked || matches!(source_status, "bridge_request_pending" | "blocked"))
 }
 
 fn host_bridge_packet_is_empty_object(canonical_packet_path: Option<&Path>) -> bool {
@@ -742,22 +799,14 @@ fn host_bridge_adapter_payload(
             let dispatch_target = request.dispatch_target.as_str();
             format!("{run_id}-{dispatch_target}-host-bridge-receipt")
         };
-        let mut command = format!(
-            "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --host-bridge-summary {}",
+        let command = format!(
+            "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --host-bridge-result-file {}",
             crate::shell_quote(&request.run_id),
             crate::shell_quote(&receipt_id),
             crate::shell_quote(&request_path.display().to_string()),
             crate::shell_quote("<host-agent-id>"),
-            crate::shell_quote("parent host adapter completed receipt-backed execution")
+            crate::shell_quote(&request.result_path.display().to_string())
         );
-        if let Some(target) =
-            host_bridge_completion_allowed_next_node(&effective_request, state_root)
-        {
-            command.push_str(&format!(
-                " --allowed-next-node {}",
-                crate::shell_quote(&target)
-            ));
-        }
         command
     } else {
         "repair host bridge request run_id before completion".to_string()
@@ -963,7 +1012,7 @@ async fn attach_host_bridge_implementation_artifacts(
                     .to_string(),
             ],
                 serde_json::json!({ "request_path": command.request.display().to_string() }),
-            )
+            );
         }
     };
     let dispatch_target = payload["host_bridge"]["dispatch_target"]
@@ -1009,7 +1058,7 @@ async fn attach_host_bridge_implementation_artifacts(
                     "request_path": command.request.display().to_string(),
                     "state_dir": state_dir.display().to_string(),
                 }),
-            )
+            );
         }
     };
     let task = match store.show_task(&run_id).await {
@@ -1028,7 +1077,7 @@ async fn attach_host_bridge_implementation_artifacts(
                     "request_path": command.request.display().to_string(),
                     "task_id": run_id,
                 }),
-            )
+            );
         }
     };
     let mut normalized_artifacts = host_bridge_request_implementation_artifacts(&request);
@@ -1055,7 +1104,7 @@ async fn attach_host_bridge_implementation_artifacts(
                         "request_path": command.request.display().to_string(),
                         "artifact_path": artifact_path.display().to_string(),
                     }),
-                )
+                );
             }
         };
         let changed_files =
@@ -1215,7 +1264,7 @@ async fn attach_host_bridge_implementation_artifacts(
         .as_str()
         .map(human_command)
         .unwrap_or_else(|| {
-            "vida lane complete <run-id> --receipt-id <receipt-id> --host-bridge-request <request-path> --host-agent-id <host-agent-id> --host-bridge-summary <summary>".to_string()
+            "vida lane complete <run-id> --receipt-id <receipt-id> --host-bridge-request <request-path> --host-agent-id <host-agent-id> --host-bridge-result-file <result-path>".to_string()
         });
     let artifact_refs_payload = serde_json::json!({
         "request_path": command.request.display().to_string(),
@@ -1356,6 +1405,62 @@ fn build_parallelization_planner(
             "add or unblock parallel-safe execution semantics before expecting planner proposals"
         }
     })
+}
+
+fn compact_diagnostics_omitted(diagnostic: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "omitted",
+        "view": "compact",
+        "diagnostic": diagnostic,
+        "full_output_flag": "--full",
+    })
+}
+
+fn maybe_build_parallelization_planner(
+    include_diagnostics: bool,
+    projection: &state_store::TaskSchedulingProjection,
+    lanes_requested: usize,
+    configured_max_parallel_agents: usize,
+) -> serde_json::Value {
+    if include_diagnostics {
+        build_parallelization_planner(projection, lanes_requested, configured_max_parallel_agents)
+    } else {
+        compact_diagnostics_omitted("parallelization_planner")
+    }
+}
+
+fn maybe_build_carrier_selection_api_descriptor(
+    include_diagnostics: bool,
+    activation_bundle: &serde_json::Value,
+) -> serde_json::Value {
+    if include_diagnostics {
+        build_carrier_selection_api_descriptor(activation_bundle)
+    } else {
+        compact_diagnostics_omitted("carrier_selection_api")
+    }
+}
+
+fn maybe_build_fanout_guard_from_projection(
+    include_diagnostics: bool,
+    projection: &state_store::TaskSchedulingProjection,
+    lanes_requested: usize,
+    configured_max_parallel_agents: usize,
+    selected_lanes: &[AgentDispatchLanePreview],
+    blocked_candidates: &[AgentDispatchBlockedCandidate],
+    blocker_codes: &[String],
+) -> serde_json::Value {
+    if include_diagnostics {
+        agent_dispatch_fanout_guard_from_projection(
+            projection,
+            lanes_requested,
+            configured_max_parallel_agents,
+            selected_lanes,
+            blocked_candidates,
+            blocker_codes,
+        )
+    } else {
+        compact_diagnostics_omitted("fanout_guard")
+    }
 }
 
 fn no_packet_materialization() -> serde_json::Value {
@@ -2039,6 +2144,26 @@ fn build_agent_dispatch_next_preview(
     explicit_state_dir: Option<&std::path::Path>,
     dev_team: bool,
 ) -> AgentDispatchNextPreview {
+    build_agent_dispatch_next_preview_with_diagnostics(
+        activation_bundle,
+        projection,
+        lanes_requested,
+        configured_max_parallel_agents,
+        explicit_state_dir,
+        dev_team,
+        true,
+    )
+}
+
+fn build_agent_dispatch_next_preview_with_diagnostics(
+    activation_bundle: &serde_json::Value,
+    projection: &state_store::TaskSchedulingProjection,
+    lanes_requested: usize,
+    configured_max_parallel_agents: usize,
+    explicit_state_dir: Option<&std::path::Path>,
+    dev_team: bool,
+    include_diagnostics: bool,
+) -> AgentDispatchNextPreview {
     if dev_team {
         build_agent_dispatch_next_preview_dev_team(
             activation_bundle,
@@ -2046,6 +2171,7 @@ fn build_agent_dispatch_next_preview(
             lanes_requested,
             configured_max_parallel_agents,
             explicit_state_dir,
+            include_diagnostics,
         )
     } else {
         build_agent_dispatch_next_preview_standard(
@@ -2054,6 +2180,7 @@ fn build_agent_dispatch_next_preview(
             lanes_requested,
             configured_max_parallel_agents,
             explicit_state_dir,
+            include_diagnostics,
         )
     }
 }
@@ -2064,6 +2191,7 @@ fn build_agent_dispatch_next_preview_standard(
     lanes_requested: usize,
     configured_max_parallel_agents: usize,
     explicit_state_dir: Option<&std::path::Path>,
+    include_diagnostics: bool,
 ) -> AgentDispatchNextPreview {
     let mut blocker_codes = Vec::new();
     let mut next_actions = Vec::new();
@@ -2089,8 +2217,13 @@ fn build_agent_dispatch_next_preview_standard(
                 vec!["graph_blocked".to_string()],
             ));
         }
-        let flow_projection = non_dev_team_flow_projection();
-        let fanout_guard = agent_dispatch_fanout_guard_from_projection(
+        let flow_projection = if include_diagnostics {
+            non_dev_team_flow_projection()
+        } else {
+            compact_diagnostics_omitted("flow_projection")
+        };
+        let fanout_guard = maybe_build_fanout_guard_from_projection(
+            include_diagnostics,
             projection,
             lanes_requested,
             configured_max_parallel_agents,
@@ -2111,13 +2244,17 @@ fn build_agent_dispatch_next_preview_standard(
             next_actions,
             execute_supported: false,
             execution_attempted: false,
-            parallelization_planner: build_parallelization_planner(
+            parallelization_planner: maybe_build_parallelization_planner(
+                include_diagnostics,
                 projection,
                 lanes_requested,
                 configured_max_parallel_agents,
             ),
             packet_materialization: no_packet_materialization(),
-            carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
+            carrier_selection_api: maybe_build_carrier_selection_api_descriptor(
+                include_diagnostics,
+                activation_bundle,
+            ),
             fanout_guard,
             flow_projection,
             source_surfaces: agent_dispatch_source_surfaces(),
@@ -2292,7 +2429,8 @@ fn build_agent_dispatch_next_preview_standard(
     }
 
     let status = release1_contract_status_value(blocker_codes.is_empty());
-    let fanout_guard = agent_dispatch_fanout_guard_from_projection(
+    let fanout_guard = maybe_build_fanout_guard_from_projection(
+        include_diagnostics,
         projection,
         lanes_requested,
         configured_max_parallel_agents,
@@ -2314,15 +2452,23 @@ fn build_agent_dispatch_next_preview_standard(
         next_actions,
         execute_supported: false,
         execution_attempted: false,
-        parallelization_planner: build_parallelization_planner(
+        parallelization_planner: maybe_build_parallelization_planner(
+            include_diagnostics,
             projection,
             lanes_requested,
             configured_max_parallel_agents,
         ),
         packet_materialization: no_packet_materialization(),
-        carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
+        carrier_selection_api: maybe_build_carrier_selection_api_descriptor(
+            include_diagnostics,
+            activation_bundle,
+        ),
         fanout_guard,
-        flow_projection: non_dev_team_flow_projection(),
+        flow_projection: if include_diagnostics {
+            non_dev_team_flow_projection()
+        } else {
+            compact_diagnostics_omitted("flow_projection")
+        },
         source_surfaces: agent_dispatch_source_surfaces(),
     }
 }
@@ -2333,6 +2479,7 @@ fn build_agent_dispatch_next_preview_dev_team(
     lanes_requested: usize,
     configured_max_parallel_agents: usize,
     explicit_state_dir: Option<&std::path::Path>,
+    include_diagnostics: bool,
 ) -> AgentDispatchNextPreview {
     let mut blocker_codes = Vec::new();
     let mut next_actions = Vec::new();
@@ -2425,7 +2572,7 @@ fn build_agent_dispatch_next_preview_dev_team(
 
     let configured_max_parallel_agents = configured_max_parallel_agents.max(1);
     let effective_max_parallel_agents = lanes_requested.min(configured_max_parallel_agents);
-    let preview_step_limit = effective_max_parallel_agents;
+    let preview_step_limit = lanes_requested;
     let steps_to_preview = sequence
         .iter()
         .cloned()
@@ -2443,14 +2590,19 @@ fn build_agent_dispatch_next_preview_dev_team(
                 vec!["graph_blocked".to_string()],
             ));
         }
-        let flow_projection = build_dev_team_flow_projection(
-            activation_bundle,
-            selected_flow_id,
-            &sequence,
-            &selected_lanes,
-            &blocker_codes,
-        );
-        let fanout_guard = agent_dispatch_fanout_guard_from_projection(
+        let flow_projection = if include_diagnostics {
+            build_dev_team_flow_projection(
+                activation_bundle,
+                selected_flow_id,
+                &sequence,
+                &selected_lanes,
+                &blocker_codes,
+            )
+        } else {
+            compact_diagnostics_omitted("flow_projection")
+        };
+        let fanout_guard = maybe_build_fanout_guard_from_projection(
+            include_diagnostics,
             projection,
             lanes_requested,
             configured_max_parallel_agents,
@@ -2471,13 +2623,17 @@ fn build_agent_dispatch_next_preview_dev_team(
             next_actions,
             execute_supported: false,
             execution_attempted: false,
-            parallelization_planner: build_parallelization_planner(
+            parallelization_planner: maybe_build_parallelization_planner(
+                include_diagnostics,
                 projection,
                 lanes_requested,
                 configured_max_parallel_agents,
             ),
             packet_materialization: no_packet_materialization(),
-            carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
+            carrier_selection_api: maybe_build_carrier_selection_api_descriptor(
+                include_diagnostics,
+                activation_bundle,
+            ),
             fanout_guard,
             flow_projection,
             source_surfaces: agent_dispatch_source_surfaces(),
@@ -2641,14 +2797,19 @@ fn build_agent_dispatch_next_preview_dev_team(
     }
 
     let status = release1_contract_status_value(blocker_codes.is_empty());
-    let flow_projection = build_dev_team_flow_projection(
-        activation_bundle,
-        selected_flow_id,
-        &sequence,
-        &selected_lanes,
-        &blocker_codes,
-    );
-    let fanout_guard = agent_dispatch_fanout_guard_from_projection(
+    let flow_projection = if include_diagnostics {
+        build_dev_team_flow_projection(
+            activation_bundle,
+            selected_flow_id,
+            &sequence,
+            &selected_lanes,
+            &blocker_codes,
+        )
+    } else {
+        compact_diagnostics_omitted("flow_projection")
+    };
+    let fanout_guard = maybe_build_fanout_guard_from_projection(
+        include_diagnostics,
         projection,
         lanes_requested,
         configured_max_parallel_agents,
@@ -2670,13 +2831,17 @@ fn build_agent_dispatch_next_preview_dev_team(
         next_actions,
         execute_supported: false,
         execution_attempted: false,
-        parallelization_planner: build_parallelization_planner(
+        parallelization_planner: maybe_build_parallelization_planner(
+            include_diagnostics,
             projection,
             lanes_requested,
             configured_max_parallel_agents,
         ),
         packet_materialization: no_packet_materialization(),
-        carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
+        carrier_selection_api: maybe_build_carrier_selection_api_descriptor(
+            include_diagnostics,
+            activation_bundle,
+        ),
         fanout_guard,
         flow_projection,
         source_surfaces: agent_dispatch_source_surfaces(),
@@ -2712,6 +2877,22 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
     plan: crate::taskflow_proxy::TaskflowSchedulerDispatchPlan,
     lanes_requested: usize,
     explicit_state_dir: Option<&std::path::Path>,
+) -> AgentDispatchNextPreview {
+    build_agent_dispatch_next_preview_from_scheduler_plan_with_diagnostics(
+        activation_bundle,
+        plan,
+        lanes_requested,
+        explicit_state_dir,
+        true,
+    )
+}
+
+fn build_agent_dispatch_next_preview_from_scheduler_plan_with_diagnostics(
+    activation_bundle: &serde_json::Value,
+    plan: crate::taskflow_proxy::TaskflowSchedulerDispatchPlan,
+    lanes_requested: usize,
+    explicit_state_dir: Option<&std::path::Path>,
+    include_diagnostics: bool,
 ) -> AgentDispatchNextPreview {
     let mut blocker_codes = plan.blocker_codes.clone();
     let mut next_actions = plan.next_actions.clone();
@@ -2859,18 +3040,28 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
     } else {
         usize::try_from(plan.max_parallel_agents).unwrap_or(usize::MAX)
     };
-    let mut parallelization_planner =
-        build_parallelization_planner(&plan.scheduling, lanes_requested, effective_parallel);
-    apply_scheduler_plan_continuation_gate_to_parallelization_planner(
-        &mut parallelization_planner,
-        &plan,
+    let mut parallelization_planner = maybe_build_parallelization_planner(
+        include_diagnostics,
+        &plan.scheduling,
+        lanes_requested,
+        effective_parallel,
     );
-    let fanout_guard = agent_dispatch_fanout_guard_from_scheduler_plan(
-        &plan,
-        &selected_lanes,
-        &blocked_candidates,
-        &blocker_codes,
-    );
+    if include_diagnostics {
+        apply_scheduler_plan_continuation_gate_to_parallelization_planner(
+            &mut parallelization_planner,
+            &plan,
+        );
+    }
+    let fanout_guard = if include_diagnostics {
+        agent_dispatch_fanout_guard_from_scheduler_plan(
+            &plan,
+            &selected_lanes,
+            &blocked_candidates,
+            &blocker_codes,
+        )
+    } else {
+        compact_diagnostics_omitted("fanout_guard")
+    };
     AgentDispatchNextPreview {
         status,
         mode: "preview".to_string(),
@@ -2886,9 +3077,16 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan(
         execution_attempted: false,
         parallelization_planner,
         packet_materialization: no_packet_materialization(),
-        carrier_selection_api: build_carrier_selection_api_descriptor(activation_bundle),
+        carrier_selection_api: maybe_build_carrier_selection_api_descriptor(
+            include_diagnostics,
+            activation_bundle,
+        ),
         fanout_guard,
-        flow_projection: non_dev_team_flow_projection(),
+        flow_projection: if include_diagnostics {
+            non_dev_team_flow_projection()
+        } else {
+            compact_diagnostics_omitted("flow_projection")
+        },
         source_surfaces: agent_dispatch_source_surfaces(),
     }
 }
@@ -3417,7 +3615,7 @@ async fn materialize_agent_dispatch_next_packets(
                 serde_json::json!({
                     "receipt_backed": true,
                     "status": "packet_ready",
-                    "artifacts": artifacts,
+                    "artifacts": artifacts.clone(),
                 }),
             );
             if let Some(current_step) = flow_projection
@@ -3455,7 +3653,7 @@ async fn materialize_agent_dispatch_next_packets(
             "status": release1_pass_status(),
             "requested": true,
             "materializes_packets": true,
-            "artifacts": preview.parallelization_planner["packet_artifacts"].clone(),
+            "artifacts": artifacts,
         });
     } else {
         preview.status = release1_blocked_status().to_string();
@@ -3498,14 +3696,16 @@ fn agent_dispatch_next_projection_name(
     } else {
         ""
     };
+    let output_mode = if command.full { "-full" } else { "-compact" };
     format!(
-        "agent-dispatch-next-mode-{}{}-lanes-{}-scope-{}-current-{}-latest",
+        "agent-dispatch-next-mode-{}{}{}-lanes-{}-scope-{}-current-{}-latest",
         if command.dev_team {
             "dev-team"
         } else {
             "scheduler"
         },
         materialization_mode,
+        output_mode,
         command.lanes,
         safe_agent_dispatch_projection_component(command.scope.as_deref().unwrap_or("default")),
         safe_agent_dispatch_projection_component(
@@ -3516,10 +3716,32 @@ fn agent_dispatch_next_projection_name(
 
 fn agent_dispatch_next_effective_materialize_packets(
     command: &AgentDispatchNextArgs,
-    _activation_bundle: &serde_json::Value,
+    activation_bundle: &serde_json::Value,
 ) -> bool {
-    // Config default_args are launch suggestions; packet writes require an explicit CLI flag.
     command.materialize_packets
+        || (command.dev_team
+            && activation_bundle_default_args_include(activation_bundle, "--materialize-packets"))
+}
+
+fn activation_bundle_default_args_include(
+    activation_bundle: &serde_json::Value,
+    expected_arg: &str,
+) -> bool {
+    ["dev_team", "dev_team_readiness"]
+        .into_iter()
+        .any(|section| {
+            activation_bundle
+                .get(section)
+                .and_then(|value| value.get("orchestrator_command_contract"))
+                .and_then(|value| value.get("default_args"))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|args| {
+                    args.iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .any(|arg| arg == expected_arg)
+                })
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3543,6 +3765,242 @@ fn resolve_agent_dispatch_next_current_task_ids<'a>(
     }
 }
 
+fn compact_agent_dispatch_packet_materialization(value: &serde_json::Value) -> serde_json::Value {
+    let artifacts = value
+        .get("artifacts")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|artifact| {
+                    serde_json::json!({
+                        "task_id": artifact.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
+                        "role_label": artifact.get("role_label").cloned().unwrap_or(serde_json::Value::Null),
+                        "dispatch_target": artifact.get("dispatch_target").cloned().unwrap_or(serde_json::Value::Null),
+                        "dispatch_packet_path": artifact.get("dispatch_packet_path").cloned().unwrap_or(serde_json::Value::Null),
+                        "agent_init_execute_command": artifact.get("agent_init_execute_command").cloned().unwrap_or(serde_json::Value::Null),
+                        "status": artifact.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let errors = value
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|error| {
+                    serde_json::json!({
+                        "task_id": error.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
+                        "role_label": error.get("role_label").cloned().unwrap_or(serde_json::Value::Null),
+                        "blocker_code": error.get("blocker_code").cloned().unwrap_or(serde_json::Value::Null),
+                        "blocker_codes": error.get("blocker_codes").cloned().unwrap_or(serde_json::json!([])),
+                        "missing_fields": error.get("missing_fields").cloned().unwrap_or(serde_json::json!([])),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    serde_json::json!({
+        "status": value.get("status").cloned().unwrap_or(serde_json::Value::Null),
+        "requested": value.get("requested").cloned().unwrap_or(serde_json::Value::Bool(false)),
+        "materializes_packets": value.get("materializes_packets").cloned().unwrap_or(serde_json::Value::Bool(false)),
+        "artifact_count": artifacts.len(),
+        "artifacts": artifacts,
+        "errors": errors,
+        "reason": value.get("reason").cloned().unwrap_or(serde_json::Value::Null),
+        "blocker_codes": value.get("blocker_codes").cloned().unwrap_or(serde_json::json!([])),
+    })
+}
+
+fn agent_dispatch_next_compact_payload(preview: &AgentDispatchNextPreview) -> serde_json::Value {
+    let selected_lanes = preview
+        .selected_lanes
+        .iter()
+        .map(|lane| {
+            serde_json::json!({
+                "lane_index": lane.lane_index,
+                "task_id": &lane.task_id,
+                "title": &lane.title,
+                "role_label": &lane.role_label,
+                "runtime_role": &lane.runtime_role,
+                "task_class": &lane.task_class,
+                "dispatch_command": &lane.dispatch_command,
+                "dispatch_command_kind": &lane.dispatch_command_kind,
+                "receipt_backed_execution_command": &lane.receipt_backed_execution_command,
+                "ready_parallel_safe": lane.ready_parallel_safe,
+                "selection_reason": &lane.selection_reason,
+                "requires_user_approval": lane.requires_user_approval,
+                "selected_carrier": &lane.selection_truth.selected_carrier,
+                "selected_backend": &lane.selection_truth.selected_backend,
+                "selected_model_ref": &lane.selection_truth.selected_model_ref,
+                "selected_reasoning_effort": &lane.selection_truth.selected_reasoning_effort,
+                "rate": lane.selection_truth.rate,
+                "estimated_task_price_units": lane.selection_truth.estimated_task_price_units,
+                "budget_verdict": &lane.selection_truth.budget_verdict,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "status": &preview.status,
+        "mode": &preview.mode,
+        "lanes_requested": preview.lanes_requested,
+        "configured_max_parallel_agents": preview.configured_max_parallel_agents,
+        "effective_max_parallel_agents": preview.effective_max_parallel_agents,
+        "lanes_selected": preview.lanes_selected,
+        "selected_lanes": selected_lanes,
+        "blocked_candidate_count": preview.blocked_candidates.len(),
+        "blocker_codes": &preview.blocker_codes,
+        "next_actions": &preview.next_actions,
+        "execute_supported": preview.execute_supported,
+        "execution_attempted": preview.execution_attempted,
+        "packet_materialization": compact_agent_dispatch_packet_materialization(&preview.packet_materialization),
+        "source_surfaces": &preview.source_surfaces,
+        "output_contract": {
+            "view": "compact",
+            "full_output_flag": "--full",
+            "full_output_requires_json": true,
+            "full_output_note": "Use --full --json to include blocked_candidates, parallelization_planner, carrier_selection_api, fanout_guard, and flow_projection diagnostics."
+        },
+    })
+}
+
+fn agent_dispatch_existing_packet_fast_path_payload(
+    command: &AgentDispatchNextArgs,
+    state_dir: &std::path::Path,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Option<serde_json::Value> {
+    if command.full || !command.materialize_packets {
+        return None;
+    }
+    let current_task_id = command.current_task_id.as_deref()?;
+    if !crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_clean_routed_agent_handoff(
+        receipt,
+        Some(current_task_id),
+    ) {
+        return None;
+    }
+    let packet_path = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if !std::path::Path::new(packet_path).is_file() {
+        return None;
+    }
+    let mut execute_command =
+        crate::continuation_binding_summary::routed_dispatch_command_from_parts(
+            receipt.dispatch_command.as_deref(),
+            Some(packet_path),
+        )?;
+    if !execute_command.contains(" --state-dir ") {
+        execute_command.push_str(" --state-dir ");
+        execute_command.push_str(&crate::shell_quote(&state_dir.display().to_string()));
+    }
+    Some(serde_json::json!({
+        "status": release1_pass_status(),
+        "mode": if command.dev_team { "materialized-dev-team" } else { "materialized" },
+        "lanes_requested": command.lanes,
+        "configured_max_parallel_agents": serde_json::Value::Null,
+        "effective_max_parallel_agents": 1,
+        "lanes_selected": 1,
+        "selected_lanes": [
+            {
+                "lane_index": 1,
+                "task_id": receipt.run_id,
+                "title": serde_json::Value::Null,
+                "role_label": receipt.dispatch_target,
+                "runtime_role": receipt.activation_runtime_role,
+                "task_class": serde_json::Value::Null,
+                "dispatch_command": receipt.dispatch_command,
+                "dispatch_command_kind": "receipt_backed_dispatch_packet",
+                "receipt_backed_execution_command": execute_command,
+                "ready_parallel_safe": true,
+                "selection_reason": "existing_receipt_backed_dispatch_packet",
+                "requires_user_approval": false,
+                "selected_carrier": serde_json::Value::Null,
+                "selected_backend": receipt.selected_backend,
+                "selected_model_ref": serde_json::Value::Null,
+                "selected_reasoning_effort": serde_json::Value::Null,
+                "rate": serde_json::Value::Null,
+                "estimated_task_price_units": serde_json::Value::Null,
+                "budget_verdict": serde_json::Value::Null,
+            }
+        ],
+        "blocked_candidate_count": 0,
+        "blocker_codes": [],
+        "next_actions": [
+            format!("Run `{execute_command}` to execute the first receipt-backed dispatch packet.")
+        ],
+        "execute_supported": true,
+        "execution_attempted": false,
+        "packet_materialization": {
+            "status": release1_pass_status(),
+            "requested": true,
+            "materializes_packets": true,
+            "artifact_count": 1,
+            "artifacts": [
+                {
+                    "task_id": receipt.run_id,
+                    "role_label": receipt.dispatch_target,
+                    "dispatch_target": receipt.dispatch_target,
+                    "dispatch_packet_path": packet_path,
+                    "agent_init_execute_command": execute_command,
+                    "status": "packet_ready",
+                }
+            ],
+            "errors": [],
+            "reason": "existing_receipt_backed_dispatch_packet",
+            "blocker_codes": [],
+        },
+        "source_surfaces": [
+            "vida agent dispatch-next",
+            "StateStore::run_graph_dispatch_receipt",
+            "runtime_dispatch_receipt_helpers::dispatch_receipt_has_clean_routed_agent_handoff",
+        ],
+        "output_contract": {
+            "view": "compact",
+            "full_output_flag": "--full",
+            "full_output_requires_json": true,
+            "full_output_note": "Use --full --json to recompute scheduler, planner, carrier, fanout, and flow diagnostics."
+        },
+    }))
+}
+
+async fn emit_agent_dispatch_existing_packet_fast_path(
+    command: &AgentDispatchNextArgs,
+    store: &StateStore,
+    state_dir: &std::path::Path,
+    projection_name: &str,
+) -> Option<ExitCode> {
+    let current_task_id = command.current_task_id.as_deref()?;
+    let receipt = match store.run_graph_dispatch_receipt(current_task_id).await {
+        Ok(Some(receipt)) => receipt,
+        _ => return None,
+    };
+    let payload = agent_dispatch_existing_packet_fast_path_payload(command, state_dir, &receipt)?;
+    if command.json {
+        crate::print_json_pretty(&payload);
+        crate::operator_projection_cache::write_json_projection(
+            state_dir,
+            projection_name,
+            &payload,
+        );
+    } else {
+        println!("agent dispatch-next: {}", release1_pass_status());
+        println!("lanes selected: 1");
+        println!("packet materialization: {}", release1_pass_status());
+        if let Some(next) =
+            payload["packet_materialization"]["artifacts"][0]["agent_init_execute_command"].as_str()
+        {
+            println!("next: {next}");
+        }
+    }
+    Some(ExitCode::SUCCESS)
+}
+
 fn emit_agent_dispatch_next_preview(
     command: &AgentDispatchNextArgs,
     state_dir: &std::path::Path,
@@ -3550,8 +4008,11 @@ fn emit_agent_dispatch_next_preview(
     preview: AgentDispatchNextPreview,
 ) -> ExitCode {
     if command.json {
-        let payload =
-            serde_json::to_value(&preview).expect("agent dispatch-next preview should serialize");
+        let payload = if command.full {
+            serde_json::to_value(&preview).expect("agent dispatch-next preview should serialize")
+        } else {
+            agent_dispatch_next_compact_payload(&preview)
+        };
         crate::print_json_pretty(&payload);
         crate::operator_projection_cache::write_json_projection(
             state_dir,
@@ -4284,8 +4745,10 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
     let explicit_state_dir = command.state_dir.as_deref();
     let projection_name =
         agent_dispatch_next_projection_name(&command, command.materialize_packets);
-    let cache_read_allowed =
-        command.current_task_id.is_some() && !command.materialize_packets && !command.dev_team;
+    let cache_read_allowed = command.current_task_id.is_some()
+        && !command.materialize_packets
+        && !command.dev_team
+        && !command.full;
     if command.json && cache_read_allowed {
         if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
             &state_dir,
@@ -4331,6 +4794,16 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
     }
     match StateStore::open_existing_read_only(state_dir.clone()).await {
         Ok(store) => {
+            if let Some(exit_code) = emit_agent_dispatch_existing_packet_fast_path(
+                &command,
+                &store,
+                &state_dir,
+                &projection_name,
+            )
+            .await
+            {
+                return exit_code;
+            }
             let mut activation_bundle =
                 match crate::read_or_sync_launcher_activation_snapshot(&store).await {
                     Ok(snapshot) => snapshot.compiled_bundle,
@@ -4452,13 +4925,14 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                         }
                     };
                 drop(store);
-                let mut preview = build_agent_dispatch_next_preview(
+                let mut preview = build_agent_dispatch_next_preview_with_diagnostics(
                     &activation_bundle,
                     &projection,
                     command.lanes,
                     configured_max_parallel_agents,
                     explicit_state_dir,
                     true,
+                    command.full,
                 );
                 if let Some(gate) = continuation_gate {
                     apply_continuation_dispatch_gate_to_preview(&mut preview, &gate);
@@ -4485,11 +4959,12 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                         }
                     };
                 drop(store);
-                build_agent_dispatch_next_preview_from_scheduler_plan(
+                build_agent_dispatch_next_preview_from_scheduler_plan_with_diagnostics(
                     &activation_bundle,
                     plan,
                     command.lanes,
                     explicit_state_dir,
+                    command.full,
                 )
             };
             let effective_materialize_packets =
@@ -4579,13 +5054,14 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                     agent_dispatch_next_effective_materialize_packets(&command, &activation_bundle);
                 let configured_max_parallel_agents =
                     configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
-                let mut preview = build_agent_dispatch_next_preview(
+                let mut preview = build_agent_dispatch_next_preview_with_diagnostics(
                     &activation_bundle,
                     &projection,
                     command.lanes,
                     configured_max_parallel_agents,
                     explicit_state_dir,
                     true,
+                    command.full,
                 );
                 preview.source_surfaces.push(
                     "StateStore::read_fresh_tasks_from_jsonl_snapshot(authoritative-open-fallback)"
@@ -4611,9 +5087,10 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_dispatch_next_effective_materialize_packets, agent_status_runtime_task_stale_code,
-        apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
-        canonical_host_bridge_request_path,
+        agent_dispatch_existing_packet_fast_path_payload, agent_dispatch_next_compact_payload,
+        agent_dispatch_next_effective_materialize_packets, agent_dispatch_next_projection_name,
+        agent_status_runtime_task_stale_code, apply_continuation_dispatch_gate_to_preview,
+        build_agent_dispatch_next_preview, canonical_host_bridge_request_path,
         completed_host_bridge_completion_request_for_state_root,
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
         dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
@@ -4622,11 +5099,12 @@ mod tests {
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path, materialize_configured_agent_dispatch_lane,
-        read_canonical_host_bridge_json_artifact, read_host_bridge_request,
+        read_canonical_host_bridge_json_artifact, read_host_bridge_request, release1_pass_status,
         resolve_agent_dispatch_next_current_task_ids, run_agent_host_bridge,
         single_in_progress_task_id_from_rows, state_store,
         validate_materialized_agent_dispatch_packet, write_host_bridge_request,
-        AgentDispatchLanePreview, AgentDispatchLaneSelectionTruth, MAX_HOST_BRIDGE_ARTIFACT_BYTES,
+        AgentDispatchLanePreview, AgentDispatchLaneSelectionTruth, AgentDispatchNextPreview,
+        MAX_HOST_BRIDGE_ARTIFACT_BYTES,
     };
     use crate::state_store::{
         CreateTaskRequest, LauncherActivationSnapshot, RunGraphDispatchReceipt,
@@ -4771,6 +5249,172 @@ mod tests {
         );
         assert_eq!(coach_test_gate.task_class, "coach");
         assert_eq!(coach_implementation_gate.task_class, "coach");
+    }
+
+    fn sample_agent_dispatch_next_preview() -> AgentDispatchNextPreview {
+        AgentDispatchNextPreview {
+            status: release1_pass_status().to_string(),
+            mode: "materialized-dev-team".to_string(),
+            lanes_requested: 4,
+            configured_max_parallel_agents: 4,
+            effective_max_parallel_agents: 4,
+            lanes_selected: 1,
+            selected_lanes: vec![coach_dispatch_lane_preview(
+                "coach_implementation_gate",
+                "task-a",
+            )],
+            blocked_candidates: vec![super::AgentDispatchBlockedCandidate {
+                task_id: "blocked-a".to_string(),
+                title: "blocked task".to_string(),
+                ready_now: false,
+                ready_parallel_safe: false,
+                reasons: vec!["dependency_open".to_string()],
+                parallel_blockers: vec!["conflict_domain_busy".to_string()],
+            }],
+            blocker_codes: Vec::new(),
+            next_actions: vec![
+                "Run `vida agent-init --dispatch-packet task-a.json --execute-dispatch`."
+                    .to_string(),
+            ],
+            execute_supported: true,
+            execution_attempted: false,
+            parallelization_planner: serde_json::json!({
+                "large_diagnostic": "planner",
+                "packet_artifacts": [
+                    {"dispatch_packet_path": "task-a.json", "agent_init_execute_command": "vida agent-init --dispatch-packet task-a.json --execute-dispatch"}
+                ]
+            }),
+            packet_materialization: serde_json::json!({
+                "status": release1_pass_status(),
+                "requested": true,
+                "materializes_packets": true,
+                "artifacts": [
+                    {
+                        "task_id": "task-a",
+                        "role_label": "coach_implementation_gate",
+                        "dispatch_target": "coach_implementation_gate",
+                        "dispatch_packet_path": "task-a.json",
+                        "agent_init_execute_command": "vida agent-init --dispatch-packet task-a.json --execute-dispatch",
+                        "extra_large_diagnostic": {"omit": true}
+                    }
+                ]
+            }),
+            carrier_selection_api: serde_json::json!({"large_diagnostic": "carrier"}),
+            fanout_guard: serde_json::json!({"large_diagnostic": "fanout"}),
+            flow_projection: serde_json::json!({"large_diagnostic": "flow"}),
+            source_surfaces: vec!["vida agent dispatch-next".to_string()],
+        }
+    }
+
+    #[test]
+    fn agent_dispatch_next_compact_payload_omits_heavy_diagnostics_but_keeps_execute_command() {
+        let payload = agent_dispatch_next_compact_payload(&sample_agent_dispatch_next_preview());
+
+        assert_eq!(payload["output_contract"]["view"], "compact");
+        assert_eq!(payload["output_contract"]["full_output_flag"], "--full");
+        assert_eq!(payload["blocked_candidate_count"], 1);
+        assert!(payload.get("blocked_candidates").is_none());
+        assert!(payload.get("parallelization_planner").is_none());
+        assert!(payload.get("carrier_selection_api").is_none());
+        assert!(payload.get("fanout_guard").is_none());
+        assert!(payload.get("flow_projection").is_none());
+        assert_eq!(
+            payload["packet_materialization"]["artifacts"][0]["agent_init_execute_command"],
+            "vida agent-init --dispatch-packet task-a.json --execute-dispatch"
+        );
+        assert!(payload["packet_materialization"]["artifacts"][0]
+            .get("extra_large_diagnostic")
+            .is_none());
+    }
+
+    #[test]
+    fn agent_dispatch_next_full_payload_preserves_diagnostics() {
+        let payload = serde_json::to_value(sample_agent_dispatch_next_preview())
+            .expect("preview should serialize");
+
+        assert!(payload.get("blocked_candidates").is_some());
+        assert!(payload.get("parallelization_planner").is_some());
+        assert!(payload.get("carrier_selection_api").is_some());
+        assert!(payload.get("fanout_guard").is_some());
+        assert!(payload.get("flow_projection").is_some());
+    }
+
+    #[test]
+    fn agent_dispatch_existing_packet_fast_path_payload_reuses_validated_receipt() {
+        let temp = std::env::temp_dir().join(format!(
+            "vida-dispatch-fast-path-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).expect("create fast path temp dir");
+        let packet_path = temp.join("dispatch-packet.json");
+        std::fs::write(&packet_path, "{}").expect("write dispatch packet");
+        let command = AgentDispatchNextArgs {
+            lanes: 4,
+            scope: None,
+            current_task_id: Some("run-fast".to_string()),
+            state_dir: None,
+            json: true,
+            full: false,
+            dev_team: true,
+            materialize_packets: true,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-fast".to_string(),
+            dispatch_target: "coach_implementation_gate".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: Some("coach_implementation_gate".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("vibe_cli".to_string()),
+            recorded_at: "2026-06-25T00:00:00Z".to_string(),
+        };
+
+        let payload = agent_dispatch_existing_packet_fast_path_payload(&command, &temp, &receipt)
+            .expect("valid receipt and packet should fast-path");
+
+        assert_eq!(payload["status"], release1_pass_status());
+        assert_eq!(payload["output_contract"]["view"], "compact");
+        assert!(payload.get("parallelization_planner").is_none());
+        assert_eq!(
+            payload["packet_materialization"]["artifacts"][0]["dispatch_packet_path"],
+            packet_path.display().to_string()
+        );
+        assert!(
+            payload["packet_materialization"]["artifacts"][0]["agent_init_execute_command"]
+                .as_str()
+                .expect("execute command should render")
+                .contains("--state-dir")
+        );
+
+        let mut full_command = command.clone();
+        full_command.full = true;
+        assert!(
+            agent_dispatch_existing_packet_fast_path_payload(&full_command, &temp, &receipt)
+                .is_none()
+        );
+
+        let _ = std::fs::remove_dir_all(temp);
     }
 
     #[test]
@@ -4941,7 +5585,7 @@ mod tests {
         assert!(payload["host_bridge"]["completion_command"]
             .as_str()
             .unwrap()
-            .contains("--host-bridge-summary"));
+            .contains("--host-bridge-result-file result.json"));
         assert!(!payload["host_bridge"]["completion_command"]
             .as_str()
             .unwrap()
@@ -5033,8 +5677,9 @@ mod tests {
         assert!(completion_command.contains("--receipt-id run-analyst-analyst-host-bridge-receipt"));
         assert!(completion_command.contains("--host-bridge-request"));
         assert!(completion_command.contains("--host-agent-id '<host-agent-id>'"));
-        assert!(completion_command.contains("--host-bridge-summary"));
-        assert!(completion_command.contains("--allowed-next-node designer"));
+        assert!(completion_command.contains("--host-bridge-result-file"));
+        assert!(!completion_command.contains("--host-bridge-summary"));
+        assert!(!completion_command.contains("--allowed-next-node"));
         assert!(!completion_command.contains("--blocker-codes"));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -5770,12 +6415,12 @@ mod tests {
             complete: true,
             host_agent_id: Some("agent-1".to_string()),
             summary: Some("parent host completed analyst bridge".to_string()),
-            decision: Some("pass".to_string()),
-            verdict: Some("pass".to_string()),
+            decision: Some("rework".to_string()),
+            verdict: Some("rework".to_string()),
             allowed_next_node: Some("designer".to_string()),
             blocker_codes: None,
             blocker_code: Vec::new(),
-            rework_target: None,
+            rework_target: Some("designer".to_string()),
             result_file: None,
             receipt_id: Some("host-bridge-wrapper-complete-1".to_string()),
             json: true,
@@ -6164,7 +6809,7 @@ mod tests {
         assert!(payload["host_bridge"]["completion_command"]
             .as_str()
             .expect("completion command")
-            .contains("--host-bridge-summary"));
+            .contains("--host-bridge-result-file"));
         assert!(!payload["host_bridge"]["completion_command"]
             .as_str()
             .expect("completion command")
@@ -8926,13 +9571,12 @@ mod tests {
             .selected_lanes
             .iter()
             .any(|lane| lane.task_id == "task-unsafe"));
-        assert!(preview
-            .blocked_candidates
-            .iter()
-            .any(|candidate| candidate.task_id == "task-unsafe"
+        assert!(preview.blocked_candidates.iter().any(|candidate| {
+            candidate.task_id == "task-unsafe"
                 && candidate
                     .reasons
-                    .contains(&"parallel_safety_not_established".to_string())));
+                    .contains(&"parallel_safety_not_established".to_string())
+        }));
     }
 
     #[test]
@@ -9199,7 +9843,85 @@ mod tests {
     }
 
     #[test]
-    fn agent_dispatch_next_materialization_requires_explicit_cli_flag_even_with_config_default() {
+    fn dev_team_explicit_lanes_can_expose_tester_beyond_parallel_cap() {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "runtime_defect_remediation",
+            "work_item_flow_bindings": {
+                "runtime_defect": "runtime_defect_remediation"
+            },
+            "roles": [
+                {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                {"role_id": "autotester", "runtime_role": "worker", "task_classes": ["implementation"]},
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                {"role_id": "coach_validator", "runtime_role": "coach", "task_classes": ["coach"]},
+                {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]}
+            ],
+            "flows": [
+                {
+                    "flow_id": "runtime_defect_remediation",
+                    "enabled": true,
+                    "default": true,
+                    "work_item_bindings": ["runtime_defect"],
+                    "ordered_steps": [
+                        {"role_id": "analyst", "runtime_role": "business_analyst", "task_class": "specification"},
+                        {"role_id": "autotester", "runtime_role": "worker", "task_class": "implementation"},
+                        {"role_id": "developer", "runtime_role": "worker", "task_class": "implementation"},
+                        {"role_id": "coach_validator", "runtime_role": "coach", "task_class": "coach"},
+                        {"role_id": "tester", "runtime_role": "verifier", "task_class": "verification"}
+                    ]
+                }
+            ]
+        });
+
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle,
+            &TaskSchedulingProjection {
+                current_task_id: Some("runtime-defect-a".to_string()),
+                ready: vec![candidate_with_type(
+                    "runtime-defect-a",
+                    "Runtime defect A",
+                    true,
+                    false,
+                    "runtime_defect",
+                )],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            5,
+            4,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "pass", "{preview:#?}");
+        assert_eq!(preview.lanes_requested, 5);
+        assert_eq!(preview.configured_max_parallel_agents, 4);
+        assert_eq!(preview.effective_max_parallel_agents, 4);
+        assert_eq!(preview.lanes_selected, 5);
+        let role_labels = preview
+            .selected_lanes
+            .iter()
+            .map(|lane| lane.role_label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            role_labels,
+            vec![
+                "analyst",
+                "autotester",
+                "developer",
+                "coach_validator",
+                "tester"
+            ]
+        );
+        assert_eq!(preview.selected_lanes[4].task_id, "runtime-defect-a");
+        assert_eq!(preview.selected_lanes[4].task_class, "verification");
+        assert_eq!(preview.fanout_guard["effective_max_parallel_agents"], 4);
+        assert_eq!(preview.fanout_guard["lanes_selected"], 5);
+    }
+
+    #[test]
+    fn agent_dispatch_next_materialization_uses_config_default_or_explicit_cli_flag() {
         let activation_bundle = serde_json::json!({
             "dev_team": {
                 "orchestrator_command_contract": {
@@ -9218,15 +9940,13 @@ mod tests {
             current_task_id: None,
             state_dir: None,
             json: true,
+            full: false,
             dev_team: true,
             materialize_packets: false,
         };
         assert!(
-            !agent_dispatch_next_effective_materialize_packets(
-                &preview_command,
-                &activation_bundle
-            ),
-            "dev-team config default_args must not turn preview into packet materialization"
+            agent_dispatch_next_effective_materialize_packets(&preview_command, &activation_bundle),
+            "dev-team config default_args should materialize configured dispatch packets"
         );
 
         let mut materialize_command = preview_command.clone();
@@ -9235,6 +9955,27 @@ mod tests {
             &materialize_command,
             &activation_bundle
         ));
+    }
+
+    #[test]
+    fn agent_dispatch_next_projection_cache_names_are_separate_for_compact_and_full_json() {
+        let mut command = AgentDispatchNextArgs {
+            lanes: 4,
+            scope: None,
+            current_task_id: Some("task-a".to_string()),
+            state_dir: None,
+            json: true,
+            full: false,
+            dev_team: false,
+            materialize_packets: false,
+        };
+        let compact_name = agent_dispatch_next_projection_name(&command, false);
+        command.full = true;
+        let full_name = agent_dispatch_next_projection_name(&command, false);
+
+        assert!(compact_name.contains("-compact-"));
+        assert!(full_name.contains("-full-"));
+        assert_ne!(compact_name, full_name);
     }
 
     #[test]

@@ -1,7 +1,9 @@
 pub mod adapter_payload;
 pub mod artifact_scope;
 pub mod completion;
+pub mod completion_authority;
 pub mod errors;
+pub mod legacy_normalization;
 pub mod provenance;
 pub mod receipt_binding;
 pub mod request;
@@ -39,7 +41,23 @@ pub use completion::{
     host_bridge_result_verdict_fields_for_gate, materialize_host_bridge_completion_evidence,
     normalize_host_bridge_provenance_for_completion,
 };
+pub use completion_authority::{
+    BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_PROVENANCE_REJECTED, BLOCKER_RECEIPT_NOT_BOUND,
+    BLOCKER_TYPED_BLOCKED_OUTCOME, HostBridgeCompletionAuthorityDecision,
+    HostBridgeCompletionAuthorityInput, HostBridgeCompletionEffectIntent,
+    HostBridgeCompletionEvent, HostBridgeCompletionState, HostBridgeCompletionTransitionCase,
+    completion_authority_transition_matrix, decide_host_bridge_completion_authority,
+};
 pub use errors::HostBridgeError;
+pub use legacy_normalization::{
+    CompletionBlocker, CompletionOutcome, FlowStepRef,
+    LEGACY_COMMAND_OPTIONS_SOURCE_CONTRACT_VERSION, LEGACY_HOST_BRIDGE_SOURCE_CONTRACT_VERSION,
+    LEGACY_LANE_COMPLETION_SOURCE_CONTRACT_VERSION, LEGACY_OUTCOME_CONTRADICTION,
+    LEGACY_RECEIPT_SOURCE_CONTRACT_VERSION, LEGACY_RUN_STATUS_SOURCE_CONTRACT_VERSION,
+    LegacyHostBridgeCompletionNormalization, LegacyHostBridgeCompletionNormalizationError,
+    normalize_legacy_command_options, normalize_legacy_host_bridge_completion_result,
+    normalize_legacy_lane_completion, normalize_legacy_receipt, normalize_legacy_run_status,
+};
 pub use provenance::{
     HostBridgeProvenanceDecision, HostBridgeProvenanceInput,
     host_bridge_provenance_public_blocker_code, validate_host_bridge_request_provenance,

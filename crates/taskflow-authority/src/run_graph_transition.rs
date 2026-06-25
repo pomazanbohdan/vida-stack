@@ -1,11 +1,79 @@
 use taskflow_core::run_graph::model::{
-    DispatchReceiptSnapshot, RunGraphStatusSnapshot, RunGraphTransitionDecision,
-    RunGraphTransitionKind, TaskClosureSnapshot, decide_run_graph_transition,
+    DefaultRunGraphStatusFields, DispatchReceiptSnapshot, RunGraphStatusSnapshot,
+    RunGraphTransitionDecision, RunGraphTransitionKind, TaskClosureSnapshot,
+    decide_run_graph_transition,
 };
 
 pub const MODULE: &str = "run_graph_transition";
 
 pub const RUN_GRAPH_NEXT_ACTION_INSPECT_LANE: &str = "inspect lane recovery evidence";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunGraphDispatchTargetFormat {
+    Lane,
+    Direct,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadyRunGraphTransitionInput {
+    pub run_id: String,
+    pub task_id: String,
+    pub task_class: String,
+    pub active_node: String,
+    pub next_node: Option<String>,
+    pub route_task_class: String,
+    pub selected_backend: String,
+    pub lane_id: String,
+    pub lifecycle_stage: String,
+    pub policy_gate: String,
+    pub checkpoint_kind: String,
+    pub target_format: RunGraphDispatchTargetFormat,
+    pub recovery_ready: bool,
+}
+
+#[must_use]
+pub fn ready_run_graph_transition(
+    input: ReadyRunGraphTransitionInput,
+) -> DefaultRunGraphStatusFields {
+    let (handoff_state, resume_target) =
+        run_graph_handoff(input.next_node.as_deref(), input.target_format);
+
+    DefaultRunGraphStatusFields {
+        run_id: input.run_id,
+        task_id: input.task_id,
+        task_class: input.task_class,
+        active_node: input.active_node,
+        next_node: input.next_node,
+        status: "ready".to_string(),
+        route_task_class: input.route_task_class,
+        selected_backend: input.selected_backend,
+        lane_id: input.lane_id,
+        lifecycle_stage: input.lifecycle_stage,
+        policy_gate: input.policy_gate,
+        handoff_state,
+        context_state: "sealed".to_string(),
+        checkpoint_kind: input.checkpoint_kind,
+        resume_target,
+        recovery_ready: input.recovery_ready,
+    }
+}
+
+#[must_use]
+pub fn run_graph_handoff(
+    next_node: Option<&str>,
+    target_format: RunGraphDispatchTargetFormat,
+) -> (String, String) {
+    let handoff_state = next_node
+        .map(|next| format!("awaiting_{next}"))
+        .unwrap_or_else(|| "none".to_string());
+    let resume_target = next_node
+        .map(|next| match target_format {
+            RunGraphDispatchTargetFormat::Lane => format!("dispatch.{next}_lane"),
+            RunGraphDispatchTargetFormat::Direct => format!("dispatch.{next}"),
+        })
+        .unwrap_or_else(|| "none".to_string());
+    (handoff_state, resume_target)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunGraphAuthorityInput {
@@ -46,7 +114,9 @@ fn next_actions_for_transition(decision: &RunGraphTransitionDecision) -> Vec<Str
 #[cfg(test)]
 mod run_graph_tests {
     use super::{
-        RUN_GRAPH_NEXT_ACTION_INSPECT_LANE, RunGraphAuthorityInput, admit_run_graph_transition,
+        RUN_GRAPH_NEXT_ACTION_INSPECT_LANE, ReadyRunGraphTransitionInput, RunGraphAuthorityInput,
+        RunGraphDispatchTargetFormat, admit_run_graph_transition, ready_run_graph_transition,
+        run_graph_handoff,
     };
     use taskflow_core::run_graph::model::{
         DispatchReceiptSnapshot, RunGraphStatusSnapshot, RunGraphTransitionKind,
@@ -125,6 +195,46 @@ mod run_graph_tests {
         assert_eq!(
             decision.next_actions,
             vec![RUN_GRAPH_NEXT_ACTION_INSPECT_LANE]
+        );
+    }
+
+    #[test]
+    fn ready_run_graph_transition_builds_lane_handoff() {
+        let transition = ready_run_graph_transition(ReadyRunGraphTransitionInput {
+            run_id: "run-1".to_string(),
+            task_id: "task-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("developer".to_string()),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "developer_lane".to_string(),
+            lifecycle_stage: "developer_dispatch_ready".to_string(),
+            policy_gate: "not_required".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            target_format: RunGraphDispatchTargetFormat::Lane,
+            recovery_ready: true,
+        });
+
+        assert_eq!(transition.status, "ready");
+        assert_eq!(transition.handoff_state, "awaiting_developer");
+        assert_eq!(transition.resume_target, "dispatch.developer_lane");
+        assert_eq!(transition.context_state, "sealed");
+        assert!(transition.recovery_ready);
+    }
+
+    #[test]
+    fn run_graph_handoff_supports_direct_conversation_targets() {
+        assert_eq!(
+            run_graph_handoff(Some("spec-pack"), RunGraphDispatchTargetFormat::Direct),
+            (
+                "awaiting_spec-pack".to_string(),
+                "dispatch.spec-pack".to_string()
+            )
+        );
+        assert_eq!(
+            run_graph_handoff(None, RunGraphDispatchTargetFormat::Lane),
+            ("none".to_string(), "none".to_string())
         );
     }
 

@@ -94,7 +94,7 @@ fn canonical_task_id_from_state(
 ) -> Result<CanonicalTaskId, StateStoreError> {
     CanonicalTaskId::try_new(value).map_err(|error| {
         StateStoreError::InvalidCanonicalTaskflowExport {
-            reason: format!("{field_name} is not a valid task id: {error}"),
+            reason: format!("{field_name} is not a valid task id: {error:?}: {error}"),
         }
     })
 }

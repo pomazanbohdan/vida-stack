@@ -1641,15 +1641,11 @@ fn persist_host_bridge_lane_receipt_with_helper(
     activation_result_path: &str,
     dispatch_target: &str,
 ) {
-    let downstream_target = if dispatch_target == "coach" {
-        "tester"
-    } else {
-        "coach"
-    };
-    let task_class = if dispatch_target == "coach" {
-        "coach"
-    } else {
-        "implementation"
+    let (downstream_target, task_class) = match dispatch_target {
+        "coach" => ("tester", "coach"),
+        "tester" => ("reviewer", "verification"),
+        "reviewer" => ("release_closure", "review"),
+        _ => ("coach", "implementation"),
     };
     let lifecycle_stage = format!("{dispatch_target}_blocked");
     let resume_target = format!("dispatch.{dispatch_target}");
@@ -1763,6 +1759,35 @@ fn persist_host_bridge_lane_receipt_with_target_and_active_node(
     blocker_code: &str,
     lifecycle_stage: &str,
 ) {
+    persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_state(
+        state_dir,
+        run_id,
+        dispatch_target,
+        active_node,
+        downstream_target,
+        dispatch_status,
+        lane_status,
+        blocker_code,
+        lifecycle_stage,
+        "false",
+        "blocked",
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_state(
+    state_dir: &str,
+    run_id: &str,
+    dispatch_target: &str,
+    active_node: &str,
+    downstream_target: &str,
+    dispatch_status: &str,
+    lane_status: &str,
+    blocker_code: &str,
+    lifecycle_stage: &str,
+    downstream_ready: &str,
+    downstream_status: &str,
+) {
     let project_root = format!("{state_dir}/../../..");
     let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
     let downstream_packet_dir =
@@ -1855,11 +1880,11 @@ fn persist_host_bridge_lane_receipt_with_target_and_active_node(
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_READY_ENV,
-            "false",
+            downstream_ready,
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_STATUS_ENV,
-            "blocked",
+            downstream_status,
         )
         .env(
             runtime_consumption::RECEIPT_HELPER_DOWNSTREAM_BLOCKERS_ENV,
@@ -2256,7 +2281,7 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             true,
             None,
             None,
-            "next",
+            "tester",
         ),
         (
             "coach",
@@ -2272,7 +2297,7 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             true,
             None,
             None,
-            "next",
+            "reviewer",
         ),
         (
             "tester",
@@ -2288,7 +2313,7 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             true,
             None,
             None,
-            "next",
+            "release_closure",
         ),
         (
             "reviewer",
@@ -4682,6 +4707,88 @@ fn projection_surfaces_fail_closed_for_ready_missing_task_run_host_bridge() {
             .contains("dispatch_packet_contract_invalid"),
         "dev-team dispatch must fail before stale packet repair/validation noise: {dispatch_json}"
     );
+    let _ = std::fs::remove_dir_all(project_root);
+}
+
+#[test]
+fn projection_surfaces_fail_closed_for_closed_task_downstream_handoff_after_exception_takeover() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let run_id = "zzzz-closed-task-downstream-handoff";
+    let parent_id = "closed-task-downstream-handoff-parent";
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+    sync_protocol_binding(&state_dir);
+    create_session_triage_task(
+        &state_dir,
+        parent_id,
+        "Closed task downstream handoff parent",
+        "epic",
+        "closed",
+        "1",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        run_id,
+        "Closed task downstream handoff",
+        "task",
+        "closed",
+        "1",
+        Some(parent_id),
+    );
+
+    persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_state(
+        &state_dir,
+        run_id,
+        "architect",
+        "architect",
+        "internal_subagents",
+        "executed",
+        "lane_completed",
+        "",
+        "architect_complete",
+        "true",
+        "packet_ready",
+    );
+
+    let run_graph = vida()
+        .args(["taskflow", "run-graph", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph status should run");
+    assert_success(&run_graph, "run-graph status");
+    let run_graph_json: serde_json::Value =
+        serde_json::from_slice(&run_graph.stdout).expect("run-graph json should parse");
+    assert_eq!(run_graph_json["status"], "blocked");
+    assert_eq!(
+        run_graph_json["blocker_codes"],
+        serde_json::json!(["closed_task_active_run_projection_mismatch"])
+    );
+    assert_eq!(
+        run_graph_json["projection_truth"]["stale_state_suspected"],
+        true
+    );
+    assert_eq!(
+        run_graph_json["projection_truth"]["next_lawful_operator_action"],
+        "vida task reconcile-closed-runs --limit 25"
+    );
+    assert!(
+        !run_graph_json["next_actions"]
+            .to_string()
+            .contains("consume continue"),
+        "closed task run-graph status must not recommend downstream consume: {run_graph_json}"
+    );
+    assert!(
+        !run_graph_json["next_actions"]
+            .to_string()
+            .contains("--execute-dispatch"),
+        "closed task run-graph status must not recommend carrier dispatch: {run_graph_json}"
+    );
+
     let _ = std::fs::remove_dir_all(project_root);
 }
 

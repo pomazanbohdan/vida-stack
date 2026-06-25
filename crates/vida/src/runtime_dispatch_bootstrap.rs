@@ -37,7 +37,7 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
             "fallback_reason": fallback_reason,
         });
     }
-    match crate::taskflow_run_graph::derive_seeded_run_graph_status(
+    match crate::taskflow_run_graph::derive_seeded_run_graph_state(
         store,
         &run_id,
         &role_selection.request,
@@ -92,7 +92,7 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
             let mut advanced_payload = serde_json::Value::Null;
 
             if role_selection.conversational_mode.is_some() {
-                match crate::taskflow_run_graph::derive_advanced_run_graph_status(
+                match crate::taskflow_run_graph::derive_advanced_run_graph_state(
                     store,
                     seed_payload.status,
                 )

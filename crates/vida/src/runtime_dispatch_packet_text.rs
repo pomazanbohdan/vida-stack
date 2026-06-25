@@ -1,4 +1,4 @@
-use crate::{RuntimeConsumptionLaneSelection, build_design_first_tracked_flow_bootstrap};
+use crate::{build_design_first_tracked_flow_bootstrap, RuntimeConsumptionLaneSelection};
 
 fn json_string(value: Option<&serde_json::Value>) -> Option<String> {
     value
@@ -394,11 +394,8 @@ mod tests {
             }),
         );
 
-        assert!(
-            prompt.contains(
-                "This delegated lane does not hold root-session orchestration authority."
-            )
-        );
+        assert!(prompt
+            .contains("This delegated lane does not hold root-session orchestration authority."));
         assert!(prompt.contains(
             "You are already inside the delegated lane activation; do not call `vida agent-init` again from this lane."
         ));
@@ -528,10 +525,8 @@ mod tests {
             "That host-tool permission is scoped to this run, runtime role, packet, owned paths, and receipt mode"
         ));
         assert!(prompt.contains("receipt-backed closure rules, or root write guard boundaries"));
-        assert!(
-            !prompt
-                .contains("If the user explicitly ordered agent-first or parallel-agent execution")
-        );
+        assert!(!prompt
+            .contains("If the user explicitly ordered agent-first or parallel-agent execution"));
     }
 
     #[test]
@@ -562,11 +557,8 @@ mod tests {
         assert!(prompt.contains(
             "restate `active_bounded_unit`, `why_this_unit`, and sequential-vs-parallel posture"
         ));
-        assert!(
-            !prompt.contains(
-                "This delegated lane does not hold root-session orchestration authority."
-            )
-        );
+        assert!(!prompt
+            .contains("This delegated lane does not hold root-session orchestration authority."));
     }
 
     #[test]

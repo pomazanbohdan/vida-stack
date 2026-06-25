@@ -357,6 +357,9 @@ pub(crate) fn resolve_protocol_view_target(
 }
 
 pub(crate) fn render_protocol_view_target(name: &str) -> Result<ProtocolViewRender, String> {
+    if let Some(render) = render_synthetic_protocol_view_target(name) {
+        return render;
+    }
     let (_, fragment) = split_protocol_view_fragment(name);
     let (target, path) = resolve_protocol_view_target(name)?;
     let content = std::fs::read_to_string(&path)
@@ -377,6 +380,43 @@ pub(crate) fn render_protocol_view_target(name: &str) -> Result<ProtocolViewRend
     })
 }
 
+fn render_synthetic_protocol_view_target(name: &str) -> Option<Result<ProtocolViewRender, String>> {
+    const RUNTIME_SCHEMA_BUNDLE_ID: &str = "schemas/runtime-envelope-bundle";
+    const RUNTIME_SCHEMA_ALIASES: &[&str] = &[
+        RUNTIME_SCHEMA_BUNDLE_ID,
+        "runtime-schemas",
+        "runtime-schema-bundle",
+        "runtime-envelope-schema-bundle",
+        "schemas/runtime-envelope-bundle.json",
+    ];
+    let (normalized, fragment) = split_protocol_view_fragment(name);
+    if !RUNTIME_SCHEMA_ALIASES.contains(&normalized) {
+        return None;
+    }
+    if let Some(fragment) = fragment {
+        if !fragment.is_empty() {
+            return Some(Err(
+                "Runtime schema bundle target does not support fragments.".to_string(),
+            ));
+        }
+    }
+    let content =
+        serde_json::to_string_pretty(&vida_contracts::runtime_envelope_schema_bundle_json())
+            .expect("runtime envelope schema bundle should render");
+    Some(Ok(ProtocolViewRender {
+        requested_name: name.to_string(),
+        resolved_id: RUNTIME_SCHEMA_BUNDLE_ID.to_string(),
+        resolved_path: "schema://vida.runtime-envelope-bundle".to_string(),
+        resolved_kind: "schema_bundle".to_string(),
+        requested_fragment: None,
+        aliases: RUNTIME_SCHEMA_ALIASES
+            .iter()
+            .map(|alias| (*alias).to_string())
+            .collect(),
+        content,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,6 +433,36 @@ mod tests {
             runtime.block_on(crate::run(cli(&["protocol", "view", "AGENTS", "--json"]))),
             ExitCode::SUCCESS
         );
+    }
+
+    #[test]
+    fn protocol_view_command_accepts_runtime_schema_bundle_json_output() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(
+            runtime.block_on(crate::run(cli(&[
+                "protocol",
+                "view",
+                "runtime-schemas",
+                "--json",
+            ]))),
+            ExitCode::SUCCESS
+        );
+    }
+
+    #[test]
+    fn render_protocol_view_target_publishes_runtime_schema_bundle() {
+        let render = render_protocol_view_target("runtime-schemas")
+            .expect("runtime schema bundle should render");
+        let content: serde_json::Value =
+            serde_json::from_str(&render.content).expect("schema content should be JSON");
+
+        assert_eq!(render.resolved_id, "schemas/runtime-envelope-bundle");
+        assert_eq!(render.resolved_kind, "schema_bundle");
+        assert!(content.get("command_envelope").is_some());
+        assert!(content.get("registry_snapshot").is_some());
     }
 
     #[test]

@@ -642,6 +642,43 @@ fn mutate_session(
     build_runtime_owner_evidence(&state_dir, true)
 }
 
+fn session_missing_error(session_id: &str) -> String {
+    format!("orchestrator session `{session_id}` is missing")
+}
+
+fn transferred_claims_payload(
+    claims: Vec<crate::state_store::OrchestratorClaim>,
+) -> serde_json::Value {
+    serde_json::Value::Array(
+        claims
+            .into_iter()
+            .map(|claim| {
+                serde_json::json!({
+                    "claim_id": claim.claim_id,
+                    "task_id": claim.task_id,
+                    "run_id": claim.run_id,
+                    "orchestrator_session_id": claim.orchestrator_session_id,
+                    "status": claim.status,
+                })
+            })
+            .collect(),
+    )
+}
+
+async fn transfer_active_claims_to_current_session(
+    state_dir: &Path,
+    from_session_id: &str,
+    current_session_id: &str,
+) -> Result<Vec<crate::state_store::OrchestratorClaim>, String> {
+    let store = crate::state_store::StateStore::open_existing(state_dir.to_path_buf())
+        .await
+        .map_err(|error| error.to_string())?;
+    store
+        .transfer_active_orchestrator_claims_to_session(from_session_id, current_session_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 fn run_reclaim(args: OrchestratorSessionReclaimArgs) -> ExitCode {
     let state_dir = args
         .state_dir
@@ -675,50 +712,32 @@ async fn run_transfer(args: OrchestratorSessionTransferArgs) -> ExitCode {
         .state_dir
         .unwrap_or_else(crate::state_store::default_state_dir);
     let current_session_id = current_session_id(&state_dir);
-    match mutate_session(
+    let session_mutation = mutate_session(
         state_dir.clone(),
         &args.session_id,
         "transferred_to_current",
-    ) {
+    );
+    match session_mutation {
         Ok(evidence) => {
-            let transferred_claims =
-                match crate::state_store::StateStore::open_existing(state_dir.clone()).await {
-                    Ok(store) => match store
-                        .transfer_active_orchestrator_claims_to_session(
-                            &args.session_id,
-                            &current_session_id,
-                        )
-                        .await
-                    {
-                        Ok(claims) => serde_json::Value::Array(
-                            claims
-                                .into_iter()
-                                .map(|claim| {
-                                    serde_json::json!({
-                                        "claim_id": claim.claim_id,
-                                        "task_id": claim.task_id,
-                                        "run_id": claim.run_id,
-                                        "orchestrator_session_id": claim.orchestrator_session_id,
-                                        "status": claim.status,
-                                    })
-                                })
-                                .collect(),
-                        ),
-                        Err(error) => serde_json::json!({
-                            "error": error.to_string(),
-                            "status": "claim_transfer_failed"
-                        }),
-                    },
-                    Err(error) => serde_json::json!({
-                        "error": error.to_string(),
-                        "status": "claim_transfer_unavailable"
-                    }),
-                };
+            let transferred_claims = match transfer_active_claims_to_current_session(
+                &state_dir,
+                &args.session_id,
+                &current_session_id,
+            )
+            .await
+            {
+                Ok(claims) => transferred_claims_payload(claims),
+                Err(error) => serde_json::json!({
+                    "error": error,
+                    "status": "claim_transfer_failed"
+                }),
+            };
             let payload = serde_json::json!({
                 "surface": "vida orchestrator-session transfer",
                 "status": "pass",
                 "blocker_codes": [],
                 "next_actions": [],
+                "session_record_status": "transferred_to_current",
                 "transferred_session_id": args.session_id,
                 "transferred_to_session_id": current_session_id,
                 "transferred_claims": transferred_claims,
@@ -728,6 +747,44 @@ async fn run_transfer(args: OrchestratorSessionTransferArgs) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
+            if error == session_missing_error(&args.session_id) {
+                match transfer_active_claims_to_current_session(
+                    &state_dir,
+                    &args.session_id,
+                    &current_session_id,
+                )
+                .await
+                {
+                    Ok(claims) if !claims.is_empty() => {
+                        match build_runtime_owner_evidence(&state_dir, true) {
+                            Ok(evidence) => {
+                                let payload = serde_json::json!({
+                                    "surface": "vida orchestrator-session transfer",
+                                    "status": "pass",
+                                    "blocker_codes": [],
+                                    "next_actions": [],
+                                    "session_record_status": "missing_claim_only_session",
+                                    "transferred_session_id": args.session_id,
+                                    "transferred_to_session_id": current_session_id,
+                                    "transferred_claims": transferred_claims_payload(claims),
+                                    "runtime_owner_evidence": evidence,
+                                });
+                                print_or_plain(&payload, args.json);
+                                return ExitCode::SUCCESS;
+                            }
+                            Err(evidence_error) => {
+                                eprintln!("{evidence_error}");
+                                return ExitCode::from(1);
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(claim_error) => {
+                        eprintln!("{claim_error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            }
             eprintln!("{error}");
             ExitCode::from(1)
         }
@@ -763,11 +820,12 @@ mod tests {
         build_runtime_owner_evidence, classify_sessions_with_liveness,
         compact_runtime_owner_evidence_for_operator, context_summary_map, current_session_id,
         current_session_identity_source, current_session_record, generated_local_session_id,
-        merge_current_session, now_epoch_seconds, read_sessions, stable_local_session_id,
-        OrchestratorSessionLiveness, ProcessLiveness, MAX_SESSION_STORE_BYTES,
-        STALE_SESSION_PURGE_AFTER_SECONDS,
+        merge_current_session, now_epoch_seconds, read_sessions, run_transfer,
+        stable_local_session_id, OrchestratorSessionLiveness, ProcessLiveness,
+        MAX_SESSION_STORE_BYTES, STALE_SESSION_PURGE_AFTER_SECONDS,
     };
     use crate::temp_state::TempStateHarness;
+    use std::process::ExitCode;
     use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {
@@ -913,6 +971,63 @@ mod tests {
 
         assert_eq!(generated_local_session_id(harness.path()), expected);
         assert_eq!(current_session_id(harness.path()), expected);
+
+        restore_session_env(saved);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn transfer_rebinds_claim_only_missing_session_to_current_session() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved = saved_session_env();
+        clear_session_env();
+        unsafe {
+            std::env::set_var("VIDA_ORCHESTRATOR_SESSION_ID", "current-session");
+        }
+
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        let store = crate::state_store::StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        store
+            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "claim-only-transfer".to_string(),
+                state_root_id: harness.path().display().to_string(),
+                worktree_environment_id: "worktree".to_string(),
+                orchestrator_session_id: "claim-only-session".to_string(),
+                process_id: Some(std::process::id()),
+                task_id: Some("task-claimed".to_string()),
+                run_id: None,
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some("task:task-claimed".to_string()),
+                owned_paths: Vec::new(),
+                read_only_paths: Vec::new(),
+                lease_mode: crate::state_store::LeaseMode::Observe,
+                lease_seconds: 3600,
+            })
+            .await
+            .expect("claim");
+        drop(store);
+
+        let exit = run_transfer(crate::OrchestratorSessionTransferArgs {
+            session_id: "claim-only-session".to_string(),
+            to_current: true,
+            state_dir: Some(harness.path().to_path_buf()),
+            json: true,
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let store = crate::state_store::StateStore::open_existing(harness.path().to_path_buf())
+            .await
+            .expect("reopen store");
+        let claim = store
+            .orchestrator_claim("claim-only-transfer")
+            .await
+            .expect("read claim")
+            .expect("claim should exist");
+        assert_eq!(claim.orchestrator_session_id, "current-session");
+        assert_eq!(claim.status, "renewed");
 
         restore_session_env(saved);
     }

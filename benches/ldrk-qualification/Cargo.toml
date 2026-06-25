@@ -1,0 +1,11 @@
+[package]
+name = "vida-ldrk-qualification"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+insta = { version = "1.43.2", features = ["json"] }
+vida-test-support = { path = "../../crates/vida-test-support" }

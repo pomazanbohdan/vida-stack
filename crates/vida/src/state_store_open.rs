@@ -136,9 +136,15 @@ impl Drop for AuthoritativeOpenGuard {
     }
 }
 
-pub(super) fn state_schema_document() -> String {
-    let storage_schema = SurrealStoreTarget::new(DEFAULT_STATE_DIR).bootstrap_schema_document();
-    format!("{storage_schema}\n\n{INSTRUCTION_STATE_SCHEMA}")
+pub(super) fn state_schema_document() -> &'static str {
+    static STATE_SCHEMA_DOCUMENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    STATE_SCHEMA_DOCUMENT
+        .get_or_init(|| {
+            let storage_schema =
+                SurrealStoreTarget::new(DEFAULT_STATE_DIR).bootstrap_schema_document();
+            format!("{storage_schema}\n\n{INSTRUCTION_STATE_SCHEMA}")
+        })
+        .as_str()
 }
 
 impl StateStore {

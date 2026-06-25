@@ -1,0 +1,5 @@
+{
+  "live_ids": ["epic-root", "task-a"],
+  "snapshot_ids": ["epic-root", "task-a", "task-b"],
+  "snapshot_fresh": true
+}

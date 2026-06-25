@@ -1,0 +1,13 @@
+[package]
+name = "vida-model-contract-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+insta = { version = "1.43.2", features = ["json"] }
+proptest = "1.11.0"
+serde_json = "1.0.150"
+vida-test-support = { path = "../../crates/vida-test-support" }

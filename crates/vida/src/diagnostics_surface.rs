@@ -77,14 +77,7 @@ fn recovery_summary_is_completed_terminal_closure_for_task(
     let Some(run_id) = run_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return false;
     };
-    summary.run_id == run_id
-        && summary.task_id == task_id
-        && summary.lifecycle_stage == "closure_complete"
-        && summary.resume_target == "none"
-        && matches!(
-            summary.resume_status.as_str(),
-            "completed" | "closure_complete"
-        )
+    summary.run_id == run_id && summary.task_id == task_id && summary.is_terminal_closure()
 }
 
 fn missing_task_actionability(

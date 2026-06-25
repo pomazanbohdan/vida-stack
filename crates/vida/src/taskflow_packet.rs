@@ -1,9 +1,10 @@
 use std::{path::Path, process::ExitCode, time::Duration};
 
 use crate::{
-    RenderMode, print_surface_header, print_surface_line,
+    print_surface_header, print_surface_line,
     state_store::{StateStore, TaskRecord},
     taskflow_task_bridge::proxy_state_dir,
+    RenderMode,
 };
 
 const TASKFLOW_PACKET_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
@@ -1032,8 +1033,8 @@ mod tests {
         resolve_packet_render_run_id, run_taskflow_packet,
     };
     use crate::state_store::{
-        CreateTaskRequest, ExecutionPlanStateRow, RunGraphDispatchReceiptStored, STATE_DATABASE,
-        STATE_NAMESPACE, StateStore, TaskExecutionSemantics, TaskPlannerMetadata, TaskRecord,
+        CreateTaskRequest, ExecutionPlanStateRow, RunGraphDispatchReceiptStored, StateStore,
+        TaskExecutionSemantics, TaskPlannerMetadata, TaskRecord, STATE_DATABASE, STATE_NAMESPACE,
     };
     use std::fs;
     use std::process::ExitCode;
@@ -1128,11 +1129,9 @@ mod tests {
             selected["dispatch_packet"]["body"]["route_policy"]["effective_selected_backend"],
             "internal_subagents"
         );
-        assert!(
-            selected["dispatch_packet"]["body"]
-                .get("large_runtime_artifact")
-                .is_none()
-        );
+        assert!(selected["dispatch_packet"]["body"]
+            .get("large_runtime_artifact")
+            .is_none());
     }
 
     #[test]
@@ -1774,13 +1773,11 @@ mod tests {
                 serde_json::from_str(&projection).expect("decode projection");
             assert_eq!(payload["status"], "blocked");
             assert_eq!(payload["from_task"], task.id);
-            assert!(
-                payload["blocker_codes"]
-                    .as_array()
-                    .expect("blocker codes")
-                    .iter()
-                    .any(|code| code == "dispatch_packet_repair_failed")
-            );
+            assert!(payload["blocker_codes"]
+                .as_array()
+                .expect("blocker codes")
+                .iter()
+                .any(|code| code == "dispatch_packet_repair_failed"));
             let repair_error = payload["repair_error"].as_str().expect("repair error");
             assert!(
                 repair_error.contains("Persisted dispatch packet run_id does not match"),
@@ -2003,12 +2000,10 @@ mod tests {
             payload["blocker_codes"][0],
             "task_metadata_missing_owned_paths"
         );
-        assert!(
-            payload["next_actions"][0]
-                .as_str()
-                .expect("next action")
-                .contains("vida task update task-with-metadata --owned-path")
-        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action")
+            .contains("vida task update task-with-metadata --owned-path"));
     }
 
     #[test]

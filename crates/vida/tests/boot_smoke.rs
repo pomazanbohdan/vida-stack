@@ -3337,6 +3337,7 @@ fn agent_dispatch_next_preview_aligns_scheduler_preview_selected_lanes_and_unsaf
                 &state_dir,
                 "--lanes",
                 "2",
+                "--full",
                 "--json",
             ]);
         },
@@ -3484,6 +3485,7 @@ fn agent_dispatch_next_dev_team_continuation_gate_preserves_diagnostic_packet_pr
                     "--dev-team",
                     "--lanes",
                     "3",
+                    "--full",
                     "--json",
                 ]);
         },
@@ -3579,6 +3581,7 @@ fn agent_dispatch_next_standard_continuation_gate_preserves_diagnostic_proposals
                     &state_dir,
                     "--lanes",
                     "3",
+                    "--full",
                     "--json",
                 ]);
         },

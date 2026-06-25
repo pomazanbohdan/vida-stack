@@ -77,6 +77,30 @@ pub(crate) fn dispatch_summary_has_clean_ready_downstream_handoff(
     })
 }
 
+pub(crate) fn dispatch_summary_has_clean_routed_agent_handoff(
+    receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    expected_run_id: Option<&str>,
+) -> bool {
+    receipt.is_some_and(|receipt| {
+        expected_run_id.is_none_or(|run_id| receipt.run_id == run_id)
+            && receipt.dispatch_kind == "agent_lane"
+            && matches!(receipt.dispatch_status.as_str(), "routed" | "packet_ready")
+            && receipt.blocker_code.is_none()
+            && receipt.downstream_dispatch_ready
+            && receipt.downstream_dispatch_blockers.is_empty()
+            && receipt
+                .dispatch_packet_path
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|path| !path.is_empty())
+            && crate::continuation_binding_summary::routed_dispatch_command_from_parts(
+                receipt.dispatch_command.as_deref(),
+                receipt.dispatch_packet_path.as_deref(),
+            )
+            .is_some()
+    })
+}
+
 pub(crate) fn dispatch_receipt_has_clean_ready_downstream_handoff(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     expected_run_id: Option<&str>,
@@ -105,6 +129,28 @@ pub(crate) fn dispatch_receipt_has_clean_ready_downstream_handoff(
             receipt.downstream_dispatch_target.as_deref(),
             receipt.downstream_dispatch_command.as_deref(),
         )
+}
+
+pub(crate) fn dispatch_receipt_has_clean_routed_agent_handoff(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    expected_run_id: Option<&str>,
+) -> bool {
+    expected_run_id.is_none_or(|run_id| receipt.run_id == run_id)
+        && receipt.dispatch_kind == "agent_lane"
+        && matches!(receipt.dispatch_status.as_str(), "routed" | "packet_ready")
+        && receipt.blocker_code.is_none()
+        && receipt.downstream_dispatch_ready
+        && receipt.downstream_dispatch_blockers.is_empty()
+        && receipt
+            .dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|path| !path.is_empty())
+        && crate::continuation_binding_summary::routed_dispatch_command_from_parts(
+            receipt.dispatch_command.as_deref(),
+            receipt.dispatch_packet_path.as_deref(),
+        )
+        .is_some()
 }
 
 fn downstream_dispatch_command_is_executable(target: Option<&str>, command: Option<&str>) -> bool {
@@ -280,11 +326,9 @@ pub(crate) fn recovery_summary_is_terminal_retired_runtime_run(
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
 ) -> bool {
     recovery.is_some_and(|summary| {
-        summary.resume_status == "completed"
-            && summary.lifecycle_stage == "closure_complete"
+        summary.is_terminal_closure()
             && !summary.delegation_gate.delegated_cycle_open
             && summary.delegation_gate.blocker_code.is_none()
-            && summary.resume_target == "none"
             && summary.task_id == summary.run_id
     })
 }

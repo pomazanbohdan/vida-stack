@@ -33,6 +33,7 @@ Purpose: make current VIDA product law discoverable through bootstrap-tracked ma
 7. Documentation/inventory route: [spec/canonical-documentation-and-inventory-layer-matrix.md](spec/canonical-documentation-and-inventory-layer-matrix.md)
 8. Runtime dependency decisions: [decisions/ldr-002-redb-operational-journal-adr.md](decisions/ldr-002-redb-operational-journal-adr.md)
 9. Runtime architecture decisions: [decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md](decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md)
+10. External runtime adapter decisions: [decisions/ldr-061-restate-adapter-mapping-adr.md](decisions/ldr-061-restate-adapter-mapping-adr.md)
 
 ## Repository Project Split
 

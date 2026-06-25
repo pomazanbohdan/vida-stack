@@ -379,7 +379,7 @@ mod tests {
             request,
             provenance_blockers: Vec::new(),
             retryable_completion_request: false,
-            completion_command: format!("vida lane complete run-1 --receipt-id run-1-{dispatch_target}-host-bridge-receipt --host-bridge-request request.json --host-agent-id <host-agent-id> --host-bridge-summary completed --json"),
+            completion_command: format!("vida lane complete run-1 --receipt-id run-1-{dispatch_target}-host-bridge-receipt --host-bridge-request request.json --host-agent-id <host-agent-id> --host-bridge-result-file result.json"),
             artifact_attach_command: Some("vida agent host-bridge --request request.json --attach-artifact <artifact-path> --changed-file <changed-file> --artifact-kind patch_proposal".to_string()),
         })
     }
@@ -401,7 +401,7 @@ mod tests {
         );
         assert_eq!(
             payload["host_bridge"]["completion_command"],
-            "vida lane complete run-1 --receipt-id run-1-implementer-host-bridge-receipt --host-bridge-request request.json --host-agent-id <host-agent-id> --host-bridge-summary completed --json"
+            "vida lane complete run-1 --receipt-id run-1-implementer-host-bridge-receipt --host-bridge-request request.json --host-agent-id <host-agent-id> --host-bridge-result-file result.json"
         );
         assert_eq!(
             payload["host_bridge"]["artifact_attach_command"],

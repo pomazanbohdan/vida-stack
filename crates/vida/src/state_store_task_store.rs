@@ -99,6 +99,13 @@ pub(crate) struct ClosedTaskRunReconciliationSummary {
 }
 
 impl StateStore {
+    pub(crate) const TASK_UPDATE_CLOSE_AUTHORITY_BLOCKER_CODE: &'static str =
+        "task_update_close_authority_required";
+    const TASK_UPDATE_CLOSE_AUTHORITY_REASON_PREFIX: &'static str =
+        "task update close authority required for `";
+    const TASK_UPDATE_CLOSE_AUTHORITY_REASON_SUFFIX: &'static str =
+        "`: configured proof targets require `vida task close`";
+
     pub(crate) fn task_status_is_closed_like(status: &str) -> bool {
         taskflow_core::task_status_is_closed_like(status)
     }
@@ -180,6 +187,41 @@ impl StateStore {
                 admission.blocker_codes.join(", ")
             ),
         })
+    }
+
+    pub(crate) fn task_update_close_authority_task_id_from_reason(reason: &str) -> Option<&str> {
+        let rest = reason.strip_prefix(Self::TASK_UPDATE_CLOSE_AUTHORITY_REASON_PREFIX)?;
+        let (task_id, suffix) = rest.split_once(Self::TASK_UPDATE_CLOSE_AUTHORITY_REASON_SUFFIX)?;
+        if suffix.is_empty() && !task_id.trim().is_empty() {
+            Some(task_id)
+        } else {
+            None
+        }
+    }
+
+    fn task_update_close_authority_required(
+        task: &TaskRecord,
+        requested_planner_metadata: Option<&TaskPlannerMetadata>,
+    ) -> bool {
+        !task.planner_metadata.proof_targets.is_empty()
+            || requested_planner_metadata.is_some_and(|metadata| !metadata.proof_targets.is_empty())
+    }
+
+    fn ensure_task_update_close_authority(
+        task: &TaskRecord,
+        requested_planner_metadata: Option<&TaskPlannerMetadata>,
+    ) -> Result<(), StateStoreError> {
+        if Self::task_update_close_authority_required(task, requested_planner_metadata) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "{}{}{}",
+                    Self::TASK_UPDATE_CLOSE_AUTHORITY_REASON_PREFIX,
+                    task.id,
+                    Self::TASK_UPDATE_CLOSE_AUTHORITY_REASON_SUFFIX
+                ),
+            });
+        }
+        Ok(())
     }
 
     fn non_closed_child_status_evidence_for_task(
@@ -1596,7 +1638,8 @@ impl StateStore {
                             status,
                             "historical_closed_task_stale_run_retired",
                         );
-                        self.record_run_graph_status(&retired_status).await?;
+                        self.record_reconciled_terminal_closure_run_graph_status(&retired_status)
+                            .await?;
                         self.clear_run_graph_continuation_binding(&row.run_id)
                             .await?;
                         reconciled_runs.push(ClosedTaskRunReconciliation {
@@ -1673,7 +1716,8 @@ impl StateStore {
                 status,
                 "historical_closed_task_stale_run_retired",
             );
-            self.record_run_graph_status(&retired_status).await?;
+            self.record_reconciled_terminal_closure_run_graph_status(&retired_status)
+                .await?;
             self.clear_run_graph_continuation_binding(&row.run_id)
                 .await?;
             reconciled_runs.push(ClosedTaskRunReconciliation {
@@ -2938,6 +2982,7 @@ impl StateStore {
             let requested_status_is_closed =
                 requested_lifecycle_status == TaskLifecycleStatus::Closed;
             if requested_status_is_closed {
+                Self::ensure_task_update_close_authority(&task, planner_metadata.as_ref())?;
                 let non_closed_children = self
                     .non_closed_child_status_evidence_for_task_live(task_id)
                     .await?;
@@ -3813,6 +3858,11 @@ mod tests {
         std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
     }
 
+    async fn close_store_and_remove_root(store: StateStore, root: PathBuf) {
+        store.close().await;
+        let _ = fs::remove_dir_all(root);
+    }
+
     struct TestProxyStateDirOverrideGuard;
 
     impl TestProxyStateDirOverrideGuard {
@@ -3946,7 +3996,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(closed, vec!["done-epic", "resolved-epic"]);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[test]
@@ -4165,7 +4215,7 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Only parent-optional work item kinds can have no parent"));
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -4193,7 +4243,7 @@ mod tests {
             .expect("normalized epic kind should be parent optional");
 
         assert_eq!(task.issue_type, "Epic");
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -4248,7 +4298,7 @@ mod tests {
             .expect("unrelated historical orphan should not block close");
 
         assert_eq!(closed.status, "closed");
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -4311,7 +4361,7 @@ mod tests {
         assert_eq!(parent.status, "open");
         assert!(parent.closed_at.is_none());
         assert!(parent.close_reason.is_none());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -4392,7 +4442,7 @@ mod tests {
             .await
             .expect("validate")
             .is_empty());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -4487,7 +4537,7 @@ mod tests {
             .expect("validate")
             .is_empty());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -4570,7 +4620,7 @@ mod tests {
         assert_eq!(claim.status, "released");
         assert_eq!(claim.release_reason.as_deref(), Some("task_closed"));
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -4652,7 +4702,7 @@ mod tests {
             .await
             .expect("validate")
             .is_empty());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -4724,7 +4774,168 @@ mod tests {
             .await
             .expect("validate")
             .is_empty());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn update_task_status_closed_rejects_proof_protected_task_close_authority() {
+        let root = unique_task_store_temp_root("vida-update-close-proof-authority");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "proof-parent",
+                title: "Proof parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "proof-child",
+                title: "Proof child",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("proof-parent"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata {
+                    proof_targets: vec!["cargo test proof-child".to_string()],
+                    ..TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create proof child");
+
+        for requested_status in ["closed", "done"] {
+            let error = store
+                .update_task(UpdateTaskRequest {
+                    task_id: "proof-child",
+                    title: None,
+                    status: Some(requested_status),
+                    priority: None,
+                    notes: None,
+                    description: None,
+                    parent_id: None,
+                    add_labels: &[],
+                    remove_labels: &[],
+                    set_labels: None,
+                    execution_mode: None,
+                    order_bucket: None,
+                    parallel_group: None,
+                    conflict_domain: None,
+                    planner_metadata: None,
+                })
+                .await
+                .expect_err("generic update close should require close authority");
+
+            match error {
+                StateStoreError::InvalidTaskRecord { reason } => {
+                    assert_eq!(
+                        StateStore::task_update_close_authority_task_id_from_reason(&reason),
+                        Some("proof-child")
+                    );
+                    assert!(reason.contains("configured proof targets require `vida task close`"));
+                }
+                other => panic!("expected InvalidTaskRecord, got {other}"),
+            }
+            let child = store.show_task("proof-child").await.expect("show child");
+            assert_eq!(child.status, "open");
+            assert!(child.closed_at.is_none());
+            assert!(child.close_reason.is_none());
+        }
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn append_task_notes_preserves_closed_task_status() {
+        let root = unique_task_store_temp_root("vida-append-note-closed-task");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "note-parent",
+                title: "Note parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "note-child",
+                title: "Note child",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("note-parent"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create child");
+
+        store
+            .close_task("note-child", "initial close proof")
+            .await
+            .expect("close child");
+        let closed_child = store.show_task("note-child").await.expect("show child");
+        let closed_parent = store.show_task("note-parent").await.expect("show parent");
+
+        let appended = store
+            .append_task_notes("note-child", "\n", "post-close scorecard")
+            .await
+            .expect("append note to closed child");
+
+        assert_eq!(appended.status, "closed");
+        assert_eq!(appended.closed_at, closed_child.closed_at);
+        assert_eq!(appended.close_reason, closed_child.close_reason);
+        assert!(appended
+            .notes
+            .as_deref()
+            .is_some_and(|notes| notes.contains("post-close scorecard")));
+
+        let parent_after_append = store.show_task("note-parent").await.expect("show parent");
+        assert_eq!(parent_after_append.status, closed_parent.status);
+        assert_eq!(parent_after_append.closed_at, closed_parent.closed_at);
+        assert_eq!(parent_after_append.close_reason, closed_parent.close_reason);
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("validate")
+            .is_empty());
+
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -4799,7 +5010,7 @@ mod tests {
             .await
             .expect("validate")
             .is_empty());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -4881,7 +5092,7 @@ mod tests {
         assert_eq!(parent.status, "open");
         assert!(parent.closed_at.is_none());
         assert!(parent.close_reason.is_none());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -4952,7 +5163,7 @@ mod tests {
         assert_eq!(parent.status, "open");
         assert!(parent.closed_at.is_none());
         assert!(parent.close_reason.is_none());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5063,7 +5274,7 @@ mod tests {
             .await
             .expect("validate")
             .is_empty());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5159,7 +5370,7 @@ mod tests {
             .await
             .expect("validate graph")
             .is_empty());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5227,7 +5438,7 @@ mod tests {
             .await
             .expect("validate graph")
             .is_empty());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5370,7 +5581,7 @@ mod tests {
         assert_eq!(refreshed.resume_target, "dispatch.work_pool_pack_lane");
         assert!(refreshed.recovery_ready);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5558,7 +5769,7 @@ mod tests {
         assert!(repaired_parent.closed_at.is_none());
         assert!(repaired_parent.close_reason.is_none());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5637,7 +5848,7 @@ mod tests {
         assert_eq!(parent.status, "open");
         assert!(parent.closed_at.is_none());
         assert!(parent.close_reason.is_none());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5708,7 +5919,7 @@ mod tests {
         assert_eq!(parent.status, "open");
         assert!(parent.closed_at.is_none());
         assert!(parent.close_reason.is_none());
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -5948,7 +6159,7 @@ mod tests {
             .expect("checkpoint record lookup should succeed");
         assert!(checkpoint_record.is_none());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[cfg(unix)]
@@ -6095,7 +6306,190 @@ mod tests {
             "run-explicit-task-close"
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn reconcile_closed_runs_uses_completed_receipt_authority() {
+        let root = unique_task_store_temp_root("vida-reconcile-closed-run-receipt-authority");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let parent_id = "closed-receipt-parent";
+        let task_id = "closed-receipt-task";
+        let run_id = "closed-receipt-run";
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: parent_id,
+                title: "Closed receipt parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id,
+                title: "Closed receipt task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: Some(parent_id),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+        store
+            .close_task(task_id, "receipt-backed closure proof passed")
+            .await
+            .expect("close task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "closure",
+        );
+        status.task_id = task_id.to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "executing".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "closure_receipt_ready".to_string();
+        status.handoff_state = "none".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("seed stale terminal closure run");
+
+        let result_dir = root.join("runtime-consumption/dispatch-results");
+        fs::create_dir_all(&result_dir).expect("create result dir");
+        let result_path = result_dir.join(format!("{run_id}.json"));
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "runtime_lane_completion_result",
+                "status": "pass",
+                "execution_state": "executed",
+                "completed_target": "closure",
+                "closure_ready": true,
+                "execution_evidence": {
+                    "status": "recorded",
+                    "receipt_backed": true
+                }
+            }))
+            .expect("encode result"),
+        )
+        .expect("write result");
+        let receipt = crate::state_store::RunGraphDispatchReceiptStored {
+            run_id: run_id.to_string(),
+            dispatch_target: "closure".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: Some("lane_completed".to_string()),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+            dispatch_packet_path: Some(
+                root.join("runtime-consumption/dispatch-packets/closed-receipt-run.json")
+                    .display()
+                    .to_string(),
+            ),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("worker".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("test".to_string()),
+            recorded_at: "2026-05-19T00:00:00Z".to_string(),
+        };
+        let _: Option<crate::state_store::RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert(("run_graph_dispatch_receipt", run_id))
+            .content(receipt)
+            .await
+            .expect("seed receipt without current-session owner evidence");
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "foreign-closed-run-claim".to_string(),
+                state_root_id: root.display().to_string(),
+                worktree_environment_id: "foreign-worktree".to_string(),
+                orchestrator_session_id: "foreign-session".to_string(),
+                process_id: None,
+                task_id: Some(task_id.to_string()),
+                run_id: Some(run_id.to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some(format!("run:{run_id}")),
+                owned_paths: Vec::new(),
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Exclusive,
+                lease_seconds: 3600,
+            })
+            .await
+            .expect("seed foreign run claim");
+
+        let mut ordinary_update = status.clone();
+        ordinary_update.policy_gate = "ordinary_update_should_still_require_ownership".to_string();
+        let ordinary_result = store.record_run_graph_status(&ordinary_update).await;
+        assert!(
+            matches!(
+                ordinary_result,
+                Err(StateStoreError::InvalidTaskRecord { ref reason })
+                    if reason.contains("current session does not own run")
+            ),
+            "ordinary run-graph mutation must remain ownership-guarded: {ordinary_result:?}"
+        );
+
+        let summary = store
+            .reconcile_historical_closed_task_active_runs(25)
+            .await
+            .expect("reconcile receipt-backed closed run");
+        assert_eq!(summary.reconciled_count, 1);
+        assert_eq!(summary.skipped_count, 0);
+        assert_eq!(summary.reconciled_runs[0].run_id, run_id);
+        let reconciled = store
+            .run_graph_status(run_id)
+            .await
+            .expect("load reconciled status");
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.active_node, "closure");
+        assert_eq!(reconciled.lifecycle_stage, "closure_complete");
+        assert!(store
+            .run_graph_continuation_binding(run_id)
+            .await
+            .expect("read binding")
+            .is_none());
+
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -6135,7 +6529,7 @@ mod tests {
             .await
             .expect("legacy row should downgrade execution semantics");
 
-        drop(store);
+        store.close().await;
 
         let reopened = StateStore::open(root.clone())
             .await
@@ -6146,7 +6540,7 @@ mod tests {
             .expect("legacy task should load");
         assert_eq!(task.execution_semantics, TaskExecutionSemantics::default());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(reopened, root).await;
     }
 
     #[tokio::test]
@@ -6186,7 +6580,7 @@ mod tests {
             .await
             .expect("legacy row should downgrade planner metadata");
 
-        drop(store);
+        store.close().await;
 
         let reopened = StateStore::open_existing_read_only(root.clone())
             .await
@@ -6207,7 +6601,7 @@ mod tests {
             .expect("legacy planner task should be present");
         assert_eq!(loaded.planner_metadata, TaskPlannerMetadata::default());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(reopened, root).await;
     }
 
     #[tokio::test]
@@ -6249,7 +6643,7 @@ mod tests {
             .await
             .expect("legacy row should downgrade nested planner metadata");
 
-        drop(store);
+        store.close().await;
 
         let reopened = StateStore::open_existing(root.clone())
             .await
@@ -6270,7 +6664,7 @@ mod tests {
             .expect("legacy planner nested none task should be present");
         assert_eq!(loaded.planner_metadata, TaskPlannerMetadata::default());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(reopened, root).await;
     }
 
     #[tokio::test]
@@ -6329,7 +6723,7 @@ mod tests {
             .expect("planner metadata task should load");
         assert_eq!(loaded.planner_metadata, expected_planner_metadata);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -6456,7 +6850,7 @@ mod tests {
         assert_eq!(imported.execution_semantics, expected_semantics);
         assert_eq!(imported.planner_metadata, expected_metadata);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -6547,7 +6941,7 @@ mod tests {
             imported.dependencies
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -6573,7 +6967,7 @@ mod tests {
         );
         assert!(store.show_task("invalid-execution-mode").await.is_err());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     // ==================== Core Rule #12 Override Tests ====================

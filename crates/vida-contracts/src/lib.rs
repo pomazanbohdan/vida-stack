@@ -839,6 +839,112 @@ impl VidaContractValidationError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VidaExternalPayloadKind {
+    CommandEnvelope,
+    DomainEventEnvelope,
+    CompletionOutcome,
+}
+
+impl VidaExternalPayloadKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CommandEnvelope => "command_envelope",
+            Self::DomainEventEnvelope => "domain_event_envelope",
+            Self::CompletionOutcome => "completion_outcome",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VidaExternalPayloadValidationStage {
+    JsonParse,
+    Schema,
+    Typed,
+    Domain,
+}
+
+impl VidaExternalPayloadValidationStage {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::JsonParse => "json_parse",
+            Self::Schema => "schema",
+            Self::Typed => "typed",
+            Self::Domain => "domain",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaExternalPayloadValidationError {
+    pub payload_kind: VidaExternalPayloadKind,
+    pub stage: VidaExternalPayloadValidationStage,
+    pub path: String,
+    pub blocker_code: String,
+    pub message: String,
+    pub schema_ref: VidaSchemaRef,
+}
+
+impl std::fmt::Display for VidaExternalPayloadValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} {} validation failed at {}: {} ({})",
+            self.payload_kind.as_str(),
+            self.stage.as_str(),
+            self.path,
+            self.message,
+            self.blocker_code
+        )
+    }
+}
+
+impl std::error::Error for VidaExternalPayloadValidationError {}
+
+impl VidaExternalPayloadValidationError {
+    fn new(
+        payload_kind: VidaExternalPayloadKind,
+        stage: VidaExternalPayloadValidationStage,
+        path: impl Into<String>,
+        blocker_code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            payload_kind,
+            stage,
+            path: path.into(),
+            blocker_code: blocker_code.into(),
+            message: message.into(),
+            schema_ref: external_payload_schema_ref(payload_kind),
+        }
+    }
+
+    fn from_contract(
+        payload_kind: VidaExternalPayloadKind,
+        stage: VidaExternalPayloadValidationStage,
+        error: VidaContractValidationError,
+    ) -> Self {
+        Self::new(
+            payload_kind,
+            stage,
+            error.path,
+            error.blocker_code,
+            error.message,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VidaExternalPayload {
+    CommandEnvelope(VidaCommandEnvelope),
+    DomainEventEnvelope(VidaDomainEventEnvelope),
+    CompletionOutcome(CompletionOutcome),
+}
+
 pub fn parse_command_envelope_json(
     input: &[u8],
 ) -> Result<VidaCommandEnvelope, VidaContractParseError> {
@@ -850,6 +956,182 @@ pub fn parse_command_envelope_json(
 pub fn command_envelope_schema_json() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(VidaCommandEnvelope))
         .expect("VidaCommandEnvelope schema should serialize")
+}
+
+#[must_use]
+pub fn external_payload_schema_ref(kind: VidaExternalPayloadKind) -> VidaSchemaRef {
+    let (schema_id, version) = match kind {
+        VidaExternalPayloadKind::CommandEnvelope => ("vida.command_envelope", 1),
+        VidaExternalPayloadKind::DomainEventEnvelope => ("vida.domain_event", 2),
+        VidaExternalPayloadKind::CompletionOutcome => ("vida.completion_outcome", 1),
+    };
+    VidaSchemaRef {
+        schema_id: VidaSchemaId(schema_id.to_string()),
+        version: VidaSchemaVersion(version),
+    }
+}
+
+#[must_use]
+pub fn external_payload_schema_json(kind: VidaExternalPayloadKind) -> serde_json::Value {
+    match kind {
+        VidaExternalPayloadKind::CommandEnvelope => command_envelope_schema_json(),
+        VidaExternalPayloadKind::DomainEventEnvelope => {
+            serde_json::to_value(schemars::schema_for!(VidaDomainEventEnvelope))
+                .expect("VidaDomainEventEnvelope schema should serialize")
+        }
+        VidaExternalPayloadKind::CompletionOutcome => completion_outcome_schema_json(),
+    }
+}
+
+pub fn validate_external_payload_schema_value(
+    kind: VidaExternalPayloadKind,
+    value: &serde_json::Value,
+) -> Result<(), VidaExternalPayloadValidationError> {
+    let schema = external_payload_schema_json(kind);
+    let validator = jsonschema::validator_for(&schema).map_err(|error| {
+        VidaExternalPayloadValidationError::new(
+            kind,
+            VidaExternalPayloadValidationStage::Schema,
+            "$",
+            "external_payload_schema_compile_failed",
+            error.to_string(),
+        )
+    })?;
+    if let Some(error) = validator.iter_errors(value).next() {
+        return Err(VidaExternalPayloadValidationError::new(
+            kind,
+            VidaExternalPayloadValidationStage::Schema,
+            jsonschema_instance_path(&error),
+            "external_payload_schema_invalid",
+            error.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn jsonschema_instance_path(error: &jsonschema::ValidationError<'_>) -> String {
+    let pointer = error.instance_path().to_string();
+    if pointer.is_empty() {
+        "$".to_string()
+    } else {
+        format!("${pointer}")
+    }
+}
+
+pub fn validate_command_envelope_domain(
+    envelope: &VidaCommandEnvelope,
+) -> Result<(), VidaContractValidationError> {
+    if envelope.schema_version != VIDA_CONTRACTS_SCHEMA_VERSION {
+        return Err(VidaContractValidationError::new(
+            "$.schema_version",
+            "command_envelope_schema_version_mismatch",
+            format!("command schema version must be `{VIDA_CONTRACTS_SCHEMA_VERSION}`"),
+        ));
+    }
+    if envelope.protocol_version != VIDA_COMMAND_PROTOCOL_VERSION {
+        return Err(VidaContractValidationError::new(
+            "$.protocol_version",
+            "command_envelope_protocol_version_mismatch",
+            format!("command protocol version must be `{VIDA_COMMAND_PROTOCOL_VERSION}`"),
+        ));
+    }
+    if operation_spec(&envelope.operation.0).is_none() {
+        return Err(VidaContractValidationError::new(
+            "$.operation",
+            "command_envelope_operation_unknown",
+            format!("operation `{}` is not registered", envelope.operation.0),
+        ));
+    }
+    Ok(())
+}
+
+pub fn parse_external_payload_json(
+    kind: VidaExternalPayloadKind,
+    input: &[u8],
+    registry: &VidaSchemaRegistrySnapshot,
+) -> Result<VidaExternalPayload, VidaExternalPayloadValidationError> {
+    let value: serde_json::Value = serde_json::from_slice(input).map_err(|error| {
+        VidaExternalPayloadValidationError::new(
+            kind,
+            VidaExternalPayloadValidationStage::JsonParse,
+            "$",
+            "external_payload_json_parse_failed",
+            error.to_string(),
+        )
+    })?;
+    validate_external_payload_schema_value(kind, &value)?;
+    match kind {
+        VidaExternalPayloadKind::CommandEnvelope => {
+            let mut deserializer = serde_json::Deserializer::from_slice(input);
+            let envelope: VidaCommandEnvelope = serde_path_to_error::deserialize(&mut deserializer)
+                .map_err(|error| {
+                    VidaExternalPayloadValidationError::new(
+                        kind,
+                        VidaExternalPayloadValidationStage::Typed,
+                        error.path().to_string(),
+                        "external_payload_typed_decode_failed",
+                        error.inner().to_string(),
+                    )
+                })?;
+            deserializer.end().map_err(|error| {
+                VidaExternalPayloadValidationError::new(
+                    kind,
+                    VidaExternalPayloadValidationStage::Typed,
+                    "$",
+                    "external_payload_typed_decode_failed",
+                    error.to_string(),
+                )
+            })?;
+            validate_command_envelope_domain(&envelope).map_err(|error| {
+                VidaExternalPayloadValidationError::from_contract(
+                    kind,
+                    VidaExternalPayloadValidationStage::Domain,
+                    error,
+                )
+            })?;
+            Ok(VidaExternalPayload::CommandEnvelope(envelope))
+        }
+        VidaExternalPayloadKind::DomainEventEnvelope => {
+            let mut deserializer = serde_json::Deserializer::from_slice(input);
+            let event: VidaDomainEventEnvelope =
+                serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
+                    VidaExternalPayloadValidationError::new(
+                        kind,
+                        VidaExternalPayloadValidationStage::Typed,
+                        error.path().to_string(),
+                        "external_payload_typed_decode_failed",
+                        error.inner().to_string(),
+                    )
+                })?;
+            deserializer.end().map_err(|error| {
+                VidaExternalPayloadValidationError::new(
+                    kind,
+                    VidaExternalPayloadValidationStage::Typed,
+                    "$",
+                    "external_payload_typed_decode_failed",
+                    error.to_string(),
+                )
+            })?;
+            validate_domain_event(&event, registry).map_err(|error| {
+                VidaExternalPayloadValidationError::from_contract(
+                    kind,
+                    VidaExternalPayloadValidationStage::Domain,
+                    error,
+                )
+            })?;
+            Ok(VidaExternalPayload::DomainEventEnvelope(event))
+        }
+        VidaExternalPayloadKind::CompletionOutcome => {
+            let outcome = parse_completion_outcome_json(input).map_err(|error| {
+                VidaExternalPayloadValidationError::from_contract(
+                    kind,
+                    VidaExternalPayloadValidationStage::Typed,
+                    error,
+                )
+            })?;
+            Ok(VidaExternalPayload::CompletionOutcome(outcome))
+        }
+    }
 }
 
 #[serde_with::skip_serializing_none]
@@ -1173,9 +1455,9 @@ pub fn vida_runtime_schema_registry_snapshot() -> VidaSchemaRegistrySnapshot {
             VidaSchemaRegistryEntry {
                 schema_id: VidaSchemaId("vida.domain_event".to_string()),
                 kind: VidaSchemaKind::Event,
-                versions: vec![VidaSchemaVersion(1)],
-                latest_version: VidaSchemaVersion(1),
-                artifact_ref: VidaArtifactRef("schema://vida.domain_event/v1".to_string()),
+                versions: vec![VidaSchemaVersion(1), VidaSchemaVersion(2)],
+                latest_version: VidaSchemaVersion(2),
+                artifact_ref: VidaArtifactRef("schema://vida.domain_event/v2".to_string()),
             },
             VidaSchemaRegistryEntry {
                 schema_id: VidaSchemaId("vida.plan".to_string()),
@@ -1218,6 +1500,14 @@ pub fn validate_domain_event(
     event: &VidaDomainEventEnvelope,
     registry: &VidaSchemaRegistrySnapshot,
 ) -> Result<(), VidaContractValidationError> {
+    upcast_domain_event_to_latest(event, registry)?;
+    Ok(())
+}
+
+pub fn upcast_domain_event_to_latest(
+    event: &VidaDomainEventEnvelope,
+    registry: &VidaSchemaRegistrySnapshot,
+) -> Result<VidaDomainEventEnvelope, VidaContractValidationError> {
     event.validate_known_version(registry)?;
     let Some(entry) = registry.event_schema(&event.schema_id) else {
         return Err(VidaContractValidationError::new(
@@ -1226,7 +1516,18 @@ pub fn validate_domain_event(
             format!("event schema id `{}` is not registered", event.schema_id.0),
         ));
     };
-    if event.event_version != entry.latest_version {
+    if event.event_version == entry.latest_version {
+        return Ok(event.clone());
+    }
+    if event.schema_id.0 == "vida.domain_event"
+        && event.event_version == VidaSchemaVersion(1)
+        && entry.latest_version == VidaSchemaVersion(2)
+    {
+        let mut upcasted = event.clone();
+        upcasted.event_version = VidaSchemaVersion(2);
+        return Ok(upcasted);
+    }
+    if event.event_version.0 > entry.latest_version.0 {
         return Err(VidaContractValidationError::new(
             "$.event_version",
             "event_schema_revision_not_latest",
@@ -1236,7 +1537,14 @@ pub fn validate_domain_event(
             ),
         ));
     }
-    Ok(())
+    Err(VidaContractValidationError::new(
+        "$.event_version",
+        "event_schema_upcaster_missing",
+        format!(
+            "event schema `{}` version {} has no upcaster to latest revision {}",
+            event.schema_id.0, event.event_version.0, entry.latest_version.0
+        ),
+    ))
 }
 
 pub fn trace_links_are_conformant(
@@ -1755,6 +2063,110 @@ mod tests {
     }
 
     #[test]
+    fn external_payload_validation_matrix_distinguishes_failure_stages() {
+        let registry = vida_runtime_schema_registry_snapshot();
+
+        let parse_error = parse_external_payload_json(
+            VidaExternalPayloadKind::CommandEnvelope,
+            br#"{"schema_version":"vida-contracts-v1","#,
+            &registry,
+        )
+        .expect_err("invalid JSON should fail at parse stage");
+        assert_eq!(
+            parse_error.stage,
+            VidaExternalPayloadValidationStage::JsonParse
+        );
+        assert_eq!(
+            parse_error.blocker_code,
+            "external_payload_json_parse_failed"
+        );
+
+        let schema_error = parse_external_payload_json(
+            VidaExternalPayloadKind::CommandEnvelope,
+            br#"{
+              "schema_version": "vida-contracts-v1",
+              "protocol_version": "vida-command-v1",
+              "operation": "vida.wizard.schema.get",
+              "session_id": "session-01",
+              "client_kind": "tui",
+              "payload": {}
+            }"#,
+            &registry,
+        )
+        .expect_err("missing request_id should fail schema validation");
+        assert_eq!(
+            schema_error.stage,
+            VidaExternalPayloadValidationStage::Schema
+        );
+        assert_eq!(schema_error.blocker_code, "external_payload_schema_invalid");
+
+        let typed_error = parse_external_payload_json(
+            VidaExternalPayloadKind::DomainEventEnvelope,
+            br#"{
+              "schema_id": "vida.domain_event",
+              "event_version": 1,
+              "event_id": "event-typed-overflow",
+              "command_id": "command-typed-overflow",
+              "causation_id": "command-typed-overflow",
+              "stream_id": "stream-typed-overflow",
+              "stream_version": 18446744073709551616,
+              "aggregate_id": "aggregate-typed-overflow",
+              "occurred_at": "2026-06-24T10:00:00Z",
+              "payload": {},
+              "trace": {}
+            }"#,
+            &registry,
+        )
+        .expect_err("integer overflow should fail typed decode");
+        assert_eq!(typed_error.stage, VidaExternalPayloadValidationStage::Typed);
+        assert_eq!(
+            typed_error.blocker_code,
+            "external_payload_typed_decode_failed"
+        );
+
+        let domain_error = parse_external_payload_json(
+            VidaExternalPayloadKind::CommandEnvelope,
+            br#"{
+              "schema_version": "wrong-contracts-v1",
+              "protocol_version": "vida-command-v1",
+              "operation": "vida.wizard.schema.get",
+              "session_id": "session-01",
+              "request_id": "request-01",
+              "client_kind": "tui",
+              "payload": {}
+            }"#,
+            &registry,
+        )
+        .expect_err("schema version mismatch should fail domain validation");
+        assert_eq!(
+            domain_error.stage,
+            VidaExternalPayloadValidationStage::Domain
+        );
+        assert_eq!(
+            domain_error.blocker_code,
+            "command_envelope_schema_version_mismatch"
+        );
+    }
+
+    #[test]
+    fn external_payload_validation_accepts_valid_command_envelope() {
+        let registry = vida_runtime_schema_registry_snapshot();
+        let payload = parse_external_payload_json(
+            VidaExternalPayloadKind::CommandEnvelope,
+            include_bytes!("../fixtures/command_envelope.json"),
+            &registry,
+        )
+        .expect("fixture should pass external validation");
+
+        let VidaExternalPayload::CommandEnvelope(envelope) = payload else {
+            panic!("expected command envelope payload");
+        };
+        assert_eq!(envelope.schema_version, VIDA_CONTRACTS_SCHEMA_VERSION);
+        assert_eq!(envelope.protocol_version, VIDA_COMMAND_PROTOCOL_VERSION);
+        assert_eq!(envelope.operation.0, operations::WIZARD_SCHEMA_GET);
+    }
+
+    #[test]
     fn runtime_schema_registry_snapshot_matches_fixture() {
         let fixture: VidaSchemaRegistrySnapshot = serde_json::from_str(include_str!(
             "../fixtures/runtime_schema_registry_snapshot.json"
@@ -1776,14 +2188,39 @@ mod tests {
     }
 
     #[test]
-    fn event_replay_accepts_v1_schema() {
+    fn event_replay_accepts_v1_and_v2_schema_versions() {
+        let registry = vida_runtime_schema_registry_snapshot();
+        let v1_event: VidaDomainEventEnvelope =
+            serde_json::from_str(include_str!("../fixtures/domain_event_v1.json"))
+                .expect("event fixture should deserialize");
+        let v2_event: VidaDomainEventEnvelope =
+            serde_json::from_str(include_str!("../fixtures/domain_event_v2.json"))
+                .expect("v2 event fixture should deserialize");
+
+        validate_domain_event(&v1_event, &registry).expect("v1 event should be registered");
+        validate_domain_event(&v2_event, &registry).expect("v2 event should be registered");
+        assert_eq!(v1_event.event_version, VidaSchemaVersion(1));
+        assert_eq!(v2_event.event_version, VidaSchemaVersion(2));
+    }
+
+    #[test]
+    fn domain_event_upcaster_is_pure_and_targets_latest_version() {
         let registry = vida_runtime_schema_registry_snapshot();
         let event: VidaDomainEventEnvelope =
             serde_json::from_str(include_str!("../fixtures/domain_event_v1.json"))
                 .expect("event fixture should deserialize");
 
-        validate_domain_event(&event, &registry).expect("event should be registered");
+        let first = upcast_domain_event_to_latest(&event, &registry)
+            .expect("v1 event should upcast to latest");
+        let second = upcast_domain_event_to_latest(&event, &registry)
+            .expect("v1 event should upcast deterministically");
+
         assert_eq!(event.event_version, VidaSchemaVersion(1));
+        assert_eq!(first, second);
+        assert_eq!(first.event_version, VidaSchemaVersion(2));
+        assert_eq!(first.event_id, event.event_id);
+        assert_eq!(first.stream_id, event.stream_id);
+        assert_eq!(first.payload, event.payload);
     }
 
     #[test]

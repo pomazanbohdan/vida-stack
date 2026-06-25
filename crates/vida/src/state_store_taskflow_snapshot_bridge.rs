@@ -302,6 +302,53 @@ impl StateStore {
         Ok(())
     }
 
+    pub async fn replace_with_task_jsonl_snapshot_file(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<(), StateStoreError> {
+        let source_path = path.as_ref().display().to_string();
+        let task_records = Self::read_tasks_from_jsonl_snapshot(path.as_ref())?;
+        let mut keep_ids = BTreeSet::new();
+        for task in &task_records {
+            if !keep_ids.insert(task.id.clone()) {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!("duplicate task id `{}` in JSONL snapshot", task.id),
+                });
+            }
+        }
+        if let Some(first) = Self::validate_task_graph_rows(&task_records).first() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "task JSONL snapshot graph is invalid: {} on {}",
+                    first.issue_type, first.issue_id
+                ),
+            });
+        }
+        let stale_task_ids = self.snapshot_replace_stale_task_ids(&keep_ids).await?;
+        self.reject_runtime_linked_snapshot_replace_stale_tasks(&stale_task_ids)
+            .await?;
+        let dependency_count = task_records
+            .iter()
+            .map(|task| task.dependencies.len())
+            .sum::<usize>();
+        for task in task_records {
+            self.persist_task_record(task).await?;
+        }
+        for task_id in &stale_task_ids {
+            self.delete_task_record(task_id).await?;
+        }
+        self.record_snapshot_bridge_reconciliation_summary(
+            "replace_snapshot",
+            "task_jsonl_snapshot_file",
+            Some(source_path),
+            keep_ids.len(),
+            dependency_count,
+            stale_task_ids.len(),
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn snapshot_replace_stale_task_ids(
         &self,
         keep_ids: &BTreeSet<String>,
@@ -478,6 +525,11 @@ fn format_runtime_linked_stale_task_rows(
 mod tests {
     use super::*;
 
+    async fn close_store_and_remove_root(store: StateStore, root: std::path::PathBuf) {
+        store.close().await;
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[tokio::test]
     async fn task_store_summary_counts_canonical_status_aliases() {
         let nanos = SystemTime::now()
@@ -524,7 +576,79 @@ mod tests {
         assert_eq!(summary.in_progress_count, 1);
         assert_eq!(summary.closed_count, 1);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn replace_with_task_jsonl_snapshot_file_accepts_exported_edge_type_rows() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-jsonl-replace-edge-type-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("initial.jsonl");
+        let replacement = root.join("replacement.jsonl");
+
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root old\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-stale\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        fs::write(
+            &replacement,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root new\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:05Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-child\",\"title\":\"Child\",\"description\":\"child\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:05Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-child\",\"depends_on_id\":\"vida-root\",\"edge_type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:05Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write replacement jsonl");
+
+        store
+            .replace_with_task_jsonl_snapshot_file(&replacement)
+            .await
+            .expect("JSONL replacement should accept exported edge_type rows");
+
+        let root_task = store.show_task("vida-root").await.expect("root exists");
+        assert_eq!(root_task.title, "Root new");
+        let child = store.show_task("vida-child").await.expect("child exists");
+        assert_eq!(child.dependencies.len(), 1);
+        assert_eq!(child.dependencies[0].depends_on_id, "vida-root");
+        assert_eq!(child.dependencies[0].edge_type, "parent-child");
+        assert!(matches!(
+            store.show_task("vida-stale").await,
+            Err(StateStoreError::MissingTask { .. })
+        ));
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should run")
+            .is_empty());
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("replace receipt should exist");
+        assert_eq!(latest.operation, "replace_snapshot");
+        assert_eq!(latest.source_kind, "task_jsonl_snapshot_file");
+        assert_eq!(latest.task_count, 2);
+        assert_eq!(latest.dependency_count, 1);
+        assert_eq!(latest.stale_removed_count, 1);
+
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -636,7 +760,7 @@ mod tests {
             Some("canonical_snapshot_memory")
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -723,7 +847,7 @@ mod tests {
             .expect("graph validation should succeed");
         assert!(graph_issues.is_empty());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -828,7 +952,7 @@ mod tests {
         assert_eq!(bridge.total_receipts, 0);
         assert_eq!(bridge.replace_receipts, 0);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -935,7 +1059,7 @@ mod tests {
         assert_eq!(bridge.total_receipts, 0);
         assert_eq!(bridge.replace_receipts, 0);
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -1024,7 +1148,7 @@ mod tests {
             Some("canonical_snapshot_memory")
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -1125,7 +1249,7 @@ mod tests {
             Some(snapshot_path.to_string_lossy().as_ref())
         );
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -1235,6 +1359,6 @@ mod tests {
             .expect("graph validation should succeed");
         assert!(graph_issues.is_empty());
 
-        let _ = fs::remove_dir_all(&root);
+        close_store_and_remove_root(store, root).await;
     }
 }

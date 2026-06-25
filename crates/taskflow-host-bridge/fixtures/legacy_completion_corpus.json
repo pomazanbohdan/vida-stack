@@ -1,0 +1,62 @@
+[
+  {
+    "name": "host_bridge_pass_executed_empty_blockers",
+    "surface": "host_bridge_result",
+    "input": {
+      "status": "pass",
+      "execution_state": "executed",
+      "blocker_codes": []
+    },
+    "expected_outcome": "passed",
+    "expected_source_contract_version": "legacy.host_bridge_result.v1",
+    "expected_blocker_code": null
+  },
+  {
+    "name": "lane_completion_approved_empty_blockers",
+    "surface": "lane_completion",
+    "input": {
+      "decision": "approved",
+      "verdict": "passed",
+      "blockers": []
+    },
+    "expected_outcome": "passed",
+    "expected_source_contract_version": "legacy.lane_completion.v1",
+    "expected_blocker_code": null
+  },
+  {
+    "name": "run_status_blocked_with_code",
+    "surface": "run_status",
+    "input": {
+      "run_status": "blocked",
+      "blocker_codes": ["runtime_blocker"],
+      "rework_target": "developer"
+    },
+    "expected_outcome": "blocked",
+    "expected_source_contract_version": "legacy.run_status.v1",
+    "expected_blocker_code": "runtime_blocker"
+  },
+  {
+    "name": "receipt_failed_with_single_blocker",
+    "surface": "receipt",
+    "input": {
+      "status": "failed",
+      "blocker_code": "receipt_failed",
+      "rework_target": "developer"
+    },
+    "expected_outcome": "blocked",
+    "expected_source_contract_version": "legacy.receipt.v1",
+    "expected_blocker_code": "receipt_failed"
+  },
+  {
+    "name": "command_options_rework_alias",
+    "surface": "command_options",
+    "input": {
+      "outcome": "rework_required",
+      "blocker_codes": ["operator_rework"],
+      "rework_target": "developer"
+    },
+    "expected_outcome": "blocked",
+    "expected_source_contract_version": "legacy.command_options.v1",
+    "expected_blocker_code": "operator_rework"
+  }
+]

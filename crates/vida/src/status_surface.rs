@@ -2377,12 +2377,52 @@ fn cached_status_projection_admissible(
                 session: cached_projection_session(&payload),
                 cache: cached_projection_cache_contract(&payload),
             };
+            if summary_only
+                && projection.session.session_id.is_none()
+                && projection.session.worktree_environment_id.is_none()
+                && sessionless_operator_status_summary_projection_admissible(&payload)
+            {
+                return true;
+            }
             taskflow_authority::projection_cache::cached_status_projection_admissible(
                 summary_only,
                 &projection,
                 &current_session,
             )
         })
+}
+
+fn sessionless_operator_status_summary_projection_admissible(payload: &serde_json::Value) -> bool {
+    let safe_summary_only = payload
+        .get("active_bounded_unit")
+        .is_none_or(serde_json::Value::is_null)
+        && payload
+            .get("continuation_binding")
+            .is_none_or(serde_json::Value::is_null)
+        && payload
+            .get("root_session_write_guard")
+            .is_none_or(serde_json::Value::is_null)
+        && payload
+            .get("latest_run_graph_status")
+            .is_none_or(serde_json::Value::is_null)
+        && payload
+            .get("latest_run_graph_dispatch_receipt")
+            .is_none_or(serde_json::Value::is_null);
+    safe_summary_only
+        && payload
+            .get("projection_cache_dependencies")
+            .and_then(|dependencies| dependencies.get("task_snapshot_marker"))
+            .is_some()
+        && payload
+            .get("shared_fields")
+            .is_some_and(serde_json::Value::is_object)
+        && payload
+            .get("operator_contracts")
+            .is_some_and(serde_json::Value::is_object)
+        && payload["operator_contracts"]["contract_id"].as_str()
+            == Some("release-1-operator-contracts")
+        && payload["operator_contracts"]["status"].as_str()
+            == payload["shared_fields"]["status"].as_str()
 }
 
 fn cached_status_projection_has_required_shape(

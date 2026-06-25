@@ -304,37 +304,99 @@ pub enum StatusMappingDecision {
 }
 
 #[must_use]
+pub fn map_lifecycle_status(lifecycle_stage: &str, status: &str) -> StatusMappingDecision {
+    let lifecycle_stage = normalize_lifecycle_token(lifecycle_stage);
+    let status = normalize_lifecycle_token(status);
+    if lifecycle_stage.is_empty() {
+        return StatusMappingDecision::Blocked {
+            blocker_code: "status_mapping_unknown",
+        };
+    }
+    if lifecycle_stage == "initialized" {
+        return StatusMappingDecision::State(RunWorkflowState::Idle);
+    }
+    if lifecycle_stage == "approval_wait" {
+        return StatusMappingDecision::State(RunWorkflowState::ApprovalBlocked);
+    }
+    if lifecycle_stage == "dispatch_init_timeout" || lifecycle_stage.ends_with("_timeout") {
+        return StatusMappingDecision::State(RunWorkflowState::RecoveryBlocked);
+    }
+    if status == "failed" || lifecycle_stage.contains("failed") {
+        return StatusMappingDecision::State(RunWorkflowState::Failed);
+    }
+    if status == "completed"
+        || matches!(
+            lifecycle_stage.as_str(),
+            "approval_complete"
+                | "closure_complete"
+                | "implementation_complete"
+                | "lane_completed"
+                | "specification_complete"
+                | "work_pool_pack_complete"
+        )
+        || lifecycle_stage.ends_with("_complete")
+    {
+        return StatusMappingDecision::State(RunWorkflowState::Completed);
+    }
+    if lifecycle_stage.ends_with("_rework_required")
+        || lifecycle_stage.ends_with("_blocked")
+        || status == "blocked"
+    {
+        return StatusMappingDecision::State(blocked_state_for_lifecycle(&lifecycle_stage));
+    }
+    if lifecycle_stage == "dispatch_ready" || lifecycle_stage.ends_with("_dispatch_ready") {
+        return StatusMappingDecision::State(
+            RunWorkflowState::from_role_step(RoleStep::planning()),
+        );
+    }
+    if lifecycle_stage == "closure_pending" {
+        return StatusMappingDecision::State(RunWorkflowState::from_role_step(
+            role_step_from_lifecycle_token("closure"),
+        ));
+    }
+    if let Some(active_stage) = lifecycle_stage.strip_suffix("_active") {
+        return StatusMappingDecision::State(RunWorkflowState::from_role_step(
+            role_step_from_lifecycle_token(active_stage),
+        ));
+    }
+    if status == "ready" || status == "running" || status == "awaiting_approval" {
+        return StatusMappingDecision::State(RunWorkflowState::from_role_step(
+            role_step_from_lifecycle_token(&lifecycle_stage),
+        ));
+    }
+    StatusMappingDecision::Blocked {
+        blocker_code: "status_mapping_unknown",
+    }
+}
+
+#[must_use]
 pub fn status_mapping_corpus() -> Vec<StatusMappingCase> {
     vec![
-        status_case("initialized", "pending", RunWorkflowState::Idle),
-        status_case(
-            "developer_dispatch_ready",
-            "ready",
-            RunWorkflowState::from_role_step(RoleStep::planning()),
-        ),
-        status_case(
-            "developer_running",
-            "running",
-            RunWorkflowState::from_role_step(RoleStep::developer()),
-        ),
-        status_case(
-            "tester_dispatch_ready",
-            "ready",
-            RunWorkflowState::from_role_step(RoleStep::developer()),
-        ),
-        status_case(
-            "tester_running",
-            "running",
-            RunWorkflowState::from_role_step(RoleStep::tester()),
-        ),
-        status_case("tester_blocked", "blocked", RunWorkflowState::LaneBlocked),
-        status_case(
-            "closure_active",
-            "running",
-            RunWorkflowState::from_role_step(RoleStep::closure()),
-        ),
-        status_case("closure_complete", "completed", RunWorkflowState::Completed),
-        status_case("failed_terminal", "failed", RunWorkflowState::Failed),
+        mapped_status_case("initialized", "pending"),
+        mapped_status_case("developer_dispatch_ready", "ready"),
+        mapped_status_case("implementation_dispatch_ready", "ready"),
+        mapped_status_case("dispatch_ready", "ready"),
+        mapped_status_case("developer_active", "running"),
+        mapped_status_case("writer_active", "running"),
+        mapped_status_case("analysis_active", "running"),
+        mapped_status_case("coach_active", "running"),
+        mapped_status_case("verification_active", "running"),
+        mapped_status_case("specification_active", "running"),
+        mapped_status_case("conversation_active", "running"),
+        mapped_status_case("tester_blocked", "blocked"),
+        mapped_status_case("analysis_blocked", "blocked"),
+        mapped_status_case("verification_blocked", "blocked"),
+        mapped_status_case("specification_blocked", "blocked"),
+        mapped_status_case("tester_rework_required", "blocked"),
+        mapped_status_case("dispatch_init_timeout", "blocked"),
+        mapped_status_case("approval_wait", "awaiting_approval"),
+        mapped_status_case("closure_pending", "ready"),
+        mapped_status_case("closure_active", "running"),
+        mapped_status_case("implementation_complete", "completed"),
+        mapped_status_case("specification_complete", "completed"),
+        mapped_status_case("work_pool_pack_complete", "completed"),
+        mapped_status_case("closure_complete", "completed"),
+        mapped_status_case("failed_terminal", "failed"),
         StatusMappingCase {
             lifecycle_stage: "unknown_external_status",
             status: "unknown",
@@ -345,16 +407,52 @@ pub fn status_mapping_corpus() -> Vec<StatusMappingCase> {
     ]
 }
 
-fn status_case(
-    lifecycle_stage: &'static str,
-    status: &'static str,
-    state: RunWorkflowState,
-) -> StatusMappingCase {
+fn mapped_status_case(lifecycle_stage: &'static str, status: &'static str) -> StatusMappingCase {
     StatusMappingCase {
         lifecycle_stage,
         status,
-        decision: StatusMappingDecision::State(state),
+        decision: map_lifecycle_status(lifecycle_stage, status),
     }
+}
+
+fn blocked_state_for_lifecycle(lifecycle_stage: &str) -> RunWorkflowState {
+    if lifecycle_stage.contains("approval") {
+        RunWorkflowState::ApprovalBlocked
+    } else if lifecycle_stage.contains("recovery") || lifecycle_stage.contains("timeout") {
+        RunWorkflowState::RecoveryBlocked
+    } else {
+        RunWorkflowState::LaneBlocked
+    }
+}
+
+fn role_step_from_lifecycle_token(token: &str) -> RoleStep {
+    let role_id = normalize_lifecycle_token(token);
+    let runtime_role = match role_id.as_str() {
+        "analysis" | "analyst" | "pm" | "planning" | "specification" => "business_analyst",
+        "coach" | "coach_implementation_gate" => "coach",
+        "closure" | "prover" => "prover",
+        "test_author" | "tester" | "verification" => "verifier",
+        _ => "worker",
+    };
+    let task_class = match role_id.as_str() {
+        "analysis" | "analyst" | "pm" | "planning" | "specification" => "specification",
+        "coach" | "coach_implementation_gate" => "coach",
+        "closure" | "prover" => "release_readiness",
+        "conversation" => "conversation",
+        "dev_pack" => "execution_preparation",
+        "test_author" | "tester" | "verification" => "verification",
+        _ => "implementation",
+    };
+    let step = RoleStep::new(role_id.clone(), runtime_role, task_class, role_id);
+    if step.role_id == "closure" {
+        step.closing()
+    } else {
+        step
+    }
+}
+
+fn normalize_lifecycle_token(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace(['-', ' '], "_")
 }
 
 fn transition_with_statig(

@@ -9,6 +9,12 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod domain_conformance;
+pub mod engine_conformance;
+pub mod failure_injection;
+pub mod model;
+pub mod shadow_diff;
+
 #[cfg(unix)]
 const DEFAULT_TIMEOUT_ARGS: [&str; 3] = ["-k", "5s", "120s"];
 pub const STATE_LOCK_ERROR_MESSAGE: &str = "LOCK is already locked";

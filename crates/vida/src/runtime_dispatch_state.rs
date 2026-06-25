@@ -7446,6 +7446,45 @@ fn packet_scope_paths_mirror(top_level: &[String], active: &[String]) -> bool {
             })
 }
 
+pub(crate) fn runtime_dispatch_packet_has_top_level_task_scope_mirror(
+    packet: &serde_json::Value,
+) -> bool {
+    let Ok((packet_template_kind, active_packet)) = active_runtime_packet(packet) else {
+        return false;
+    };
+    if packet_template_kind == "delivery_task_packet" {
+        let active_task_id = active_packet
+            .get("task_id")
+            .or_else(|| active_packet.get("backlog_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if active_task_id.is_none()
+            || packet
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                != active_task_id
+        {
+            return false;
+        }
+    }
+    for key in ["owned_paths", "read_only_paths"] {
+        let active_paths = packet_string_array(active_packet, key).unwrap_or_default();
+        if active_paths.is_empty() {
+            continue;
+        }
+        let Some(top_level_paths) = packet_string_array(packet, key) else {
+            return false;
+        };
+        if !packet_scope_paths_mirror(&top_level_paths, &active_paths) {
+            return false;
+        }
+    }
+    true
+}
+
 fn packet_has_owned_or_read_only_paths(packet: &serde_json::Value) -> bool {
     packet_nonempty_string_array(packet, "owned_paths")
         || packet_nonempty_string_array(packet, "read_only_paths")
@@ -7519,10 +7558,14 @@ pub(crate) fn implementation_owned_paths_for_role_selection(
     owned_paths_for_required_delivery_task_class(role_selection, TASK_CLASS_IMPLEMENTATION)
 }
 
-fn owned_paths_for_required_delivery_task_class(
+pub(crate) fn owned_paths_for_required_delivery_task_class(
     role_selection: &RuntimeConsumptionLaneSelection,
     handoff_task_class: &str,
 ) -> Vec<String> {
+    let planner_paths = planner_metadata_owned_paths_from_role_selection(role_selection);
+    if !planner_paths.is_empty() {
+        return planner_paths;
+    }
     let design_doc_path = tracked_design_doc_path_for_gates(role_selection);
     let mut derived_paths = delivery_packet_owned_paths(
         handoff_task_class,
@@ -7530,11 +7573,7 @@ fn owned_paths_for_required_delivery_task_class(
         design_doc_path.as_deref(),
     );
     derived_paths.retain(|path| !is_runtime_consumption_fallback_owned_path(path));
-    if derived_paths.is_empty() {
-        planner_metadata_owned_paths_from_role_selection(role_selection)
-    } else {
-        derived_paths
-    }
+    derived_paths
 }
 
 fn append_unique_owned_paths(target: &mut Vec<String>, source: &[String]) {
@@ -7557,7 +7596,6 @@ fn normalize_explicit_owned_scope_path_candidate(
         .trim_end_matches(|ch| matches!(ch, '/' | '\\'))
         .to_string();
     if normalized.is_empty()
-        || !normalized.contains('/')
         || normalized.starts_with('/')
         || normalized.starts_with("./")
         || normalized.starts_with("../")
@@ -7685,6 +7723,30 @@ pub(crate) fn apply_owned_paths(packet: &mut serde_json::Value, owned_paths: &[S
     true
 }
 
+fn apply_owned_paths_and_implementation_isolation(
+    packet: &mut serde_json::Value,
+    handoff_task_class: &str,
+    owned_paths: &[String],
+) -> bool {
+    if !apply_owned_paths(packet, owned_paths) {
+        return false;
+    }
+    let Some(applied_owned_paths) = packet_string_array(packet, "owned_paths") else {
+        return false;
+    };
+    let Some(object) = packet.as_object_mut() else {
+        return false;
+    };
+    object.insert(
+        "implementation_isolation".to_string(),
+        crate::runtime_dispatch_packets::implementation_isolation_contract(
+            handoff_task_class,
+            &applied_owned_paths,
+        ),
+    );
+    true
+}
+
 pub(crate) fn clear_runtime_consumption_fallback_owned_paths(
     packet: &mut serde_json::Value,
 ) -> bool {
@@ -7776,6 +7838,50 @@ fn active_runtime_packet<'a>(
         ));
     }
     Ok((packet_template_kind, packet_value))
+}
+
+fn mirror_active_runtime_packet_metadata(packet: &mut serde_json::Value) {
+    let Some(packet_template_kind) = packet
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(active_packet) = packet
+        .get(packet_template_kind.as_str())
+        .filter(|value| !value.is_null())
+        .cloned()
+    else {
+        return;
+    };
+    let task_id = active_packet
+        .get("task_id")
+        .or_else(|| active_packet.get("backlog_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let owned_paths = active_packet.get("owned_paths").cloned();
+    let read_only_paths = active_packet.get("read_only_paths").cloned();
+    let implementation_isolation = active_packet.get("implementation_isolation").cloned();
+    let Some(object) = packet.as_object_mut() else {
+        return;
+    };
+    if let Some(task_id) = task_id {
+        object.insert("task_id".to_string(), serde_json::Value::String(task_id));
+    }
+    for (key, value) in [
+        ("owned_paths", owned_paths),
+        ("read_only_paths", read_only_paths),
+        ("implementation_isolation", implementation_isolation),
+    ] {
+        if let Some(value) = value.filter(|value| !value.is_null()) {
+            object.insert(key.to_string(), value);
+        }
+    }
 }
 
 pub(crate) fn validate_runtime_dispatch_packet_contract(
@@ -8214,7 +8320,11 @@ fn build_runtime_dispatch_packet_body(
                 handoff_task_class.as_str(),
             );
         }
-        if !apply_owned_paths_if_missing(&mut delivery_task_packet, &owned_paths) {
+        if !apply_owned_paths_and_implementation_isolation(
+            &mut delivery_task_packet,
+            handoff_task_class.as_str(),
+            &owned_paths,
+        ) {
             clear_runtime_consumption_fallback_owned_paths(&mut delivery_task_packet);
         }
     }
@@ -8319,6 +8429,7 @@ fn build_runtime_dispatch_packet_body(
             .unwrap_or(serde_json::Value::Null),
         "orchestration_contract": ctx.role_selection.execution_plan["orchestration_contract"],
     });
+    mirror_active_runtime_packet_metadata(&mut packet);
     if let Some(object) = packet.as_object_mut() {
         object.insert("runtime_assignment".to_string(), runtime_assignment.clone());
         object.insert("carrier_runtime_assignment".to_string(), runtime_assignment);
@@ -8561,6 +8672,39 @@ mod tests {
         assert_eq!(
             packet["owned_paths"],
             serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
+        );
+    }
+
+    #[test]
+    fn apply_owned_paths_updates_implementation_isolation() {
+        let mut packet = serde_json::json!({
+            "owned_paths": ["docs/product/spec/old-scope.md"],
+            "implementation_isolation": {
+                "owned_paths": ["docs/product/spec/old-scope.md"]
+            }
+        });
+        let owned_paths = vec![
+            "Cargo.toml".to_string(),
+            "crates/taskflow-state".to_string(),
+            "crates/taskflow-state-redb".to_string(),
+        ];
+
+        assert!(apply_owned_paths_and_implementation_isolation(
+            &mut packet,
+            TASK_CLASS_IMPLEMENTATION,
+            &owned_paths,
+        ));
+        assert_eq!(
+            packet["owned_paths"],
+            serde_json::json!([
+                "Cargo.toml",
+                "crates/taskflow-state",
+                "crates/taskflow-state-redb"
+            ])
+        );
+        assert_eq!(
+            packet["implementation_isolation"]["owned_paths"],
+            packet["owned_paths"]
         );
     }
 
@@ -24297,6 +24441,10 @@ agent_system:
             preview["packet"]["delivery_task_packet"]["owned_paths"],
             serde_json::json!(["crates/vida", "docs/process"])
         );
+        assert_eq!(
+            preview["packet"]["delivery_task_packet"]["implementation_isolation"]["owned_paths"],
+            serde_json::json!(["crates/vida", "docs/process"])
+        );
 
         let unsafe_only_ctx = RuntimeDispatchPacketContext::new(
             &state_root,
@@ -24317,6 +24465,115 @@ agent_system:
         assert_eq!(
             unsafe_only_preview["packet_contract_missing_fields"],
             serde_json::json!(["owned_paths"])
+        );
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_prefers_planner_metadata_owned_scope_for_implementation() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement the durable runtime. Architecture law: use docs/product/spec/local-durable-runtime-kernel-architecture-and-migration-law.md and docs/product/decisions/ldr-002-redb-operational-journal-adr.md. Owned scope: Cargo.toml, crates/taskflow-state, crates/taskflow-state-redb.".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "tracked_flow_bootstrap": {
+                    "dev_task": {
+                        "planner_metadata": {
+                            "owned_paths": [
+                                "Cargo.toml",
+                                "crates/taskflow-state",
+                                "crates/taskflow-state-redb"
+                            ]
+                        }
+                    }
+                },
+                "development_flow": {
+                    "implementer": {
+                        "executor_backend": "internal_subagents",
+                        "activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-planner-owned-scope".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-20T00:00:00Z".to_string(),
+        };
+        let handoff_plan = serde_json::json!({});
+        let run_graph_bootstrap = serde_json::json!({});
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        );
+
+        let preview = runtime_dispatch_packet_preview(&ctx).expect("preview should render");
+        let expected_owned_paths = serde_json::json!([
+            "Cargo.toml",
+            "crates/taskflow-state",
+            "crates/taskflow-state-redb"
+        ]);
+
+        assert_eq!(
+            preview["packet"]["delivery_task_packet"]["owned_paths"],
+            expected_owned_paths
+        );
+        assert_eq!(preview["packet"]["task_id"], "run-planner-owned-scope");
+        assert_eq!(preview["packet"]["owned_paths"], expected_owned_paths);
+        assert_eq!(
+            preview["packet"]["delivery_task_packet"]["implementation_isolation"]["owned_paths"],
+            expected_owned_paths
+        );
+        assert_eq!(
+            preview["packet"]["implementation_isolation"]["owned_paths"],
+            expected_owned_paths
         );
     }
 }
@@ -24939,7 +25196,7 @@ pub(crate) async fn reconcile_executed_dispatch_result_state_best_effort(
                     || status.next_node.as_deref() == Some(receipt.dispatch_target.as_str());
                 let terminal_status =
                     if receipt.dispatch_status == "executed" && receipt_matches_current_lane {
-                        match crate::taskflow_run_graph::derive_advanced_run_graph_status(
+                        match crate::taskflow_run_graph::derive_advanced_run_graph_state(
                             &store,
                             status.clone(),
                         )
@@ -25807,7 +26064,7 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
                     || status.next_node.as_deref() == Some(receipt.dispatch_target.as_str());
                 let mut terminal_status =
                     if receipt.dispatch_status == "executed" && receipt_matches_current_lane {
-                        match crate::taskflow_run_graph::derive_advanced_run_graph_status(
+                        match crate::taskflow_run_graph::derive_advanced_run_graph_state(
                             &store,
                             status.clone(),
                         )

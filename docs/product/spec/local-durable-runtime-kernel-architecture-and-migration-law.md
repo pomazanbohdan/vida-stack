@@ -44,6 +44,14 @@ Purpose: freeze the Local Durable Runtime Kernel architecture before implementat
 6. Projections consume events and update task/run/lane/status/file views.
 7. Operators read projections through `vida get`, dry-run mutations through `vida plan`, mutate through `vida apply`, stream through `vida watch`, manage service lifecycle through `vida service`, and recover through `vida repair`.
 
+## Operation Cutover Receipt Contract
+
+1. Each mutating operation slice records a cutover receipt before routing changes.
+2. The receipt must name the operation id, route, parity result, rollback event preservation result, and legacy-writer state.
+3. `legacy_accepts_authoritative_writes` and `pipeline_accepts_authoritative_writes` must never both be true for one operation.
+4. Routing tests must prove `task.apply`, `run.advance`, `completion.record`, and `claim.acquire` enter `VidaCommandPipeline` after cutover.
+5. The post-cutover health report fails when any slice has dual authority, missing parity, or rollback gaps.
+
 ## Aggregate Boundaries
 
 | Aggregate | Owns | Does not own |

@@ -786,6 +786,7 @@ pub(crate) fn runtime_delivery_task_packet_with_scope_context(
         implementation_isolation_contract(handoff_task_class, &owned_paths);
     serde_json::json!({
         "packet_id": runtime_delivery_packet_id(run_id, dispatch_target),
+        "task_id": run_id,
         "backlog_id": run_id,
         "release_slice": "none",
         "owner": "taskflow",

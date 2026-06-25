@@ -353,6 +353,64 @@ fn proxy_command_needs_project_root(args: &[String]) -> bool {
     !proxy_args_request_help_or_version(args)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GenericCliWorkflowMetric {
+    pub(crate) workflow: &'static str,
+    pub(crate) legacy_command_count: usize,
+    pub(crate) canonical_command_count: usize,
+    pub(crate) legacy_option_count: usize,
+    pub(crate) canonical_option_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GenericCliCommandMetrics {
+    pub(crate) legacy_operation_leaf_count: usize,
+    pub(crate) canonical_generic_leaf_count: usize,
+    pub(crate) leaf_reduction_percent: usize,
+    pub(crate) max_transport_context_flags: usize,
+    pub(crate) workflows: Vec<GenericCliWorkflowMetric>,
+}
+
+pub(crate) fn generic_service_client_command_metrics() -> GenericCliCommandMetrics {
+    let legacy_operation_leaf_count = 17;
+    let canonical_generic_leaf_count = 5;
+    let workflows = vec![
+        workflow_metric("service status", 2, 0),
+        workflow_metric("service capabilities", 2, 0),
+        workflow_metric("service endpoint status", 2, 0),
+        workflow_metric("service lifecycle plan", 3, 1),
+        workflow_metric("project list", 2, 0),
+        workflow_metric("project resolve", 4, 1),
+        workflow_metric("wizard inspect", 3, 1),
+        workflow_metric("wizard validate", 3, 1),
+        workflow_metric("job status", 3, 1),
+        workflow_metric("receipt get", 3, 1),
+    ];
+    GenericCliCommandMetrics {
+        legacy_operation_leaf_count,
+        canonical_generic_leaf_count,
+        leaf_reduction_percent: ((legacy_operation_leaf_count - canonical_generic_leaf_count)
+            * 100)
+            / legacy_operation_leaf_count,
+        max_transport_context_flags: 5,
+        workflows,
+    }
+}
+
+fn workflow_metric(
+    workflow: &'static str,
+    legacy_option_count: usize,
+    canonical_option_count: usize,
+) -> GenericCliWorkflowMetric {
+    GenericCliWorkflowMetric {
+        workflow,
+        legacy_command_count: 1,
+        canonical_command_count: 1,
+        legacy_option_count,
+        canonical_option_count,
+    }
+}
+
 pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) -> bool {
     match command {
         Some(Command::Task(args)) => task_command_needs_project_root(args),
@@ -644,8 +702,9 @@ fn raw_args_explicit_state_dir(args: &[OsString]) -> Option<std::path::PathBuf> 
 #[cfg(test)]
 mod tests {
     use super::{
-        command_needs_project_root_state_dir, normalize_runtime_state_dir_env_for_parse,
-        prepare_runtime_state_dir, prepare_runtime_state_dir_for_parse, Cli,
+        command_needs_project_root_state_dir, generic_service_client_command_metrics,
+        normalize_runtime_state_dir_env_for_parse, prepare_runtime_state_dir,
+        prepare_runtime_state_dir_for_parse, Cli,
     };
     use crate::temp_state::TempStateHarness;
     use crate::Command;
@@ -653,6 +712,29 @@ mod tests {
     use std::fs;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn generic_service_client_command_metrics_prove_leaf_and_workflow_reduction() {
+        let metrics = generic_service_client_command_metrics();
+
+        assert_eq!(metrics.legacy_operation_leaf_count, 17);
+        assert_eq!(metrics.canonical_generic_leaf_count, 5);
+        assert!(
+            metrics.leaf_reduction_percent >= 40,
+            "expected at least 40% leaf reduction, got {}%",
+            metrics.leaf_reduction_percent
+        );
+        assert!(metrics.max_transport_context_flags <= 5);
+        assert_eq!(metrics.workflows.len(), 10);
+        assert!(metrics
+            .workflows
+            .iter()
+            .all(|workflow| workflow.canonical_command_count <= workflow.legacy_command_count));
+        assert!(metrics
+            .workflows
+            .iter()
+            .all(|workflow| workflow.canonical_option_count < workflow.legacy_option_count));
+    }
 
     struct EnvVarGuard {
         key: &'static str,

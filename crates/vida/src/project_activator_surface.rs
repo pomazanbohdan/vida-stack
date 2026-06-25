@@ -624,7 +624,7 @@ pub(crate) fn resolve_host_cli_template_source(
     validate_project_relative_path(&template_relative, "template_root")?;
     let primary_root = resolve_init_bootstrap_source_root();
     let fallback_root = super::repo_runtime_root();
-    let candidates = if fallback_root == primary_root {
+    let mut candidates = if fallback_root == primary_root {
         vec![primary_root.join(&template_relative)]
     } else {
         vec![
@@ -632,6 +632,16 @@ pub(crate) fn resolve_host_cli_template_source(
             fallback_root.join(&template_relative),
         ]
     };
+    if registry_entry.is_some_and(|entry| {
+        host_cli_system_materialization_mode(entry, cli_system) == "copy_tree_only"
+    }) && template_relative != ".codex"
+    {
+        for candidate in [primary_root.join(".codex"), fallback_root.join(".codex")] {
+            if !candidates.iter().any(|existing| existing == &candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
     for candidate in &candidates {
         if candidate.is_dir() {
             return Ok(candidate.clone());

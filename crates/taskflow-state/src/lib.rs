@@ -747,6 +747,13 @@ impl OperationalJournal for InMemoryOperationalJournal {
     }
 
     fn record_projection_checkpoint(&mut self, checkpoint: VidaProjectionCheckpoint) {
+        if self
+            .projection_checkpoints
+            .get(&checkpoint.projection_id.0)
+            .is_some_and(|existing| projection_checkpoint_is_stale(existing, &checkpoint))
+        {
+            return;
+        }
         self.projection_checkpoints
             .insert(checkpoint.projection_id.0.clone(), checkpoint);
     }
@@ -759,6 +766,25 @@ impl OperationalJournal for InMemoryOperationalJournal {
         self.artifacts
             .insert(artifact.artifact_ref.0.clone(), artifact);
     }
+}
+
+fn projection_checkpoint_is_stale(
+    existing: &VidaProjectionCheckpoint,
+    candidate: &VidaProjectionCheckpoint,
+) -> bool {
+    let existing_cursor = projection_checkpoint_cursor_number(&existing.event_cursor);
+    let candidate_cursor = projection_checkpoint_cursor_number(&candidate.event_cursor);
+    candidate_cursor < existing_cursor
+        || (candidate_cursor == existing_cursor
+            && candidate.stream_version.0 < existing.stream_version.0)
+}
+
+fn projection_checkpoint_cursor_number(cursor: &VidaEventCursor) -> u64 {
+    cursor
+        .0
+        .rsplit_once('-')
+        .and_then(|(_, value)| value.parse::<u64>().ok())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -996,6 +1022,12 @@ mod tests {
         assert_eq!(
             journal.projection_checkpoint(&VidaProjectionRef("projection-1".to_string())),
             Some(&checkpoint)
+        );
+        journal.record_projection_checkpoint(projection_checkpoint(0));
+        assert_eq!(
+            journal.projection_checkpoint(&VidaProjectionRef("projection-1".to_string())),
+            Some(&checkpoint),
+            "out-of-order older checkpoints must not overwrite newer projection state"
         );
 
         let failure = JournalProjectionFailure {

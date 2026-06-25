@@ -5,6 +5,9 @@ use serde_json::Value;
 use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
 use time::OffsetDateTime;
 
+use crate::legacy_normalization::{
+    LEGACY_OUTCOME_CONTRADICTION, normalize_legacy_host_bridge_completion_result,
+};
 use crate::provenance::HostBridgeProvenanceDecision;
 use crate::receipt_binding::DispatchReceiptBindingDecision;
 use crate::request::{HostBridgeRequest, host_bridge_request_string};
@@ -525,10 +528,23 @@ pub fn host_bridge_result_verdict_contract_blockers(
     result: &Value,
     required_result_fields: &[String],
 ) -> Vec<String> {
+    let legacy_normalization = normalize_legacy_host_bridge_completion_result(result);
+    let normalized_result_contract = legacy_normalization
+        .as_ref()
+        .ok()
+        .map(|normalization| normalization.result_contract.clone());
+    let result = normalized_result_contract.as_ref().unwrap_or(result);
     let required_fields = crate::request::canonical_host_bridge_required_result_fields(
         required_result_fields.to_vec(),
     );
     let mut blockers = Vec::new();
+    if legacy_normalization
+        .as_ref()
+        .err()
+        .is_some_and(|error| error.blocker_code == LEGACY_OUTCOME_CONTRADICTION)
+    {
+        push_unique_blocker(&mut blockers, LEGACY_OUTCOME_CONTRADICTION);
+    }
     for field in required_fields {
         if !result.get(field.as_str()).is_some_and(|value| {
             if field == "blocker_codes" {
@@ -860,6 +876,45 @@ mod tests {
                 &crate::request::default_host_bridge_required_result_fields(),
             ),
             Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn result_verdict_contract_accepts_legacy_pass_executed_empty_blockers() {
+        let result = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "blocker_codes": []
+        });
+
+        assert_eq!(
+            host_bridge_result_verdict_contract_blockers(
+                &result,
+                &crate::request::default_host_bridge_required_result_fields(),
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn result_verdict_contract_rejects_legacy_mixed_pass_blocker_tuple() {
+        let result = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "decision": "rework_required",
+            "verdict": "rework_required",
+            "blocker_codes": ["host_agent_execution_failed"]
+        });
+
+        let blockers = host_bridge_result_verdict_contract_blockers(
+            &result,
+            &crate::request::default_host_bridge_required_result_fields(),
+        );
+
+        assert!(
+            blockers
+                .iter()
+                .any(|blocker| blocker == LEGACY_OUTCOME_CONTRADICTION)
         );
     }
 

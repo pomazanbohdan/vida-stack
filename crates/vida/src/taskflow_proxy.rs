@@ -3202,7 +3202,7 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
                 return Ok(None);
             }
             if latest_run_matches_scoped_ready_task
-                && crate::taskflow_run_graph::run_graph_status_has_configured_dev_team_route_mismatch(
+                && crate::taskflow_run_graph::run_graph_state_has_configured_dev_team_route_mismatch(
                     store,
                     status,
                 )
@@ -3376,11 +3376,12 @@ fn active_exception_takeover_evidence_matches_status(
     if terminal_continue_run_id == Some(status.run_id.as_str()) && !supersedes_distinct_exception {
         return false;
     }
-    let exception_takeover_receipt = taskflow_authority::exception_takeover::ExceptionTakeoverReceipt {
-        lane_status: dispatch.lane_status.as_str(),
-        exception_path_receipt_id: dispatch.exception_path_receipt_id.as_deref(),
-        supersedes_receipt_id: dispatch.supersedes_receipt_id.as_deref(),
-    };
+    let exception_takeover_receipt =
+        taskflow_authority::exception_takeover::ExceptionTakeoverReceipt {
+            lane_status: dispatch.lane_status.as_str(),
+            exception_path_receipt_id: dispatch.exception_path_receipt_id.as_deref(),
+            supersedes_receipt_id: dispatch.supersedes_receipt_id.as_deref(),
+        };
     let exception_takeover_state =
         taskflow_authority::exception_takeover::exception_takeover_state_label(
             Some(&exception_takeover_receipt),
@@ -3389,7 +3390,9 @@ fn active_exception_takeover_evidence_matches_status(
     dispatch.run_id == status.run_id
         && (dispatch.lane_status == "lane_exception_takeover"
             || exception_takeover_state
-                == Some(taskflow_authority::exception_takeover::ExceptionTakeoverStateLabel::Active))
+                == Some(
+                    taskflow_authority::exception_takeover::ExceptionTakeoverStateLabel::Active,
+                ))
         && dispatch
             .exception_path_receipt_id
             .as_deref()
@@ -5387,7 +5390,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     };
     if let (Some(status), Some(ready_task)) = (latest_run_graph.as_ref(), decision_ready_task) {
         if status.task_id == ready_task.id
-            && match crate::taskflow_run_graph::run_graph_status_has_configured_dev_team_route_mismatch(
+            && match crate::taskflow_run_graph::run_graph_state_has_configured_dev_team_route_mismatch(
                 &store,
                 status,
             )

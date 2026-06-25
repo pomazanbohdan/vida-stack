@@ -1,0 +1,14 @@
+---
+source: tests/qualification.rs
+expression: benchmark_review_artifact()
+---
+{
+  "max_allowed_regression_percent": 20,
+  "mutation_budget_ms": 28,
+  "mutation_observed_ms": 30,
+  "mutation_regression_percent": 7,
+  "read_budget_ms": 12,
+  "read_observed_ms": 11,
+  "read_regression_percent": 0,
+  "within_threshold": true
+}

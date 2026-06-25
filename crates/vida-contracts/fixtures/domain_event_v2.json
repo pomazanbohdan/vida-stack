@@ -1,0 +1,21 @@
+{
+  "schema_id": "vida.domain_event",
+  "event_version": 2,
+  "event_id": "event-ldr-011-002",
+  "command_id": "command-ldr-011-001",
+  "causation_id": "command-ldr-011-001",
+  "stream_id": "stream-ldr-011",
+  "stream_version": 2,
+  "aggregate_id": "aggregate-ldr-011",
+  "occurred_at": "2026-06-22T07:41:00Z",
+  "payload": {
+    "status": "applied",
+    "trace_link_policy": "command_event_receipt",
+    "schema_revision": "v2"
+  },
+  "trace": {
+    "task_id": "ldr-011",
+    "flow_step": "define_runtime_envelopes",
+    "schema_revision": "v2"
+  }
+}

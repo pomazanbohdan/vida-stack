@@ -2,6 +2,7 @@ pub mod authority_chain;
 pub mod claims;
 pub mod continuation_binding;
 pub mod continuation_transition;
+pub mod domain_conformance;
 pub mod errors;
 pub mod exception_takeover;
 pub mod final_snapshot;
@@ -39,11 +40,12 @@ mod tests {
             crate::operation_authorization::MODULE,
             crate::continuation_binding::MODULE,
             crate::continuation_transition::MODULE,
+            crate::domain_conformance::MODULE,
             crate::task_attempts::MODULE,
             crate::task_transition::MODULE,
         ];
 
-        assert_eq!(modules.len(), 17);
+        assert_eq!(modules.len(), 18);
         assert!(modules.contains(&"authority_chain"));
         assert!(modules.contains(&"claims"));
         assert!(modules.contains(&"terminal_closure"));
@@ -59,6 +61,7 @@ mod tests {
         assert!(modules.contains(&"operation_authorization"));
         assert!(modules.contains(&"continuation_binding"));
         assert!(modules.contains(&"continuation_transition"));
+        assert!(modules.contains(&"domain_conformance"));
         assert!(modules.contains(&"task_attempts"));
         assert!(modules.contains(&"task_transition"));
     }

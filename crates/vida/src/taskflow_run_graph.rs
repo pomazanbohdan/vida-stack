@@ -1,7 +1,6 @@
 use crate::{
-    RenderMode, RuntimeConsumptionLaneSelection, build_runtime_execution_plan_from_snapshot,
-    dispatch_contract_execution_lane_sequence, print_surface_header, print_surface_line,
-    read_or_sync_launcher_activation_snapshot,
+    build_runtime_execution_plan_from_snapshot, dispatch_contract_execution_lane_sequence,
+    print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
     release1_operator_output::{
         canonical_release1_blocker_code_entries, finalize_release1_operator_truth,
         shared_operator_output_contract_parity_error,
@@ -13,16 +12,21 @@ use crate::{
     },
     taskflow_layer4::print_taskflow_proxy_help,
     taskflow_task_bridge::proxy_state_dir,
+    RenderMode, RuntimeConsumptionLaneSelection,
 };
 use std::collections::BTreeSet;
 use std::{path::PathBuf, process::ExitCode, time::Duration};
+use taskflow_authority::run_graph_transition::{
+    ready_run_graph_transition, run_graph_handoff, ReadyRunGraphTransitionInput,
+    RunGraphDispatchTargetFormat as DispatchTargetFormat,
+};
 use time::format_description::well_known::Rfc3339;
 
 const STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS: u64 = 60;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER: &str = "run_graph_dispatch_init_timeout";
 const TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
-const DISPATCH_INIT_FAST_CACHE_SCHEMA_VERSION: u64 = 3;
+const DISPATCH_INIT_FAST_CACHE_SCHEMA_VERSION: u64 = 4;
 
 fn projection_component(value: &str) -> String {
     value
@@ -37,11 +41,11 @@ fn projection_component(value: &str) -> String {
         .collect()
 }
 
-fn recovery_status_projection_name(run_id: &str) -> String {
+fn recovery_projection_name(run_id: &str) -> String {
     format!("taskflow-recovery-status-{}", projection_component(run_id))
 }
 
-fn read_recovery_status_projection(
+fn read_recovery_projection(
     _state_dir: &std::path::Path,
     _projection_name: &str,
     _run_id: &str,
@@ -51,7 +55,7 @@ fn read_recovery_status_projection(
     None
 }
 
-fn recovery_projection_has_complete_action_fields(cached: &str) -> bool {
+fn recovery_projection_has_done_action_fields(cached: &str) -> bool {
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
         return false;
     };
@@ -160,6 +164,182 @@ fn run_graph_operator_artifact_refs(surface: &str, run_id: &str) -> serde_json::
     })
 }
 
+fn insert_string_artifact_ref(
+    refs: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: Option<&str>,
+) {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        refs.insert(key.to_string(), serde_json::json!(value));
+    }
+}
+
+fn host_bridge_artifact_ref_from_result(
+    refs: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    result: &serde_json::Value,
+    result_key: &str,
+) {
+    let value = result
+        .get("host_tool_bridge_request")
+        .and_then(|request| request.get(result_key))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            result
+                .get("host_bridge")
+                .and_then(|request| request.get(result_key))
+                .and_then(serde_json::Value::as_str)
+        });
+    insert_string_artifact_ref(refs, key, value);
+}
+
+fn run_graph_repair_target(
+    status: &RunGraphStatus,
+    projection_truth: &RunGraphProjectionTruth,
+) -> Option<String> {
+    projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .and_then(|receipt| {
+            receipt
+                .downstream_dispatch_target
+                .as_deref()
+                .or(receipt.downstream_dispatch_active_target.as_deref())
+                .or(receipt.downstream_dispatch_last_target.as_deref())
+                .or(Some(receipt.dispatch_target.as_str()))
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && *value != "none")
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            status
+                .next_node
+                .as_deref()
+                .or(Some(status.active_node.as_str()))
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && *value != "none")
+                .map(str::to_string)
+        })
+}
+
+fn run_graph_state_operator_artifact_refs(
+    surface: &str,
+    status: &RunGraphStatus,
+    projection_truth: &RunGraphProjectionTruth,
+    state_root: Option<&std::path::Path>,
+) -> serde_json::Value {
+    let mut refs = run_graph_operator_artifact_refs(surface, &status.run_id)
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    refs.insert("task_id".to_string(), serde_json::json!(status.task_id));
+    refs.insert(
+        "status_lifecycle_stage".to_string(),
+        serde_json::json!(status.lifecycle_stage),
+    );
+    insert_string_artifact_ref(
+        &mut refs,
+        "repair_target",
+        run_graph_repair_target(status, projection_truth).as_deref(),
+    );
+    if let Some(receipt) = projection_truth.dispatch_receipt.as_ref() {
+        insert_string_artifact_ref(
+            &mut refs,
+            "dispatch_target",
+            Some(receipt.dispatch_target.as_str()),
+        );
+        insert_string_artifact_ref(
+            &mut refs,
+            "dispatch_status",
+            Some(receipt.dispatch_status.as_str()),
+        );
+        insert_string_artifact_ref(&mut refs, "lane_status", Some(receipt.lane_status.as_str()));
+        insert_string_artifact_ref(
+            &mut refs,
+            "dispatch_packet_path",
+            receipt.dispatch_packet_path.as_deref(),
+        );
+        insert_string_artifact_ref(
+            &mut refs,
+            "dispatch_result_path",
+            receipt.dispatch_result_path.as_deref(),
+        );
+        insert_string_artifact_ref(&mut refs, "blocker_code", receipt.blocker_code.as_deref());
+        insert_string_artifact_ref(
+            &mut refs,
+            "downstream_dispatch_target",
+            receipt.downstream_dispatch_target.as_deref(),
+        );
+        insert_string_artifact_ref(
+            &mut refs,
+            "downstream_dispatch_status",
+            receipt.downstream_dispatch_status.as_deref(),
+        );
+        insert_string_artifact_ref(
+            &mut refs,
+            "downstream_dispatch_result_path",
+            receipt.downstream_dispatch_result_path.as_deref(),
+        );
+        refs.insert(
+            "downstream_dispatch_ready".to_string(),
+            serde_json::json!(receipt.downstream_dispatch_ready),
+        );
+        if !receipt.downstream_dispatch_blockers.is_empty() {
+            refs.insert(
+                "downstream_dispatch_blockers".to_string(),
+                serde_json::json!(receipt.downstream_dispatch_blockers),
+            );
+        }
+        if let Some(root) = state_root {
+            let result = receipt
+                .downstream_dispatch_result_path
+                .as_deref()
+                .and_then(|path| safe_read_dispatch_result_json(root, path))
+                .or_else(|| {
+                    receipt
+                        .dispatch_result_path
+                        .as_deref()
+                        .and_then(|path| safe_read_dispatch_result_json(root, path))
+                });
+            if let Some(result) = result.as_ref() {
+                host_bridge_artifact_ref_from_result(
+                    &mut refs,
+                    "host_bridge_request_path",
+                    result,
+                    "request_path",
+                );
+                host_bridge_artifact_ref_from_result(
+                    &mut refs,
+                    "host_bridge_result_path",
+                    result,
+                    "result_path",
+                );
+                host_bridge_artifact_ref_from_result(
+                    &mut refs,
+                    "host_bridge_receipt_path",
+                    result,
+                    "receipt_path",
+                );
+                insert_string_artifact_ref(
+                    &mut refs,
+                    "result_rework_target",
+                    result
+                        .get("rework_target")
+                        .and_then(serde_json::Value::as_str),
+                );
+                insert_string_artifact_ref(
+                    &mut refs,
+                    "result_allowed_next_node",
+                    result
+                        .get("allowed_next_node")
+                        .and_then(serde_json::Value::as_str),
+                );
+            }
+        }
+    }
+    serde_json::Value::Object(refs)
+}
+
 fn operator_next_actions_for_operator_surface(
     blocker_codes: &[String],
     next_action: Option<&RecoveryNextAction>,
@@ -190,17 +370,17 @@ fn operator_next_actions_for_operator_surface(
     vec!["inspect authoritative run-graph state".to_string()]
 }
 
-fn blocked_status_signal(value: &str) -> bool {
+fn halted_state_signal(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     normalized == "blocked" || normalized == "lane_blocked" || normalized.ends_with("_blocked")
 }
 
-fn completed_status_signal(value: &str) -> bool {
+fn done_state_signal(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     normalized == "completed" || normalized == "complete" || normalized.ends_with("_complete")
 }
 
-pub(crate) fn terminal_run_graph_status_resolved(status: &RunGraphStatus) -> bool {
+pub(crate) fn terminal_run_graph_state_resolved(status: &RunGraphStatus) -> bool {
     crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(status)
 }
 
@@ -210,29 +390,43 @@ pub(crate) fn missing_task_run_graph_requires_stale_cleanup(
 ) -> bool {
     task_missing
         && status
-            .map(|status| !terminal_run_graph_status_resolved(status))
+            .map(|status| !terminal_run_graph_state_resolved(status))
+            .unwrap_or(false)
+}
+
+fn closed_task_active_run_projection_mismatch_command() -> String {
+    "vida task reconcile-closed-runs --limit 25".to_string()
+}
+
+fn closed_task_run_graph_requires_stale_cleanup(
+    status: Option<&RunGraphStatus>,
+    task_closed_stale_run: bool,
+) -> bool {
+    task_closed_stale_run
+        && status
+            .map(|status| !terminal_run_graph_state_resolved(status))
             .unwrap_or(false)
 }
 
 fn terminal_recovery_summary_resolved(
     summary: &crate::state_store::RunGraphRecoverySummary,
 ) -> bool {
-    completed_status_signal(&summary.resume_status)
-        && completed_status_signal(&summary.lifecycle_stage)
+    done_state_signal(&summary.resume_status)
+        && done_state_signal(&summary.lifecycle_stage)
         && !summary.recovery_ready
         && summary.resume_target == "none"
         && !summary.delegation_gate.delegated_cycle_open
         && summary.delegation_gate.blocker_code.is_none()
 }
 
-fn fallback_dispatch_blocker_code() -> String {
+fn fallback_dispatch_issue_code() -> String {
     crate::contract_profile_adapter::blocker_code_str(
         crate::contract_profile_adapter::BlockerCode::ToolExecutionFailed,
     )
     .to_string()
 }
 
-fn normalize_run_graph_blocker_codes(
+fn normalize_run_graph_issue_codes(
     blocker_codes: &[String],
     blocked_evidence_present: bool,
 ) -> Vec<String> {
@@ -241,6 +435,12 @@ fn normalize_run_graph_blocker_codes(
         .any(|code| code.trim() == "stale_missing_task_run_graph")
     {
         return vec!["stale_missing_task_run_graph".to_string()];
+    }
+    if blocker_codes
+        .iter()
+        .any(|code| code.trim() == "closed_task_active_run_projection_mismatch")
+    {
+        return vec!["closed_task_active_run_projection_mismatch".to_string()];
     }
     if blocker_codes
         .iter()
@@ -266,7 +466,7 @@ fn normalize_run_graph_blocker_codes(
         None,
     );
     if normalized.is_empty() && (blocked_evidence_present || !blocker_codes.is_empty()) {
-        vec![fallback_dispatch_blocker_code()]
+        vec![fallback_dispatch_issue_code()]
     } else {
         normalized
     }
@@ -279,11 +479,25 @@ fn build_run_graph_operator_surface_payload(
     next_actions: Vec<String>,
     extra_fields: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let finalized = finalize_release1_operator_truth(
+    build_run_graph_operator_surface_payload_with_artifact_refs(
+        surface,
+        run_id,
         blocker_codes,
         next_actions,
         run_graph_operator_artifact_refs(surface, run_id),
-    )?;
+        extra_fields,
+    )
+}
+
+fn build_run_graph_operator_surface_payload_with_artifact_refs(
+    surface: &str,
+    run_id: &str,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    artifact_refs: serde_json::Value,
+    extra_fields: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let finalized = finalize_release1_operator_truth(blocker_codes, next_actions, artifact_refs)?;
     let mut payload = serde_json::json!({
         "surface": surface,
         "run_id": run_id,
@@ -369,6 +583,69 @@ fn build_recovery_json_payload(
     )
 }
 
+fn recovery_json_error_payload(
+    surface: &str,
+    run_id: &str,
+    state_dir: &std::path::Path,
+    error_kind: &str,
+    error: &str,
+) -> serde_json::Value {
+    let status_command = format!(
+        "vida taskflow run-graph status {} --json",
+        shell_quote(run_id)
+    );
+    let next_actions = vec![format!(
+        "Inspect run-graph state with `{}`; recovery status failed: {}",
+        status_command, error
+    )];
+    build_run_graph_operator_surface_payload(
+        surface,
+        run_id,
+        vec![fallback_dispatch_issue_code()],
+        next_actions,
+        serde_json::json!({
+            "error_kind": error_kind,
+            "error": error,
+            "state_dir": state_dir.display().to_string(),
+            "recommended_surface": "vida taskflow run-graph status",
+            "recommended_command": status_command,
+        }),
+    )
+    .unwrap_or_else(|payload_error| {
+        serde_json::json!({
+            "surface": surface,
+            "run_id": run_id,
+            "status": "blocked",
+            "blocker_codes": [fallback_dispatch_issue_code()],
+            "next_actions": [
+                format!("Inspect run-graph state for `{}`; recovery status failed: {}", run_id, error)
+            ],
+            "artifact_refs": run_graph_operator_artifact_refs(surface, run_id),
+            "error_kind": error_kind,
+            "error": error,
+            "payload_error": payload_error,
+            "state_dir": state_dir.display().to_string(),
+        })
+    })
+}
+
+fn emit_recovery_json_error(
+    state_dir: &std::path::Path,
+    run_id: &str,
+    error_kind: &str,
+    error: &str,
+) -> ExitCode {
+    let payload = recovery_json_error_payload(
+        "vida taskflow recovery status",
+        run_id,
+        state_dir,
+        error_kind,
+        error,
+    );
+    crate::print_json_pretty(&payload);
+    exit_code_for_operator_payload(&payload)
+}
+
 fn exit_code_for_operator_payload(payload: &serde_json::Value) -> ExitCode {
     if payload["status"].as_str() == Some("blocked") {
         ExitCode::from(1)
@@ -404,7 +681,7 @@ fn build_recovery_explain_json_payload_with_task_identity(
         .unwrap_or_else(|| "No recovery blocker is currently actionable.".to_string());
 
     // Classify into one of four primary diagnosis types
-    let diagnosis_type = classify_recovery_diagnosis(&blocker_codes, summary, projection_truth);
+    let diagnosis_type = categorize_recovery_diagnosis(&blocker_codes, summary, projection_truth);
 
     let diagnosis_evidence = serde_json::json!({
         "recovery_ready": summary.recovery_ready,
@@ -680,24 +957,114 @@ fn build_run_graph_diagnosis_json_payload(
     )
 }
 
-fn build_run_graph_status_json_payload_with_task_identity(
+fn build_run_graph_state_json_payload_with_task_identity(
     surface: &str,
     status: &RunGraphStatus,
     projection_truth: &RunGraphProjectionTruth,
     task_identity: Option<&RunGraphDispatchTaskIdentity>,
 ) -> Result<serde_json::Value, String> {
-    let blocker_codes = run_graph_status_surface_blocker_codes(status, projection_truth);
-    let next_actions = operator_next_actions_for_operator_surface(
-        &blocker_codes,
+    build_run_graph_state_json_payload_with_task_identity_and_state_root(
+        surface,
+        status,
+        projection_truth,
+        task_identity,
         None,
-        None,
+    )
+}
+
+fn run_graph_state_recommended_command_is_self_loop(
+    status: &RunGraphStatus,
+    command: Option<&str>,
+) -> bool {
+    let Some(command) = command.map(default_operator_command_text) else {
+        return false;
+    };
+    command == format!("vida taskflow run-graph status {}", status.run_id)
+}
+
+fn run_graph_state_actionable_next_action(
+    status: &RunGraphStatus,
+    projection_truth: &RunGraphProjectionTruth,
+) -> Option<RecoveryNextAction> {
+    let receipt = projection_truth.dispatch_receipt.as_ref()?;
+    let blocked_receipt_evidence = halted_state_signal(&receipt.dispatch_status)
+        || halted_state_signal(&receipt.lane_status)
+        || receipt
+            .downstream_dispatch_status
+            .as_deref()
+            .is_some_and(halted_state_signal)
+        || receipt
+            .blocker_code
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || receipt
+            .downstream_dispatch_blockers
+            .iter()
+            .any(|value| !value.trim().is_empty());
+    if !blocked_receipt_evidence {
+        return None;
+    }
+    let command = if run_graph_state_recommended_command_is_self_loop(
+        status,
         projection_truth.next_lawful_operator_action.as_deref(),
-    );
-    build_run_graph_operator_surface_payload(
+    ) {
+        format!("vida lane show {}", shell_quote(&status.run_id))
+    } else {
+        projection_truth
+            .next_lawful_operator_action
+            .as_deref()
+            .map(default_operator_command_text)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| format!("vida lane show {}", shell_quote(&status.run_id)))
+    };
+    Some(RecoveryNextAction {
+        surface: recommended_surface_for_command(&command),
+        command: command.clone(),
+        reason: format!(
+            "Inspect dispatch receipt and host-bridge artifacts with `{command}`; artifact_refs identify result paths, downstream dispatch status, and repair target."
+        ),
+    })
+}
+
+fn run_graph_state_operator_next_actions(
+    status: &RunGraphStatus,
+    projection_truth: &RunGraphProjectionTruth,
+    blocker_codes: &[String],
+) -> Vec<String> {
+    let next_action = run_graph_state_actionable_next_action(status, projection_truth);
+    let recommended_command = if next_action.is_some()
+        && run_graph_state_recommended_command_is_self_loop(
+            status,
+            projection_truth.next_lawful_operator_action.as_deref(),
+        ) {
+        None
+    } else {
+        projection_truth.next_lawful_operator_action.as_deref()
+    };
+    operator_next_actions_for_operator_surface(
+        blocker_codes,
+        next_action.as_ref(),
+        None,
+        recommended_command,
+    )
+}
+
+fn build_run_graph_state_json_payload_with_task_identity_and_state_root(
+    surface: &str,
+    status: &RunGraphStatus,
+    projection_truth: &RunGraphProjectionTruth,
+    task_identity: Option<&RunGraphDispatchTaskIdentity>,
+    state_root: Option<&std::path::Path>,
+) -> Result<serde_json::Value, String> {
+    let blocker_codes = run_graph_state_surface_issue_codes(status, projection_truth);
+    let next_actions =
+        run_graph_state_operator_next_actions(status, projection_truth, &blocker_codes);
+    build_run_graph_operator_surface_payload_with_artifact_refs(
         surface,
         &status.run_id,
         blocker_codes,
         next_actions,
+        run_graph_state_operator_artifact_refs(surface, status, projection_truth, state_root),
         serde_json::json!({
             "run_id": status.run_id,
             "run_graph_status": status,
@@ -708,12 +1075,12 @@ fn build_run_graph_status_json_payload_with_task_identity(
     )
 }
 
-fn build_run_graph_status_json_payload(
+fn build_run_graph_state_json_payload(
     surface: &str,
     status: &RunGraphStatus,
     projection_truth: &RunGraphProjectionTruth,
 ) -> Result<serde_json::Value, String> {
-    build_run_graph_status_json_payload_with_task_identity(surface, status, projection_truth, None)
+    build_run_graph_state_json_payload_with_task_identity(surface, status, projection_truth, None)
 }
 
 fn run_graph_task_identity_compact(identity: &RunGraphDispatchTaskIdentity) -> String {
@@ -1282,7 +1649,7 @@ fn parse_dispatch_target_from_path(value: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<String> {
+fn next_lawful_operator_action_for_snapshot(status: &RunGraphStatus) -> Option<String> {
     if status.recovery_ready && status.resume_target != "none" {
         return Some(format!(
             "vida taskflow consume continue --run-id {}",
@@ -1295,7 +1662,7 @@ fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<Str
     Some(format!("vida taskflow run-graph status {}", status.run_id))
 }
 
-fn fail_closed_terminal_continue_followup(status: &RunGraphStatus) -> String {
+fn guard_terminal_continue_followup(status: &RunGraphStatus) -> String {
     format!("vida taskflow run-graph status {}", status.run_id)
 }
 
@@ -1426,6 +1793,10 @@ fn next_lawful_operator_action_for_dispatch_resolution(
         return downstream_dispatch_command_for_receipt(receipt)
             .or_else(|| Some(format!("vida lane show {}", status.run_id)));
     }
+    if dispatch_receipt_has_clean_routed_agent_handoff(receipt, Some(&status.run_id)) {
+        return routed_dispatch_command_for_receipt(receipt)
+            .or_else(|| Some(format!("vida lane show {}", status.run_id)));
+    }
     let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
     if receipt.blocker_code.as_deref() == Some("internal_dispatch_timeout_without_receipt") {
         if status.recovery_ready
@@ -1461,7 +1832,7 @@ fn next_lawful_operator_action_for_dispatch_resolution(
             return Some(format!("vida lane show {}", status.run_id));
         }
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
-            return Some(fail_closed_terminal_continue_followup(status));
+            return Some(guard_terminal_continue_followup(status));
         }
         return (status.status != "completed")
             .then(|| format!("vida taskflow consume continue --run-id {}", status.run_id));
@@ -1475,10 +1846,29 @@ fn dispatch_receipt_has_clean_ready_downstream_handoff(receipt: &RunGraphDispatc
     )
 }
 
+fn dispatch_receipt_has_clean_routed_agent_handoff(
+    receipt: &RunGraphDispatchReceipt,
+    expected_run_id: Option<&str>,
+) -> bool {
+    crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_clean_routed_agent_handoff(
+        receipt,
+        expected_run_id,
+    )
+}
+
 fn downstream_dispatch_command_for_receipt(receipt: &RunGraphDispatchReceipt) -> Option<String> {
     crate::continuation_binding_summary::downstream_dispatch_command_from_parts(
         receipt.downstream_dispatch_command.as_deref(),
         receipt.downstream_dispatch_packet_path.as_deref(),
+    )
+    .map(|command| default_operator_command_text(&command))
+    .filter(|command| !command.is_empty())
+}
+
+fn routed_dispatch_command_for_receipt(receipt: &RunGraphDispatchReceipt) -> Option<String> {
+    crate::continuation_binding_summary::routed_dispatch_command_from_parts(
+        receipt.dispatch_command.as_deref(),
+        receipt.dispatch_packet_path.as_deref(),
     )
     .map(|command| default_operator_command_text(&command))
     .filter(|command| !command.is_empty())
@@ -1490,7 +1880,7 @@ pub(crate) fn dispatch_receipt_can_use_terminal_continue_evidence(
     receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some()
 }
 
-fn blocked_external_dispatch_artifact_mismatched_as_internal_activation(
+fn halted_external_dispatch_artifact_mismatched_as_internal_activation(
     receipt: &RunGraphDispatchReceipt,
 ) -> bool {
     if receipt.dispatch_status != "blocked"
@@ -1545,6 +1935,7 @@ fn next_lawful_operator_action_for_projection(
     receipt: Option<&RunGraphDispatchReceipt>,
     terminal_consume_continue_run_id: Option<&str>,
     task_missing: bool,
+    task_closed_stale_run: bool,
 ) -> Option<String> {
     if missing_task_run_graph_requires_stale_cleanup(Some(status), task_missing) {
         return Some(format!(
@@ -1555,9 +1946,12 @@ fn next_lawful_operator_action_for_projection(
     if task_missing {
         return None;
     }
-    if receipt.is_some_and(blocked_external_dispatch_artifact_mismatched_as_internal_activation) {
+    if closed_task_run_graph_requires_stale_cleanup(Some(status), task_closed_stale_run) {
+        return Some(closed_task_active_run_projection_mismatch_command());
+    }
+    if receipt.is_some_and(halted_external_dispatch_artifact_mismatched_as_internal_activation) {
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
-            return Some(fail_closed_terminal_continue_followup(status));
+            return Some(guard_terminal_continue_followup(status));
         }
         return Some(format!("vida lane show {}", status.run_id));
     }
@@ -1577,7 +1971,7 @@ fn next_lawful_operator_action_for_projection(
     }) {
         return Some(command);
     }
-    next_lawful_operator_action_for_status(status)
+    next_lawful_operator_action_for_snapshot(status)
 }
 
 fn recommended_surface_for_command(command: &str) -> String {
@@ -1656,6 +2050,9 @@ fn recovery_next_action_reason(
     if command.starts_with("vida task show") {
         return "inspect the active task owned paths before recording structured exception-takeover evidence for the terminal dispatch blocker".to_string();
     }
+    if command.starts_with("vida agent-init") {
+        return "execute the ready materialized agent dispatch packet without granting root-local product write authority".to_string();
+    }
     if command.starts_with("vida taskflow consume continue")
         && projection_truth
             .dispatch_receipt
@@ -1720,6 +2117,12 @@ fn recovery_exception_takeover_next_action(
         return None;
     }
     if recovery_projection_resolves_persisted_open_cycle(summary, projection_truth)
+        || projection_truth
+            .dispatch_receipt
+            .as_ref()
+            .is_some_and(|receipt| {
+                dispatch_receipt_has_clean_routed_agent_handoff(receipt, Some(&summary.run_id))
+            })
         || recovery_ready_handoff_resolves_open_cycle(summary)
     {
         return None;
@@ -1816,7 +2219,7 @@ fn recovery_exception_takeover_next_action(
 
 /// Classify blocker codes into one of four primary diagnosis types.
 /// Returns the diagnosis type as a string: runtime_defect, carrier_unavailable, packet_invalid, or user_action_needed.
-fn classify_recovery_diagnosis(
+fn categorize_recovery_diagnosis(
     blocker_codes: &[String],
     summary: &crate::state_store::RunGraphRecoverySummary,
     projection_truth: &RunGraphProjectionTruth,
@@ -1942,6 +2345,17 @@ fn recovery_surface_contract_with_owned_scope(
             owned_write_scope_hint,
         );
     let ready_handoff_resolves_open_cycle = recovery_ready_handoff_resolves_open_cycle(summary);
+    let routed_agent_handoff_resolves_open_cycle = summary.delegation_gate.delegated_cycle_open
+        && summary.delegation_gate.blocker_code.as_deref() == Some("open_delegated_cycle")
+        && summary.recovery_ready
+        && summary.resume_status == "ready"
+        && summary.resume_target.starts_with("dispatch.")
+        && projection_truth
+            .dispatch_receipt
+            .as_ref()
+            .is_some_and(|receipt| {
+                dispatch_receipt_has_clean_routed_agent_handoff(receipt, Some(&summary.run_id))
+            });
     let projection_ready_handoff_resolves_open_cycle = summary.delegation_gate.delegated_cycle_open
         && summary.delegation_gate.blocker_code.as_deref() == Some("open_delegated_cycle")
         && summary.recovery_ready
@@ -1977,6 +2391,7 @@ fn recovery_surface_contract_with_owned_scope(
     let mut blocker_codes = if projection_resolves_open_cycle
         || active_exception_takeover_resolves_open_cycle
         || ready_handoff_resolves_open_cycle
+        || routed_agent_handoff_resolves_open_cycle
         || projection_ready_handoff_resolves_open_cycle
         || downstream_ready_handoff_resolves_open_cycle
     {
@@ -1991,9 +2406,10 @@ fn recovery_surface_contract_with_owned_scope(
             .unwrap_or_default()
     };
     if !active_exception_takeover_resolves_open_cycle
+        && !routed_agent_handoff_resolves_open_cycle
         && !downstream_ready_handoff_resolves_open_cycle
     {
-        blocker_codes.extend(projection_truth_blocker_codes_for_ready_handoff(
+        blocker_codes.extend(projection_truth_issue_codes_for_ready_handoff(
             &summary.active_node,
             &summary.resume_status,
             summary.recovery_ready,
@@ -2001,7 +2417,7 @@ fn recovery_surface_contract_with_owned_scope(
             projection_truth,
         ));
     }
-    let blocker_codes = normalize_run_graph_blocker_codes(&blocker_codes, false);
+    let blocker_codes = normalize_run_graph_issue_codes(&blocker_codes, false);
 
     let next_action = projection_truth
         .next_lawful_operator_action
@@ -2192,7 +2608,7 @@ fn projection_vs_receipt_parity(
     "reconciled_from_receipt".to_string()
 }
 
-fn projection_reason_for_status(
+fn projection_reason_for_snapshot(
     status: &RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceipt>,
     binding: Option<&RunGraphContinuationBinding>,
@@ -2221,7 +2637,7 @@ fn projection_reason_for_status(
     "run-graph status reflects authoritative persisted state".to_string()
 }
 
-fn continuation_binding_matches_reconciled_status(
+fn continuation_binding_matches_reconciled_snapshot(
     status: &RunGraphStatus,
     binding: &RunGraphContinuationBinding,
 ) -> bool {
@@ -2246,7 +2662,7 @@ fn continuation_binding_matches_reconciled_status(
         .is_some_and(|active_node| active_node == status.active_node)
 }
 
-fn active_exception_takeover_receipt_matches_status(
+fn active_exception_takeover_receipt_matches_snapshot(
     status: &RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceipt>,
 ) -> bool {
@@ -2259,7 +2675,7 @@ fn active_exception_takeover_receipt_matches_status(
     )
 }
 
-fn status_derived_exception_takeover_binding(
+fn snapshot_derived_exception_takeover_binding(
     status: &RunGraphStatus,
 ) -> RunGraphContinuationBinding {
     RunGraphContinuationBinding {
@@ -2290,15 +2706,15 @@ fn effective_projection_continuation_binding(
     binding: Option<RunGraphContinuationBinding>,
 ) -> Option<RunGraphContinuationBinding> {
     if let Some(binding) = binding {
-        if continuation_binding_matches_reconciled_status(status, &binding) {
+        if continuation_binding_matches_reconciled_snapshot(status, &binding) {
             return Some(binding);
         }
     }
-    active_exception_takeover_receipt_matches_status(status, receipt)
-        .then(|| status_derived_exception_takeover_binding(status))
+    active_exception_takeover_receipt_matches_snapshot(status, receipt)
+        .then(|| snapshot_derived_exception_takeover_binding(status))
 }
 
-fn continuation_binding_source_from_status_surface(
+fn continuation_binding_source_from_state_surface(
     continuation_binding: Option<&serde_json::Value>,
 ) -> Option<String> {
     let binding = continuation_binding?;
@@ -2313,7 +2729,7 @@ fn continuation_binding_source_from_status_surface(
         .map(str::to_string)
 }
 
-fn dispatch_receipt_from_status_surface(
+fn dispatch_receipt_from_state_surface(
     receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
 ) -> RunGraphDispatchReceipt {
     RunGraphDispatchReceipt {
@@ -2411,7 +2827,7 @@ fn route_truth_from_projection_truth(
     }
 }
 
-fn downstream_dispatch_preview_from_status_snapshot(
+fn downstream_dispatch_preview_from_run_snapshot(
     status: &RunGraphStatus,
     receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     continuation_binding_source: Option<&str>,
@@ -2494,7 +2910,7 @@ fn downstream_dispatch_preview_from_status_snapshot(
     }
 }
 
-fn dispatch_blocker_codes_from_status_surface(
+fn dispatch_issue_codes_from_state_surface(
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
 ) -> Vec<String> {
@@ -2512,8 +2928,8 @@ fn dispatch_blocker_codes_from_status_surface(
                 blocker_codes.push(blocker_code.to_string());
             }
         }
-        blocked_evidence_present |= blocked_status_signal(&summary.lifecycle_stage)
-            || blocked_status_signal(&summary.resume_status);
+        blocked_evidence_present |= halted_state_signal(&summary.lifecycle_stage)
+            || halted_state_signal(&summary.resume_status);
     }
     if let Some(summary) = receipt {
         if crate::runtime_dispatch_receipt_helpers::dispatch_summary_is_materialization_only_blocked_task_ensure(summary)
@@ -2529,7 +2945,7 @@ fn dispatch_blocker_codes_from_status_surface(
             blocker_codes.push(blocker_code.to_string());
         }
         if !recovery.is_some_and(|recovery| {
-            downstream_summary_blockers_are_superseded_by_ready_handoff(recovery, summary)
+            downstream_summary_issues_are_superseded_by_ready_handoff(recovery, summary)
         }) {
             blocker_codes.extend(
                 summary
@@ -2540,19 +2956,19 @@ fn dispatch_blocker_codes_from_status_surface(
                     .map(str::to_string),
             );
         }
-        blocked_evidence_present |= blocked_status_signal(&summary.dispatch_status)
-            || blocked_status_signal(&summary.lane_status)
+        blocked_evidence_present |= halted_state_signal(&summary.dispatch_status)
+            || halted_state_signal(&summary.lane_status)
             || summary
                 .downstream_dispatch_status
                 .as_deref()
-                .is_some_and(blocked_status_signal);
+                .is_some_and(halted_state_signal);
     }
     blocker_codes.sort_unstable();
     blocker_codes.dedup();
-    normalize_run_graph_blocker_codes(&blocker_codes, blocked_evidence_present)
+    normalize_run_graph_issue_codes(&blocker_codes, blocked_evidence_present)
 }
 
-fn dispatch_receipt_blocker_codes(
+fn dispatch_receipt_issue_codes(
     receipt: &RunGraphDispatchReceipt,
     blocked_evidence_present: &mut bool,
 ) -> Vec<String> {
@@ -2577,16 +2993,16 @@ fn dispatch_receipt_blocker_codes(
             .filter(|value| !value.is_empty())
             .map(str::to_string),
     );
-    *blocked_evidence_present |= blocked_status_signal(&receipt.dispatch_status)
-        || blocked_status_signal(&receipt.lane_status)
+    *blocked_evidence_present |= halted_state_signal(&receipt.dispatch_status)
+        || halted_state_signal(&receipt.lane_status)
         || receipt
             .downstream_dispatch_status
             .as_deref()
-            .is_some_and(blocked_status_signal);
+            .is_some_and(halted_state_signal);
     blocker_codes
 }
 
-fn projection_truth_blocker_codes(projection_truth: &RunGraphProjectionTruth) -> Vec<String> {
+fn projection_truth_issue_codes(projection_truth: &RunGraphProjectionTruth) -> Vec<String> {
     let mut blocked_evidence_present = projection_truth.stale_state_suspected;
     let mut blocker_codes = Vec::new();
     if projection_truth.stale_state_suspected
@@ -2600,15 +3016,25 @@ fn projection_truth_blocker_codes(projection_truth: &RunGraphProjectionTruth) ->
     {
         blocker_codes.push("stale_missing_task_run_graph".to_string());
     }
+    if projection_truth.stale_state_suspected
+        && projection_truth
+            .next_lawful_operator_action
+            .as_deref()
+            .is_some_and(|action| {
+                action.trim() == closed_task_active_run_projection_mismatch_command()
+            })
+    {
+        blocker_codes.push("closed_task_active_run_projection_mismatch".to_string());
+    }
     if let Some(receipt) = projection_truth.dispatch_receipt.as_ref() {
-        blocker_codes.extend(dispatch_receipt_blocker_codes(
+        blocker_codes.extend(dispatch_receipt_issue_codes(
             receipt,
             &mut blocked_evidence_present,
         ));
     }
     blocker_codes.sort_unstable();
     blocker_codes.dedup();
-    normalize_run_graph_blocker_codes(&blocker_codes, blocked_evidence_present)
+    normalize_run_graph_issue_codes(&blocker_codes, blocked_evidence_present)
 }
 
 fn exception_takeover_receipt_is_behind_ready_handoff(
@@ -2635,13 +3061,22 @@ fn exception_takeover_receipt_is_behind_ready_handoff(
         && active_node != receipt.dispatch_target
 }
 
-fn projection_truth_blocker_codes_for_ready_handoff(
+fn projection_truth_issue_codes_for_ready_handoff(
     active_node: &str,
     status: &str,
     recovery_ready: bool,
     resume_target: &str,
     projection_truth: &RunGraphProjectionTruth,
 ) -> Vec<String> {
+    let task_authority_blockers = projection_truth_issue_codes(projection_truth);
+    if task_authority_blockers.iter().any(|code| {
+        matches!(
+            code.as_str(),
+            "closed_task_active_run_projection_mismatch" | "stale_missing_task_run_graph"
+        )
+    }) {
+        return task_authority_blockers;
+    }
     if projection_truth
         .dispatch_receipt
         .as_ref()
@@ -2655,13 +3090,13 @@ fn projection_truth_blocker_codes_for_ready_handoff(
             )
         })
     {
-        return normalize_run_graph_blocker_codes(&[], projection_truth.stale_state_suspected);
+        return normalize_run_graph_issue_codes(&[], projection_truth.stale_state_suspected);
     }
     if projection_truth
         .dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
-            downstream_receipt_blockers_are_superseded_by_ready_handoff(
+            downstream_receipt_issues_are_superseded_by_ready_handoff(
                 active_node,
                 status,
                 recovery_ready,
@@ -2670,7 +3105,7 @@ fn projection_truth_blocker_codes_for_ready_handoff(
             )
         })
     {
-        return normalize_run_graph_blocker_codes(&[], projection_truth.stale_state_suspected);
+        return normalize_run_graph_issue_codes(&[], projection_truth.stale_state_suspected);
     }
     if projection_truth
         .dispatch_receipt
@@ -2686,10 +3121,10 @@ fn projection_truth_blocker_codes_for_ready_handoff(
     {
         return Vec::new();
     }
-    projection_truth_blocker_codes(projection_truth)
+    projection_truth_issue_codes(projection_truth)
 }
 
-fn downstream_receipt_blockers_are_superseded_by_ready_handoff(
+fn downstream_receipt_issues_are_superseded_by_ready_handoff(
     active_node: &str,
     status: &str,
     recovery_ready: bool,
@@ -2732,18 +3167,18 @@ fn downstream_receipt_blockers_are_superseded_by_ready_handoff(
     resume_target == format!("dispatch.{downstream_node}_lane")
 }
 
-fn run_graph_status_surface_blocker_codes(
+fn run_graph_state_surface_issue_codes(
     status: &RunGraphStatus,
     projection_truth: &RunGraphProjectionTruth,
 ) -> Vec<String> {
-    if terminal_run_graph_status_resolved(status)
+    if terminal_run_graph_state_resolved(status)
         && !projection_truth.dispatch_receipt.as_ref().is_some_and(|receipt| {
             crate::runtime_dispatch_receipt_helpers::dispatch_receipt_is_materialization_only_blocked_task_ensure(receipt)
         })
     {
         return Vec::new();
     }
-    if active_exception_takeover_receipt_matches_status(
+    if active_exception_takeover_receipt_matches_snapshot(
         status,
         projection_truth.dispatch_receipt.as_ref(),
     ) {
@@ -2751,8 +3186,8 @@ fn run_graph_status_surface_blocker_codes(
     }
 
     let mut blocked_evidence_present =
-        blocked_status_signal(&status.status) || blocked_status_signal(&status.lifecycle_stage);
-    let mut blocker_codes = projection_truth_blocker_codes_for_ready_handoff(
+        halted_state_signal(&status.status) || halted_state_signal(&status.lifecycle_stage);
+    let mut blocker_codes = projection_truth_issue_codes_for_ready_handoff(
         &status.active_node,
         &status.status,
         status.recovery_ready,
@@ -2772,7 +3207,7 @@ fn run_graph_status_surface_blocker_codes(
             )
         })
         .filter(|receipt| {
-            !downstream_receipt_blockers_are_superseded_by_ready_handoff(
+            !downstream_receipt_issues_are_superseded_by_ready_handoff(
                 &status.active_node,
                 &status.status,
                 status.recovery_ready,
@@ -2781,17 +3216,17 @@ fn run_graph_status_surface_blocker_codes(
             )
         })
     {
-        blocker_codes.extend(dispatch_receipt_blocker_codes(
+        blocker_codes.extend(dispatch_receipt_issue_codes(
             receipt,
             &mut blocked_evidence_present,
         ));
     }
     blocker_codes.sort_unstable();
     blocker_codes.dedup();
-    normalize_run_graph_blocker_codes(&blocker_codes, blocked_evidence_present)
+    normalize_run_graph_issue_codes(&blocker_codes, blocked_evidence_present)
 }
 
-fn downstream_summary_blockers_are_superseded_by_ready_handoff(
+fn downstream_summary_issues_are_superseded_by_ready_handoff(
     recovery: &crate::state_store::RunGraphRecoverySummary,
     receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
 ) -> bool {
@@ -2823,14 +3258,14 @@ fn downstream_summary_blockers_are_superseded_by_ready_handoff(
     recovery.resume_target == format!("dispatch.{downstream_node}_lane")
 }
 
-fn projection_truth_from_status_surface(
+fn projection_truth_from_state_surface(
     state_root: &std::path::Path,
     status: &RunGraphStatus,
     recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     continuation_binding_source: Option<&str>,
 ) -> (RunGraphProjectionTruth, Vec<String>) {
-    let status_surface_receipt = receipt.map(dispatch_receipt_from_status_surface);
+    let status_surface_receipt = receipt.map(dispatch_receipt_from_state_surface);
     let status_surface_binding =
         continuation_binding_source.map(|binding_source| RunGraphContinuationBinding {
             run_id: status.run_id.clone(),
@@ -2848,7 +3283,7 @@ fn projection_truth_from_status_surface(
         state_root,
         receipt
             .as_ref()
-            .map(|summary| dispatch_receipt_from_status_surface(summary))
+            .map(|summary| dispatch_receipt_from_state_surface(summary))
             .as_ref(),
     );
     let projection_truth = RunGraphProjectionTruth {
@@ -2857,7 +3292,7 @@ fn projection_truth_from_status_surface(
         } else {
             "persisted_run_graph_status".to_string()
         },
-        projection_reason: projection_reason_for_status(
+        projection_reason: projection_reason_for_snapshot(
             status,
             status_surface_receipt.as_ref(),
             status_surface_binding.as_ref(),
@@ -2874,6 +3309,7 @@ fn projection_truth_from_status_surface(
             status_surface_receipt.as_ref(),
             None,
             false,
+            false,
         ),
         dispatch_receipt: status_surface_receipt.clone(),
         continuation_binding: None,
@@ -2881,7 +3317,7 @@ fn projection_truth_from_status_surface(
     let blocker_codes = if recovery.is_some_and(|summary| {
         recovery_projection_resolves_persisted_open_cycle(summary, &projection_truth)
     }) {
-        projection_truth_blocker_codes_for_ready_handoff(
+        projection_truth_issue_codes_for_ready_handoff(
             &status.active_node,
             &status.status,
             status.recovery_ready,
@@ -2889,7 +3325,7 @@ fn projection_truth_from_status_surface(
             &projection_truth,
         )
     } else {
-        dispatch_blocker_codes_from_status_surface(recovery, receipt)
+        dispatch_issue_codes_from_state_surface(recovery, receipt)
     };
     (projection_truth, blocker_codes)
 }
@@ -2904,7 +3340,7 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
 ) -> Option<RunGraphDispatchCompactSummary> {
     let status = status?;
     let continuation_binding_source =
-        continuation_binding_source_from_status_surface(continuation_binding);
+        continuation_binding_source_from_state_surface(continuation_binding);
     let evidence = activation_vs_execution_evidence.or_else(|| {
         receipt.and_then(|summary| {
             if summary.activation_evidence.is_null() {
@@ -2914,7 +3350,7 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
             }
         })
     });
-    let (projection_truth, blocker_codes) = projection_truth_from_status_surface(
+    let (projection_truth, blocker_codes) = projection_truth_from_state_surface(
         state_root,
         status,
         recovery,
@@ -2956,7 +3392,7 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
         );
     Some(RunGraphDispatchCompactSummary {
         route_truth: route_truth_from_projection_truth(&projection_truth, evidence),
-        downstream_dispatch_preview: downstream_dispatch_preview_from_status_snapshot(
+        downstream_dispatch_preview: downstream_dispatch_preview_from_run_snapshot(
             status,
             receipt,
             continuation_binding_source.as_deref(),
@@ -3010,7 +3446,7 @@ fn projection_stale_state_suspected(
     let Some(receipt) = receipt else {
         return false;
     };
-    if blocked_external_dispatch_artifact_mismatched_as_internal_activation(receipt) {
+    if halted_external_dispatch_artifact_mismatched_as_internal_activation(receipt) {
         return true;
     }
     if receipt.dispatch_status != "executing" {
@@ -3059,7 +3495,7 @@ pub(crate) async fn run_graph_projection_truth(
         )
     };
     let terminal_consume_continue_run_id = if dispatch_receipt.as_ref().is_some_and(|receipt| {
-        blocked_external_dispatch_artifact_mismatched_as_internal_activation(receipt)
+        halted_external_dispatch_artifact_mismatched_as_internal_activation(receipt)
             || dispatch_receipt_has_clean_ready_downstream_handoff(receipt)
             || (dispatch_receipt_resolution_reason_class(receipt).is_some()
                 && dispatch_receipt_can_use_terminal_continue_evidence(receipt)
@@ -3080,7 +3516,7 @@ pub(crate) async fn run_graph_projection_truth(
         } else {
             "persisted_run_graph_status".to_string()
         },
-        projection_reason: projection_reason_for_status(
+        projection_reason: projection_reason_for_snapshot(
             status,
             dispatch_receipt.as_ref(),
             continuation_binding.as_ref(),
@@ -3097,6 +3533,7 @@ pub(crate) async fn run_graph_projection_truth(
             dispatch_receipt.as_ref(),
             terminal_consume_continue_run_id.as_deref(),
             task_authority.task_missing(),
+            task_authority.task_closed_stale_run(),
         ),
         dispatch_receipt,
         continuation_binding,
@@ -3173,7 +3610,7 @@ fn json_bool_field(value: &serde_json::Value, key: &str) -> Option<bool> {
     value.get(key)?.as_bool()
 }
 
-pub(crate) fn default_run_graph_status(
+pub(crate) fn default_run_graph_state(
     task_id: &str,
     task_class: &str,
     route_task_class: &str,
@@ -3201,6 +3638,15 @@ pub(crate) fn default_run_graph_status(
         resume_target: fields.resume_target,
         recovery_ready: fields.recovery_ready,
     }
+}
+
+pub(crate) fn default_run_graph_status(
+    task_id: &str,
+    task_class: &str,
+    route_task_class: &str,
+) -> RunGraphStatus {
+    // compatibility_adapter: one-way alias while callers move to state naming.
+    default_run_graph_state(task_id, task_class, route_task_class)
 }
 
 pub(crate) fn default_run_graph_recovery_summary(
@@ -3232,7 +3678,7 @@ pub(crate) fn default_run_graph_recovery_summary(
     }
 }
 
-async fn run_taskflow_run_graph_status(
+async fn run_taskflow_run_graph_state(
     state_dir: &std::path::Path,
     run_id: &str,
     as_json: bool,
@@ -3256,11 +3702,12 @@ async fn run_taskflow_run_graph_status(
                         }
                     };
                 if as_json {
-                    match build_run_graph_status_json_payload_with_task_identity(
+                    match build_run_graph_state_json_payload_with_task_identity_and_state_root(
                         "vida taskflow run-graph status",
                         &status,
                         &projection_truth,
                         task_identity.as_ref(),
+                        Some(state_dir),
                     ) {
                         Ok(payload) => {
                             println!(
@@ -3279,7 +3726,7 @@ async fn run_taskflow_run_graph_status(
                     }
                 } else {
                     let blocker_codes =
-                        run_graph_status_surface_blocker_codes(&status, &projection_truth);
+                        run_graph_state_surface_issue_codes(&status, &projection_truth);
                     print_surface_header(RenderMode::Plain, "vida taskflow run-graph status");
                     print_surface_line(RenderMode::Plain, "run", &status.run_id);
                     print_surface_line(RenderMode::Plain, "status", &status.as_display());
@@ -3317,7 +3764,7 @@ async fn run_taskflow_run_graph_status(
             }
             Err(error) => {
                 if let Some(status) =
-                    read_run_graph_status_json_from_dispatch_init_fast_cache(state_dir, run_id)
+                    read_run_graph_state_json_from_dispatch_init_fast_cache(state_dir, run_id)
                 {
                     if as_json {
                         let payload = serde_json::json!({
@@ -3379,7 +3826,7 @@ async fn run_taskflow_run_graph_latest(state_dir: &std::path::Path, as_json: boo
                 };
                 match (status.as_ref(), projection_truth.as_ref(), as_json) {
                     (Some(status), Some(projection_truth), true) => {
-                        match build_run_graph_status_json_payload(
+                        match build_run_graph_state_json_payload(
                             "vida taskflow run-graph latest",
                             status,
                             projection_truth,
@@ -3584,15 +4031,14 @@ async fn run_taskflow_run_graph_diagnose_latest(
     }
 }
 
-async fn run_taskflow_recovery_status_from_state_dir(
+async fn run_taskflow_recovery_from_state_dir(
     state_dir: PathBuf,
     run_id: &str,
     as_json: bool,
 ) -> ExitCode {
     if as_json {
-        let projection_name = recovery_status_projection_name(run_id);
-        if let Some(cached) = read_recovery_status_projection(&state_dir, &projection_name, run_id)
-        {
+        let projection_name = recovery_projection_name(run_id);
+        if let Some(cached) = read_recovery_projection(&state_dir, &projection_name, run_id) {
             let exit_code = serde_json::from_str::<serde_json::Value>(&cached)
                 .ok()
                 .as_ref()
@@ -3608,15 +4054,21 @@ async fn run_taskflow_recovery_status_from_state_dir(
                         Ok(status) => match run_graph_projection_truth(&store, &status).await {
                             Ok(truth) => truth,
                             Err(error) => {
-                                eprintln!("Failed to build recovery projection truth: {error}");
-                                return ExitCode::from(1);
+                                return emit_recovery_json_error(
+                                    &state_dir,
+                                    run_id,
+                                    "recovery_projection_truth_unreadable",
+                                    &error.to_string(),
+                                );
                             }
                         },
                         Err(error) => {
-                            eprintln!(
-                                "Failed to read run-graph status for projection truth: {error}"
+                            return emit_recovery_json_error(
+                                &state_dir,
+                                run_id,
+                                "run_graph_status_unreadable",
+                                &error.to_string(),
                             );
-                            return ExitCode::from(1);
                         }
                     };
                     let (
@@ -3636,8 +4088,12 @@ async fn run_taskflow_recovery_status_from_state_dir(
                     {
                         Ok(identity) => identity,
                         Err(error) => {
-                            eprintln!("Failed to read run-graph task identity: {error}");
-                            return ExitCode::from(1);
+                            return emit_recovery_json_error(
+                                &state_dir,
+                                run_id,
+                                "run_graph_task_identity_unreadable",
+                                &error.to_string(),
+                            );
                         }
                     };
                     match build_recovery_json_payload_with_task_identity(
@@ -3665,23 +4121,27 @@ async fn run_taskflow_recovery_status_from_state_dir(
                             );
                             exit_code
                         }
-                        Err(error) => {
-                            eprintln!(
-                                "Failed to render normalized recovery status payload: {error}"
-                            );
-                            ExitCode::from(1)
-                        }
+                        Err(error) => emit_recovery_json_error(
+                            &state_dir,
+                            run_id,
+                            "recovery_status_payload_render_failed",
+                            &error,
+                        ),
                     }
                 }
-                Err(error) => {
-                    eprintln!("Failed to read recovery status: {error}");
-                    ExitCode::from(1)
-                }
+                Err(error) => emit_recovery_json_error(
+                    &state_dir,
+                    run_id,
+                    "run_graph_recovery_unreadable",
+                    &error.to_string(),
+                ),
             },
-            Err(error) => {
-                eprintln!("Failed to open authoritative state store: {error}");
-                ExitCode::from(1)
-            }
+            Err(error) => emit_recovery_json_error(
+                &state_dir,
+                run_id,
+                "state_store_unreadable",
+                &error.to_string(),
+            ),
         };
     }
 
@@ -4132,7 +4592,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
                             &projection_truth,
                             &recovery_owned_write_scope_for_summary(&store, &summary).await,
                         );
-                        let diagnosis_type = classify_recovery_diagnosis(
+                        let diagnosis_type = categorize_recovery_diagnosis(
                             &blocker_codes,
                             &summary,
                             &projection_truth,
@@ -4272,18 +4732,17 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         [head, subcommand, run_id] if head == "recovery" && subcommand == "status" => {
-            run_taskflow_recovery_status_from_state_dir(proxy_state_dir(), run_id, false).await
+            run_taskflow_recovery_from_state_dir(proxy_state_dir(), run_id, false).await
         }
         [head, subcommand, run_id, state_flag, state_value]
             if head == "recovery" && subcommand == "status" && state_flag == "--state-dir" =>
         {
-            run_taskflow_recovery_status_from_state_dir(PathBuf::from(state_value), run_id, false)
-                .await
+            run_taskflow_recovery_from_state_dir(PathBuf::from(state_value), run_id, false).await
         }
         [head, subcommand, run_id, flag]
             if head == "recovery" && subcommand == "status" && flag == "--json" =>
         {
-            run_taskflow_recovery_status_from_state_dir(proxy_state_dir(), run_id, true).await
+            run_taskflow_recovery_from_state_dir(proxy_state_dir(), run_id, true).await
         }
         [head, subcommand, run_id, state_flag, state_value, flag]
             if head == "recovery"
@@ -4291,8 +4750,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
                 && state_flag == "--state-dir"
                 && flag == "--json" =>
         {
-            run_taskflow_recovery_status_from_state_dir(PathBuf::from(state_value), run_id, true)
-                .await
+            run_taskflow_recovery_from_state_dir(PathBuf::from(state_value), run_id, true).await
         }
         [head, subcommand, run_id, flag, state_flag, state_value]
             if head == "recovery"
@@ -4300,8 +4758,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
                 && flag == "--json"
                 && state_flag == "--state-dir" =>
         {
-            run_taskflow_recovery_status_from_state_dir(PathBuf::from(state_value), run_id, true)
-                .await
+            run_taskflow_recovery_from_state_dir(PathBuf::from(state_value), run_id, true).await
         }
         [head, subcommand, ..] if head == "recovery" && subcommand == "gate-latest" => {
             eprintln!("Usage: vida taskflow recovery gate-latest [--json]");
@@ -4387,7 +4844,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         [head, subcommand, flag]
             if head == "run-graph" && subcommand == "status" && flag == "--json" =>
         {
-            print_run_graph_status_missing_run_id_json();
+            print_run_graph_missing_run_id_json();
             ExitCode::from(2)
         }
         [head, subcommand, run_id, flag]
@@ -4709,7 +5166,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                         };
                         match (status.as_ref(), projection_truth.as_ref()) {
                             (Some(status), Some(projection_truth)) => {
-                                match build_run_graph_status_json_payload(
+                                match build_run_graph_state_json_payload(
                                     "vida taskflow run-graph latest",
                                     status,
                                     projection_truth,
@@ -4765,12 +5222,12 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
             }
         }
         [head, subcommand, run_id] if head == "run-graph" && subcommand == "status" => {
-            run_taskflow_run_graph_status(&proxy_state_dir(), run_id, false).await
+            run_taskflow_run_graph_state(&proxy_state_dir(), run_id, false).await
         }
         [head, subcommand, run_id, state_flag, state_value]
             if head == "run-graph" && subcommand == "status" && state_flag == "--state-dir" =>
         {
-            run_taskflow_run_graph_status(&PathBuf::from(state_value), run_id, false).await
+            run_taskflow_run_graph_state(&PathBuf::from(state_value), run_id, false).await
         }
         [head, subcommand, run_id] if head == "run-graph" && subcommand == "diagnose" => {
             let state_dir = proxy_state_dir();
@@ -4843,7 +5300,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         [head, subcommand, run_id, flag]
             if head == "run-graph" && subcommand == "status" && flag == "--json" =>
         {
-            run_taskflow_run_graph_status(&proxy_state_dir(), run_id, true).await
+            run_taskflow_run_graph_state(&proxy_state_dir(), run_id, true).await
         }
         [head, subcommand, run_id, state_flag, state_value, flag]
             if head == "run-graph"
@@ -4851,7 +5308,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                 && state_flag == "--state-dir"
                 && flag == "--json" =>
         {
-            run_taskflow_run_graph_status(&PathBuf::from(state_value), run_id, true).await
+            run_taskflow_run_graph_state(&PathBuf::from(state_value), run_id, true).await
         }
         [head, subcommand, run_id, flag, state_flag, state_value]
             if head == "run-graph"
@@ -4859,7 +5316,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                 && flag == "--json"
                 && state_flag == "--state-dir" =>
         {
-            run_taskflow_run_graph_status(&PathBuf::from(state_value), run_id, true).await
+            run_taskflow_run_graph_state(&PathBuf::from(state_value), run_id, true).await
         }
         [head, subcommand, run_id, state_flag, state_value, flag]
             if head == "run-graph"
@@ -4953,8 +5410,8 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
     }
 }
 
-fn print_run_graph_status_missing_run_id_json() {
-    let payload = run_graph_status_missing_run_id_json_payload();
+fn print_run_graph_missing_run_id_json() {
+    let payload = run_graph_missing_run_id_json_payload();
     println!(
         "{}",
         serde_json::to_string_pretty(&payload)
@@ -4962,7 +5419,7 @@ fn print_run_graph_status_missing_run_id_json() {
     );
 }
 
-fn run_graph_status_missing_run_id_json_payload() -> serde_json::Value {
+fn run_graph_missing_run_id_json_payload() -> serde_json::Value {
     serde_json::json!({
         "surface": "vida taskflow run-graph status",
         "status": "blocked",
@@ -5077,7 +5534,7 @@ fn run_graph_dispatch_init_error_evidence(error: &str) -> Option<serde_json::Val
         return build_run_graph_operator_surface_payload(
             "vida taskflow run-graph dispatch-init",
             &run_id,
-            vec![fallback_dispatch_blocker_code()],
+            vec![fallback_dispatch_issue_code()],
             next_actions,
             serde_json::json!({
                 "error": error,
@@ -5106,7 +5563,7 @@ fn run_graph_resume_gate_error_run_id(error: &str) -> Option<String> {
     (!run_id.is_empty()).then(|| run_id.to_string())
 }
 
-async fn record_dispatch_init_timeout_blocker(
+async fn record_dispatch_init_timeout_issue(
     store: &StateStore,
     run_id: &str,
 ) -> Result<bool, String> {
@@ -5130,7 +5587,7 @@ async fn record_dispatch_init_timeout_blocker(
     status.checkpoint_kind = "dispatch_init_timeout".to_string();
     status.resume_target = "none".to_string();
     status.recovery_ready = false;
-    record_run_graph_status_with_continuation_sync(
+    record_run_graph_state_with_continuation_sync(
         store,
         &status,
         "run_graph_dispatch_init_timeout",
@@ -5139,13 +5596,13 @@ async fn record_dispatch_init_timeout_blocker(
     Ok(true)
 }
 
-async fn record_dispatch_init_timeout_blocker_bounded(
+async fn record_dispatch_init_timeout_issue_bounded(
     store: &StateStore,
     run_id: &str,
 ) -> Result<bool, String> {
     match tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        record_dispatch_init_timeout_blocker(store, run_id),
+        record_dispatch_init_timeout_issue(store, run_id),
     )
     .await
     {
@@ -5154,7 +5611,7 @@ async fn record_dispatch_init_timeout_blocker_bounded(
     }
 }
 
-async fn record_dispatch_init_timeout_blocker_from_state_dir_bounded(
+async fn record_dispatch_init_timeout_issue_from_state_dir_bounded(
     state_dir: &std::path::Path,
     run_id: &str,
 ) -> Result<bool, String> {
@@ -5164,7 +5621,7 @@ async fn record_dispatch_init_timeout_blocker_from_state_dir_bounded(
             .map_err(|error| {
                 format!("Failed to open state store for dispatch-init timeout blocker: {error}")
             })?;
-        let recorded = record_dispatch_init_timeout_blocker(&store, run_id).await?;
+        let recorded = record_dispatch_init_timeout_issue(&store, run_id).await?;
         store.close().await;
         Ok::<bool, String>(recorded)
     })
@@ -5175,7 +5632,7 @@ async fn record_dispatch_init_timeout_blocker_from_state_dir_bounded(
     }
 }
 
-fn run_graph_blocker_code(status: &str) -> Option<&'static str> {
+fn run_graph_issue_code(status: &str) -> Option<&'static str> {
     match status {
         "denied" => Some(crate::release1_contracts::blocker_code_str(
             crate::release1_contracts::BlockerCode::ImplementationReviewDenied,
@@ -5204,7 +5661,7 @@ struct RunGraphBlockerEvidenceArgs<'a> {
     error: &'a str,
 }
 
-fn run_graph_blocker_evidence(
+fn run_graph_issue_evidence(
     args: RunGraphBlockerEvidenceArgs<'_>,
 ) -> Result<Option<serde_json::Value>, String> {
     let is_blocked_advance = args.error.starts_with("run-graph advance blocked:");
@@ -5217,21 +5674,21 @@ fn run_graph_blocker_evidence(
             crate::release1_contracts::BlockerCode::OpenDelegatedCycle,
         )
     } else {
-        run_graph_blocker_code(args.status).ok_or_else(|| {
+        run_graph_issue_code(args.status).ok_or_else(|| {
             format!(
                 "run-graph advance blocked without explicit blocker evidence for `{}` status `{}`; refusing to continue (fail-closed)",
                 args.run_id, args.status
             )
         })?
     };
-    let canonical_blocker_codes = canonical_release1_blocker_code_entries(&serde_json::json!([
-        blocker_code
-    ]))
-    .ok_or_else(|| {
-        format!(
+    let canonical_blocker_codes =
+        canonical_release1_blocker_code_entries(&serde_json::json!([blocker_code])).ok_or_else(
+            || {
+                format!(
             "run-graph blocker code `{blocker_code}` is not canonical (must be lowercase/digits/_)"
         )
-    })?;
+            },
+        )?;
     let canonical_blocker_code = canonical_blocker_codes
         .first()
         .expect("canonical block list always non-empty")
@@ -5259,7 +5716,7 @@ fn run_graph_blocker_evidence(
     })))
 }
 
-pub(crate) fn is_dispatch_resume_handoff_complete(status: &RunGraphStatus) -> bool {
+pub(crate) fn is_dispatch_resume_handoff_done(status: &RunGraphStatus) -> bool {
     if !status.resume_target.starts_with("dispatch.") {
         return true;
     }
@@ -5289,7 +5746,7 @@ pub(crate) fn validate_run_graph_resume_gate(status: &RunGraphStatus) -> Result<
             status.run_id
         )
     })?;
-    if !is_dispatch_resume_handoff_complete(status) {
+    if !is_dispatch_resume_handoff_done(status) {
         return Err(format!(
             "Run-graph resume gate denied for `{}`: dispatch resume target `{}` requires complete handoff metadata (next_node={}, policy_gate=`{}`, handoff=`{}`)",
             status.run_id,
@@ -5362,16 +5819,15 @@ fn dispatch_replay_node_from_receipt(receipt: &RunGraphDispatchReceipt) -> Optio
         .map(|value| value.strip_suffix("_lane").unwrap_or(value).to_string())
 }
 
-pub(crate) fn status_with_active_exception_dispatch_replay(
+pub(crate) fn state_with_active_exception_dispatch_replay(
     status: &RunGraphStatus,
     receipt: &RunGraphDispatchReceipt,
 ) -> Option<RunGraphStatus> {
-    if !active_exception_takeover_receipt_matches_status(status, Some(receipt)) {
+    if !active_exception_takeover_receipt_matches_snapshot(status, Some(receipt)) {
         return None;
     }
     let node = dispatch_replay_node_from_receipt(receipt)?;
-    let (handoff_state, resume_target) =
-        governance_handoff(Some(&node), DispatchTargetFormat::Lane);
+    let (handoff_state, resume_target) = run_graph_handoff(Some(&node), DispatchTargetFormat::Lane);
     let mut replay = status.clone();
     replay.next_node = Some(node);
     replay.handoff_state = handoff_state;
@@ -5383,7 +5839,7 @@ pub(crate) fn status_with_active_exception_dispatch_replay(
     Some(replay)
 }
 
-async fn reconcile_dispatch_init_status_for_active_exception(
+async fn reconcile_dispatch_init_state_for_active_exception(
     store: &StateStore,
     status: RunGraphStatus,
 ) -> Result<RunGraphStatus, String> {
@@ -5401,11 +5857,11 @@ async fn reconcile_dispatch_init_status_for_active_exception(
         })?;
     Ok(receipt
         .as_ref()
-        .and_then(|receipt| status_with_active_exception_dispatch_replay(&status, receipt))
+        .and_then(|receipt| state_with_active_exception_dispatch_replay(&status, receipt))
         .unwrap_or(status))
 }
 
-fn reconcile_dispatch_init_status_for_missing_receipt(
+fn reconcile_dispatch_init_state_for_missing_receipt(
     mut status: RunGraphStatus,
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_receipt_present: bool,
@@ -5425,7 +5881,7 @@ fn reconcile_dispatch_init_status_for_missing_receipt(
         DispatchTargetFormat::Lane
     };
     let node = status.active_node.clone();
-    let (handoff_state, resume_target) = governance_handoff(Some(&node), target_format);
+    let (handoff_state, resume_target) = run_graph_handoff(Some(&node), target_format);
     status.next_node = Some(node);
     status.handoff_state = handoff_state;
     status.resume_target = resume_target;
@@ -5483,7 +5939,7 @@ pub(crate) fn merge_run_graph_meta(
     status
 }
 
-async fn record_run_graph_status_with_continuation_sync(
+async fn record_run_graph_state_with_continuation_sync(
     store: &StateStore,
     status: &RunGraphStatus,
     binding_source: &str,
@@ -5508,29 +5964,8 @@ async fn record_run_graph_status_with_continuation_sync(
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-enum DispatchTargetFormat {
-    Lane,
-    Direct,
-}
-
-fn governance_handoff(
-    next_node: Option<&str>,
-    target_format: DispatchTargetFormat,
-) -> (String, String) {
-    let handoff_state = next_node
-        .map(|next| format!("awaiting_{next}"))
-        .unwrap_or_else(|| "none".to_string());
-    let resume_target = next_node
-        .map(|next| match target_format {
-            DispatchTargetFormat::Lane => format!("dispatch.{next}_lane"),
-            DispatchTargetFormat::Direct => format!("dispatch.{next}"),
-        })
-        .unwrap_or_else(|| "none".to_string());
-    (handoff_state, resume_target)
-}
-
-struct RunGraphTransitionArgs {
+fn run_graph_state_from_authority_ready_transition(
+    existing: &RunGraphStatus,
     active_node: String,
     next_node: Option<String>,
     lane_id: String,
@@ -5539,29 +5974,39 @@ struct RunGraphTransitionArgs {
     checkpoint_kind: String,
     target_format: DispatchTargetFormat,
     recovery_ready: bool,
-}
-
-fn run_graph_transition(existing: &RunGraphStatus, args: RunGraphTransitionArgs) -> RunGraphStatus {
-    let (handoff_state, resume_target) =
-        governance_handoff(args.next_node.as_deref(), args.target_format);
-
-    RunGraphStatus {
+) -> RunGraphStatus {
+    let transition = ready_run_graph_transition(ReadyRunGraphTransitionInput {
         run_id: existing.run_id.clone(),
         task_id: existing.task_id.clone(),
         task_class: existing.task_class.clone(),
-        active_node: args.active_node,
-        next_node: args.next_node,
-        status: "ready".to_string(),
+        active_node,
+        next_node,
         route_task_class: existing.route_task_class.clone(),
         selected_backend: existing.selected_backend.clone(),
-        lane_id: args.lane_id,
-        lifecycle_stage: args.lifecycle_stage,
-        policy_gate: args.policy_gate,
-        handoff_state,
-        context_state: "sealed".to_string(),
-        checkpoint_kind: args.checkpoint_kind,
-        resume_target,
-        recovery_ready: args.recovery_ready,
+        lane_id,
+        lifecycle_stage,
+        policy_gate,
+        checkpoint_kind,
+        target_format,
+        recovery_ready,
+    });
+    RunGraphStatus {
+        run_id: transition.run_id,
+        task_id: transition.task_id,
+        task_class: transition.task_class,
+        active_node: transition.active_node,
+        next_node: transition.next_node,
+        status: transition.status,
+        route_task_class: transition.route_task_class,
+        selected_backend: transition.selected_backend,
+        lane_id: transition.lane_id,
+        lifecycle_stage: transition.lifecycle_stage,
+        policy_gate: transition.policy_gate,
+        handoff_state: transition.handoff_state,
+        context_state: transition.context_state,
+        checkpoint_kind: transition.checkpoint_kind,
+        resume_target: transition.resume_target,
+        recovery_ready: transition.recovery_ready,
     }
 }
 
@@ -5976,7 +6421,7 @@ pub(crate) struct RunGraphPacketBackedExecutionGate {
 }
 
 impl RunGraphPacketBackedExecutionGate {
-    fn blocked(
+    fn not_ready(
         status: &str,
         selected_task_id: Option<&str>,
         run_id: Option<&str>,
@@ -6026,7 +6471,7 @@ fn run_graph_packet_gate_binding_task_id(binding: &RunGraphContinuationBinding) 
         .filter(|value| !value.is_empty())
 }
 
-fn terminal_completed_without_next_unit_for_packet_gate(status: &RunGraphStatus) -> bool {
+fn terminal_done_without_next_unit_for_packet_gate(status: &RunGraphStatus) -> bool {
     status.status == "completed"
         && status.lifecycle_stage == "closure_complete"
         && status
@@ -6048,7 +6493,7 @@ pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return RunGraphPacketBackedExecutionGate::blocked(
+        return RunGraphPacketBackedExecutionGate::not_ready(
             "blocked_task_run_mapping_mismatch",
             None,
             None,
@@ -6056,7 +6501,7 @@ pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
         );
     };
     let Some(status) = status else {
-        return RunGraphPacketBackedExecutionGate::blocked(
+        return RunGraphPacketBackedExecutionGate::not_ready(
             "blocked_lineage_preconditions_not_verified",
             Some(selected_task_id),
             None,
@@ -6067,15 +6512,15 @@ pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
         || status.task_id.trim().is_empty()
         || status.task_id != selected_task_id
     {
-        return RunGraphPacketBackedExecutionGate::blocked(
+        return RunGraphPacketBackedExecutionGate::not_ready(
             "blocked_task_run_mapping_mismatch",
             Some(selected_task_id),
             Some(status.run_id.as_str()),
             vec!["blocked_task_run_mapping_mismatch"],
         );
     }
-    if terminal_completed_without_next_unit_for_packet_gate(status) {
-        return RunGraphPacketBackedExecutionGate::blocked(
+    if terminal_done_without_next_unit_for_packet_gate(status) {
+        return RunGraphPacketBackedExecutionGate::not_ready(
             "blocked_lineage_preconditions_not_verified",
             Some(selected_task_id),
             Some(status.run_id.as_str()),
@@ -6084,7 +6529,7 @@ pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
     }
 
     let Some(context) = context else {
-        return RunGraphPacketBackedExecutionGate::blocked(
+        return RunGraphPacketBackedExecutionGate::not_ready(
             "blocked_lineage_preconditions_not_verified",
             Some(selected_task_id),
             Some(status.run_id.as_str()),
@@ -6096,7 +6541,7 @@ pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
         || context.request_text.trim().is_empty()
         || !context.role_selection.is_object()
     {
-        return RunGraphPacketBackedExecutionGate::blocked(
+        return RunGraphPacketBackedExecutionGate::not_ready(
             "blocked_lineage_preconditions_not_verified",
             Some(selected_task_id),
             Some(status.run_id.as_str()),
@@ -6105,7 +6550,7 @@ pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
     }
 
     let Some(binding) = binding else {
-        return RunGraphPacketBackedExecutionGate::blocked(
+        return RunGraphPacketBackedExecutionGate::not_ready(
             "blocked_lineage_preconditions_not_verified",
             Some(selected_task_id),
             Some(status.run_id.as_str()),
@@ -6125,7 +6570,7 @@ pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
         || binding.why_this_unit.trim().is_empty()
         || binding.sequential_vs_parallel_posture.trim().is_empty()
     {
-        return RunGraphPacketBackedExecutionGate::blocked(
+        return RunGraphPacketBackedExecutionGate::not_ready(
             "blocked_task_run_mapping_mismatch",
             Some(selected_task_id),
             Some(status.run_id.as_str()),
@@ -6134,7 +6579,7 @@ pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
     }
 
     let Some(receipt) = receipt else {
-        return RunGraphPacketBackedExecutionGate::blocked(
+        return RunGraphPacketBackedExecutionGate::not_ready(
             "blocked_lineage_preconditions_not_verified",
             Some(selected_task_id),
             Some(status.run_id.as_str()),
@@ -6147,7 +6592,7 @@ pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return RunGraphPacketBackedExecutionGate::blocked(
+        return RunGraphPacketBackedExecutionGate::not_ready(
             "blocked_lineage_preconditions_not_verified",
             Some(selected_task_id),
             Some(status.run_id.as_str()),
@@ -6162,7 +6607,7 @@ pub(crate) fn evaluate_run_graph_packet_backed_execution_gate(
             .filter(|value| !value.is_empty())
             .is_some()
     {
-        return RunGraphPacketBackedExecutionGate::blocked(
+        return RunGraphPacketBackedExecutionGate::not_ready(
             "blocked_lineage_preconditions_not_verified",
             Some(selected_task_id),
             Some(status.run_id.as_str()),
@@ -6299,16 +6744,16 @@ async fn resolve_seed_task_id_for_runtime_run(
     ))
 }
 
-pub(crate) async fn derive_seeded_run_graph_status(
+pub(crate) async fn derive_seeded_run_graph_state(
     store: &StateStore,
     requested_run_id: &str,
     request_text: &str,
 ) -> Result<TaskflowRunGraphSeedPayload, String> {
-    derive_seeded_run_graph_status_with_stage(store, requested_run_id, request_text, None, false)
+    derive_seeded_run_graph_state_with_stage(store, requested_run_id, request_text, None, false)
         .await
 }
 
-async fn derive_seeded_run_graph_status_with_stage(
+async fn derive_seeded_run_graph_state_with_stage(
     store: &StateStore,
     requested_run_id: &str,
     request_text: &str,
@@ -6352,13 +6797,13 @@ async fn derive_seeded_run_graph_status_with_stage(
                 inject_tracked_design_doc_path(&mut selection.execution_plan, &path);
             }
             set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_dev_team_route_status");
-            let mut status = seeded_run_graph_status_from_role_selection(
+            let mut status = seeded_run_graph_state_from_role_selection(
                 requested_run_id,
                 &bounded_task_id,
                 &selection,
                 &snapshot,
             )?;
-            apply_configured_dev_team_route_to_status(&mut status, &selection, &route);
+            apply_configured_dev_team_route_to_state(&mut status, &selection, &route);
             return Ok(TaskflowRunGraphSeedPayload {
                 request_text: request_text.to_string(),
                 role_selection: selection,
@@ -6367,6 +6812,25 @@ async fn derive_seeded_run_graph_status_with_stage(
         }
     }
     if skip_design_override {
+        if bounded_task
+            .as_ref()
+            .is_some_and(|task| task.issue_type.trim() != "task")
+        {
+            if let Some(payload) = configured_dev_team_seed_payload_from_task(
+                store,
+                &snapshot,
+                &bounded_task_id,
+                requested_run_id,
+                request_text,
+                bounded_task.as_ref(),
+                timeout_stage,
+                false,
+            )
+            .await?
+            {
+                return Ok(payload);
+            }
+        }
         set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_task_metadata_selection");
         let mut selection =
             bounded_implementation_lane_selection_from_snapshot(&snapshot, request_text);
@@ -6382,7 +6846,7 @@ async fn derive_seeded_run_graph_status_with_stage(
             inject_tracked_design_doc_path(&mut selection.execution_plan, &path);
         }
         set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_task_metadata_status");
-        let status = seeded_run_graph_status_from_role_selection(
+        let status = seeded_run_graph_state_from_role_selection(
             requested_run_id,
             &bounded_task_id,
             &selection,
@@ -6395,7 +6859,7 @@ async fn derive_seeded_run_graph_status_with_stage(
         });
     }
     set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_build_from_snapshot");
-    let mut design_backed_payload = build_seeded_run_graph_status_from_activation_snapshot(
+    let mut design_backed_payload = build_seeded_run_graph_state_from_activation_snapshot(
         requested_run_id,
         &bounded_task_id,
         request_text,
@@ -6409,9 +6873,28 @@ async fn derive_seeded_run_graph_status_with_stage(
         &mut design_backed_payload.role_selection,
     )
     .await?;
+    if bounded_task
+        .as_ref()
+        .is_some_and(|task| task.issue_type.trim() != "task")
+    {
+        if let Some(payload) = configured_dev_team_seed_payload_from_task(
+            store,
+            &snapshot,
+            &bounded_task_id,
+            requested_run_id,
+            request_text,
+            bounded_task.as_ref(),
+            timeout_stage,
+            false,
+        )
+        .await?
+        {
+            return Ok(payload);
+        }
+    }
     if selection_is_bounded_implementation_seed(&design_backed_payload.role_selection) {
         set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_status_from_role_selection");
-        design_backed_payload.status = seeded_run_graph_status_from_role_selection(
+        design_backed_payload.status = seeded_run_graph_state_from_role_selection(
             requested_run_id,
             &bounded_task_id,
             &design_backed_payload.role_selection,
@@ -6422,9 +6905,23 @@ async fn derive_seeded_run_graph_status_with_stage(
         }
         return Ok(design_backed_payload);
     }
+    if let Some(payload) = configured_dev_team_seed_payload_from_task(
+        store,
+        &snapshot,
+        &bounded_task_id,
+        requested_run_id,
+        request_text,
+        bounded_task.as_ref(),
+        timeout_stage,
+        true,
+    )
+    .await?
+    {
+        return Ok(payload);
+    }
     let mut payload = design_backed_payload;
     set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_status_from_role_selection");
-    payload.status = seeded_run_graph_status_from_role_selection(
+    payload.status = seeded_run_graph_state_from_role_selection(
         requested_run_id,
         &bounded_task_id,
         &payload.role_selection,
@@ -6439,26 +6936,19 @@ async fn derive_seeded_run_graph_status_with_stage(
 async fn read_seed_launcher_activation_snapshot(
     store: &StateStore,
 ) -> Result<crate::state_store::LauncherActivationSnapshot, String> {
-    match store.read_launcher_activation_snapshot().await {
-        Ok(snapshot) => {
-            let configured_path = std::path::Path::new(&snapshot.source_config_path);
-            if configured_path.exists() {
-                match crate::launcher_activation_snapshot::config_file_digest(configured_path) {
-                    Ok(current_digest) if current_digest == snapshot.source_config_digest => {
-                        return Ok(snapshot);
-                    }
-                    Ok(_) => {}
-                    Err(_) => {}
+    match crate::launcher_activation_snapshot::read_or_sync_launcher_activation_snapshot(store)
+        .await
+    {
+        Ok(snapshot) => Ok(snapshot),
+        Err(error) if error.starts_with("Unable to resolve launcher activation project root") => {
+            match store.read_launcher_activation_snapshot().await {
+                Ok(snapshot) => Ok(snapshot),
+                Err(_) => {
+                    crate::launcher_activation_snapshot::capture_launcher_activation_snapshot()
                 }
             }
-            crate::launcher_activation_snapshot::capture_launcher_activation_snapshot()
         }
-        Err(StateStoreError::MissingLauncherActivationSnapshot) => {
-            crate::launcher_activation_snapshot::capture_launcher_activation_snapshot()
-        }
-        Err(error) => Err(format!(
-            "Failed to read launcher activation snapshot: {error}"
-        )),
+        Err(error) => Err(error),
     }
 }
 
@@ -6746,14 +7236,14 @@ async fn reseed_dispatch_context_after_route_assignment_drift(
         status.task_id.as_str()
     };
     if let Ok(task) = store.show_task(task_id).await {
-        if taskflow_task_status_is_terminal_for_dispatch_init(&task.status) {
+        if taskflow_task_state_is_terminal_for_dispatch_init(&task.status) {
             return Err(format!(
                 "Dispatch-init cannot refresh stale route assignment for terminal TaskFlow task `{task_id}` with status `{}`; bind a non-terminal bounded unit before dispatch-init.",
                 task.status
             ));
         }
     }
-    derive_seeded_run_graph_status(store, task_id, &context.request_text).await
+    derive_seeded_run_graph_state(store, task_id, &context.request_text).await
 }
 
 pub(crate) async fn persist_seed_artifacts(
@@ -6787,7 +7277,7 @@ pub(crate) async fn persist_seed_artifacts(
     Ok(())
 }
 
-pub(crate) fn run_graph_dispatch_bootstrap_from_status(
+pub(crate) fn run_graph_dispatch_bootstrap_from_state(
     status: &RunGraphStatus,
 ) -> Result<serde_json::Value, String> {
     validate_run_graph_resume_gate(status)?;
@@ -6936,7 +7426,26 @@ fn dispatch_init_fast_cache_payload_is_reusable(
     let Some(packet_path) = payload["dispatch_packet_path"].as_str().map(str::trim) else {
         return false;
     };
-    !packet_path.is_empty() && std::path::Path::new(packet_path).is_file()
+    if packet_path.is_empty() || !std::path::Path::new(packet_path).is_file() {
+        return false;
+    }
+    if dispatch_init_packet_template_kind(packet_path).as_deref() == Some("delivery_task_packet") {
+        let run_id = payload["run_id"].as_str().unwrap_or(requested_run_id);
+        if dispatch_init_delivery_packet_string_field(packet_path, "task_id").as_deref()
+            != Some(run_id)
+        {
+            return false;
+        }
+        if let (Some(owned_paths), Some(implementation_isolation_owned_paths)) = (
+            dispatch_init_delivery_packet_string_array(packet_path, "owned_paths"),
+            dispatch_init_delivery_packet_implementation_isolation_owned_paths(packet_path),
+        ) {
+            if implementation_isolation_owned_paths != owned_paths {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 pub(crate) fn read_run_graph_dispatch_init_fast_cache(
@@ -6956,7 +7465,7 @@ pub(crate) fn read_run_graph_dispatch_init_fast_cache(
     .then_some(payload)
 }
 
-fn read_run_graph_status_json_from_dispatch_init_fast_cache(
+fn read_run_graph_state_json_from_dispatch_init_fast_cache(
     state_root: &std::path::Path,
     run_id: &str,
 ) -> Option<serde_json::Value> {
@@ -7045,6 +7554,12 @@ fn reusable_routed_dispatch_receipt(
     if packet_path.is_empty() || !std::path::Path::new(packet_path).is_file() {
         return None;
     }
+    let packet = crate::read_json_file_if_present(std::path::Path::new(packet_path))?;
+    if !crate::runtime_dispatch_state::runtime_dispatch_packet_has_top_level_task_scope_mirror(
+        &packet,
+    ) {
+        return None;
+    }
     Some(packet_path.to_string())
 }
 
@@ -7077,6 +7592,54 @@ fn dispatch_init_packet_template_kind(packet_path: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn dispatch_init_delivery_packet_string_field(packet_path: &str, key: &str) -> Option<String> {
+    let packet = crate::read_json_file_if_present(std::path::Path::new(packet_path))?;
+    packet
+        .get("delivery_task_packet")?
+        .get(key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn dispatch_init_delivery_packet_string_array(packet_path: &str, key: &str) -> Option<Vec<String>> {
+    let packet = crate::read_json_file_if_present(std::path::Path::new(packet_path))?;
+    packet
+        .get("delivery_task_packet")?
+        .get(key)?
+        .as_array()?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .collect::<Option<Vec<_>>>()
+}
+
+fn dispatch_init_delivery_packet_implementation_isolation_owned_paths(
+    packet_path: &str,
+) -> Option<Vec<String>> {
+    let packet = crate::read_json_file_if_present(std::path::Path::new(packet_path))?;
+    packet
+        .get("delivery_task_packet")?
+        .get("implementation_isolation")?
+        .get("owned_paths")?
+        .as_array()?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .collect::<Option<Vec<_>>>()
+}
+
 async fn existing_dispatch_receipt_matches_current_seed(
     store: &StateStore,
     run_id: &str,
@@ -7096,7 +7659,7 @@ async fn existing_dispatch_receipt_matches_current_seed(
     else {
         return Ok(true);
     };
-    let current_bootstrap = run_graph_dispatch_bootstrap_from_status(&current_seed.status)?;
+    let current_bootstrap = run_graph_dispatch_bootstrap_from_state(&current_seed.status)?;
     let current_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
         &current_seed.role_selection,
         &current_bootstrap,
@@ -7119,6 +7682,45 @@ async fn existing_dispatch_receipt_matches_current_seed(
         != Some(current_packet_kind.as_str())
     {
         return Ok(false);
+    }
+    if current_packet_kind == "delivery_task_packet" {
+        let packet_task_id = dispatch_init_delivery_packet_string_field(packet_path, "task_id");
+        if packet_task_id.as_deref() != Some(current_receipt.run_id.as_str()) {
+            return Ok(false);
+        }
+        let handoff_runtime_role = current_receipt
+            .activation_runtime_role
+            .as_deref()
+            .unwrap_or(current_seed.role_selection.selected_role.as_str());
+        let handoff_task_class =
+            crate::runtime_dispatch_state::runtime_packet_handoff_task_class_for_plan(
+                &current_seed.role_selection.execution_plan,
+                &current_receipt.dispatch_target,
+                handoff_runtime_role,
+            );
+        if crate::runtime_dispatch_packets::delivery_packet_task_class_requires_owned_paths(
+            handoff_task_class.as_str(),
+        ) {
+            let expected_owned_paths =
+                crate::runtime_dispatch_state::owned_paths_for_required_delivery_task_class(
+                    &current_seed.role_selection,
+                    handoff_task_class.as_str(),
+                );
+            if !expected_owned_paths.is_empty() {
+                if dispatch_init_delivery_packet_string_array(packet_path, "owned_paths").as_deref()
+                    != Some(expected_owned_paths.as_slice())
+                {
+                    return Ok(false);
+                }
+                if crate::runtime_dispatch_packets::delivery_packet_task_class_requires_implementation_isolation(handoff_task_class.as_str())
+                    && dispatch_init_delivery_packet_implementation_isolation_owned_paths(packet_path)
+                        .as_deref()
+                        != Some(expected_owned_paths.as_slice())
+                {
+                    return Ok(false);
+                }
+            }
+        }
     }
     let current_backend =
         crate::runtime_dispatch_state::admissible_selected_backend_for_dispatch_target(
@@ -7177,7 +7779,7 @@ async fn existing_routed_dispatch_init_artifacts(
     {
         return Ok(None);
     }
-    let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
+    let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_state(&status)?;
     let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
     Ok(Some(RunGraphDispatchInitArtifacts {
         requested_run_id: requested_run_id.to_string(),
@@ -7238,7 +7840,7 @@ async fn reseed_explicit_task_graph_binding_for_dispatch_init(
     }
     let bound_task = store.show_task(bound_task_id).await.ok();
     if let Some(task) = bound_task.as_ref() {
-        if taskflow_task_status_is_terminal_for_dispatch_init(&task.status) {
+        if taskflow_task_state_is_terminal_for_dispatch_init(&task.status) {
             return Err(format!(
                 "Run `{requested_run_id}` has explicit continuation binding to terminal task_graph_task `{bound_task_id}` with status `{}`; bind a non-terminal bounded unit before dispatch-init.",
                 task.status
@@ -7271,7 +7873,7 @@ async fn reseed_explicit_task_graph_binding_for_dispatch_init(
         ));
     };
 
-    let payload = derive_seeded_run_graph_status(store, bound_task_id, &request_text).await?;
+    let payload = derive_seeded_run_graph_state(store, bound_task_id, &request_text).await?;
     persist_seed_artifacts(store, &payload).await?;
 
     let why = format!(
@@ -7325,22 +7927,131 @@ fn task_record_dispatch_seed_request_text(task: &crate::state_store::TaskRecord)
     }
 }
 
-fn taskflow_task_status_is_terminal_for_dispatch_init(status: &str) -> bool {
+fn taskflow_task_state_is_terminal_for_dispatch_init(status: &str) -> bool {
     matches!(status.trim(), "closed" | "completed")
+}
+
+async fn configured_dev_team_seed_payload_from_task(
+    store: &StateStore,
+    snapshot: &crate::state_store::LauncherActivationSnapshot,
+    bounded_task_id: &str,
+    requested_run_id: &str,
+    request_text: &str,
+    task: Option<&crate::state_store::TaskRecord>,
+    timeout_stage: Option<&std::sync::Arc<std::sync::Mutex<&'static str>>>,
+    allow_design_backed: bool,
+) -> Result<Option<TaskflowRunGraphSeedPayload>, String> {
+    let Some(task) = task.filter(|task| task_has_configured_dev_team_dispatch_identity(task))
+    else {
+        return Ok(None);
+    };
+    let design_doc_path = existing_design_backed_task_design_doc_path(store, bounded_task_id).await;
+    if design_doc_path.is_some() && !allow_design_backed {
+        return Ok(None);
+    }
+    let activation_bundle = activation_bundle_with_dev_team_readiness(snapshot);
+    let Some(route) = crate::dev_team_sequence_contract::configured_dev_team_first_step_for_task(
+        &activation_bundle,
+        task,
+    ) else {
+        return Ok(None);
+    };
+    set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_dev_team_route_selection");
+    let mut selection = configured_dev_team_lane_selection_from_snapshot(
+        snapshot,
+        activation_bundle,
+        request_text,
+        &route,
+    );
+    selection.execution_plan =
+        build_runtime_execution_plan_from_snapshot(&selection.compiled_bundle, &selection);
+    inject_configured_dev_team_route_into_execution_plan(&mut selection.execution_plan, &route);
+    inject_task_planner_metadata(&mut selection, &task.planner_metadata);
+    if let Some(path) = design_doc_path {
+        inject_tracked_design_doc_path(&mut selection.execution_plan, &path);
+    }
+    set_dispatch_init_timeout_stage(timeout_stage, "derive_seed_dev_team_route_status");
+    let mut status = seeded_run_graph_state_from_role_selection(
+        requested_run_id,
+        bounded_task_id,
+        &selection,
+        snapshot,
+    )?;
+    apply_configured_dev_team_route_to_state(&mut status, &selection, &route);
+    Ok(Some(TaskflowRunGraphSeedPayload {
+        request_text: request_text.to_string(),
+        role_selection: selection,
+        status,
+    }))
 }
 
 fn activation_bundle_with_dev_team_readiness(
     snapshot: &crate::state_store::LauncherActivationSnapshot,
 ) -> serde_json::Value {
     let mut activation_bundle = snapshot.compiled_bundle.clone();
-    let readiness = crate::taskflow_consume_bundle::build_dev_team_readiness(
-        &snapshot.source_config_path,
+    let source_config_path = snapshot.source_config_path.trim();
+    let primary_config_path = if source_config_path.is_empty() {
+        "vida.config.yaml"
+    } else {
+        source_config_path
+    };
+    let mut readiness = crate::taskflow_consume_bundle::build_dev_team_readiness(
+        primary_config_path,
         &activation_bundle,
     );
+    if !dev_team_readiness_has_route_truth(&readiness) {
+        let config_path = std::path::Path::new(primary_config_path);
+        if let Some(project_root) = config_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            if let Ok(snapshot) =
+                crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root(
+                    project_root,
+                )
+            {
+                activation_bundle = snapshot.compiled_bundle;
+                readiness = crate::taskflow_consume_bundle::build_dev_team_readiness(
+                    &snapshot.source_config_path,
+                    &activation_bundle,
+                );
+            }
+        } else if let Ok(snapshot) =
+            crate::launcher_activation_snapshot::capture_launcher_activation_snapshot()
+        {
+            activation_bundle = snapshot.compiled_bundle;
+            readiness = crate::taskflow_consume_bundle::build_dev_team_readiness(
+                &snapshot.source_config_path,
+                &activation_bundle,
+            );
+        }
+    }
+    if readiness
+        .get("flows")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(Vec::is_empty)
+        && primary_config_path != "vida.config.yaml"
+    {
+        readiness = crate::taskflow_consume_bundle::build_dev_team_readiness(
+            "vida.config.yaml",
+            &activation_bundle,
+        );
+    }
     if let Some(object) = activation_bundle.as_object_mut() {
         object.insert("dev_team_readiness".to_string(), readiness);
     }
     activation_bundle
+}
+
+fn dev_team_readiness_has_route_truth(readiness: &serde_json::Value) -> bool {
+    readiness
+        .get("roles")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|roles| !roles.is_empty())
+        && readiness
+            .get("flows")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|flows| !flows.is_empty())
 }
 
 fn configured_dev_team_lane_selection_from_snapshot(
@@ -7463,7 +8174,7 @@ fn inject_configured_dev_team_route_into_execution_plan(
     );
 }
 
-fn apply_configured_dev_team_route_to_status(
+fn apply_configured_dev_team_route_to_state(
     status: &mut RunGraphStatus,
     selection: &RuntimeConsumptionLaneSelection,
     route: &crate::dev_team_sequence_contract::ConfiguredDevTeamTaskRoute,
@@ -7495,7 +8206,7 @@ fn task_has_configured_dev_team_dispatch_identity(task: &crate::state_store::Tas
         || !task.labels.is_empty()
 }
 
-pub(crate) async fn run_graph_status_has_configured_dev_team_route_mismatch(
+pub(crate) async fn run_graph_state_has_configured_dev_team_route_mismatch(
     store: &StateStore,
     status: &RunGraphStatus,
 ) -> Result<bool, String> {
@@ -7562,7 +8273,7 @@ fn bounded_implementation_lane_selection_from_snapshot(
     }
 }
 
-fn build_seeded_run_graph_status_from_activation_snapshot(
+fn build_seeded_run_graph_state_from_activation_snapshot(
     requested_run_id: &str,
     bounded_task_id: &str,
     request_text: &str,
@@ -7574,7 +8285,7 @@ fn build_seeded_run_graph_status_from_activation_snapshot(
         &snapshot.pack_router_keywords,
         request_text,
     )?;
-    let status = seeded_run_graph_status_from_role_selection(
+    let status = seeded_run_graph_state_from_role_selection(
         requested_run_id,
         bounded_task_id,
         &selection,
@@ -7587,7 +8298,7 @@ fn build_seeded_run_graph_status_from_activation_snapshot(
     })
 }
 
-fn seeded_run_graph_status_from_role_selection(
+fn seeded_run_graph_state_from_role_selection(
     requested_run_id: &str,
     bounded_task_id: &str,
     selection: &RuntimeConsumptionLaneSelection,
@@ -7689,20 +8400,18 @@ fn seeded_run_graph_status_from_role_selection(
             "implementation".to_string()
         },
         selected_backend,
-        ..default_run_graph_status(requested_run_id, "planning", "implementation")
+        ..default_run_graph_state(requested_run_id, "planning", "implementation")
     };
-    let mut status = run_graph_transition(
+    let mut status = run_graph_state_from_authority_ready_transition(
         &seed_base,
-        RunGraphTransitionArgs {
-            active_node: "planning".to_string(),
-            next_node,
-            lane_id,
-            lifecycle_stage,
-            policy_gate,
-            checkpoint_kind,
-            target_format: DispatchTargetFormat::Lane,
-            recovery_ready,
-        },
+        "planning".to_string(),
+        next_node,
+        lane_id,
+        lifecycle_stage,
+        policy_gate,
+        checkpoint_kind,
+        DispatchTargetFormat::Lane,
+        recovery_ready,
     );
     status.task_class = seed_base.task_class;
     status.route_task_class = seed_base.route_task_class;
@@ -7721,7 +8430,7 @@ async fn seed_existing_task_payload_for_dispatch_init(
         Ok(task) => task,
         Err(_) => return Ok(None),
     };
-    if taskflow_task_status_is_terminal_for_dispatch_init(&task.status) {
+    if taskflow_task_state_is_terminal_for_dispatch_init(&task.status) {
         return Err(format!(
             "Dispatch-init cannot seed terminal TaskFlow task `{task_id}` with status `{}`; bind a non-terminal bounded unit before dispatch-init.",
             task.status
@@ -7740,7 +8449,7 @@ async fn seed_existing_task_payload_for_dispatch_init(
             && design_doc_has_bounded_scope
             && request_has_explicit_implementation_or_repair_terms(&request_text));
     set_dispatch_init_timeout_stage(timeout_stage, "seed_existing_task_derive_seeded_status");
-    let payload = derive_seeded_run_graph_status_with_stage(
+    let payload = derive_seeded_run_graph_state_with_stage(
         store,
         task_id,
         &request_text,
@@ -7801,15 +8510,15 @@ async fn preview_run_graph_dispatch_init_artifacts(
         }
     };
     set_dispatch_init_timeout_stage(timeout_stage, "reconcile_active_exception_status");
-    let mut status = reconcile_dispatch_init_status_for_active_exception(store, status).await?;
-    if run_graph_status_has_configured_dev_team_route_mismatch(store, &status).await? {
+    let mut status = reconcile_dispatch_init_state_for_active_exception(store, status).await?;
+    if run_graph_state_has_configured_dev_team_route_mismatch(store, &status).await? {
         set_dispatch_init_timeout_stage(timeout_stage, "reseed_configured_dev_team_route_mismatch");
         if let Some(payload) =
             seed_existing_task_payload_for_dispatch_init(store, &effective_run_id, timeout_stage)
                 .await?
         {
             status =
-                reconcile_dispatch_init_status_for_active_exception(store, payload.status.clone())
+                reconcile_dispatch_init_state_for_active_exception(store, payload.status.clone())
                     .await?;
             seed_payload = Some(payload);
         }
@@ -7838,7 +8547,7 @@ async fn preview_run_graph_dispatch_init_artifacts(
             )
             .await?
             {
-                status = reconcile_dispatch_init_status_for_active_exception(
+                status = reconcile_dispatch_init_state_for_active_exception(
                     store,
                     payload.status.clone(),
                 )
@@ -7866,7 +8575,7 @@ async fn preview_run_graph_dispatch_init_artifacts(
         set_dispatch_init_timeout_stage(timeout_stage, "reseed_route_assignment_drift");
         let payload =
             reseed_dispatch_context_after_route_assignment_drift(store, &status, &context).await?;
-        status = reconcile_dispatch_init_status_for_active_exception(store, payload.status.clone())
+        status = reconcile_dispatch_init_state_for_active_exception(store, payload.status.clone())
             .await?;
         role_selection = payload.role_selection.clone();
         seed_payload = Some(payload);
@@ -7898,21 +8607,21 @@ async fn preview_run_graph_dispatch_init_artifacts(
         set_dispatch_init_timeout_stage(timeout_stage, "reseed_stale_dispatch_packet");
         let payload =
             reseed_dispatch_context_after_route_assignment_drift(store, &status, &context).await?;
-        status = reconcile_dispatch_init_status_for_active_exception(store, payload.status.clone())
+        status = reconcile_dispatch_init_state_for_active_exception(store, payload.status.clone())
             .await?;
         role_selection = payload.role_selection.clone();
         seed_payload = Some(payload);
         existing_dispatch_receipt = None;
     }
     if route_assignment_drift.is_none() {
-        status = reconcile_dispatch_init_status_for_missing_receipt(
+        status = reconcile_dispatch_init_state_for_missing_receipt(
             status,
             &role_selection,
             existing_dispatch_receipt.is_some(),
         );
     }
     set_dispatch_init_timeout_stage(timeout_stage, "build_run_graph_dispatch_bootstrap");
-    let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
+    let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_state(&status)?;
     set_dispatch_init_timeout_stage(timeout_stage, "build_taskflow_handoff_plan");
     let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
     if route_assignment_drift.is_none() {
@@ -8154,7 +8863,7 @@ pub(crate) async fn run_graph_dispatch_init_from_state_dir(
     {
         Ok(result) => result,
         Err(_) => {
-            let _ = record_dispatch_init_timeout_blocker_from_state_dir_bounded(state_dir, run_id)
+            let _ = record_dispatch_init_timeout_issue_from_state_dir_bounded(state_dir, run_id)
                 .await;
             let stage = *timeout_stage
                 .lock()
@@ -8187,7 +8896,7 @@ async fn run_graph_dispatch_init(
             Ok(payload)
         }),
         Err(_) => {
-            let _ = record_dispatch_init_timeout_blocker_bounded(store, run_id).await;
+            let _ = record_dispatch_init_timeout_issue_bounded(store, run_id).await;
             Err(run_graph_dispatch_init_timeout_message(
                 run_id,
                 "prepare_dispatch_init_artifacts",
@@ -8196,7 +8905,7 @@ async fn run_graph_dispatch_init(
     }
 }
 
-pub(crate) async fn derive_advanced_run_graph_status(
+pub(crate) async fn derive_advanced_run_graph_state(
     store: &StateStore,
     existing: RunGraphStatus,
 ) -> Result<TaskflowRunGraphAdvancePayload, String> {
@@ -8211,7 +8920,7 @@ pub(crate) async fn derive_advanced_run_graph_status(
                 existing.run_id
             )
         })?;
-    if active_exception_takeover_receipt_matches_status(&existing, dispatch_receipt.as_ref()) {
+    if active_exception_takeover_receipt_matches_snapshot(&existing, dispatch_receipt.as_ref()) {
         return Err(format!(
             "run-graph advance blocked: run `{}` is in active exception takeover for `{}`; finish the scoped local work allowed by `vida lane takeover-ready {}`, then close the bounded task before advancing another runtime lane.",
             existing.run_id, existing.active_node, existing.run_id
@@ -8240,24 +8949,22 @@ pub(crate) async fn derive_advanced_run_graph_status(
             let (next_node, policy_gate) =
                 implementation_verification_gate(&implementation, &verification);
             return Ok(TaskflowRunGraphAdvancePayload {
-                status: run_graph_transition(
+                status: run_graph_state_from_authority_ready_transition(
                     &existing,
-                    RunGraphTransitionArgs {
-                        active_node: direct_writer_entry.clone(),
-                        next_node: if coach_required {
-                            json_string_field(&implementation, "coach_route_task_class")
-                                .filter(|value| !value.is_empty())
-                                .or(next_node)
-                        } else {
-                            next_node
-                        },
-                        lane_id: format!("{direct_writer_entry}_lane"),
-                        lifecycle_stage: "writer_active".to_string(),
-                        policy_gate,
-                        checkpoint_kind: "execution_cursor".to_string(),
-                        target_format: DispatchTargetFormat::Lane,
-                        recovery_ready: true,
+                    direct_writer_entry.clone(),
+                    if coach_required {
+                        json_string_field(&implementation, "coach_route_task_class")
+                            .filter(|value| !value.is_empty())
+                            .or(next_node)
+                    } else {
+                        next_node
                     },
+                    format!("{direct_writer_entry}_lane"),
+                    "writer_active".to_string(),
+                    policy_gate,
+                    "execution_cursor".to_string(),
+                    DispatchTargetFormat::Lane,
+                    true,
                 ),
             });
         }
@@ -8273,18 +8980,16 @@ pub(crate) async fn derive_advanced_run_graph_status(
             implementation_analysis_gate(&implementation);
 
         return Ok(TaskflowRunGraphAdvancePayload {
-            status: run_graph_transition(
+            status: run_graph_state_from_authority_ready_transition(
                 &existing,
-                RunGraphTransitionArgs {
-                    active_node: analysis_node.clone(),
-                    next_node,
-                    lane_id: format!("{analysis_node}_lane"),
-                    lifecycle_stage: "analysis_active".to_string(),
-                    policy_gate,
-                    checkpoint_kind: "execution_cursor".to_string(),
-                    target_format: DispatchTargetFormat::Lane,
-                    recovery_ready,
-                },
+                analysis_node.clone(),
+                next_node,
+                format!("{analysis_node}_lane"),
+                "analysis_active".to_string(),
+                policy_gate,
+                "execution_cursor".to_string(),
+                DispatchTargetFormat::Lane,
+                recovery_ready,
             ),
         });
     }
@@ -8304,18 +9009,16 @@ pub(crate) async fn derive_advanced_run_graph_status(
             let (next_node, policy_gate, recovery_ready) =
                 implementation_analysis_gate(&implementation);
             return Ok(TaskflowRunGraphAdvancePayload {
-                status: run_graph_transition(
+                status: run_graph_state_from_authority_ready_transition(
                     &existing,
-                    RunGraphTransitionArgs {
-                        active_node: existing.active_node.clone(),
-                        next_node,
-                        lane_id: existing.lane_id.clone(),
-                        lifecycle_stage: "analysis_active".to_string(),
-                        policy_gate,
-                        checkpoint_kind: "execution_cursor".to_string(),
-                        target_format: DispatchTargetFormat::Lane,
-                        recovery_ready,
-                    },
+                    existing.active_node.clone(),
+                    next_node,
+                    existing.lane_id.clone(),
+                    "analysis_active".to_string(),
+                    policy_gate,
+                    "execution_cursor".to_string(),
+                    DispatchTargetFormat::Lane,
+                    recovery_ready,
                 ),
             });
         }
@@ -8333,24 +9036,22 @@ pub(crate) async fn derive_advanced_run_graph_status(
         let (next_node, policy_gate) =
             implementation_verification_gate(&implementation, &verification);
         return Ok(TaskflowRunGraphAdvancePayload {
-            status: run_graph_transition(
+            status: run_graph_state_from_authority_ready_transition(
                 &existing,
-                RunGraphTransitionArgs {
-                    active_node: writer_node.clone(),
-                    next_node: if coach_required {
-                        json_string_field(&implementation, "coach_route_task_class")
-                            .filter(|value| !value.is_empty())
-                            .or(next_node)
-                    } else {
-                        next_node
-                    },
-                    lane_id: format!("{writer_node}_lane"),
-                    lifecycle_stage: "writer_active".to_string(),
-                    policy_gate,
-                    checkpoint_kind: "execution_cursor".to_string(),
-                    target_format: DispatchTargetFormat::Lane,
-                    recovery_ready: true,
+                writer_node.clone(),
+                if coach_required {
+                    json_string_field(&implementation, "coach_route_task_class")
+                        .filter(|value| !value.is_empty())
+                        .or(next_node)
+                } else {
+                    next_node
                 },
+                format!("{writer_node}_lane"),
+                "writer_active".to_string(),
+                policy_gate,
+                "execution_cursor".to_string(),
+                DispatchTargetFormat::Lane,
+                true,
             ),
         });
     }
@@ -8381,18 +9082,16 @@ pub(crate) async fn derive_advanced_run_graph_status(
         }
 
         if active_node == existing.active_node && next_node.is_none() {
-            let mut status = run_graph_transition(
+            let mut status = run_graph_state_from_authority_ready_transition(
                 &existing,
-                RunGraphTransitionArgs {
-                    active_node: existing.active_node.clone(),
-                    next_node: None,
-                    lane_id: existing.lane_id.clone(),
-                    lifecycle_stage: "implementation_complete".to_string(),
-                    policy_gate: "not_required".to_string(),
-                    checkpoint_kind: existing.checkpoint_kind.clone(),
-                    target_format: DispatchTargetFormat::Lane,
-                    recovery_ready: false,
-                },
+                existing.active_node.clone(),
+                None,
+                existing.lane_id.clone(),
+                "implementation_complete".to_string(),
+                "not_required".to_string(),
+                existing.checkpoint_kind.clone(),
+                DispatchTargetFormat::Lane,
+                false,
             );
             status.status = "completed".to_string();
             status.context_state = existing.context_state;
@@ -8400,18 +9099,16 @@ pub(crate) async fn derive_advanced_run_graph_status(
         }
 
         return Ok(TaskflowRunGraphAdvancePayload {
-            status: run_graph_transition(
+            status: run_graph_state_from_authority_ready_transition(
                 &existing,
-                RunGraphTransitionArgs {
-                    active_node: active_node.clone(),
-                    next_node,
-                    lane_id: format!("{active_node}_lane"),
-                    lifecycle_stage: format!("{active_node}_active"),
-                    policy_gate,
-                    checkpoint_kind: "execution_cursor".to_string(),
-                    target_format,
-                    recovery_ready,
-                },
+                active_node.clone(),
+                next_node,
+                format!("{active_node}_lane"),
+                format!("{active_node}_active"),
+                policy_gate,
+                "execution_cursor".to_string(),
+                target_format,
+                recovery_ready,
             ),
         });
     }
@@ -8458,20 +9155,18 @@ pub(crate) async fn derive_advanced_run_graph_status(
         let verification = compiled_control.verification.clone();
 
         return Ok(TaskflowRunGraphAdvancePayload {
-            status: run_graph_transition(
+            status: run_graph_state_from_authority_ready_transition(
                 &existing,
-                RunGraphTransitionArgs {
-                    active_node: verification_node.clone(),
-                    next_node: None,
-                    lane_id: format!("{verification_node}_lane"),
-                    lifecycle_stage: format!("{verification_node}_active"),
-                    policy_gate: json_string_field(&verification, "verification_gate")
-                        .filter(|value| !value.is_empty())
-                        .unwrap_or_else(|| existing.policy_gate.clone()),
-                    checkpoint_kind: "execution_cursor".to_string(),
-                    target_format: DispatchTargetFormat::Lane,
-                    recovery_ready: false,
-                },
+                verification_node.clone(),
+                None,
+                format!("{verification_node}_lane"),
+                format!("{verification_node}_active"),
+                json_string_field(&verification, "verification_gate")
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| existing.policy_gate.clone()),
+                "execution_cursor".to_string(),
+                DispatchTargetFormat::Lane,
+                false,
             ),
         });
     }
@@ -8500,55 +9195,48 @@ pub(crate) async fn derive_advanced_run_graph_status(
                         implementation_analysis_gate(&implementation);
 
                     return Ok(TaskflowRunGraphAdvancePayload {
-                        status: run_graph_transition(
+                        status: run_graph_state_from_authority_ready_transition(
                             &existing,
-                            RunGraphTransitionArgs {
-                                active_node: analysis_node.clone(),
-                                next_node,
-                                lane_id: format!("{analysis_node}_lane"),
-                                lifecycle_stage: "analysis_active".to_string(),
-                                policy_gate,
-                                checkpoint_kind: "execution_cursor".to_string(),
-                                target_format: DispatchTargetFormat::Lane,
-                                recovery_ready,
-                            },
+                            analysis_node.clone(),
+                            next_node,
+                            format!("{analysis_node}_lane"),
+                            "analysis_active".to_string(),
+                            policy_gate,
+                            "execution_cursor".to_string(),
+                            DispatchTargetFormat::Lane,
+                            recovery_ready,
                         ),
                     });
                 }
                 ImplementationVerificationOutcome::Clean => {
-                    let mut status = run_graph_transition(
+                    let mut status = run_graph_state_from_authority_ready_transition(
                         &existing,
-                        RunGraphTransitionArgs {
-                            active_node: existing.active_node.clone(),
-                            next_node: Some("approval".to_string()),
-                            lane_id: existing.lane_id.clone(),
-                            lifecycle_stage: "approval_wait".to_string(),
-                            policy_gate:
-                                crate::release1_contracts::ApprovalStatus::ApprovalRequired
-                                    .as_str()
-                                    .to_string(),
-                            checkpoint_kind: existing.checkpoint_kind.clone(),
-                            target_format: DispatchTargetFormat::Direct,
-                            recovery_ready: true,
-                        },
+                        existing.active_node.clone(),
+                        Some("approval".to_string()),
+                        existing.lane_id.clone(),
+                        "approval_wait".to_string(),
+                        crate::release1_contracts::ApprovalStatus::ApprovalRequired
+                            .as_str()
+                            .to_string(),
+                        existing.checkpoint_kind.clone(),
+                        DispatchTargetFormat::Direct,
+                        true,
                     );
                     status.status = "awaiting_approval".to_string();
                     status.context_state = existing.context_state;
                     return Ok(TaskflowRunGraphAdvancePayload { status });
                 }
                 ImplementationVerificationOutcome::Approved => {
-                    let mut status = run_graph_transition(
+                    let mut status = run_graph_state_from_authority_ready_transition(
                         &existing,
-                        RunGraphTransitionArgs {
-                            active_node: existing.active_node.clone(),
-                            next_node: None,
-                            lane_id: existing.lane_id.clone(),
-                            lifecycle_stage: "implementation_complete".to_string(),
-                            policy_gate: "not_required".to_string(),
-                            checkpoint_kind: existing.checkpoint_kind.clone(),
-                            target_format: DispatchTargetFormat::Lane,
-                            recovery_ready: false,
-                        },
+                        existing.active_node.clone(),
+                        None,
+                        existing.lane_id.clone(),
+                        "implementation_complete".to_string(),
+                        "not_required".to_string(),
+                        existing.checkpoint_kind.clone(),
+                        DispatchTargetFormat::Lane,
+                        false,
                     );
                     status.status = "completed".to_string();
                     status.context_state = existing.context_state;
@@ -8595,18 +9283,16 @@ pub(crate) async fn derive_advanced_run_graph_status(
 
         return Ok(TaskflowRunGraphAdvancePayload {
             status: {
-                let mut status = run_graph_transition(
+                let mut status = run_graph_state_from_authority_ready_transition(
                     &existing,
-                    RunGraphTransitionArgs {
-                        active_node: analyst_node.clone(),
-                        next_node: next_node.clone(),
-                        lane_id: format!("{analyst_node}_lane"),
-                        lifecycle_stage: "conversation_active".to_string(),
-                        policy_gate: existing.policy_gate.clone(),
-                        checkpoint_kind: "conversation_cursor".to_string(),
-                        target_format: DispatchTargetFormat::Lane,
-                        recovery_ready: true,
-                    },
+                    analyst_node.clone(),
+                    next_node.clone(),
+                    format!("{analyst_node}_lane"),
+                    "conversation_active".to_string(),
+                    existing.policy_gate.clone(),
+                    "conversation_cursor".to_string(),
+                    DispatchTargetFormat::Lane,
+                    true,
                 );
                 status.handoff_state = format!("awaiting_{route_target}");
                 status.resume_target = format!("dispatch.{route_target}");
@@ -8715,7 +9401,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                     return ExitCode::from(1);
                 }
             };
-            let payload = match derive_advanced_run_graph_status(&store, existing).await {
+            let payload = match derive_advanced_run_graph_state(&store, existing).await {
                 Ok(payload) => payload,
                 Err(error) => {
                     eprintln!("{error}");
@@ -8785,10 +9471,10 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
             let blocker_policy_gate = existing.policy_gate.clone();
             let blocker_resume_target = existing.resume_target.clone();
             let blocker_next_node = existing.next_node.clone();
-            let payload = match derive_advanced_run_graph_status(&store, existing).await {
+            let payload = match derive_advanced_run_graph_state(&store, existing).await {
                 Ok(payload) => payload,
                 Err(error) => {
-                    let evidence = match run_graph_blocker_evidence(RunGraphBlockerEvidenceArgs {
+                    let evidence = match run_graph_issue_evidence(RunGraphBlockerEvidenceArgs {
                         run_id: &blocker_run_id,
                         active_node: &blocker_active_node,
                         status: &blocker_status,
@@ -8886,7 +9572,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 return ExitCode::from(2);
             }
 
-            let payload = match derive_seeded_run_graph_status(&store, task_id, &request_text).await
+            let payload = match derive_seeded_run_graph_state(&store, task_id, &request_text).await
             {
                 Ok(payload) => payload,
                 Err(error) => {
@@ -8991,7 +9677,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
             }
         }
         [head, subcommand, task_id, task_class] if head == "run-graph" && subcommand == "init" => {
-            let status = default_run_graph_status(task_id, task_class, task_class);
+            let status = default_run_graph_state(task_id, task_class, task_class);
             match store.record_run_graph_status(&status).await {
                 Ok(()) => {
                     println!(
@@ -9013,7 +9699,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
         [head, subcommand, task_id, task_class, route_task_class]
             if head == "run-graph" && subcommand == "init" =>
         {
-            let status = default_run_graph_status(task_id, task_class, route_task_class);
+            let status = default_run_graph_state(task_id, task_class, route_task_class);
             match store.record_run_graph_status(&status).await {
                 Ok(()) => {
                     println!(
@@ -9038,7 +9724,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
             let existing = match store.run_graph_status(task_id).await {
                 Ok(existing) => existing,
                 Err(StateStoreError::MissingTask { .. }) => {
-                    default_run_graph_status(task_id, task_class, task_class)
+                    default_run_graph_state(task_id, task_class, task_class)
                 }
                 Err(error) => {
                     eprintln!("Failed to read existing run-graph state: {error}");
@@ -9063,12 +9749,8 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 resume_target: existing.resume_target,
                 recovery_ready: existing.recovery_ready,
             };
-            match record_run_graph_status_with_continuation_sync(
-                &store,
-                &merged,
-                "run_graph_update",
-            )
-            .await
+            match record_run_graph_state_with_continuation_sync(&store, &merged, "run_graph_update")
+                .await
             {
                 Ok(()) => {
                     println!(
@@ -9087,19 +9769,13 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [
-            head,
-            subcommand,
-            task_id,
-            task_class,
-            node,
-            status,
-            route_task_class,
-        ] if head == "run-graph" && subcommand == "update" => {
+        [head, subcommand, task_id, task_class, node, status, route_task_class]
+            if head == "run-graph" && subcommand == "update" =>
+        {
             let existing = match store.run_graph_status(task_id).await {
                 Ok(existing) => existing,
                 Err(StateStoreError::MissingTask { .. }) => {
-                    default_run_graph_status(task_id, task_class, route_task_class)
+                    default_run_graph_state(task_id, task_class, route_task_class)
                 }
                 Err(error) => {
                     eprintln!("Failed to read existing run-graph state: {error}");
@@ -9124,12 +9800,8 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 resume_target: existing.resume_target,
                 recovery_ready: existing.recovery_ready,
             };
-            match record_run_graph_status_with_continuation_sync(
-                &store,
-                &merged,
-                "run_graph_update",
-            )
-            .await
+            match record_run_graph_state_with_continuation_sync(&store, &merged, "run_graph_update")
+                .await
             {
                 Ok(()) => {
                     println!(
@@ -9148,16 +9820,9 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [
-            head,
-            subcommand,
-            task_id,
-            task_class,
-            node,
-            status,
-            route_task_class,
-            meta_json,
-        ] if head == "run-graph" && subcommand == "update" => {
+        [head, subcommand, task_id, task_class, node, status, route_task_class, meta_json]
+            if head == "run-graph" && subcommand == "update" =>
+        {
             let meta: serde_json::Value = match serde_json::from_str(meta_json) {
                 Ok(meta) => meta,
                 Err(error) => {
@@ -9168,7 +9833,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
             let existing = match store.run_graph_status(task_id).await {
                 Ok(existing) => existing,
                 Err(StateStoreError::MissingTask { .. }) => {
-                    default_run_graph_status(task_id, task_class, route_task_class)
+                    default_run_graph_state(task_id, task_class, route_task_class)
                 }
                 Err(error) => {
                     eprintln!("Failed to read existing run-graph state: {error}");
@@ -9196,12 +9861,8 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 },
                 &meta,
             );
-            match record_run_graph_status_with_continuation_sync(
-                &store,
-                &merged,
-                "run_graph_update",
-            )
-            .await
+            match record_run_graph_state_with_continuation_sync(&store, &merged, "run_graph_update")
+                .await
             {
                 Ok(()) => {
                     println!(
@@ -9251,6 +9912,15 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn test_temp_run_graph_root(prefix: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
+    }
 
     #[test]
     fn recommended_surface_for_command_uses_default_human_surface_without_json_bias() {
@@ -9392,17 +10062,16 @@ mod tests {
         inject_task_planner_metadata(&mut selection, &planner_metadata);
 
         assert_eq!(
-            selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]["planner_metadata"]["owned_paths"],
+            selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]["planner_metadata"]
+                ["owned_paths"],
             serde_json::json!([
                 "crates/vida/src/runtime_dispatch_execution.rs",
                 "docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md"
             ])
         );
-        assert!(
-            selection
-                .request
-                .contains("Owned paths: crates/vida/src/runtime_dispatch_execution.rs")
-        );
+        assert!(selection
+            .request
+            .contains("Owned paths: crates/vida/src/runtime_dispatch_execution.rs"));
     }
 
     fn clean_ready_downstream_dispatch_receipt(run_id: &str) -> RunGraphDispatchReceipt {
@@ -9436,6 +10105,96 @@ mod tests {
             selected_backend: Some("internal_subagents".to_string()),
             recorded_at: "2026-05-22T01:00:00Z".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn closed_task_ready_downstream_handoff_blocks_projection_action() {
+        let root = test_temp_run_graph_root("vida-closed-task-ready-downstream");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        let run_id = "closed-ready-downstream-run";
+
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: run_id,
+                title: "Closed ready downstream run",
+                display_id: None,
+                description: "closed task with stale run graph handoff",
+                issue_type: "task",
+                status: "closed",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create closed task");
+
+        let mut status = default_run_graph_state(run_id, "implementation", "implementation");
+        status.run_id = run_id.to_string();
+        status.task_id = run_id.to_string();
+        status.active_node = "architect".to_string();
+        status.next_node = Some("internal_subagents".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "architect_complete".to_string();
+        status.handoff_state = "awaiting_internal_subagents".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.internal_subagents_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist stale closed-task status");
+
+        let mut receipt = clean_ready_downstream_dispatch_receipt(run_id);
+        receipt.dispatch_target = "architect".to_string();
+        receipt.lane_status = "lane_completed".to_string();
+        receipt.downstream_dispatch_target = Some("internal_subagents".to_string());
+        receipt.downstream_dispatch_command = Some(
+            "vida agent-init --downstream-packet downstream.json --execute-dispatch --json"
+                .to_string(),
+        );
+        receipt.downstream_dispatch_packet_path = Some("downstream.json".to_string());
+        receipt.downstream_dispatch_result_path = None;
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist ready downstream receipt");
+
+        let projection_truth = run_graph_projection_truth(&store, &status)
+            .await
+            .expect("build projection truth");
+        assert!(projection_truth.stale_state_suspected);
+        assert_eq!(
+            projection_truth.next_lawful_operator_action.as_deref(),
+            Some("vida task reconcile-closed-runs --limit 25")
+        );
+        assert!(projection_truth.continuation_binding.is_none());
+        assert_eq!(
+            run_graph_state_surface_issue_codes(&status, &projection_truth),
+            vec!["closed_task_active_run_projection_mismatch".to_string()]
+        );
+
+        let payload = build_run_graph_state_json_payload(
+            "vida taskflow run-graph status",
+            &status,
+            &projection_truth,
+        )
+        .expect("status payload renders");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["closed_task_active_run_projection_mismatch"])
+        );
+        assert!(
+            !payload.to_string().contains("consume continue"),
+            "closed task projection must not recommend downstream consume: {payload}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -9474,13 +10233,11 @@ mod tests {
             evidence["next_action"]["command"],
             "vida lane show run-recovery-false --json"
         );
-        assert!(
-            evidence["next_actions"]
-                .as_array()
-                .is_some_and(|actions| actions.iter().any(|action| action
-                    .as_str()
-                    .is_some_and(|text| text.contains("recommended recovery command"))))
-        );
+        assert!(evidence["next_actions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|action| action
+                .as_str()
+                .is_some_and(|text| text.contains("recommended recovery command")))));
         assert_eq!(
             shared_operator_output_contract_parity_error(&evidence),
             None
@@ -9488,8 +10245,8 @@ mod tests {
     }
 
     #[test]
-    fn run_graph_blocker_evidence_accepts_active_exception_takeover() {
-        let evidence = run_graph_blocker_evidence(RunGraphBlockerEvidenceArgs {
+    fn run_graph_issue_evidence_accepts_active_exception_takeover() {
+        let evidence = run_graph_issue_evidence(RunGraphBlockerEvidenceArgs {
             run_id: "run-active-exception",
             active_node: "analyst",
             status: "blocked",
@@ -9529,7 +10286,7 @@ mod tests {
         let run_id = "run-1";
         crate::operator_projection_cache::write_json_projection(
             &root,
-            &recovery_status_projection_name(run_id),
+            &recovery_projection_name(run_id),
             &serde_json::json!({
                 "surface": "vida taskflow recovery status",
                 "status": "blocked",
@@ -9550,12 +10307,7 @@ mod tests {
         crate::operator_projection_cache::touch_state_mutation_marker(&root);
 
         assert!(
-            read_recovery_status_projection(
-                &root,
-                &recovery_status_projection_name(run_id),
-                run_id
-            )
-            .is_none()
+            read_recovery_projection(&root, &recovery_projection_name(run_id), run_id).is_none()
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -9586,8 +10338,8 @@ mod tests {
         })
         .to_string();
 
-        assert!(!recovery_projection_has_complete_action_fields(&incomplete));
-        assert!(recovery_projection_has_complete_action_fields(&complete));
+        assert!(!recovery_projection_has_done_action_fields(&incomplete));
+        assert!(recovery_projection_has_done_action_fields(&complete));
     }
 
     #[test]
@@ -9614,7 +10366,7 @@ mod tests {
         })
         .to_string();
 
-        assert!(!recovery_projection_has_complete_action_fields(
+        assert!(!recovery_projection_has_done_action_fields(
             &stale_lane_show
         ));
     }
@@ -9632,7 +10384,7 @@ mod tests {
         let run_id = "run-stale-pass";
         crate::operator_projection_cache::write_json_projection(
             &root,
-            &recovery_status_projection_name(run_id),
+            &recovery_projection_name(run_id),
             &serde_json::json!({
                 "surface": "vida taskflow recovery status",
                 "status": "pass",
@@ -9649,12 +10401,7 @@ mod tests {
         crate::operator_projection_cache::touch_state_mutation_marker(&root);
 
         assert!(
-            read_recovery_status_projection(
-                &root,
-                &recovery_status_projection_name(run_id),
-                run_id
-            )
-            .is_none()
+            read_recovery_projection(&root, &recovery_projection_name(run_id), run_id).is_none()
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -9673,7 +10420,7 @@ mod tests {
         let run_id = "run-1";
         crate::operator_projection_cache::write_json_projection(
             &root,
-            &recovery_status_projection_name(run_id),
+            &recovery_projection_name(run_id),
             &serde_json::json!({
                 "surface": "vida taskflow recovery status",
                 "status": "blocked",
@@ -9694,12 +10441,7 @@ mod tests {
         crate::operator_projection_cache::touch_state_mutation_marker(&root);
 
         assert!(
-            read_recovery_status_projection(
-                &root,
-                &recovery_status_projection_name(run_id),
-                run_id
-            )
-            .is_none()
+            read_recovery_projection(&root, &recovery_projection_name(run_id), run_id).is_none()
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -9742,7 +10484,7 @@ mod tests {
                 .expect("create task");
         }
 
-        let mut current_status = crate::taskflow_run_graph::default_run_graph_status(
+        let mut current_status = crate::taskflow_run_graph::default_run_graph_state(
             "run-current-recovery",
             "run-current-recovery",
             "analysis",
@@ -9775,7 +10517,7 @@ mod tests {
             .await
             .expect("claim current run");
 
-        let mut stale_status = crate::taskflow_run_graph::default_run_graph_status(
+        let mut stale_status = crate::taskflow_run_graph::default_run_graph_state(
             "run-global-stale",
             "run-global-stale",
             "planning",
@@ -9836,7 +10578,7 @@ mod tests {
             .await
             .expect("open store");
         let run_id = "dispatch-init-timeout-missing-receipt";
-        let mut status = default_run_graph_status(run_id, "implementation", "implementation");
+        let mut status = default_run_graph_state(run_id, "implementation", "implementation");
         status.run_id = run_id.to_string();
         status.task_id = run_id.to_string();
         status.status = "ready".to_string();
@@ -9855,7 +10597,7 @@ mod tests {
             .expect("persist timeout candidate status");
 
         assert!(
-            record_dispatch_init_timeout_blocker(&store, run_id)
+            record_dispatch_init_timeout_issue(&store, run_id)
                 .await
                 .expect("timeout blocker should record"),
             "missing receipt timeout should mutate status"
@@ -9872,7 +10614,7 @@ mod tests {
     }
 
     fn packet_gate_status(task_id: &str) -> RunGraphStatus {
-        let mut status = default_run_graph_status(task_id, "implementation", "implementation");
+        let mut status = default_run_graph_state(task_id, "implementation", "implementation");
         status.run_id = task_id.to_string();
         status.task_id = task_id.to_string();
         status.status = "running".to_string();
@@ -9958,11 +10700,10 @@ mod tests {
 
         assert!(!gate.supported);
         assert_eq!(gate.status, "blocked_lineage_preconditions_not_verified");
-        assert!(
-            gate.blocker_codes
-                .iter()
-                .any(|code| code == "missing_run_graph_status")
-        );
+        assert!(gate
+            .blocker_codes
+            .iter()
+            .any(|code| code == "missing_run_graph_status"));
     }
 
     #[test]
@@ -10031,13 +10772,11 @@ mod tests {
 
         assert!(!gate.supported);
         assert_eq!(gate.status, "blocked_task_run_mapping_mismatch");
-        assert!(
-            gate.blocker_codes
-                .iter()
-                .any(|code| code == "blocked_task_run_mapping_mismatch")
-        );
+        assert!(gate
+            .blocker_codes
+            .iter()
+            .any(|code| code == "blocked_task_run_mapping_mismatch"));
     }
-    use crate::RuntimeConsumptionLaneSelection;
     use crate::build_compiled_agent_extension_bundle_for_root;
     use crate::launcher_activation_snapshot::config_file_digest;
     use crate::launcher_activation_snapshot::pack_router_keywords_json;
@@ -10045,6 +10784,7 @@ mod tests {
     use crate::state_store::LauncherActivationSnapshot;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::guard_current_dir;
+    use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
     use std::path::Path;
 
@@ -10072,7 +10812,7 @@ mod tests {
         let run_id = "runtime-missing-task-stale-run";
         let task_id = "missing-authoritative-task";
 
-        let mut status = default_run_graph_status(task_id, "implementation", "implementation");
+        let mut status = default_run_graph_state(task_id, "implementation", "implementation");
         status.run_id = run_id.to_string();
         status.active_node = "analysis".to_string();
         status.status = "blocked".to_string();
@@ -10158,17 +10898,17 @@ mod tests {
     }
 
     #[test]
-    fn governance_handoff_uses_lane_targets_for_execution() {
+    fn run_graph_authority_handoff_uses_lane_targets_for_execution() {
         let (handoff_state, resume_target) =
-            governance_handoff(Some("coach"), DispatchTargetFormat::Lane);
+            run_graph_handoff(Some("coach"), DispatchTargetFormat::Lane);
         assert_eq!(handoff_state, "awaiting_coach");
         assert_eq!(resume_target, "dispatch.coach_lane");
     }
 
     #[test]
-    fn governance_handoff_uses_direct_targets_for_conversation() {
+    fn run_graph_authority_handoff_uses_direct_targets_for_conversation() {
         let (handoff_state, resume_target) =
-            governance_handoff(Some("spec-pack"), DispatchTargetFormat::Direct);
+            run_graph_handoff(Some("spec-pack"), DispatchTargetFormat::Direct);
         assert_eq!(handoff_state, "awaiting_spec-pack");
         assert_eq!(resume_target, "dispatch.spec-pack");
     }
@@ -10212,7 +10952,7 @@ mod tests {
         };
 
         let reconciled =
-            reconcile_dispatch_init_status_for_missing_receipt(status, &role_selection, false);
+            reconcile_dispatch_init_state_for_missing_receipt(status, &role_selection, false);
 
         assert_eq!(reconciled.next_node.as_deref(), Some("analysis"));
         assert_eq!(reconciled.handoff_state, "awaiting_analysis");
@@ -10490,6 +11230,40 @@ mod tests {
     }
 
     #[test]
+    fn recovery_status_json_failure_contract() {
+        let state_dir = std::path::Path::new(".vida/data/state");
+        let payload = recovery_json_error_payload(
+            "vida taskflow recovery status",
+            "run-missing-recovery-json",
+            state_dir,
+            "run_graph_recovery_unreadable",
+            "task is missing: run_graph:run-missing-recovery-json",
+        );
+
+        assert_eq!(payload["surface"], "vida taskflow recovery status");
+        assert_eq!(payload["run_id"], "run-missing-recovery-json");
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| !codes.is_empty()));
+        assert_eq!(
+            payload["artifact_refs"]["surface"],
+            "vida taskflow recovery status"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["run_id"],
+            "run-missing-recovery-json"
+        );
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(payload["error_kind"], "run_graph_recovery_unreadable");
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .is_some_and(|action| action.contains("vida taskflow run-graph status")));
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
     fn recovery_explain_json_payload_keeps_operator_contract_parity() {
         let summary = crate::state_store::RunGraphRecoverySummary {
             run_id: "run-recovery-explain-json".to_string(),
@@ -10551,15 +11325,13 @@ mod tests {
         let diagnosis_value = payload["diagnosis"]
             .as_str()
             .expect("diagnosis should be a string");
-        assert!(
-            [
-                "runtime_defect",
-                "carrier_unavailable",
-                "packet_invalid",
-                "user_action_needed"
-            ]
-            .contains(&diagnosis_value)
-        );
+        assert!([
+            "runtime_defect",
+            "carrier_unavailable",
+            "packet_invalid",
+            "user_action_needed"
+        ]
+        .contains(&diagnosis_value));
         // diagnosis_detail contains the old diagnosis object
         assert!(payload.get("diagnosis_detail").is_some());
         assert_eq!(
@@ -10582,7 +11354,7 @@ mod tests {
         let store = StateStore::open(harness.path().to_path_buf())
             .await
             .expect("open store");
-        let mut status = default_run_graph_status(
+        let mut status = default_run_graph_state(
             "task-recovery-status-json-latest",
             "implementation",
             "implementation",
@@ -10662,13 +11434,11 @@ mod tests {
         };
 
         let command =
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false);
 
-        assert!(
-            command.as_deref().is_some_and(
-                |value| value == "vida lane show run-configured-backend-blocked --json"
-            )
-        );
+        assert!(command
+            .as_deref()
+            .is_some_and(|value| value == "vida lane show run-configured-backend-blocked --json"));
     }
 
     #[test]
@@ -10723,7 +11493,7 @@ mod tests {
         };
 
         let command =
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false);
 
         assert_eq!(
             command.as_deref(),
@@ -10748,7 +11518,7 @@ mod tests {
         receipt.selected_backend = Some("internal_subagents".to_string());
 
         let command =
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false);
 
         assert_eq!(
             command.as_deref(),
@@ -10774,7 +11544,7 @@ mod tests {
         receipt.selected_backend = Some("internal_subagents".to_string());
 
         let command =
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false);
 
         assert_eq!(
             command.as_deref(),
@@ -10834,7 +11604,7 @@ mod tests {
         };
 
         let command =
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false);
 
         assert_eq!(
             command.as_deref(),
@@ -10893,7 +11663,7 @@ mod tests {
             recorded_at: "2026-05-13T00:00:00Z".to_string(),
         };
         let next_lawful_operator_action =
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false);
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false);
         let projection_truth = RunGraphProjectionTruth {
             projection_source: "reconciled_run_graph_status".to_string(),
             projection_reason: "run-graph status reflects persisted dispatch blocker evidence"
@@ -10907,7 +11677,7 @@ mod tests {
             continuation_binding: None,
         };
 
-        let payload = build_run_graph_status_json_payload(
+        let payload = build_run_graph_state_json_payload(
             "vida taskflow run-graph status",
             &status,
             &projection_truth,
@@ -10915,30 +11685,24 @@ mod tests {
         .expect("status payload should render");
 
         assert_eq!(payload["status"], "blocked");
-        assert!(
-            payload["blocker_codes"]
-                .as_array()
-                .expect("blocker_codes should be an array")
-                .iter()
-                .any(|value| value == "missing_owned_write_scope")
-        );
-        assert!(
-            payload["next_actions"]
-                .as_array()
-                .expect("next_actions should be an array")
-                .iter()
-                .any(|value| value.as_str().is_some_and(|action| action
-                    .contains("vida taskflow packet render run-status-missing-owned-scope")))
-        );
-        assert!(
-            payload["next_actions"]
-                .as_array()
-                .expect("next_actions should be an array")
-                .iter()
-                .all(|value| value
-                    .as_str()
-                    .is_some_and(|action| !action.contains("--json")))
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should be an array")
+            .iter()
+            .any(|value| value == "missing_owned_write_scope"));
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .any(|value| value.as_str().is_some_and(|action| action
+                .contains("vida taskflow packet render run-status-missing-owned-scope"))));
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .all(|value| value
+                .as_str()
+                .is_some_and(|action| !action.contains("--json"))));
     }
 
     #[test]
@@ -11026,7 +11790,7 @@ mod tests {
             "specification"
         );
         assert_eq!(
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false)
                 .as_deref(),
             Some("vida lane show run-stale-binding")
         );
@@ -11117,6 +11881,7 @@ mod tests {
                 Some(&receipt),
                 None,
                 false,
+                false,
             ),
             dispatch_receipt: Some(receipt),
             continuation_binding: None,
@@ -11142,11 +11907,9 @@ mod tests {
             payload["recommended_surface"],
             serde_json::json!("vida lane show")
         );
-        assert!(
-            payload["recommended_command"]
-                .as_str()
-                .is_some_and(|value| value == "vida lane show run-terminal-write-blocked --json")
-        );
+        assert!(payload["recommended_command"]
+            .as_str()
+            .is_some_and(|value| value == "vida lane show run-terminal-write-blocked --json"));
         assert_eq!(
             payload["why_not_now"]["category"],
             serde_json::json!("run_graph_blocked_state")
@@ -11226,7 +11989,7 @@ mod tests {
         };
 
         assert_eq!(
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false)
                 .as_deref(),
             Some(
                 "vida lane supersede run-recorded-exception --receipt-id exception-receipt-1 --json"
@@ -11286,7 +12049,7 @@ mod tests {
         };
 
         assert_eq!(
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false)
                 .as_deref(),
             Some("vida taskflow consume continue --run-id run-active-exception --json")
         );
@@ -11349,6 +12112,7 @@ mod tests {
                 Some(&receipt),
                 Some("run-active-exception"),
                 false,
+                false,
             )
             .as_deref(),
             Some("vida taskflow run-graph status run-active-exception --json")
@@ -11357,7 +12121,7 @@ mod tests {
 
     #[test]
     fn recovery_status_action_for_internal_timeout_without_ready_recovery_points_to_lane_show() {
-        let mut status = default_run_graph_status("run-timeout", "implementation", "coach");
+        let mut status = default_run_graph_state("run-timeout", "implementation", "coach");
         status.status = "blocked".to_string();
         status.lifecycle_stage = "implementer_blocked".to_string();
         status.active_node = "implementer".to_string();
@@ -11372,7 +12136,7 @@ mod tests {
             .push("internal_dispatch_timeout_without_receipt".to_string());
 
         assert_eq!(
-            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false)
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false)
                 .as_deref(),
             Some("vida lane show run-timeout --json")
         );
@@ -11381,19 +12145,19 @@ mod tests {
     #[test]
     fn missing_task_stale_cleanup_is_not_actionable_for_terminal_resolved_status() {
         let mut terminal =
-            default_run_graph_status("run-terminal-missing", "implementation", "closure");
+            default_run_graph_state("run-terminal-missing", "implementation", "closure");
         terminal.status = "completed".to_string();
         terminal.lifecycle_stage = "closure_complete".to_string();
         terminal.resume_target = "none".to_string();
         terminal.next_node = None;
         let mut completed_like =
-            default_run_graph_status("run-completed-like-missing", "implementation", "coach");
+            default_run_graph_state("run-completed-like-missing", "implementation", "coach");
         completed_like.status = "completed".to_string();
         completed_like.lifecycle_stage = "implementation_complete".to_string();
         completed_like.next_node = Some("verification".to_string());
         completed_like.resume_target = "dispatch.implementation_lane".to_string();
         completed_like.recovery_ready = true;
-        let mut active = default_run_graph_status("run-active-missing", "implementation", "coach");
+        let mut active = default_run_graph_state("run-active-missing", "implementation", "coach");
         active.status = "blocked".to_string();
         active.lifecycle_stage = "coach_blocked".to_string();
 
@@ -11413,9 +12177,12 @@ mod tests {
             Some(&active),
             false
         ));
-        assert!(next_lawful_operator_action_for_projection(&terminal, None, None, true).is_none());
         assert!(
-            next_lawful_operator_action_for_projection(&active, None, None, true)
+            next_lawful_operator_action_for_projection(&terminal, None, None, true, false)
+                .is_none()
+        );
+        assert!(
+            next_lawful_operator_action_for_projection(&active, None, None, true, false)
                 .as_deref()
                 .is_some_and(|action| action.starts_with("vida lane retire run-active-missing"))
         );
@@ -11457,7 +12224,7 @@ mod tests {
             continuation_binding: None,
         };
 
-        let payload = build_run_graph_status_json_payload(
+        let payload = build_run_graph_state_json_payload(
             "vida taskflow run-graph status",
             &status,
             &projection_truth,
@@ -11540,7 +12307,7 @@ mod tests {
             continuation_binding: None,
         };
 
-        let payload = build_run_graph_status_json_payload(
+        let payload = build_run_graph_state_json_payload(
             "vida taskflow run-graph status",
             &status,
             &projection_truth,
@@ -11558,11 +12325,9 @@ mod tests {
             payload["projection_truth"]["dispatch_receipt"]["blocker_code"],
             serde_json::json!("configured_backend_dispatch_failed")
         );
-        assert!(
-            payload["next_actions"]
-                .as_array()
-                .is_some_and(|actions| !actions.is_empty())
-        );
+        assert!(payload["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty()));
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
@@ -11604,7 +12369,7 @@ mod tests {
             downstream_dispatch_note: None,
             downstream_dispatch_ready: false,
             downstream_dispatch_blockers: vec![
-                "internal_dispatch_timeout_without_receipt".to_string(),
+                "internal_dispatch_timeout_without_receipt".to_string()
             ],
             downstream_dispatch_packet_path: None,
             downstream_dispatch_status: Some("blocked".to_string()),
@@ -11635,7 +12400,7 @@ mod tests {
             continuation_binding: None,
         };
 
-        let payload = build_run_graph_status_json_payload(
+        let payload = build_run_graph_state_json_payload(
             "vida taskflow run-graph status",
             &status,
             &projection_truth,
@@ -11704,7 +12469,7 @@ mod tests {
             recorded_at: "2026-04-26T00:00:00Z".to_string(),
         };
 
-        let (_projection_truth, blocker_codes) = projection_truth_from_status_surface(
+        let (_projection_truth, blocker_codes) = projection_truth_from_state_surface(
             std::path::Path::new("."),
             &status,
             None,
@@ -11756,7 +12521,7 @@ mod tests {
             downstream_dispatch_note: None,
             downstream_dispatch_ready: false,
             downstream_dispatch_blockers: vec![
-                "internal_dispatch_timeout_without_receipt".to_string(),
+                "internal_dispatch_timeout_without_receipt".to_string()
             ],
             downstream_dispatch_packet_path: None,
             downstream_dispatch_status: Some("blocked".to_string()),
@@ -11812,7 +12577,7 @@ mod tests {
             continuation_binding: None,
         };
 
-        let payload = build_run_graph_status_json_payload(
+        let payload = build_run_graph_state_json_payload(
             "vida taskflow run-graph latest",
             &status,
             &projection_truth,
@@ -11827,6 +12592,159 @@ mod tests {
             serde_json::json!("vida taskflow run-graph latest")
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn run_graph_status_host_bridge_projection_blocker_next_actions() {
+        let root = test_temp_run_graph_root("run-graph-status-host-bridge-actionable");
+        let result_path =
+            root.join("runtime-consumption/dispatch-results/run-host-bridge-blocked.json");
+        let request_path =
+            root.join("host-tool-bridge/requests/run-host-bridge-blocked-request.json");
+        let receipt_path =
+            root.join("host-tool-bridge/receipts/run-host-bridge-blocked-receipt.json");
+        fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create result parent");
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "blocked",
+                "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_codes": ["host_tool_bridge_adapter_required"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer_rework",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }
+            }))
+            .expect("result should encode"),
+        )
+        .expect("write result");
+        let status = RunGraphStatus {
+            run_id: "run-host-bridge-blocked".to_string(),
+            task_id: "task-host-bridge-blocked".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "coach".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "coach_lane".to_string(),
+            lifecycle_stage: "coach_blocked".to_string(),
+            policy_gate: "host_bridge_completion_result_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "none".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --dispatch-packet packet.json".to_string()),
+            dispatch_packet_path: Some(
+                "runtime-consumption/dispatch-packets/coach.json".to_string(),
+            ),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: Some("host_tool_bridge_adapter_required".to_string()),
+            downstream_dispatch_target: Some("developer".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: Some(
+                "host bridge completion requires developer rework".to_string(),
+            ),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["host_tool_bridge_adapter_required".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: Some(result_path.display().to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-24T00:00:00Z".to_string(),
+        };
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: false,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida taskflow run-graph status run-host-bridge-blocked --json".to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let payload = build_run_graph_state_json_payload_with_task_identity_and_state_root(
+            "vida taskflow run-graph status",
+            &status,
+            &projection_truth,
+            None,
+            Some(&root),
+        )
+        .expect("run-graph status payload should render");
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["host_tool_bridge_adapter_required"])
+        );
+        let next_actions = payload["next_actions"]
+            .as_array()
+            .expect("next_actions should render");
+        assert!(next_actions.iter().any(|action| {
+            action
+                .as_str()
+                .is_some_and(|value| value.contains("vida lane show run-host-bridge-blocked"))
+        }));
+        assert!(next_actions.iter().all(|action| {
+            action.as_str().is_some_and(|value| {
+                !value.contains("vida taskflow run-graph status run-host-bridge-blocked")
+            })
+        }));
+        assert_eq!(
+            payload["artifact_refs"]["dispatch_result_path"],
+            serde_json::json!(result_path.display().to_string())
+        );
+        assert_eq!(
+            payload["artifact_refs"]["host_bridge_receipt_path"],
+            serde_json::json!(receipt_path.display().to_string())
+        );
+        assert_eq!(
+            payload["artifact_refs"]["downstream_dispatch_status"],
+            serde_json::json!("blocked")
+        );
+        assert_eq!(
+            payload["artifact_refs"]["repair_target"],
+            serde_json::json!("developer")
+        );
+        assert_eq!(
+            payload["artifact_refs"]["result_rework_target"],
+            serde_json::json!("developer")
+        );
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"],
+            payload["operator_contracts"]["artifact_refs"]
+        );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -12299,12 +13217,10 @@ mod tests {
         .expect("compact summary should exist");
 
         assert!(summary.stale_state_suspected);
-        assert!(
-            summary
-                .route_truth
-                .projection_reason
-                .contains("looks stale")
-        );
+        assert!(summary
+            .route_truth
+            .projection_reason
+            .contains("looks stale"));
         assert_eq!(
             summary.recommended_command.as_deref(),
             Some("vida taskflow run-graph status run-stale --json")
@@ -12412,7 +13328,7 @@ mod tests {
         write_activation_snapshot_for_store(&store)
             .await
             .expect("activation snapshot should be written");
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "task-repair-seed-1",
             "Repair scope and specification drift in crates/vida/src/runtime_lane_summary.rs, fix the file, add regression tests, and prove test coverage.",
@@ -12482,7 +13398,7 @@ mod tests {
             .await
             .expect("create active task");
 
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "runtime-fix-runtime-run-binding-task-missing",
             "Fix runtime run binding task-missing actionability for taskflow-runtime-run-binding-task-missing-actionability.",
@@ -12519,7 +13435,7 @@ mod tests {
         write_activation_snapshot_for_store(&store)
             .await
             .expect("activation snapshot should be written");
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "task-design-seed-1",
             "Research the feature scope, write the specification and acceptance criteria.",
@@ -12564,7 +13480,7 @@ mod tests {
                         "crates/vida/src/runtime_dispatch_state.rs".to_string(),
                     ],
                     proof_targets: vec![
-                        "cargo test -p vida design_backed -- --nocapture".to_string(),
+                        "cargo test -p vida design_backed -- --nocapture".to_string()
                     ],
                     ..crate::state_store::TaskPlannerMetadata::default()
                 },
@@ -12585,7 +13501,7 @@ mod tests {
         )
         .expect("write existing design doc");
 
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "feature-existing-design-route-fix",
             "Review the existing design document, keep the specification context, and then implement the bounded current-release code fix without opening a new spec pack.",
@@ -12649,7 +13565,7 @@ mod tests {
                         "crates/vida/src/runtime_dispatch_state.rs".to_string(),
                     ],
                     proof_targets: vec![
-                        "cargo test -p vida design_backed -- --nocapture".to_string(),
+                        "cargo test -p vida design_backed -- --nocapture".to_string()
                     ],
                     ..crate::state_store::TaskPlannerMetadata::default()
                 },
@@ -12681,8 +13597,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn derive_seeded_run_graph_keeps_design_backed_qwen_remediation_out_of_worker_without_explicit_terms()
-     {
+    async fn derive_seeded_run_graph_keeps_design_backed_qwen_remediation_out_of_worker_without_explicit_terms(
+    ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
 
@@ -12723,7 +13639,7 @@ mod tests {
         )
         .expect("write qwen design doc");
 
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "feature-reconcile-qwen-cli-carrier-drift-across-config-code",
             "Bounded audit-remediation task. Remove qwen_cli from active runtime/config/code/test assumptions and retain it only in template/reference surfaces where it is intentionally documented as a non-active example carrier.",
@@ -12740,20 +13656,18 @@ mod tests {
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
-        assert!(
-            !payload
-                .role_selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "existing_design_backed_work_pool_override"
-                    || term == "existing_design_backed_generic_override")
-        );
+        assert!(!payload
+            .role_selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "existing_design_backed_work_pool_override"
+                || term == "existing_design_backed_generic_override"));
         assert_ne!(payload.status.route_task_class, "implementation");
     }
 
     #[tokio::test]
-    async fn derive_seeded_run_graph_keeps_design_backed_blocker_out_of_worker_without_explicit_terms()
-     {
+    async fn derive_seeded_run_graph_keeps_design_backed_blocker_out_of_worker_without_explicit_terms(
+    ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
 
@@ -12794,7 +13708,7 @@ mod tests {
         )
         .expect("write blocker design doc");
 
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "feature-design-backed-reseed-blocker",
             "Bounded audit-remediation blocker. A finalized design-backed task is still reseeded into specification/planning instead of continuing into the implementation lane.",
@@ -12807,16 +13721,14 @@ mod tests {
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
-        assert!(
-            payload
-                .role_selection
-                .matched_terms
-                .iter()
-                .all(|term| term != ".rs"
-                    && term != "crates/"
-                    && term != "src/"
-                    && term != "existing_design_backed_generic_override")
-        );
+        assert!(payload
+            .role_selection
+            .matched_terms
+            .iter()
+            .all(|term| term != ".rs"
+                && term != "crates/"
+                && term != "src/"
+                && term != "existing_design_backed_generic_override"));
         assert_ne!(
             payload.role_selection.tracked_flow_entry.as_deref(),
             Some("dev-pack")
@@ -12866,7 +13778,7 @@ mod tests {
         )
         .expect("write generic design doc");
 
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "feature-generic-design-scope",
             "Clarify the product scope for an existing design document.",
@@ -12878,13 +13790,11 @@ mod tests {
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
-        assert!(
-            !payload
-                .role_selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "existing_design_backed_generic_override")
-        );
+        assert!(!payload
+            .role_selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "existing_design_backed_generic_override"));
     }
 
     #[tokio::test]
@@ -12929,7 +13839,7 @@ mod tests {
         )
         .expect("write approved design doc");
 
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "feature-direct-explicit-implementation-seed",
             "Implement the bounded fix for the design-backed dispatch-init regression and keep the registered design scope.",
@@ -12953,8 +13863,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_defect_design_backed_seed_uses_configured_first_step()
-    {
+    async fn runtime_defect_design_backed_seed_uses_configured_first_step() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
 
@@ -12995,7 +13904,7 @@ mod tests {
         )
         .expect("write approved design doc");
 
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "runtime-defect-design-backed-dispatch-init-routing",
             "Implement the bounded runtime defect fix from the approved design doc for crates/vida/src/taskflow_run_graph.rs.",
@@ -13009,22 +13918,20 @@ mod tests {
             payload.role_selection.reason,
             "configured_dev_team_first_step_dispatch_init"
         );
-        assert!(
-            payload
-                .role_selection
-                .matched_terms
-                .iter()
-                .any(|term| term == "dev_team_flow_id:runtime_defect_remediation")
-        );
+        assert!(payload
+            .role_selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "dev_team_flow_id:runtime_defect_remediation"));
         assert_eq!(payload.status.task_class, "specification");
         assert_eq!(payload.status.route_task_class, "specification");
         assert_eq!(payload.status.next_node.as_deref(), Some("analyst"));
         assert_eq!(payload.status.handoff_state, "awaiting_analyst");
-        let design_doc_path =
-            payload.role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
-                .as_str()
-                .expect("design doc path should be injected")
-                .replace('\\', "/");
+        let design_doc_path = payload.role_selection.execution_plan["tracked_flow_bootstrap"]
+            ["design_doc_path"]
+            .as_str()
+            .expect("design doc path should be injected")
+            .replace('\\', "/");
         assert_eq!(
             design_doc_path,
             "docs/product/spec/design-backed-dispatch-init-routing-design.md"
@@ -13356,13 +14263,11 @@ mod tests {
             prepare_run_graph_dispatch_init_artifacts(&store, "task-writer-planner-scope")
                 .await
                 .expect("dispatch init artifacts should be prepared from planner metadata");
-        assert_eq!(artifacts.dispatch_receipt.dispatch_target, "developer");
-        assert!(
-            artifacts
-                .dispatch_receipt
-                .downstream_dispatch_blockers
-                .is_empty()
-        );
+        assert_eq!(artifacts.dispatch_receipt.dispatch_target, "junior");
+        assert!(artifacts
+            .dispatch_receipt
+            .downstream_dispatch_blockers
+            .is_empty());
 
         let packet =
             crate::read_json_file_if_present(std::path::Path::new(&artifacts.dispatch_packet_path))
@@ -13373,6 +14278,15 @@ mod tests {
                 "crates/vida/src/runtime_dispatch_downstream_packets.rs",
                 "crates/vida/src/runtime_dispatch_state.rs"
             ])
+        );
+        assert_eq!(packet["task_id"], "task-writer-planner-scope");
+        assert_eq!(
+            packet["owned_paths"],
+            packet["delivery_task_packet"]["owned_paths"]
+        );
+        assert_eq!(
+            packet["implementation_isolation"]["owned_paths"],
+            packet["delivery_task_packet"]["owned_paths"]
         );
     }
 
@@ -13442,7 +14356,7 @@ mod tests {
             .await
             .expect("persist stale dispatch receipt");
 
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "task-reseed-1",
             "Fix the exact in-process test hang in runtime_dispatch_state by removing nested EnvVarGuard acquisition and preserving harness-local state isolation. Owned paths: crates/vida/src/runtime_dispatch_state.rs.",
@@ -13497,7 +14411,7 @@ mod tests {
             .expect("activation snapshot should be written");
 
         let run_id = "task-exception-replay";
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             run_id,
             "Fix run-graph dispatch-init replay after active exception takeover. Owned paths: crates/vida/src/taskflow_run_graph.rs.",
@@ -13589,7 +14503,7 @@ mod tests {
             .await
             .expect("activation snapshot should be written");
 
-        let mut stale_status = default_run_graph_status("run-old", "closure", "delivery");
+        let mut stale_status = default_run_graph_state("run-old", "closure", "delivery");
         stale_status.task_id = "run-old".to_string();
         stale_status.active_node = "closure".to_string();
         stale_status.status = "completed".to_string();
@@ -13687,7 +14601,7 @@ mod tests {
             .await
             .expect("create closed bound task");
 
-        let mut stale_status = default_run_graph_status("run-old-closed", "closure", "delivery");
+        let mut stale_status = default_run_graph_state("run-old-closed", "closure", "delivery");
         stale_status.task_id = "run-old-closed".to_string();
         stale_status.active_node = "closure".to_string();
         stale_status.status = "completed".to_string();
@@ -13802,16 +14716,12 @@ mod tests {
             context.role_selection["compiled_bundle"],
             serde_json::Value::Null
         );
-        assert!(
-            context
-                .request_text
-                .contains("Graph summary must respect open delegated cycle gate")
-        );
-        assert!(
-            context
-                .request_text
-                .contains("crates/vida/src/taskflow_proxy.rs")
-        );
+        assert!(context
+            .request_text
+            .contains("Graph summary must respect open delegated cycle gate"));
+        assert!(context
+            .request_text
+            .contains("crates/vida/src/taskflow_proxy.rs"));
     }
 
     #[tokio::test]
@@ -13867,13 +14777,11 @@ mod tests {
             .await
             .expect("status lookup should succeed");
         assert_eq!(status.run_id, "task-dispatch-init-read-mostly");
-        assert!(
-            store
-                .run_graph_dispatch_receipt("task-dispatch-init-read-mostly")
-                .await
-                .expect("receipt lookup should succeed")
-                .is_some()
-        );
+        assert!(store
+            .run_graph_dispatch_receipt("task-dispatch-init-read-mostly")
+            .await
+            .expect("receipt lookup should succeed")
+            .is_some());
     }
 
     #[tokio::test]
@@ -13933,13 +14841,11 @@ mod tests {
         let store = StateStore::open(harness.path().to_path_buf())
             .await
             .expect("reopen store");
-        assert!(
-            store
-                .run_graph_dispatch_receipt("task-dispatch-init-stale-snapshot")
-                .await
-                .expect("receipt lookup should succeed")
-                .is_some()
-        );
+        assert!(store
+            .run_graph_dispatch_receipt("task-dispatch-init-stale-snapshot")
+            .await
+            .expect("receipt lookup should succeed")
+            .is_some());
     }
 
     #[tokio::test]
@@ -14015,7 +14921,7 @@ mod tests {
             .await
             .expect("create repair task");
 
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "task-dispatch-context-repair",
             "Fix dispatch-init partial seed recovery. Owned paths: crates/vida/src/taskflow_run_graph.rs.",
@@ -14026,13 +14932,11 @@ mod tests {
             .record_run_graph_status(&payload.status)
             .await
             .expect("persist status without context");
-        assert!(
-            store
-                .run_graph_dispatch_context("task-dispatch-context-repair")
-                .await
-                .expect("context lookup should succeed")
-                .is_none()
-        );
+        assert!(store
+            .run_graph_dispatch_context("task-dispatch-context-repair")
+            .await
+            .expect("context lookup should succeed")
+            .is_none());
 
         let dispatch_init = run_graph_dispatch_init(&store, "task-dispatch-context-repair")
             .await
@@ -14040,20 +14944,16 @@ mod tests {
 
         assert_eq!(dispatch_init["run_id"], "task-dispatch-context-repair");
         assert!(dispatch_init["dispatch_packet_path"].as_str().is_some());
-        assert!(
-            store
-                .run_graph_dispatch_context("task-dispatch-context-repair")
-                .await
-                .expect("repaired context lookup should succeed")
-                .is_some()
-        );
-        assert!(
-            store
-                .run_graph_dispatch_receipt("task-dispatch-context-repair")
-                .await
-                .expect("receipt lookup should succeed")
-                .is_some()
-        );
+        assert!(store
+            .run_graph_dispatch_context("task-dispatch-context-repair")
+            .await
+            .expect("repaired context lookup should succeed")
+            .is_some());
+        assert!(store
+            .run_graph_dispatch_receipt("task-dispatch-context-repair")
+            .await
+            .expect("receipt lookup should succeed")
+            .is_some());
     }
 
     #[tokio::test]
@@ -14093,7 +14993,7 @@ mod tests {
             .expect("create fast-path task");
 
         let seeded_request_text = "preseeded dispatch context fast path";
-        let payload = derive_seeded_run_graph_status(
+        let payload = derive_seeded_run_graph_state(
             &store,
             "task-dispatch-context-fast-path",
             seeded_request_text,
@@ -14178,13 +15078,11 @@ mod tests {
             "task-dispatch-init-idempotent-fast-path",
             current_config_digest.as_deref()
         ));
-        assert!(
-            read_run_graph_dispatch_init_fast_cache(
-                store.root(),
-                "task-dispatch-init-idempotent-fast-path"
-            )
-            .is_some()
-        );
+        assert!(read_run_graph_dispatch_init_fast_cache(
+            store.root(),
+            "task-dispatch-init-idempotent-fast-path"
+        )
+        .is_some());
         let cache_path = run_graph_dispatch_init_fast_cache_path(
             store.root(),
             "task-dispatch-init-idempotent-fast-path",
@@ -14202,13 +15100,11 @@ mod tests {
             serde_json::to_string_pretty(&legacy_cache_payload).expect("cache should encode"),
         )
         .expect("legacy cache payload should write");
-        assert!(
-            read_run_graph_dispatch_init_fast_cache(
-                store.root(),
-                "task-dispatch-init-idempotent-fast-path"
-            )
-            .is_none()
-        );
+        assert!(read_run_graph_dispatch_init_fast_cache(
+            store.root(),
+            "task-dispatch-init-idempotent-fast-path"
+        )
+        .is_none());
         write_run_graph_dispatch_init_fast_cache(
             store.root(),
             "task-dispatch-init-idempotent-fast-path",
@@ -14216,13 +15112,11 @@ mod tests {
             &second,
         )
         .expect("cache should rewrite with current schema");
-        assert!(
-            read_run_graph_dispatch_init_fast_cache(
-                store.root(),
-                "task-dispatch-init-idempotent-fast-path"
-            )
-            .is_some()
-        );
+        assert!(read_run_graph_dispatch_init_fast_cache(
+            store.root(),
+            "task-dispatch-init-idempotent-fast-path"
+        )
+        .is_some());
 
         let mut receipt = store
             .run_graph_dispatch_receipt("task-dispatch-init-idempotent-fast-path")
@@ -14234,13 +15128,11 @@ mod tests {
             .record_run_graph_dispatch_receipt(&receipt)
             .await
             .expect("non-routed receipt should persist and invalidate fast cache");
-        assert!(
-            read_run_graph_dispatch_init_fast_cache(
-                store.root(),
-                "task-dispatch-init-idempotent-fast-path"
-            )
-            .is_none()
-        );
+        assert!(read_run_graph_dispatch_init_fast_cache(
+            store.root(),
+            "task-dispatch-init-idempotent-fast-path"
+        )
+        .is_none());
     }
 
     #[tokio::test]
@@ -14303,16 +15195,14 @@ mod tests {
             .await
             .expect("receipt lookup should succeed")
             .expect("receipt should exist");
-        assert!(
-            !existing_dispatch_receipt_matches_current_seed(
-                &store,
-                "task-dispatch-init-stale-backend-packet",
-                &receipt,
-                None
-            )
-            .await
-            .expect("stale packet check should succeed")
-        );
+        assert!(!existing_dispatch_receipt_matches_current_seed(
+            &store,
+            "task-dispatch-init-stale-backend-packet",
+            &receipt,
+            None
+        )
+        .await
+        .expect("stale packet check should succeed"));
 
         let second = run_graph_dispatch_init(&store, "task-dispatch-init-stale-backend-packet")
             .await
@@ -14327,6 +15217,115 @@ mod tests {
         assert_ne!(
             dispatch_init_packet_selected_backend(second_packet_path).as_deref(),
             Some("legacy_middle")
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_rebuilds_routed_packet_with_stale_owned_scope() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "task-dispatch-init-stale-owned-scope-packet",
+                title: "Dispatch init refreshes stale packet scope",
+                display_id: None,
+                description: "Repeated dispatch-init must not reuse a routed implementation packet whose task_id or owned_paths no longer match current planner metadata.",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &["runtime-recovery".to_string()],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec![
+                        "Cargo.toml".to_string(),
+                        "crates/taskflow-state".to_string(),
+                        "crates/taskflow-state-redb".to_string(),
+                    ],
+                    proof_targets: vec![
+                        "cargo test -p vida dispatch_init_rebuilds_routed_packet_with_stale_owned_scope -- --nocapture"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create stale owned-scope packet task");
+
+        let first = run_graph_dispatch_init(&store, "task-dispatch-init-stale-owned-scope-packet")
+            .await
+            .expect("first dispatch-init should seed and route");
+        let first_packet_path = first["dispatch_packet_path"]
+            .as_str()
+            .expect("first packet path")
+            .to_string();
+        let mut stale_packet =
+            crate::read_json_file_if_present(std::path::Path::new(&first_packet_path))
+                .expect("stale packet should be readable");
+        let docs_only_scope = serde_json::json!([
+            "docs/product/spec/local-durable-runtime-kernel-architecture-and-migration-law.md",
+            "docs/product/decisions/ldr-002-redb-operational-journal-adr.md"
+        ]);
+        if let Some(delivery_packet) = stale_packet["delivery_task_packet"].as_object_mut() {
+            delivery_packet.remove("task_id");
+            delivery_packet.insert("owned_paths".to_string(), docs_only_scope.clone());
+            delivery_packet["implementation_isolation"]["owned_paths"] = docs_only_scope;
+        }
+        std::fs::write(
+            &first_packet_path,
+            serde_json::to_string_pretty(&stale_packet).expect("stale packet should encode"),
+        )
+        .expect("stale packet should write");
+        let receipt = store
+            .run_graph_dispatch_receipt("task-dispatch-init-stale-owned-scope-packet")
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("receipt should exist");
+        assert!(!existing_dispatch_receipt_matches_current_seed(
+            &store,
+            "task-dispatch-init-stale-owned-scope-packet",
+            &receipt,
+            None
+        )
+        .await
+        .expect("stale owned-scope packet check should succeed"));
+
+        let second = run_graph_dispatch_init(&store, "task-dispatch-init-stale-owned-scope-packet")
+            .await
+            .expect("second dispatch-init should rebuild stale owned-scope packet");
+        assert_ne!(
+            first["dispatch_packet_path"],
+            second["dispatch_packet_path"]
+        );
+        let second_packet_path = second["dispatch_packet_path"]
+            .as_str()
+            .expect("second packet path");
+        let expected_owned_paths = vec![
+            "Cargo.toml".to_string(),
+            "crates/taskflow-state".to_string(),
+            "crates/taskflow-state-redb".to_string(),
+        ];
+        assert_eq!(
+            dispatch_init_delivery_packet_string_field(second_packet_path, "task_id").as_deref(),
+            Some("task-dispatch-init-stale-owned-scope-packet")
+        );
+        assert_eq!(
+            dispatch_init_delivery_packet_string_array(second_packet_path, "owned_paths")
+                .expect("owned paths should be present"),
+            expected_owned_paths
+        );
+        assert_eq!(
+            dispatch_init_delivery_packet_implementation_isolation_owned_paths(second_packet_path)
+                .expect("implementation isolation should carry owned paths"),
+            expected_owned_paths
         );
     }
 
@@ -14468,10 +15467,11 @@ mod tests {
         let refreshed_selection = refreshed_context
             .role_selection()
             .expect("refreshed role selection should decode");
-        assert!(
-            dispatch_context_route_assignment_catalog_drift(store.root(), &refreshed_selection)
-                .is_none()
-        );
+        assert!(dispatch_context_route_assignment_catalog_drift(
+            store.root(),
+            &refreshed_selection
+        )
+        .is_none());
 
         let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
             &refreshed_selection.execution_plan,
@@ -14576,10 +15576,11 @@ mod tests {
         let refreshed_selection = refreshed_context
             .role_selection()
             .expect("refreshed role selection should decode");
-        assert!(
-            dispatch_context_route_assignment_catalog_drift(store.root(), &refreshed_selection)
-                .is_none()
-        );
+        assert!(dispatch_context_route_assignment_catalog_drift(
+            store.root(),
+            &refreshed_selection
+        )
+        .is_none());
 
         let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
             &refreshed_selection.execution_plan,
@@ -14610,7 +15611,7 @@ mod tests {
             "feature-repair-design-backed-reseed-canonicalization-does-not-deadlock-qwen";
         let request_text = "Bounded audit-remediation blocker. After fixing explicit continuation-bind preservation, `vida taskflow run-graph dispatch-init feature-reconcile-autonomous-execution-flag-runtime-drift --json` now lawfully reseeds the explicit qwen task into a fresh run `feature-reconcile-qwen-cli-carrier-drift-across-config-code`. But that fresh run is shaped as `task_class=pbi_discussion`, `next_node=pm`, `tracked_flow_entry=work-pool-pack`, while the rendered dispatch packet canonicalizes to `dispatch_target=specification`, `handoff_runtime_role=pm`, `activation_agent_type=null`, `selected_backend=null`; `vida agent-init --dispatch-packet ... --execute-dispatch --json` then fails closed with `Dispatch target `specification` is routed to an agent lane but no lawful backend could be resolved from the execution route`.";
 
-        let mut stale_status = default_run_graph_status(requested_run_id, "closure", "delivery");
+        let mut stale_status = default_run_graph_state(requested_run_id, "closure", "delivery");
         stale_status.task_id = requested_run_id.to_string();
         stale_status.active_node = "closure".to_string();
         stale_status.status = "completed".to_string();
@@ -14847,7 +15848,7 @@ mod tests {
             .await
             .expect("persist target dispatch context");
 
-        let mut stale_status = default_run_graph_status("run-stale-latest", "closure", "delivery");
+        let mut stale_status = default_run_graph_state("run-stale-latest", "closure", "delivery");
         stale_status.task_id = "run-stale-latest".to_string();
         stale_status.active_node = "closure".to_string();
         stale_status.status = "completed".to_string();
@@ -14929,7 +15930,7 @@ mod tests {
             .await
             .expect("record run status");
 
-        let payload = derive_advanced_run_graph_status(&store, existing)
+        let payload = derive_advanced_run_graph_state(&store, existing)
             .await
             .expect("seeded test-author run should advance");
 
@@ -14948,7 +15949,7 @@ mod tests {
         write_activation_snapshot_for_store(&store)
             .await
             .expect("activation snapshot should be written");
-        let mut existing = default_run_graph_status(
+        let mut existing = default_run_graph_state(
             "run-active-exception-advance",
             "specification",
             "specification",
@@ -14972,7 +15973,7 @@ mod tests {
             .await
             .expect("record active exception takeover receipt");
 
-        let error = derive_advanced_run_graph_status(&store, existing)
+        let error = derive_advanced_run_graph_state(&store, existing)
             .await
             .expect_err("active exception takeover should block route advance");
 
@@ -15016,7 +16017,7 @@ mod tests {
             .await
             .expect("record run status");
 
-        let payload = derive_advanced_run_graph_status(&store, existing)
+        let payload = derive_advanced_run_graph_state(&store, existing)
             .await
             .expect("test-author lane should advance to coach");
 
@@ -15035,7 +16036,7 @@ mod tests {
         write_activation_snapshot_for_store(&store)
             .await
             .expect("activation snapshot should be written");
-        let mut existing = default_run_graph_status(
+        let mut existing = default_run_graph_state(
             "task-blocked-coach-no-verification",
             "implementation",
             "implementation",
@@ -15053,7 +16054,7 @@ mod tests {
             .await
             .expect("record run status");
 
-        let error = derive_advanced_run_graph_status(&store, existing)
+        let error = derive_advanced_run_graph_state(&store, existing)
             .await
             .expect_err("blocked coach should not advance to verification");
 
@@ -15078,7 +16079,7 @@ mod tests {
     #[test]
     fn approval_delegation_transition_kind_requires_route_bound_receipt_shape() {
         let mut awaiting_approval =
-            default_run_graph_status("run-1", "implementation", "implementation");
+            default_run_graph_state("run-1", "implementation", "implementation");
         awaiting_approval.status = "awaiting_approval".to_string();
         awaiting_approval.active_node = "verification".to_string();
         awaiting_approval.next_node = Some("approval".to_string());
@@ -15094,7 +16095,7 @@ mod tests {
             Some("approval_wait")
         );
 
-        let mut completed = default_run_graph_status("run-1", "implementation", "implementation");
+        let mut completed = default_run_graph_state("run-1", "implementation", "implementation");
         completed.active_node = "verification".to_string();
         completed.status = "completed".to_string();
         completed.next_node = None;
@@ -15213,7 +16214,7 @@ mod tests {
             .expect("persist stale blocked receipt with explicit takeover");
 
         let mut status =
-            default_run_graph_status("run-terminal-update", "implementation", "implementation");
+            default_run_graph_state("run-terminal-update", "implementation", "implementation");
         status.active_node = "closure".to_string();
         status.status = "completed".to_string();
         status.lifecycle_stage = "closure_complete".to_string();
@@ -15222,7 +16223,7 @@ mod tests {
         status.resume_target = "none".to_string();
         status.recovery_ready = false;
 
-        record_run_graph_status_with_continuation_sync(&store, &status, "run_graph_update")
+        record_run_graph_state_with_continuation_sync(&store, &status, "run_graph_update")
             .await
             .expect("terminal update should sync continuation binding");
 
@@ -15232,13 +16233,11 @@ mod tests {
             .expect("reconciled status should load");
         assert_eq!(reconciled.status, "completed");
         assert_eq!(reconciled.lifecycle_stage, "closure_complete");
-        assert!(
-            store
-                .run_graph_continuation_binding("run-terminal-update")
-                .await
-                .expect("continuation binding lookup should succeed")
-                .is_none()
-        );
+        assert!(store
+            .run_graph_continuation_binding("run-terminal-update")
+            .await
+            .expect("continuation binding lookup should succeed")
+            .is_none());
     }
 
     #[test]
@@ -15457,7 +16456,7 @@ mod tests {
         };
 
         assert_eq!(
-            projection_reason_for_status(&status, Some(&receipt), None),
+            projection_reason_for_snapshot(&status, Some(&receipt), None),
             "run-graph status reflects persisted dispatch blocker evidence"
         );
         assert_eq!(
@@ -15653,6 +16652,7 @@ mod tests {
                 Some(&receipt),
                 None,
                 false,
+                false,
             )
             .as_deref(),
             Some("vida lane show run-projection-blocked-mismatch")
@@ -15682,7 +16682,7 @@ mod tests {
             recovery_ready: true,
         };
 
-        let next_action = next_lawful_operator_action_for_status(&status)
+        let next_action = next_lawful_operator_action_for_snapshot(&status)
             .expect("recovery-ready status should recommend consume continue");
         assert_eq!(
             next_action,
@@ -15692,8 +16692,8 @@ mod tests {
     }
 
     #[test]
-    fn next_lawful_operator_action_uses_downstream_execute_command_after_terminal_ready_downstream_handoff()
-     {
+    fn next_lawful_operator_action_uses_downstream_execute_command_after_terminal_ready_downstream_handoff(
+    ) {
         let status = RunGraphStatus {
             run_id: "run-terminal-ready-handoff".to_string(),
             task_id: "task-terminal-ready-handoff".to_string(),
@@ -15719,6 +16719,7 @@ mod tests {
             Some(&receipt),
             Some("run-terminal-ready-handoff"),
             false,
+            false,
         )
         .expect("terminal ready downstream handoff should expose downstream command");
         assert_eq!(
@@ -15726,6 +16727,50 @@ mod tests {
             "vida agent-init --downstream-packet downstream-packet.json --execute-dispatch"
         );
         assert!(!next_action.contains("--json"));
+    }
+
+    #[test]
+    fn next_lawful_operator_action_uses_dispatch_packet_for_routed_agent_handoff() {
+        let status = RunGraphStatus {
+            run_id: "run-routed-agent-handoff".to_string(),
+            task_id: "task-routed-agent-handoff".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "coach_implementation_gate".to_string(),
+            next_node: Some("coach_implementation_gate".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "vibe_cli".to_string(),
+            lane_id: "coach_implementation_gate_lane".to_string(),
+            lifecycle_stage: "coach_implementation_gate_dispatch_ready".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "awaiting_coach_implementation_gate".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach_implementation_gate_lane".to_string(),
+            recovery_ready: true,
+        };
+        let mut receipt = clean_ready_downstream_dispatch_receipt("run-routed-agent-handoff");
+        receipt.dispatch_target = "coach_implementation_gate".to_string();
+        receipt.dispatch_status = "routed".to_string();
+        receipt.lane_status = "lane_open".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.dispatch_command = Some("vida agent-init".to_string());
+        receipt.dispatch_packet_path = Some("coach-packet.json".to_string());
+        receipt.dispatch_result_path = None;
+        receipt.downstream_dispatch_target = Some("coach_implementation_gate".to_string());
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_packet_path = None;
+        receipt.downstream_dispatch_result_path = None;
+
+        let next_action =
+            next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false)
+                .expect("routed agent handoff should expose dispatch packet command");
+        assert_eq!(
+            next_action,
+            "vida agent-init --dispatch-packet coach-packet.json --execute-dispatch"
+        );
+        assert!(!next_action.contains("exception-takeover"));
     }
 
     #[test]
@@ -15789,8 +16834,86 @@ mod tests {
     }
 
     #[test]
-    fn recovery_surface_contract_keeps_materialization_only_receipt_blocked_after_terminal_completion()
-     {
+    fn recovery_surface_contract_does_not_recommend_takeover_for_routed_agent_handoff() {
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-routed-recovery-handoff".to_string(),
+            task_id: "task-routed-recovery-handoff".to_string(),
+            active_node: "coach_implementation_gate".to_string(),
+            lifecycle_stage: "coach_implementation_gate_dispatch_ready".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach_implementation_gate_lane".to_string(),
+            resume_node: Some("coach_implementation_gate".to_string()),
+            resume_status: "ready".to_string(),
+            recovery_ready: true,
+            handoff_state: "awaiting_coach_implementation_gate".to_string(),
+            policy_gate: "not_required".to_string(),
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "coach_implementation_gate".to_string(),
+                lifecycle_stage: "coach_implementation_gate_dispatch_ready".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "handoff_pending".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+            },
+        };
+        let mut receipt = clean_ready_downstream_dispatch_receipt("run-routed-recovery-handoff");
+        receipt.dispatch_target = "coach_implementation_gate".to_string();
+        receipt.dispatch_status = "routed".to_string();
+        receipt.lane_status = "lane_open".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.dispatch_command = Some("vida agent-init".to_string());
+        receipt.dispatch_packet_path = Some("coach-packet.json".to_string());
+        receipt.dispatch_result_path = None;
+        receipt.downstream_dispatch_target = Some("coach_implementation_gate".to_string());
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_packet_path = None;
+        receipt.downstream_dispatch_result_path = None;
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: false,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida agent-init --dispatch-packet coach-packet.json --execute-dispatch"
+                    .to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
+            recovery_surface_contract_with_owned_scope(
+                &summary,
+                &projection_truth,
+                &["crates/vida/src/taskflow_run_graph.rs".to_string()],
+            );
+
+        assert!(blocker_codes.is_empty());
+        assert!(why_not_now.is_none());
+        assert_eq!(
+            next_action.as_ref().map(|action| action.command.as_str()),
+            Some("vida agent-init --dispatch-packet coach-packet.json --execute-dispatch")
+        );
+        assert_eq!(
+            recommended_command.as_deref(),
+            Some("vida agent-init --dispatch-packet coach-packet.json --execute-dispatch")
+        );
+        assert_eq!(recommended_surface.as_deref(), Some("vida agent-init"));
+        assert!(recommended_command
+            .as_deref()
+            .is_some_and(|command| !command.contains("exception-takeover")));
+    }
+
+    #[test]
+    fn recovery_surface_contract_keeps_materialization_only_receipt_blocked_after_terminal_completion(
+    ) {
         let summary = crate::state_store::RunGraphRecoverySummary {
             run_id: "run-terminal-materialization".to_string(),
             task_id: "run-terminal-materialization".to_string(),
@@ -15849,9 +16972,9 @@ mod tests {
     }
 
     #[test]
-    fn run_graph_status_surface_keeps_materialization_only_receipt_blocked_after_terminal_completion()
-     {
-        let mut status = default_run_graph_status(
+    fn run_graph_status_surface_keeps_materialization_only_receipt_blocked_after_terminal_completion(
+    ) {
+        let mut status = default_run_graph_state(
             "run-terminal-materialization-status",
             "implementation",
             "implementation",
@@ -15892,7 +17015,7 @@ mod tests {
             continuation_binding: None,
         };
 
-        let blocker_codes = run_graph_status_surface_blocker_codes(&status, &projection_truth);
+        let blocker_codes = run_graph_state_surface_issue_codes(&status, &projection_truth);
 
         assert!(blocker_codes.contains(&"internal_activation_view_only".to_string()));
     }
@@ -16034,11 +17157,9 @@ mod tests {
             recommended_surface.as_deref(),
             Some("vida taskflow run-graph status")
         );
-        assert!(
-            recommended_command
-                .as_deref()
-                .is_some_and(|command| !command.contains("exception-takeover"))
-        );
+        assert!(recommended_command
+            .as_deref()
+            .is_some_and(|command| !command.contains("exception-takeover")));
     }
 
     #[test]
@@ -16137,7 +17258,7 @@ mod tests {
 
     #[test]
     fn run_graph_status_surface_suppresses_open_cycle_after_active_exception_takeover() {
-        let mut status = default_run_graph_status(
+        let mut status = default_run_graph_state(
             "run-active-exception-status",
             "specification",
             "specification",
@@ -16174,7 +17295,7 @@ mod tests {
             continuation_binding: None,
         };
 
-        let blocker_codes = run_graph_status_surface_blocker_codes(&status, &projection_truth);
+        let blocker_codes = run_graph_state_surface_issue_codes(&status, &projection_truth);
 
         assert!(
             blocker_codes.is_empty(),
@@ -16226,20 +17347,16 @@ mod tests {
         let (_codes, why_not_now, next_action, _command, _surface) =
             recovery_surface_contract(&summary, &projection_truth);
 
-        assert!(
-            why_not_now
-                .as_ref()
-                .map(|value| value.summary.contains("looks stale"))
-                .unwrap_or(false)
-        );
-        assert!(
-            next_action
-                .as_ref()
-                .map(|value| value
-                    .reason
-                    .contains("stale delegated execution is suspected"))
-                .unwrap_or(false)
-        );
+        assert!(why_not_now
+            .as_ref()
+            .map(|value| value.summary.contains("looks stale"))
+            .unwrap_or(false));
+        assert!(next_action
+            .as_ref()
+            .map(|value| value
+                .reason
+                .contains("stale delegated execution is suspected"))
+            .unwrap_or(false));
     }
 
     #[test]
@@ -16290,24 +17407,18 @@ mod tests {
             why_not_now.as_ref().map(|value| value.category.as_str()),
             Some("stale_run_graph_blocked_state")
         );
-        assert!(
-            why_not_now
-                .as_ref()
-                .and_then(|value| Some(value.summary.as_str()))
-                .is_some_and(|value| value.contains("persisted dispatch evidence looks stale"))
-        );
-        assert!(
-            why_not_now
-                .as_ref()
-                .and_then(|value| Some(value.summary.as_str()))
-                .is_some_and(|value| !value.contains("delegated cycle remains open"))
-        );
-        assert!(
-            why_not_now
-                .as_ref()
-                .and_then(|value| Some(value.summary.as_str()))
-                .is_some_and(|value| !value.contains("actively open"))
-        );
+        assert!(why_not_now
+            .as_ref()
+            .and_then(|value| Some(value.summary.as_str()))
+            .is_some_and(|value| value.contains("persisted dispatch evidence looks stale")));
+        assert!(why_not_now
+            .as_ref()
+            .and_then(|value| Some(value.summary.as_str()))
+            .is_some_and(|value| !value.contains("delegated cycle remains open")));
+        assert!(why_not_now
+            .as_ref()
+            .and_then(|value| Some(value.summary.as_str()))
+            .is_some_and(|value| !value.contains("actively open")));
     }
 
     #[test]
@@ -16483,11 +17594,9 @@ mod tests {
             "vida taskflow run-graph status run-terminal-bind"
         );
         assert_eq!(next_action.surface, "vida taskflow run-graph status");
-        assert!(
-            next_action
-                .reason
-                .contains("inspect the authoritative run state")
-        );
+        assert!(next_action
+            .reason
+            .contains("inspect the authoritative run state"));
     }
 
     #[test]
@@ -16505,11 +17614,9 @@ mod tests {
 
         assert_eq!(next_action.command, "vida status");
         assert_eq!(next_action.surface, "vida status");
-        assert!(
-            next_action
-                .reason
-                .contains("inspect the authoritative run state")
-        );
+        assert!(next_action
+            .reason
+            .contains("inspect the authoritative run state"));
     }
 
     #[test]
@@ -16530,42 +17637,34 @@ mod tests {
             "vida taskflow run-graph status run-open"
         );
         assert_eq!(next_action.surface, "vida taskflow run-graph status");
-        assert!(
-            next_action
-                .reason
-                .contains("inspect the authoritative run state")
-        );
+        assert!(next_action
+            .reason
+            .contains("inspect the authoritative run state"));
     }
 
     #[test]
     fn run_graph_status_missing_run_id_json_is_actionable() {
-        let payload = run_graph_status_missing_run_id_json_payload();
+        let payload = run_graph_missing_run_id_json_payload();
 
         assert_eq!(payload["status"], "blocked");
         assert_eq!(payload["blocker_codes"][0], "missing_run_id");
-        assert!(
-            payload["error"]
+        assert!(payload["error"]
+            .as_str()
+            .expect("error should be a string")
+            .contains("<run-id>"));
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .any(|value| value
                 .as_str()
-                .expect("error should be a string")
-                .contains("<run-id>")
-        );
-        assert!(
-            payload["next_actions"]
-                .as_array()
-                .expect("next_actions should be an array")
-                .iter()
-                .any(|value| value
-                    .as_str()
-                    .is_some_and(|action| action.contains("run-graph latest")))
-        );
-        assert!(
-            payload["next_actions"]
-                .as_array()
-                .expect("next_actions should be an array")
-                .iter()
-                .all(|value| value
-                    .as_str()
-                    .is_some_and(|action| !action.contains("--json")))
-        );
+                .is_some_and(|action| action.contains("run-graph latest"))));
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .all(|value| value
+                .as_str()
+                .is_some_and(|action| !action.contains("--json"))));
     }
 }

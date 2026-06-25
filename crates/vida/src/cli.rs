@@ -40,8 +40,8 @@ const TASK_IMPORT_LONG_ABOUT: &str = "Create many tracked tasks from a structure
 const TASK_IMPORT_AFTER_HELP: &str = "Examples:\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run --json\n  vida task import --file tasks.yaml --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task create-bulk --file tasks.json --labels operator-dx,taskflow --acceptance-target \"Tasks imported\" --proof-target \"cargo test -p vida task_bulk_import\" --json\n\nInput task object fields:\n  id | task_id, title, display_id, description, type | issue_type, status, priority, parent_id, notes\n  labels: [\"operator-dx\"] or \"operator-dx,taskflow\"\n  execution_semantics: { execution_mode, order_bucket, parallel_group, conflict_domain }\n  planner_metadata: { owned_paths, acceptance_targets, proof_targets, risk, estimate, lane_hint }\n\nLarge-batch transport:\n  Prefer JSONL/NDJSON for large batches because each task is one bounded line in a file.\n  If the shell reports a command line or payload is too large, move the task objects into a file and rerun `vida task import --file <path> --dry-run`.\n  Use `vida task dep add-bulk --edge-file edges.txt --dry-run` for large dependency-edge batches.\n\nNotes:\n  `--dry-run` validates against the current graph and does not mutate TaskFlow state.\n  Per-task fields override command defaults; list defaults are appended and de-duplicated.\n  JSONL lets operators import large batches from a file instead of passing oversized command payloads.";
 
 const TASK_UPDATE_ABOUT: &str = "Update one tracked task in the authoritative backlog store.";
-const TASK_UPDATE_LONG_ABOUT: &str = "Update one tracked task in the authoritative backlog store.\n\nUse execution-semantics flags to correct sequencing and parallelism truth without moving ordering back into notes:\n- `--execution-mode sequential|parallel_safe|exclusive|container_only`\n- `--order-bucket <id>`\n- `--parallel-group <id>`\n- `--conflict-domain <id>`\n- matching `--clear-*` flags remove one semantics field";
-const TASK_UPDATE_AFTER_HELP: &str = "Examples:\n  vida task update <task-id> --status in_progress --json\n  vida task update <task-id> --title \"Retitled task\" --priority 1 --json\n  vida task update <task-id> --parent-id <parent-id> --json\n  vida task update <task-id> --clear-parent-id --json\n  vida task update <task-id> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task update <task-id> --clear-parallel-group --clear-conflict-domain --json\n\nNotes:\n  Use either a value flag or the matching clear flag, not both.\n  Re-check `vida taskflow graph-summary --json` after updates to confirm `ready_parallel_safe` and `parallel_blockers`.\n  For long notes, use `--notes-file <path>`; for many task updates or creates, use `vida task import --file tasks.jsonl --dry-run`.";
+const TASK_UPDATE_LONG_ABOUT: &str = "Update one tracked task in the authoritative backlog store.\n\nUse execution-semantics flags to correct sequencing and parallelism truth without moving ordering back into notes:\n- `--execution-mode sequential|parallel_safe|exclusive|container_only`\n- `--order-bucket <id>`\n- `--parallel-group <id>`\n- `--conflict-domain <id>`\n- matching `--clear-*` flags remove one semantics field\n\nPlanner proof target updates are replacements, not appends. Use `--clear-proof-targets` to remove obsolete proof targets.";
+const TASK_UPDATE_AFTER_HELP: &str = "Examples:\n  vida task update <task-id> --status in_progress --json\n  vida task update <task-id> --title \"Retitled task\" --priority 1 --json\n  vida task update <task-id> --parent-id <parent-id> --json\n  vida task update <task-id> --clear-parent-id --json\n  vida task update <task-id> --proof-target \"cargo test -p vida focused_test\" --json\n  vida task update <task-id> --clear-proof-targets --json\n  vida task update <task-id> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task update <task-id> --clear-parallel-group --clear-conflict-domain --json\n\nNotes:\n  Use either a value flag or the matching clear flag, not both.\n  `--proof-target` replaces the configured planner proof_targets; it does not append to stale targets.\n  Re-check `vida taskflow graph-summary --json` after updates to confirm `ready_parallel_safe` and `parallel_blockers`.\n  For long notes, use `--notes-file <path>`; for many task updates or creates, use `vida task import --file tasks.jsonl --dry-run`.";
 const TASK_BLOCK_ABOUT: &str = "record a runtime blocker on one task without closing it";
 const TASK_BLOCK_LONG_ABOUT: &str = "Record a runtime blocker on one task without closing it.\n\nThe command marks the task status as `blocked`, appends a structured blocker note to existing task notes, refreshes the canonical TaskFlow snapshot, and emits a machine-readable receipt when `--json` is set.";
 const TASK_BLOCK_AFTER_HELP: &str = "Examples:\n  vida task block <task-id> --reason \"runtime bridge unavailable\" --evidence \"agent-init returned host_tool_capability_missing\" --json\n  vida task block <task-id> --reason \"browser proof unavailable\" --blocker web_runtime_unhealthy --next-action \"run vida runtime web status --json\" --json\n\nOptions:\n  --reason <text>       Human-readable blocker reason; required\n  --evidence <text>     Evidence command, file, receipt, or observation\n  --blocker <code>      Canonical blocker code; accepts comma-separated values and repeated flags\n  --next-action <text>  Suggested recovery or continuation action; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output";
@@ -537,6 +537,12 @@ pub(crate) struct AgentDispatchNextArgs {
         help = "Emit machine-readable JSON output instead of default compact TOON"
     )]
     pub(crate) json: bool,
+
+    #[arg(
+        long = "full",
+        help = "Include full dispatch diagnostics in JSON output; default JSON stays compact for operator latency"
+    )]
+    pub(crate) full: bool,
 
     #[arg(
         long = "dev-team",
@@ -2038,9 +2044,15 @@ pub(crate) struct TaskUpdateArgs {
     #[arg(
         long = "proof-target",
         value_delimiter = ',',
-        help = "Planner metadata proof targets to set. Accepts comma-separated values and repeated flags."
+        help = "Planner metadata proof targets to replace. Accepts comma-separated values and repeated flags."
     )]
     pub(crate) proof_targets: Vec<String>,
+
+    #[arg(
+        long = "clear-proof-targets",
+        help = "Remove all planner metadata proof targets; cannot be combined with --proof-target."
+    )]
+    pub(crate) clear_proof_targets: bool,
 
     #[arg(
         long = "clear-execution-mode",
@@ -3673,6 +3685,18 @@ mod tests {
     }
 
     #[test]
+    fn task_update_help_lists_proof_target_replacement_contract() {
+        let error = Cli::try_parse_from(["vida", "task", "update", "--help"])
+            .expect_err("help should render clap display error");
+        let help = error.to_string();
+
+        assert!(help.contains("--proof-target"));
+        assert!(help.contains("--clear-proof-targets"));
+        assert!(help.contains("Planner proof target updates are replacements"));
+        assert!(help.contains("--proof-target` replaces the configured planner proof_targets"));
+    }
+
+    #[test]
     fn task_import_help_lists_bulk_file_dry_run_and_metadata_options() {
         let error = Cli::try_parse_from(["vida", "task", "import", "--help"])
             .expect_err("help should render clap display error");
@@ -3866,6 +3890,7 @@ mod tests {
         assert!(dispatch_help.contains("--current-task-id"));
         assert!(dispatch_help.contains("--state-dir"));
         assert!(dispatch_help.contains("--json"));
+        assert!(dispatch_help.contains("--full"));
         assert!(dispatch_help.contains("--dev-team"));
 
         let parsed = Cli::try_parse_from([
@@ -3879,6 +3904,7 @@ mod tests {
             "--state-dir",
             "/tmp/vida-state",
             "--json",
+            "--full",
         ])
         .expect("agent dispatch-next should parse");
         let Some(super::Command::Agent(agent_args)) = parsed.command else {
@@ -3898,6 +3924,7 @@ mod tests {
         );
         assert!(!dispatch.dev_team);
         assert!(dispatch.json);
+        assert!(dispatch.full);
 
         let dispatch_dev_team = Cli::try_parse_from([
             "vida",

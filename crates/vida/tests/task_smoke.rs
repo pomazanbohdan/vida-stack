@@ -3332,6 +3332,8 @@ fn agent_dispatch_preview_aligns_with_scheduler_selected_tasks_and_routing_truth
             "agent-dispatch-pack",
             "--conflict-domain",
             "agent-dispatch-current-domain",
+            "--owned-path",
+            "crates/vida/tests/agent-dispatch-current.rs",
             "--json",
         ],
         &state_dir,
@@ -3356,6 +3358,8 @@ fn agent_dispatch_preview_aligns_with_scheduler_selected_tasks_and_routing_truth
             "agent-dispatch-pack",
             "--conflict-domain",
             "agent-dispatch-parallel-domain",
+            "--owned-path",
+            "crates/vida/tests/agent-dispatch-parallel.rs",
             "--json",
         ],
         &state_dir,
@@ -3728,7 +3732,11 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         assert!(command.contains("vida agent-init"));
         assert!(command.contains("--role worker"));
         assert!(command.contains("--state-dir"));
-        assert!(command.contains("--json"));
+        assert!(!command.contains("--json"));
+        assert_eq!(
+            lane["dispatch_command_kind"],
+            "startup_activation_view_only"
+        );
     }
 
     let agent_init = run_command_json(
@@ -3818,11 +3826,11 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         ],
         &state_dir,
     );
-    assert_eq!(run_graph_status["status"], "blocked");
-    assert_eq!(run_graph_status["run_graph_status"]["status"], "blocked");
+    assert_eq!(run_graph_status["status"], "pass");
+    assert_eq!(run_graph_status["run_graph_status"]["status"], "ready");
     assert_eq!(
         run_graph_status["run_graph_status"]["policy_gate"],
-        "validation_report_required"
+        "not_required"
     );
     assert_eq!(run_graph_status["run_graph_status"]["recovery_ready"], true);
 
@@ -3836,20 +3844,18 @@ fn taskflow_golden_route_happy_path_stitches_bootstrap_dispatch_resume_status_an
         ],
         &state_dir,
     );
-    assert!(
-        !recovery_success,
-        "blocked recovery status should fail closed at the process boundary"
-    );
-    assert_eq!(recovery["status"], "blocked");
-    assert_eq!(
-        recovery["blocker_codes"],
-        serde_json::json!(["open_delegated_cycle"])
-    );
+    assert!(recovery_success);
+    assert_eq!(recovery["status"], "pass");
+    assert_eq!(recovery["blocker_codes"], serde_json::json!([]));
     assert_eq!(recovery["recovery"]["run_id"], implementation_task_id);
     assert_eq!(recovery["recovery"]["recovery_ready"], true);
     assert_eq!(
         recovery["recovery"]["resume_target"],
-        "dispatch.implementation"
+        "dispatch.junior_lane"
+    );
+    assert_eq!(
+        recovery["recovery"]["delegation_gate"]["blocker_code"],
+        "open_delegated_cycle"
     );
 
     let defect = run_command_json(
@@ -4046,6 +4052,8 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
             "sandbox-graph-pack",
             "--conflict-domain",
             "sandbox-graph-ready-domain",
+            "--owned-path",
+            "crates/sandbox/current",
             "--json",
         ],
         &state_dir,
@@ -4086,6 +4094,8 @@ fn taskflow_factual_sandbox_h4_h5_graph_readiness() {
             "sandbox-graph-pack",
             "--conflict-domain",
             "sandbox-graph-parallel-domain",
+            "--owned-path",
+            "crates/sandbox/parallel",
             "--json",
         ],
         &state_dir,
@@ -8647,6 +8657,158 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
 }
 
 #[test]
+fn task_close_json_includes_parent_epic_progress_after_child_close() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    run_command_json(
+        &[
+            "task",
+            "create",
+            "parent-epic",
+            "Parent epic",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--json",
+        ],
+        &state_dir,
+    );
+    run_command_json(
+        &[
+            "task",
+            "create",
+            "child-a",
+            "Child A",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            "parent-epic",
+            "--json",
+        ],
+        &state_dir,
+    );
+    run_command_json(
+        &[
+            "task",
+            "create",
+            "child-b",
+            "Child B",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            "parent-epic",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let closed = run_command_json(
+        &[
+            "task",
+            "close",
+            "child-a",
+            "--reason",
+            "proof complete",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(closed["status"], "pass");
+    assert_eq!(closed["parent_epic_progress"]["closed_task_id"], "child-a");
+    assert_eq!(
+        closed["parent_epic_progress"]["scope"],
+        "closed_task_ancestor_epics"
+    );
+    assert_eq!(
+        closed["parent_epic_progress"]["epics"][0]["epic_id"],
+        "parent-epic"
+    );
+    assert_eq!(
+        closed["parent_epic_progress"]["epics"][0]["closed_count"],
+        1
+    );
+    assert_eq!(closed["parent_epic_progress"]["epics"][0]["total_count"], 2);
+    assert_eq!(
+        closed["epic_progress_summary"],
+        closed["parent_epic_progress"]
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_close_default_output_prints_compact_parent_epic_progress() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    run_command_json(
+        &[
+            "task",
+            "create",
+            "parent-epic",
+            "Parent epic",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--json",
+        ],
+        &state_dir,
+    );
+    run_command_json(
+        &[
+            "task",
+            "create",
+            "child-a",
+            "Child A",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            "parent-epic",
+            "--json",
+        ],
+        &state_dir,
+    );
+    run_command_json(
+        &[
+            "task",
+            "create",
+            "child-b",
+            "Child B",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            "parent-epic",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let output = run_and_assert_success(
+        &["task", "close", "child-a", "--reason", "proof complete"],
+        &state_dir,
+    );
+
+    assert!(!output.trim_start().starts_with('{'));
+    assert!(output.contains("epic progress"));
+    assert!(output.contains("epic parent-epic"));
+    assert!(output.contains("1/2 closed (50.00%)"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_progress_no_args_outputs_actionable_default_guidance() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -12879,8 +13041,7 @@ fn dev_team_dispatch_current_task_ignores_unrelated_blocked_run_gate() {
     assert_eq!(dispatch["status"], "pass");
     assert_eq!(dispatch["lanes_selected"], 1);
     assert_eq!(
-        dispatch["selected_lanes"][0]["task_id"],
-        current_task_id,
+        dispatch["selected_lanes"][0]["task_id"], current_task_id,
         "explicit current task should keep its dev-team lane despite unrelated blocked run: {dispatch}"
     );
     assert_eq!(
@@ -13318,8 +13479,7 @@ fn dev_team_dispatch_init_uses_configured_analyst_route_for_runtime_defect() {
         "business_analyst"
     );
     assert_ne!(
-        dispatch_init["dispatch_receipt"]["dispatch_target"],
-        "coach",
+        dispatch_init["dispatch_receipt"]["dispatch_target"], "coach",
         "dispatch-init must not reuse a stale coach route for a fresh runtime defect: {dispatch_init}"
     );
     let packet_path = dispatch_init["dispatch_packet_path"]
@@ -15236,13 +15396,11 @@ fn task_close_preserves_unevidenced_closed_task_active_run_projection() {
         "doctor must not suppress a terminal closure state that lacks receipt-backed execution evidence: {forged_doctor}"
     );
     assert_eq!(
-        forged_doctor["root_session_write_guard"]["latest_run_graph_task_stale"],
-        true,
+        forged_doctor["root_session_write_guard"]["latest_run_graph_task_stale"], true,
         "doctor must keep the stale write guard active for forged terminal closure evidence: {forged_doctor}"
     );
     assert_eq!(
-        forged_doctor["root_session_write_guard"]["root_local_write_allowed"],
-        false,
+        forged_doctor["root_session_write_guard"]["root_local_write_allowed"], false,
         "doctor must not grant root-local write authority for forged terminal closure evidence: {forged_doctor}"
     );
     let forged_status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
@@ -15253,13 +15411,11 @@ fn task_close_preserves_unevidenced_closed_task_active_run_projection() {
         "status must stay aligned with doctor for forged terminal closure evidence: {forged_status}"
     );
     assert_eq!(
-        forged_status["root_session_write_guard"]["latest_run_graph_task_stale"],
-        true,
+        forged_status["root_session_write_guard"]["latest_run_graph_task_stale"], true,
         "status must keep the stale write guard active for forged terminal closure evidence: {forged_status}"
     );
     assert_eq!(
-        forged_status["root_session_write_guard"]["root_local_write_allowed"],
-        false,
+        forged_status["root_session_write_guard"]["root_local_write_allowed"], false,
         "status must not grant root-local write authority for forged terminal closure evidence: {forged_status}"
     );
     let (forged_diagnostics, forged_diagnostics_success) = run_command_json_allow_failure(
@@ -15817,7 +15973,7 @@ fn taskflow_settle_keeps_unsafe_closed_task_run_blocked_with_exact_inspection() 
     );
     let next_actions = require_json_string_array(&settle["next_actions"], "settle next actions");
     assert!(next_actions.iter().any(|action| action.contains(
-        "Inspect unresolved closed-task active run with `vida taskflow run-graph status taskflow-settle-unsafe-closed-run --json`"
+        "Inspect unresolved closed-task active run with `vida taskflow run-graph status taskflow-settle-unsafe-closed-run`"
     )));
     let blockers = require_json_string_array(&settle["blocker_codes"], "settle blockers");
     assert!(blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()));
@@ -15888,15 +16044,13 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
         &state_dir,
     );
     assert_eq!(
-        cached_orchestrator_before_close["active_bounded_unit"]["task_id"],
-        task_id,
+        cached_orchestrator_before_close["active_bounded_unit"]["task_id"], task_id,
         "pre-close orchestrator-init should cache the single active bounded unit for the regression setup: {cached_orchestrator_before_close}"
     );
     let cached_status_before_close =
         run_command_json(&["status", "--state-dir", &state_dir, "--json"], &state_dir);
     assert_eq!(
-        cached_status_before_close["active_bounded_unit"]["task_id"],
-        task_id,
+        cached_status_before_close["active_bounded_unit"]["task_id"], task_id,
         "pre-close status should cache the single active bounded unit for the regression setup: {cached_status_before_close}"
     );
 
@@ -16099,7 +16253,8 @@ fn task_reconcile_closed_runs_retires_canonical_task_close_active_run() {
             .any(|action| action.as_str().is_some_and(|value| {
                 value.contains("vida task reconcile-closed-runs --limit 25")
                     && !value.contains("vida task reconcile-closed-runs --limit 25 --json")
-                    && value.contains("closed tasks must not remain projected as active runtime work")
+                    && value
+                        .contains("closed tasks must not remain projected as active runtime work")
             })),
         "diagnostics post-commit must publish the same canonical reconcile next action: {diagnostics_before}"
     );
@@ -18203,8 +18358,14 @@ fn status_json_reports_non_default_host_agents_summary() {
     let host_agents = &parsed["host_agents"];
     assert_eq!(host_agents["host_cli_system"], "qwen");
     assert_eq!(host_agents["runtime_surface"], ".qwen");
-    assert_eq!(host_agents["root_session_write_guard"]["status"], "missing");
-    assert_eq!(parsed["root_session_write_guard"]["status"], "missing");
+    assert_eq!(
+        host_agents["root_session_write_guard"]["status"],
+        "blocked_by_default"
+    );
+    assert_eq!(
+        parsed["root_session_write_guard"]["status"],
+        "blocked_by_default"
+    );
     let runtime_root = host_agents["runtime_root"]
         .as_str()
         .expect("runtime_root present");
@@ -20679,11 +20840,27 @@ fn host_dispatch_handoff_projection_parity_unresolved_lane_selection_persists_bl
         "consume continue must fail closed on blocked unresolved lane evidence"
     );
     let stderr = String::from_utf8_lossy(&continue_output.stderr);
+    let continue_parsed: serde_json::Value = serde_json::from_slice(&continue_output.stdout)
+        .expect("consume continue json should parse");
+    let stdout_blockers = continue_parsed["blocker_codes"]
+        .as_array()
+        .expect("consume continue blocker_codes should be an array");
+    let stdout_has_resume_blocker = stdout_blockers.iter().any(|code| {
+        code.as_str().is_some_and(|code| {
+            code == "execution_preparation_gate_blocked" || code == "stale_missing_task_run_graph"
+        })
+    }) || continue_parsed["diagnostic_kind"].as_str().is_some_and(
+        |kind| {
+            kind == "execution_preparation_gate_blocked" || kind == "stale_missing_task_run_graph"
+        },
+    );
     assert!(
         stderr.contains("execution_preparation_gate_blocked")
             || stderr.contains("stale_missing_task_run_graph")
-            || stderr.contains("Stale missing-task run graph"),
-        "stderr should classify blocked packet evidence as execution_preparation_gate_blocked, got: {stderr}"
+            || stderr.contains("Stale missing-task run graph")
+            || stdout_has_resume_blocker,
+        "consume continue should classify blocked packet evidence, stderr: {stderr}, stdout: {}",
+        String::from_utf8_lossy(&continue_output.stdout)
     );
 
     let _ = fs::remove_dir_all(&project_root);

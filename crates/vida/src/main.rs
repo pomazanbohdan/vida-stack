@@ -21,6 +21,7 @@ mod consume_final_operator_surface;
 mod continuation_binding_summary;
 mod contract_profile_adapter;
 mod contract_profile_registry;
+mod cutover_gate;
 mod dev_team_sequence_contract;
 mod development_flow_glue;
 mod development_flow_orchestration;

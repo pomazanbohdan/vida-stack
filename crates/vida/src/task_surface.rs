@@ -1,4 +1,5 @@
 use super::*;
+use crate::contract_profile_adapter::render_operator_contract_envelope;
 use crate::task_cli_render::{
     print_task_bulk_reparent_result, print_task_defect_batch_rehome_result,
     print_task_dependency_bulk_add_result, print_task_dependency_bulk_add_result_for_surface,
@@ -61,6 +62,15 @@ impl TaskReadMetadata {
             degraded: false,
             snapshot_path: Some(path.display().to_string()),
             detail: "served from canonical task snapshot evidence with freshness metadata",
+        }
+    }
+
+    fn fresh_snapshot_live_divergence(path: &std::path::Path) -> Self {
+        Self {
+            mode: "fresh_snapshot_live_divergence",
+            degraded: true,
+            snapshot_path: Some(path.display().to_string()),
+            detail: "served from canonical task snapshot evidence because authoritative live task store is missing snapshot rows",
         }
     }
 }
@@ -890,6 +900,12 @@ struct TaskProofAttachEvidenceReceipt {
 struct TaskTakeoverStatusReceipt {
     surface: &'static str,
     status: String,
+    trace_id: Option<String>,
+    workflow_class: Option<String>,
+    risk_tier: Option<String>,
+    artifact_refs: serde_json::Value,
+    shared_fields: serde_json::Value,
+    operator_contracts: serde_json::Value,
     task_id: String,
     allowed: bool,
     local_exception_takeover_state: String,
@@ -905,6 +921,72 @@ struct TaskTakeoverStatusReceipt {
     recommended_command: Option<String>,
     next_actions: Vec<String>,
     blocker_codes: Vec<String>,
+}
+
+fn task_takeover_json_field(value: &serde_json::Value, key: &str) -> serde_json::Value {
+    value.get(key).cloned().unwrap_or(serde_json::Value::Null)
+}
+
+fn task_takeover_status_artifact_refs(receipt: &TaskTakeoverStatusReceipt) -> serde_json::Value {
+    serde_json::json!({
+        "surface": receipt.surface,
+        "task_id": receipt.task_id.clone(),
+        "run_id": task_takeover_json_field(&receipt.lane, "run_id"),
+        "lane_task_id": task_takeover_json_field(&receipt.lane, "task_id"),
+        "lane_source": task_takeover_json_field(&receipt.lane, "source"),
+        "dispatch_packet_path": task_takeover_json_field(&receipt.packet, "dispatch_packet_path"),
+        "dispatch_result_path": task_takeover_json_field(&receipt.packet, "dispatch_result_path"),
+        "downstream_dispatch_packet_path": task_takeover_json_field(&receipt.packet, "downstream_dispatch_packet_path"),
+        "downstream_dispatch_result_path": task_takeover_json_field(&receipt.packet, "downstream_dispatch_result_path"),
+        "root_local_write_allowed": receipt.root_local_write_allowed,
+        "local_exception_takeover_state": receipt.local_exception_takeover_state.clone(),
+        "active_takeover_state": receipt.active_takeover_state.clone(),
+        "takeover_ready_state": receipt.takeover_ready_state.clone(),
+        "recommended_surface": receipt.recommended_surface.clone(),
+        "recommended_command": receipt.recommended_command.clone(),
+    })
+}
+
+fn finalize_task_takeover_status_receipt(
+    mut receipt: TaskTakeoverStatusReceipt,
+) -> TaskTakeoverStatusReceipt {
+    let operator_contracts = render_operator_contract_envelope(
+        &receipt.status,
+        receipt.blocker_codes.clone(),
+        receipt.next_actions.clone(),
+        task_takeover_status_artifact_refs(&receipt),
+    );
+    let trace_id = operator_contracts["trace_id"]
+        .as_str()
+        .map(ToOwned::to_owned);
+    let workflow_class = operator_contracts["workflow_class"]
+        .as_str()
+        .map(ToOwned::to_owned);
+    let risk_tier = operator_contracts["risk_tier"]
+        .as_str()
+        .map(ToOwned::to_owned);
+    let artifact_refs = operator_contracts["artifact_refs"].clone();
+    let status = operator_contracts["status"]
+        .as_str()
+        .unwrap_or(&receipt.status)
+        .to_string();
+
+    receipt.status = status.clone();
+    receipt.trace_id = trace_id.clone();
+    receipt.workflow_class = workflow_class.clone();
+    receipt.risk_tier = risk_tier.clone();
+    receipt.artifact_refs = artifact_refs.clone();
+    receipt.shared_fields = serde_json::json!({
+        "trace_id": trace_id,
+        "workflow_class": workflow_class,
+        "risk_tier": risk_tier,
+        "status": status,
+        "blocker_codes": receipt.blocker_codes.clone(),
+        "next_actions": receipt.next_actions.clone(),
+        "artifact_refs": artifact_refs,
+    });
+    receipt.operator_contracts = operator_contracts;
+    receipt
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1052,6 +1134,57 @@ struct TaskVerifyReceipt {
 
 fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
+}
+
+fn task_reconcile_closed_runs_error_run_id(error_text: &str) -> Option<String> {
+    let marker = "current session does not own run `";
+    let (_, rest) = error_text.split_once(marker)?;
+    let run_id = rest.split('`').next()?.trim();
+    (!run_id.is_empty()).then(|| run_id.to_string())
+}
+
+fn task_reconcile_closed_runs_error_payload(
+    error: &state_store::StateStoreError,
+) -> serde_json::Value {
+    let error_text = error.to_string();
+    let rejected_run_id = task_reconcile_closed_runs_error_run_id(&error_text);
+    let inspect_command = rejected_run_id.as_ref().map(|run_id| {
+        format!(
+            "vida taskflow run-graph status {} --json",
+            crate::shell_quote(run_id)
+        )
+    });
+    let (blocker_codes, next_actions) = if let Some(command) = inspect_command.as_ref() {
+        (
+            vec!["closed_task_active_run_projection_mismatch".to_string()],
+            vec![format!(
+                "Inspect the rejected closed-task run with `{command}` before retrying reconcile-closed-runs."
+            )],
+        )
+    } else {
+        (
+            vec!["tool_execution_failed".to_string()],
+            vec![
+                "Inspect the state-store error before retrying reconcile-closed-runs.".to_string(),
+            ],
+        )
+    };
+    crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+        "vida task reconcile-closed-runs",
+    )
+    .blocker_codes(blocker_codes)
+    .next_actions(next_actions)
+    .artifact_refs(serde_json::json!({
+        "surface": "vida task reconcile-closed-runs",
+        "run_id": rejected_run_id,
+        "inspect_command": inspect_command,
+    }))
+    .extra_fields(serde_json::json!({
+        "error": error_text,
+        "repair_target": inspect_command,
+    }))
+    .build()
+    .expect("task reconcile closed runs error payload should satisfy release-1 operator contract")
 }
 
 fn proof_target_has_close_reason_evidence(task: &state_store::TaskRecord, target: &str) -> bool {
@@ -1462,9 +1595,15 @@ async fn task_takeover_status_receipt(
         }
     };
     let Some(status) = status else {
-        return TaskTakeoverStatusReceipt {
+        return finalize_task_takeover_status_receipt(TaskTakeoverStatusReceipt {
             surface: "vida task takeover status",
             status: "blocked".to_string(),
+            trace_id: None,
+            workflow_class: None,
+            risk_tier: None,
+            artifact_refs: serde_json::Value::Null,
+            shared_fields: serde_json::Value::Null,
+            operator_contracts: serde_json::Value::Null,
             task_id: task.id.clone(),
             allowed: false,
             local_exception_takeover_state: "not_recorded".to_string(),
@@ -1512,7 +1651,7 @@ async fn task_takeover_status_receipt(
             } else {
                 "missing_lane_receipt".to_string()
             }],
-        };
+        });
     };
     let summary = store
         .run_graph_dispatch_receipt_summary_for_status(&status)
@@ -1718,13 +1857,19 @@ async fn task_takeover_status_receipt(
         "reason": if root_local_write_allowed { serde_json::Value::Null } else { serde_json::json!(reason.clone()) },
     });
 
-    TaskTakeoverStatusReceipt {
+    finalize_task_takeover_status_receipt(TaskTakeoverStatusReceipt {
         surface: "vida task takeover status",
         status: if allowed {
             task_json_success_status().to_string()
         } else {
             "blocked".to_string()
         },
+        trace_id: None,
+        workflow_class: None,
+        risk_tier: None,
+        artifact_refs: serde_json::Value::Null,
+        shared_fields: serde_json::Value::Null,
+        operator_contracts: serde_json::Value::Null,
         task_id: task.id.clone(),
         allowed,
         local_exception_takeover_state: state_label.clone(),
@@ -1744,7 +1889,7 @@ async fn task_takeover_status_receipt(
         recommended_command,
         next_actions,
         blocker_codes,
-    }
+    })
 }
 
 fn print_task_takeover_status(render: RenderMode, receipt: &TaskTakeoverStatusReceipt) {
@@ -1839,6 +1984,17 @@ fn task_browser_proof_planner_metadata(
         metadata.proof_targets.push(proof_target.trim().to_string());
     }
     metadata
+}
+
+fn task_evidence_proof_planner_metadata(
+    existing: &state_store::TaskPlannerMetadata,
+    proof_target: &str,
+) -> state_store::TaskPlannerMetadata {
+    if existing.proof_targets.is_empty() {
+        task_browser_proof_planner_metadata(existing, proof_target)
+    } else {
+        existing.clone()
+    }
 }
 
 fn print_task_verify_receipt(render: RenderMode, receipt: &TaskVerifyReceipt, as_json: bool) {
@@ -1987,6 +2143,67 @@ fn task_update_graph_issue_from_invalid_record_reason(
     })
 }
 
+fn task_update_close_authority_payload(task_id: &str) -> serde_json::Value {
+    let quoted_task_id = crate::shell_quote(task_id);
+    let close_command = operator_output::command_text::human_command(&format!(
+        "vida task close {} --reason <closure-evidence>",
+        quoted_task_id
+    ));
+    let blocker_code = crate::release1_contracts::blocker_code_value(
+        crate::release1_contracts::BlockerCode::TaskUpdateCloseAuthorityRequired,
+    )
+    .unwrap_or_else(|| {
+        state_store::StateStore::TASK_UPDATE_CLOSE_AUTHORITY_BLOCKER_CODE.to_string()
+    });
+    crate::release1_operator_output::Release1OperatorOutputBuilder::new("vida task update")
+        .blocker_codes(vec![blocker_code])
+        .next_actions(vec![format!(
+            "Use `{close_command}` after structured proof evidence is attached."
+        )])
+        .artifact_refs(serde_json::json!({
+            "surface": "vida task update",
+            "task_id": task_id,
+            "close_surface": "vida task close",
+            "proof_status_surface": "vida task proof status",
+        }))
+        .extra_fields(serde_json::json!({
+            "closed": false,
+            "task_id": task_id,
+            "reason": "generic task update cannot close tasks with configured proof targets",
+            "required_surface": "vida task close",
+        }))
+        .build()
+        .expect("task update close authority payload should satisfy release-1 contract")
+}
+
+fn print_task_update_close_authority_blocked(render: RenderMode, task_id: &str, as_json: bool) {
+    if as_json {
+        crate::print_json_pretty(&task_update_close_authority_payload(task_id));
+        return;
+    }
+    let quoted_task_id = crate::shell_quote(task_id);
+    print_surface_header(render, "vida task update");
+    print_surface_line(render, "status", "blocked");
+    print_surface_line(
+        render,
+        "blocker_codes",
+        state_store::StateStore::TASK_UPDATE_CLOSE_AUTHORITY_BLOCKER_CODE,
+    );
+    print_surface_line(
+        render,
+        "reason",
+        "generic task update cannot close tasks with configured proof targets",
+    );
+    print_surface_line(
+        render,
+        "next action",
+        &format!(
+            "vida task close {} --reason <closure-evidence>",
+            quoted_task_id
+        ),
+    );
+}
+
 fn canonical_json_string_array_entries(value: &serde_json::Value) -> Option<Vec<String>> {
     let rows = value.as_array()?;
     let mut entries = Vec::with_capacity(rows.len());
@@ -2081,7 +2298,13 @@ async fn load_task_snapshot_rows_authoritative_first(
     let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(state_dir);
     match open_read_only_task_store(state_dir.to_path_buf()).await {
         Ok(store) => match store.list_tasks(None, true).await {
-            Ok(rows) => Ok((rows, TaskReadMetadata::authoritative_live())),
+            Ok(rows) => match StateStore::read_fresh_tasks_from_jsonl_snapshot(state_dir) {
+                Ok(snapshot_rows) if task_snapshot_is_richer_than_live(&snapshot_rows, &rows) => Ok((
+                    snapshot_rows,
+                    TaskReadMetadata::fresh_snapshot_live_divergence(&snapshot_path),
+                )),
+                _ => Ok((rows, TaskReadMetadata::authoritative_live())),
+            },
             Err(error) if is_authoritative_state_lock_error(&error) => {
                 load_task_snapshot_rows_fallback_with_metadata(
                     state_dir,
@@ -2113,6 +2336,22 @@ async fn load_task_snapshot_rows_authoritative_first(
         }
         Err(error) => Err(error),
     }
+}
+
+fn task_snapshot_is_richer_than_live(
+    snapshot_rows: &[state_store::TaskRecord],
+    live_rows: &[state_store::TaskRecord],
+) -> bool {
+    if snapshot_rows.len() <= live_rows.len() {
+        return false;
+    }
+    let live_ids = live_rows
+        .iter()
+        .map(|task| task.id.as_str())
+        .collect::<BTreeSet<_>>();
+    snapshot_rows
+        .iter()
+        .any(|task| !live_ids.contains(task.id.as_str()))
 }
 
 fn resolve_task_from_rows(
@@ -2973,6 +3212,7 @@ fn task_close_result_payload(
         "host_agent_telemetry": telemetry,
         "automation": automation,
         "epic_progress_summary": epic_progress_summary,
+        "parent_epic_progress": epic_progress_summary,
     })
 }
 
@@ -3308,6 +3548,13 @@ fn parse_proof_target_values(values: &[String]) -> Vec<String> {
     taskflow_core::task::update::parse_proof_target_values(values)
 }
 
+fn task_update_proof_targets_arg(
+    values: &[String],
+    clear: bool,
+) -> Result<Option<Vec<String>>, String> {
+    taskflow_core::task::update::task_update_proof_targets_arg(values, clear)
+}
+
 fn normalize_proof_target_commands(values: Vec<String>) -> Vec<String> {
     taskflow_core::task::update::normalize_proof_target_commands(values)
 }
@@ -3320,6 +3567,7 @@ fn task_update_planner_metadata_requested(command: &crate::TaskUpdateArgs) -> bo
     !command.owned_paths.is_empty()
         || !command.acceptance_targets.is_empty()
         || !command.proof_targets.is_empty()
+        || command.clear_proof_targets
 }
 
 fn task_create_planner_metadata_arg(command: &TaskCreateArgs) -> state_store::TaskPlannerMetadata {
@@ -3334,9 +3582,9 @@ fn task_create_planner_metadata_arg(command: &TaskCreateArgs) -> state_store::Ta
 fn task_update_planner_metadata_arg(
     existing: &state_store::TaskPlannerMetadata,
     command: &crate::TaskUpdateArgs,
-) -> Option<state_store::TaskPlannerMetadata> {
+) -> Result<Option<state_store::TaskPlannerMetadata>, String> {
     if !task_update_planner_metadata_requested(command) {
-        return None;
+        return Ok(None);
     }
     let mut metadata = existing.clone();
     let owned_paths = parse_label_values(&command.owned_paths);
@@ -3347,11 +3595,12 @@ fn task_update_planner_metadata_arg(
     if !acceptance_targets.is_empty() {
         metadata.acceptance_targets = acceptance_targets;
     }
-    let proof_targets = parse_label_values(&command.proof_targets);
-    if !proof_targets.is_empty() {
-        metadata.proof_targets = normalize_proof_target_commands(proof_targets);
+    if let Some(proof_targets) =
+        task_update_proof_targets_arg(&command.proof_targets, command.clear_proof_targets)?
+    {
+        metadata.proof_targets = proof_targets;
     }
-    Some(metadata)
+    Ok(Some(metadata))
 }
 
 const TASK_BULK_IMPORT_SURFACE: &str = "vida task import";
@@ -6438,6 +6687,12 @@ struct TaskContinuationCandidate {
 #[derive(Debug, Clone, serde::Serialize)]
 struct TaskNextLawfulReceipt {
     status: String,
+    trace_id: Option<String>,
+    workflow_class: Option<String>,
+    risk_tier: Option<String>,
+    artifact_refs: serde_json::Value,
+    shared_fields: serde_json::Value,
+    operator_contracts: serde_json::Value,
     active_bounded_unit: serde_json::Value,
     binding_source: Option<String>,
     why_this_unit: String,
@@ -6451,6 +6706,8 @@ struct TaskNextLawfulReceipt {
     next_action: Option<String>,
     next_actions: Vec<String>,
     source_surfaces: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ambiguity_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     operator_explanation: Option<serde_json::Value>,
 }
@@ -7302,6 +7559,73 @@ fn task_continuation_source_surfaces() -> Vec<String> {
     ]
 }
 
+fn task_next_lawful_ambiguity_reason(receipt: &TaskNextLawfulReceipt) -> Option<String> {
+    if receipt.status != "blocked" || !receipt.active_bounded_unit.is_null() {
+        return None;
+    }
+    receipt
+        .why_not_auto_bound
+        .clone()
+        .or_else(|| receipt.next_action.clone())
+}
+
+fn task_next_lawful_artifact_refs(receipt: &TaskNextLawfulReceipt) -> serde_json::Value {
+    serde_json::json!({
+        "surface": "vida task next-lawful",
+        "active_bounded_unit": receipt.active_bounded_unit.clone(),
+        "binding_source": receipt.binding_source.clone(),
+        "ambiguity_reason": receipt.ambiguity_reason.clone(),
+        "recommended_primary_task_id": receipt
+            .recommended_primary
+            .as_ref()
+            .map(|candidate| candidate.task_id.clone()),
+        "bind_command": receipt.bind_command.clone(),
+        "ready_task_candidate_count": receipt.ready_task_candidates.len(),
+        "source_surfaces": receipt.source_surfaces.clone(),
+    })
+}
+
+fn finalize_task_next_lawful_receipt(mut receipt: TaskNextLawfulReceipt) -> TaskNextLawfulReceipt {
+    receipt.ambiguity_reason = task_next_lawful_ambiguity_reason(&receipt);
+    let operator_contracts = render_operator_contract_envelope(
+        &receipt.status,
+        receipt.blocker_codes.clone(),
+        receipt.next_actions.clone(),
+        task_next_lawful_artifact_refs(&receipt),
+    );
+    let trace_id = operator_contracts["trace_id"]
+        .as_str()
+        .map(ToOwned::to_owned);
+    let workflow_class = operator_contracts["workflow_class"]
+        .as_str()
+        .map(ToOwned::to_owned);
+    let risk_tier = operator_contracts["risk_tier"]
+        .as_str()
+        .map(ToOwned::to_owned);
+    let artifact_refs = operator_contracts["artifact_refs"].clone();
+    let status = operator_contracts["status"]
+        .as_str()
+        .unwrap_or(&receipt.status)
+        .to_string();
+
+    receipt.status = status.clone();
+    receipt.trace_id = trace_id.clone();
+    receipt.workflow_class = workflow_class.clone();
+    receipt.risk_tier = risk_tier.clone();
+    receipt.artifact_refs = artifact_refs.clone();
+    receipt.shared_fields = serde_json::json!({
+        "trace_id": trace_id,
+        "workflow_class": workflow_class,
+        "risk_tier": risk_tier,
+        "status": status,
+        "blocker_codes": receipt.blocker_codes.clone(),
+        "next_actions": receipt.next_actions.clone(),
+        "artifact_refs": artifact_refs,
+    });
+    receipt.operator_contracts = operator_contracts;
+    receipt
+}
+
 fn continuation_binding_active_kind(binding: &state_store::RunGraphContinuationBinding) -> &str {
     binding
         .active_bounded_unit
@@ -7547,8 +7871,14 @@ fn blocked_task_next_lawful_receipt_with_blockers(
     let primary_blocker = blocker_codes.first().map(String::as_str);
     let why_not_auto_bound =
         task_next_lawful_why_not_auto_bound(primary_blocker, &ready_task_candidates);
-    TaskNextLawfulReceipt {
+    finalize_task_next_lawful_receipt(TaskNextLawfulReceipt {
         status: "blocked".to_string(),
+        trace_id: None,
+        workflow_class: None,
+        risk_tier: None,
+        artifact_refs: serde_json::Value::Null,
+        shared_fields: serde_json::Value::Null,
+        operator_contracts: serde_json::Value::Null,
         active_bounded_unit,
         binding_source: None,
         why_this_unit: "blocked_until_unique_lawful_continuation_is_evidenced".to_string(),
@@ -7562,8 +7892,9 @@ fn blocked_task_next_lawful_receipt_with_blockers(
         next_action: next_actions.first().cloned(),
         next_actions,
         source_surfaces: task_continuation_source_surfaces(),
+        ambiguity_reason: None,
         operator_explanation: None,
-    }
+    })
 }
 
 fn pass_task_next_lawful_receipt(
@@ -7581,8 +7912,14 @@ fn pass_task_next_lawful_receipt(
         .map(task_next_lawful_bind_command);
     let recommended_parallel_batch =
         task_next_lawful_recommended_parallel_batch(&ready_task_candidates);
-    TaskNextLawfulReceipt {
+    finalize_task_next_lawful_receipt(TaskNextLawfulReceipt {
         status: task_json_success_status().to_string(),
+        trace_id: None,
+        workflow_class: None,
+        risk_tier: None,
+        artifact_refs: serde_json::Value::Null,
+        shared_fields: serde_json::Value::Null,
+        operator_contracts: serde_json::Value::Null,
         active_bounded_unit,
         binding_source,
         why_this_unit: why_this_unit.to_string(),
@@ -7596,8 +7933,9 @@ fn pass_task_next_lawful_receipt(
         next_action: next_actions.first().cloned(),
         next_actions,
         source_surfaces: task_continuation_source_surfaces(),
+        ambiguity_reason: None,
         operator_explanation: None,
-    }
+    })
 }
 
 fn task_next_lawful_attach_explanation(
@@ -9575,7 +9913,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .unwrap_or_else(state_store::default_state_dir);
             match StateStore::open(state_dir).await {
                 Ok(store) => match store
-                    .replace_with_taskflow_snapshot_file(&command.path)
+                    .replace_with_task_jsonl_snapshot_file(&command.path)
                     .await
                 {
                     Ok(()) => {
@@ -9966,9 +10304,16 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .unwrap_or_else(state_store::default_state_dir);
                 let requested_task_id = match (&command.task_id, &command.task_id_filter) {
                     (Some(positional), Some(flag)) if positional.trim() != flag.trim() => {
-                        let receipt = TaskTakeoverStatusReceipt {
+                        let receipt = finalize_task_takeover_status_receipt(
+                            TaskTakeoverStatusReceipt {
                             surface: "vida task takeover status",
                             status: "blocked".to_string(),
+                            trace_id: None,
+                            workflow_class: None,
+                            risk_tier: None,
+                            artifact_refs: serde_json::Value::Null,
+                            shared_fields: serde_json::Value::Null,
+                            operator_contracts: serde_json::Value::Null,
                             task_id: positional.clone(),
                             allowed: false,
                             local_exception_takeover_state: "not_recorded".to_string(),
@@ -9993,7 +10338,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     .to_string(),
                             ],
                             blocker_codes: vec!["task_filter_conflict".to_string()],
-                        };
+                        });
                         if command.json {
                             crate::print_json_pretty(
                                 &serde_json::to_value(&receipt)
@@ -10058,9 +10403,16 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     .map(|status| status.task_id.clone())
                             })
                         else {
-                            let receipt = TaskTakeoverStatusReceipt {
+                            let receipt = finalize_task_takeover_status_receipt(
+                                TaskTakeoverStatusReceipt {
                                 surface: "vida task takeover status",
                                 status: "blocked".to_string(),
+                                trace_id: None,
+                                workflow_class: None,
+                                risk_tier: None,
+                                artifact_refs: serde_json::Value::Null,
+                                shared_fields: serde_json::Value::Null,
+                                operator_contracts: serde_json::Value::Null,
                                 task_id: String::new(),
                                 allowed: false,
                                 local_exception_takeover_state: "not_recorded".to_string(),
@@ -10094,7 +10446,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     ),
                                 ],
                                 blocker_codes: vec!["missing_task_and_lane_evidence".to_string()],
-                            };
+                            });
                             if command.json {
                                 crate::print_json_pretty(
                                     &serde_json::to_value(&receipt)
@@ -10610,7 +10962,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 command.artifact_ref.as_deref(),
                                 &evidence,
                             );
-                            planner_metadata = task_browser_proof_planner_metadata(
+                            planner_metadata = task_evidence_proof_planner_metadata(
                                 &planner_metadata,
                                 proof_target,
                             );
@@ -11158,10 +11510,16 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 Ok(store) => {
                     let planner_metadata = if task_update_planner_metadata_requested(&command) {
                         match store.show_task(&command.task_id).await {
-                            Ok(existing) => task_update_planner_metadata_arg(
+                            Ok(existing) => match task_update_planner_metadata_arg(
                                 &existing.planner_metadata,
                                 &command,
-                            ),
+                            ) {
+                                Ok(planner_metadata) => planner_metadata,
+                                Err(error) => {
+                                    eprintln!("{error}");
+                                    return ExitCode::from(2);
+                                }
+                            },
                             Err(error) => {
                                 eprintln!(
                                     "Failed to read task before planner metadata update: {error}"
@@ -11208,10 +11566,20 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             ExitCode::SUCCESS
                         }
                         Err(error) => {
-                            if command.json {
-                                if let state_store::StateStoreError::InvalidTaskRecord { reason } =
-                                    &error
+                            if let state_store::StateStoreError::InvalidTaskRecord { reason } =
+                                &error
+                            {
+                                if let Some(task_id) =
+                                    state_store::StateStore::task_update_close_authority_task_id_from_reason(reason)
                                 {
+                                    print_task_update_close_authority_blocked(
+                                        command.render,
+                                        task_id,
+                                        command.json,
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                                if command.json {
                                     if let Some(issue) =
                                         task_update_graph_issue_from_invalid_record_reason(reason)
                                     {
@@ -11948,7 +12316,12 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::SUCCESS
                     }
                     Err(error) => {
-                        eprintln!("Failed to reconcile closed-task runs: {error}");
+                        if command.json {
+                            let payload = task_reconcile_closed_runs_error_payload(&error);
+                            crate::print_json_pretty(&payload);
+                        } else {
+                            eprintln!("Failed to reconcile closed-task runs: {error}");
+                        }
                         ExitCode::from(1)
                     }
                 },
@@ -12553,16 +12926,16 @@ mod tests {
         task_close_result_payload, task_close_uses_isolated_state_dir, task_continuation_candidate,
         task_create_planner_metadata_arg, task_create_semantics_mismatch,
         task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
-        task_exception_takeover_metadata_path, task_exception_takeover_owned_write_scope,
-        task_handoff_accept_receipt, task_handoff_project_receipt_root, task_handoff_receipt_path,
-        task_handoff_receipt_root, task_json_success_status, task_next_lawful_apply_strategy,
-        task_next_lawful_receipt, task_next_lawful_select_ready_candidate_receipt,
-        task_owned_status_receipt, task_parent_id, task_progress_summary_for_basis,
-        task_ready_authoritative_first, task_takeover_status_default_lines,
-        task_takeover_status_receipt, task_update_planner_metadata_arg,
-        validate_task_handoff_accept_receipt, TaskCloseAutomationReceipt,
-        TaskContinuationCandidate, TaskProofAttachBrowserReceipt, TaskProofAttachEvidenceReceipt,
-        ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_evidence_proof_planner_metadata, task_exception_takeover_metadata_path,
+        task_exception_takeover_owned_write_scope, task_handoff_accept_receipt,
+        task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
+        task_json_success_status, task_next_lawful_apply_strategy, task_next_lawful_receipt,
+        task_next_lawful_select_ready_candidate_receipt, task_owned_status_receipt, task_parent_id,
+        task_progress_summary_for_basis, task_ready_authoritative_first,
+        task_takeover_status_default_lines, task_takeover_status_receipt,
+        task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
+        TaskCloseAutomationReceipt, TaskContinuationCandidate, TaskProofAttachBrowserReceipt,
+        TaskProofAttachEvidenceReceipt, ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -12603,6 +12976,53 @@ mod tests {
             })
             .await
             .expect("task should create");
+    }
+
+    #[test]
+    fn task_read_uses_fresh_snapshot_when_live_store_lost_rows() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            create_task_for_test(&store, "live-epic", "Live epic", "epic", "open", 1, None).await;
+            create_task_for_test(
+                &store,
+                "snapshot-only-task",
+                "Snapshot-only task",
+                "task",
+                "open",
+                2,
+                Some("live-epic"),
+            )
+            .await;
+            store
+                .refresh_task_snapshot()
+                .await
+                .expect("snapshot should refresh");
+            store
+                .delete_task_record("snapshot-only-task")
+                .await
+                .expect("live task deletion should simulate stale live store");
+            fs::remove_file(
+                crate::StateStore::canonical_task_snapshot_marker_path_for_state_root(
+                    harness.path(),
+                ),
+            )
+            .expect("lost live rows should not carry a legitimate mutation marker");
+            drop(store);
+
+            let (rows, metadata) =
+                super::load_task_snapshot_rows_authoritative_first(harness.path())
+                    .await
+                    .expect("task rows should load");
+            assert_eq!(metadata.mode, "fresh_snapshot_live_divergence");
+            assert!(metadata.degraded);
+            assert!(rows.iter().any(|task| task.id == "live-epic"));
+            assert!(rows.iter().any(|task| task.id == "snapshot-only-task"));
+        });
     }
 
     fn run_cli_on_runtime_stack_for_test(args: Vec<String>) -> ExitCode {
@@ -13440,6 +13860,61 @@ mod tests {
     }
 
     #[test]
+    fn takeover_status_blocked_json_operator_contract() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            let task = owned_task_record(
+                "requested-task-without-lane-contract",
+                vec!["crates/vida/src/task_surface.rs"],
+            );
+
+            let receipt =
+                task_takeover_status_receipt(&store, &task, None, Some("task_id"), false).await;
+
+            assert_eq!(receipt.status, "blocked");
+            assert_eq!(receipt.blocker_codes, vec!["missing_lane_receipt"]);
+            assert_eq!(
+                receipt.artifact_refs["surface"],
+                "vida task takeover status"
+            );
+            assert_eq!(
+                receipt.artifact_refs["task_id"],
+                "requested-task-without-lane-contract"
+            );
+            assert_eq!(receipt.artifact_refs["run_id"], serde_json::Value::Null);
+            assert_eq!(receipt.artifact_refs["lane_source"], "task_id");
+            assert_eq!(receipt.artifact_refs["root_local_write_allowed"], false);
+            assert_eq!(
+                receipt.artifact_refs["local_exception_takeover_state"],
+                "not_recorded"
+            );
+            assert_eq!(receipt.shared_fields["status"], receipt.status);
+            assert_eq!(
+                receipt.shared_fields["artifact_refs"],
+                receipt.operator_contracts["artifact_refs"]
+            );
+            assert_eq!(
+                receipt.operator_contracts["contract_id"],
+                "release-1-operator-contracts"
+            );
+            assert_eq!(receipt.operator_contracts["status"], "blocked");
+            assert_eq!(
+                receipt.operator_contracts["blocker_codes"],
+                serde_json::json!(["missing_lane_receipt"])
+            );
+            assert_eq!(
+                receipt.operator_contracts["next_actions"],
+                serde_json::json!(receipt.next_actions.clone())
+            );
+        });
+    }
+
+    #[test]
     fn task_takeover_status_default_output_includes_blocker_codes() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -13992,6 +14467,7 @@ mod tests {
         };
 
         let metadata = task_update_planner_metadata_arg(&existing, &command)
+            .expect("metadata update should pass")
             .expect("metadata update should be requested");
 
         assert_eq!(
@@ -14012,6 +14488,89 @@ mod tests {
         assert_eq!(metadata.risk, existing.risk);
         assert_eq!(metadata.estimate, existing.estimate);
         assert_eq!(metadata.lane_hint, existing.lane_hint);
+    }
+
+    #[test]
+    fn task_update_proof_target_replacement_contract() {
+        let existing = crate::state_store::TaskPlannerMetadata {
+            proof_targets: vec![
+                "cargo test -p vida --lib stale_contract -- --nocapture".to_string()
+            ],
+            risk: Some("medium".to_string()),
+            ..Default::default()
+        };
+        let replace_command = crate::TaskUpdateArgs {
+            task_id: "proof-target-task".to_string(),
+            proof_targets: vec![
+                "cargo test -p vida --bin vida current_contract -- --nocapture".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let metadata = task_update_planner_metadata_arg(&existing, &replace_command)
+            .expect("proof target replacement should pass")
+            .expect("proof target replacement should be requested");
+
+        assert_eq!(
+            metadata.proof_targets,
+            vec!["cargo test -p vida --bin vida current_contract -- --nocapture".to_string()]
+        );
+        assert_eq!(metadata.risk, existing.risk);
+
+        let after_stale_evidence = task_evidence_proof_planner_metadata(
+            &metadata,
+            "cargo test -p vida --lib stale_contract -- --nocapture",
+        );
+        assert_eq!(
+            after_stale_evidence.proof_targets, metadata.proof_targets,
+            "attaching historical evidence must not resurrect replaced proof targets"
+        );
+
+        let empty_existing = crate::state_store::TaskPlannerMetadata::default();
+        let after_first_evidence =
+            task_evidence_proof_planner_metadata(&empty_existing, "cargo test -p vida first");
+        assert_eq!(
+            after_first_evidence.proof_targets,
+            vec!["cargo test -p vida first".to_string()],
+            "attach-evidence still bootstraps proof targets for unconfigured tasks"
+        );
+
+        let clear_command = crate::TaskUpdateArgs {
+            task_id: "proof-target-task".to_string(),
+            clear_proof_targets: true,
+            ..Default::default()
+        };
+        let metadata = task_update_planner_metadata_arg(&existing, &clear_command)
+            .expect("proof target clear should pass")
+            .expect("proof target clear should be requested");
+        assert!(metadata.proof_targets.is_empty());
+
+        let conflicting_command = crate::TaskUpdateArgs {
+            task_id: "proof-target-task".to_string(),
+            proof_targets: vec!["cargo test -p vida current_contract".to_string()],
+            clear_proof_targets: true,
+            ..Default::default()
+        };
+        let error = task_update_planner_metadata_arg(&existing, &conflicting_command)
+            .expect_err("clear plus replacement should fail");
+        assert!(error.contains("--clear-proof-targets"));
+    }
+
+    #[test]
+    fn task_update_close_authority_payload_reports_blocker_code() {
+        let payload = super::task_update_close_authority_payload("proof-child");
+
+        assert_eq!(payload["surface"], "vida task update");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"][0],
+            state_store::StateStore::TASK_UPDATE_CLOSE_AUTHORITY_BLOCKER_CODE
+        );
+        assert_eq!(payload["task_id"], "proof-child");
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action")
+            .contains("vida task close proof-child --reason <closure-evidence>"));
     }
 
     #[test]
@@ -15450,6 +16009,65 @@ mod tests {
             .why_not_auto_bound
             .as_deref()
             .is_some_and(|reason| reason.contains("multiple ready candidates")));
+    }
+
+    #[test]
+    fn next_lawful_blocked_json_operator_contract() {
+        let mut first = owned_task_record("task-a", vec![]);
+        first.status = "open".to_string();
+        first.priority = 1;
+        let mut second = owned_task_record("task-b", vec![]);
+        second.status = "open".to_string();
+        second.priority = 1;
+        let ready = vec![
+            super::task_continuation_candidate(&first, false),
+            super::task_continuation_candidate(&second, false),
+        ];
+
+        let receipt = task_next_lawful_receipt(&[first, second], ready, None);
+        let payload = serde_json::to_value(&receipt).expect("receipt should serialize");
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(
+            receipt.blocker_codes,
+            vec!["ambiguous_ready_task_candidates"]
+        );
+        assert!(receipt
+            .ambiguity_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("multiple ready candidates")));
+        assert_eq!(receipt.artifact_refs["surface"], "vida task next-lawful");
+        assert_eq!(
+            receipt.artifact_refs["active_bounded_unit"],
+            serde_json::Value::Null
+        );
+        assert_eq!(receipt.artifact_refs["ready_task_candidate_count"], 2);
+        assert_eq!(
+            receipt.artifact_refs["recommended_primary_task_id"],
+            "task-a"
+        );
+        assert_eq!(receipt.shared_fields["status"], receipt.status);
+        assert_eq!(
+            receipt.shared_fields["artifact_refs"],
+            receipt.operator_contracts["artifact_refs"]
+        );
+        assert_eq!(
+            receipt.operator_contracts["contract_id"],
+            "release-1-operator-contracts"
+        );
+        assert_eq!(receipt.operator_contracts["status"], "blocked");
+        assert_eq!(
+            receipt.operator_contracts["blocker_codes"],
+            serde_json::json!(["ambiguous_ready_task_candidates"])
+        );
+        assert_eq!(
+            receipt.operator_contracts["next_actions"],
+            serde_json::json!(receipt.next_actions.clone())
+        );
+        assert!(payload.get("artifact_refs").is_some());
+        assert!(payload.get("shared_fields").is_some());
+        assert!(payload.get("operator_contracts").is_some());
+        assert!(payload.get("ambiguity_reason").is_some());
     }
 
     #[test]

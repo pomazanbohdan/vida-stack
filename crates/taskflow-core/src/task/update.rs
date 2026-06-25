@@ -59,6 +59,24 @@ pub fn parse_proof_target_values(values: &[String]) -> Vec<String> {
     normalize_proof_target_commands(parse_label_values(values))
 }
 
+pub fn task_update_proof_targets_arg(
+    values: &[String],
+    clear: bool,
+) -> Result<Option<Vec<String>>, String> {
+    if !values.is_empty() && clear {
+        return Err("Use either --proof-target or --clear-proof-targets, not both.".to_string());
+    }
+    if clear {
+        return Ok(Some(Vec::new()));
+    }
+    let proof_targets = parse_proof_target_values(values);
+    if proof_targets.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(proof_targets))
+    }
+}
+
 #[must_use]
 pub fn normalize_proof_target_commands(values: Vec<String>) -> Vec<String> {
     values
@@ -163,7 +181,8 @@ fn cargo_test_option_takes_value(option: &str) -> bool {
 mod tests {
     use super::{
         normalize_proof_target_commands, parse_label_values, parse_optional_label_value,
-        parse_proof_target_values, task_update_parent_arg, task_update_semantics_arg,
+        parse_proof_target_values, task_update_parent_arg, task_update_proof_targets_arg,
+        task_update_semantics_arg,
     };
 
     #[test]
@@ -243,5 +262,32 @@ mod tests {
             ]),
             vec!["vida docflow protocol-coverage-check docs"]
         );
+    }
+
+    #[test]
+    fn task_update_proof_targets_arg_replaces_or_clears_explicitly() {
+        assert_eq!(
+            task_update_proof_targets_arg(&[], false).expect("no proof update should pass"),
+            None
+        );
+        assert_eq!(
+            task_update_proof_targets_arg(&[], true).expect("clear should pass"),
+            Some(Vec::new())
+        );
+        assert_eq!(
+            task_update_proof_targets_arg(
+                &["cargo test -p vida alpha beta -- --nocapture".to_string()],
+                false,
+            )
+            .expect("replacement should pass"),
+            Some(vec![
+                "cargo test -p vida alpha -- --nocapture".to_string(),
+                "cargo test -p vida beta -- --nocapture".to_string(),
+            ])
+        );
+
+        let error = task_update_proof_targets_arg(&["cargo test -p vida proof".to_string()], true)
+            .expect_err("value plus clear should fail");
+        assert!(error.contains("--clear-proof-targets"));
     }
 }

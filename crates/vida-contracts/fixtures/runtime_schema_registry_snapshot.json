@@ -11,9 +11,9 @@
     {
       "schema_id": "vida.domain_event",
       "kind": "event",
-      "versions": [1],
-      "latest_version": 1,
-      "artifact_ref": "schema://vida.domain_event/v1"
+      "versions": [1, 2],
+      "latest_version": 2,
+      "artifact_ref": "schema://vida.domain_event/v2"
     },
     {
       "schema_id": "vida.plan",

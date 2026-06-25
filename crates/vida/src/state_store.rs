@@ -831,6 +831,7 @@ hierarchy: framework,contracts
         let ready_ids = ready.into_iter().map(|task| task.id).collect::<Vec<_>>();
         assert_eq!(ready_ids, vec!["vida-c", "vida-a"]);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -931,6 +932,7 @@ hierarchy: framework,contracts
         assert_eq!(exported_child["provider_mapping"]["provider"], "jira");
         assert_eq!(exported_child["provider_mapping"]["external_id"], "PROJ-12");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -979,6 +981,7 @@ hierarchy: framework,contracts
         assert!(error.to_string().contains("provider=jira"));
         assert!(error.to_string().contains("external_parent_id=PROJ-404"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1031,6 +1034,7 @@ hierarchy: framework,contracts
             .expect("list tasks")
             .is_empty());
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1105,6 +1109,7 @@ hierarchy: framework,contracts
             .expect("list tasks")
             .is_empty());
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1168,6 +1173,7 @@ hierarchy: framework,contracts
             .collect::<Vec<_>>();
         assert_eq!(child_ids, vec!["vida-a", "vida-b", "vida-c"]);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1217,6 +1223,7 @@ hierarchy: framework,contracts
         assert!(b_summary.status_counts.is_empty());
         assert_eq!(b_summary.percent_closed, 0.0);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1270,6 +1277,7 @@ hierarchy: framework,contracts
         assert!(!leaf_summary.closure_candidate);
         assert_eq!(leaf_summary.closure_candidate_state, "already_closed");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1311,6 +1319,7 @@ hierarchy: framework,contracts
         assert_eq!(summary.descendant_count, 0);
         assert!(summary.status_counts.is_empty());
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1352,6 +1361,7 @@ hierarchy: framework,contracts
         assert!(summary.recommended_next_action.contains(expected_command));
         assert_eq!(summary.canonical_commands, vec![expected_command]);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1394,6 +1404,7 @@ hierarchy: framework,contracts
             "Run `vida taskflow consume continue` to materialize or refresh run-graph dispatch receipt evidence before operator handoff."
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1471,7 +1482,7 @@ hierarchy: framework,contracts
             .expect("parent close should succeed after child closure");
         assert_eq!(closed_parent.status, "closed");
 
-        drop(store);
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1565,6 +1576,7 @@ hierarchy: framework,contracts
         );
         assert!(updated_again.closed_at.is_none());
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1615,6 +1627,7 @@ hierarchy: framework,contracts
         let persisted = store.show_task("vida-root").await.expect("show task");
         assert_eq!(persisted.notes.as_deref(), Some("first\n\nsecond"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1702,7 +1715,7 @@ hierarchy: framework,contracts
         assert_eq!(root_task.status, "open");
         assert!(root_task.closed_at.is_none());
 
-        drop(store);
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1821,6 +1834,7 @@ hierarchy: framework,contracts
             .any(|dependency| dependency.edge_type == "blocks"
                 && dependency.depends_on_id == "dep-task"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1894,6 +1908,7 @@ hierarchy: framework,contracts
             .any(|dependency| dependency.edge_type == "parent-child"
                 && dependency.depends_on_id == "root-a"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2017,6 +2032,7 @@ hierarchy: framework,contracts
             "in_progress"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2073,6 +2089,7 @@ hierarchy: framework,contracts
         assert_eq!(second.unchanged_count, 3);
         assert_eq!(second.updated_count, 0);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2107,6 +2124,7 @@ hierarchy: framework,contracts
         let artifact = artifact.expect("agent definition artifact should exist");
         assert!(artifact.body.contains("active-project-root-source-marker"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2136,6 +2154,7 @@ hierarchy: framework,contracts
         let artifact = artifact.expect("agent definition artifact should exist");
         assert!(artifact.body.contains("absolute-source-marker"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2172,7 +2191,7 @@ hierarchy: framework,contracts
 
         assert_eq!(first.initialized_at, second.initialized_at);
 
-        drop(store);
+        store.close().await;
 
         let mut existing = None;
         for _ in 0..10 {
@@ -2195,6 +2214,7 @@ hierarchy: framework,contracts
         assert_eq!(summary.entity_surface_count, 8);
         assert_eq!(summary.authoritative_mutation_root, "vida task");
 
+        existing.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2242,6 +2262,7 @@ hierarchy: framework,contracts
             other => panic!("unexpected error: {other}"),
         }
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2286,6 +2307,7 @@ hierarchy: framework,contracts
             other => panic!("unexpected error: {other}"),
         }
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2332,6 +2354,7 @@ hierarchy: framework,contracts
             other => panic!("unexpected error: {other}"),
         }
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2360,6 +2383,7 @@ hierarchy: framework,contracts
         assert_eq!(summary.state_schema_version, 1);
         assert_eq!(summary.instruction_schema_version, 1);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2388,6 +2412,7 @@ hierarchy: framework,contracts
             .expect_err("missing manifest should fail");
         assert!(matches!(error, StateStoreError::MissingStateSpineManifest));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2431,6 +2456,7 @@ hierarchy: framework,contracts
             .expect("active root should load");
         assert_eq!(active_root, "framework-agent-definition");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2476,6 +2502,7 @@ hierarchy: framework,contracts
             .iter()
             .any(|reason| reason.contains("instruction runtime state missing")));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2531,6 +2558,7 @@ hierarchy: framework,contracts
             .iter()
             .any(|reason| reason.contains("backend=sqlite")));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2567,7 +2595,7 @@ hierarchy: framework,contracts
         assert!(compatibility.reasons.is_empty());
         assert_eq!(compatibility.next_step, "normal_boot_allowed");
 
-        drop(store);
+        store.close().await;
 
         let mut reopened = None;
         for _ in 0..10 {
@@ -2596,6 +2624,7 @@ hierarchy: framework,contracts
         assert!(persisted.reasons.is_empty());
         assert_eq!(persisted.next_step, "normal_boot_allowed");
 
+        reopened.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2613,23 +2642,9 @@ hierarchy: framework,contracts
 
         let store = StateStore::open(root.clone()).await.expect("open store");
         store
-            .create_task(CreateTaskRequest {
-                task_id: "vida-a",
-                title: "Vida A",
-                display_id: None,
-                description: "active run graph task",
-                issue_type: "epic",
-                status: "open",
-                priority: 1,
-                parent_id: None,
-                labels: &[],
-                execution_semantics: TaskExecutionSemantics::default(),
-                planner_metadata: TaskPlannerMetadata::default(),
-                created_by: "test",
-                source_repo: "",
-            })
+            .persist_task_record(run_graph_fixture_task("vida-a"))
             .await
-            .expect("create run graph task");
+            .expect("seed live task for latest projection authority");
         let status = RunGraphStatus {
             run_id: "run-vida-a".to_string(),
             task_id: "vida-a".to_string(),
@@ -2742,7 +2757,7 @@ hierarchy: framework,contracts
         assert_eq!(summary.governance_count, 1);
         assert_eq!(summary.resumability_count, 1);
 
-        drop(store);
+        store.close().await;
 
         let mut reopened = None;
         for _ in 0..10 {
@@ -2822,6 +2837,7 @@ hierarchy: framework,contracts
         assert_eq!(summary.governance_count, 1);
         assert_eq!(summary.resumability_count, 1);
 
+        reopened.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2942,6 +2958,7 @@ hierarchy: framework,contracts
         assert_eq!(receipt.resume_target, "none");
         assert!(receipt.next_node.is_none());
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2970,6 +2987,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("memory governance evidence shaping required"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2999,6 +3017,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("memory governance linkage required"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3033,6 +3052,7 @@ hierarchy: framework,contracts
         assert_eq!(persisted.context_state, "sealed");
         assert_eq!(persisted.handoff_state, "consent_ttl_linked");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3075,6 +3095,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("memory governance evidence shaping required"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3171,6 +3192,7 @@ hierarchy: framework,contracts
             .expect("latest recovery summary should exist");
         assert_eq!(recovery.run_id, "run-bbb");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3237,6 +3259,7 @@ hierarchy: framework,contracts
             .expect("latest gate summary should exist");
         assert_eq!(gate.run_id, "run-current");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3302,6 +3325,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("run-graph recovery/gate summary is inconsistent"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3385,6 +3409,7 @@ hierarchy: framework,contracts
         assert_eq!(gate.policy_gate, "stale_missing_run_graph_governance");
         assert_eq!(gate.handoff_state, "blocked_missing_run_graph_governance");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3626,6 +3651,7 @@ hierarchy: framework,contracts
             .expect("receipt exists");
         assert_eq!(receipt.lane_status, "lane_running");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3786,6 +3812,7 @@ hierarchy: framework,contracts
             true
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3840,6 +3867,7 @@ hierarchy: framework,contracts
             .expect("load latest dispatch receipt summary after rejected write");
         assert!(summary.is_none());
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3932,6 +3960,7 @@ hierarchy: framework,contracts
         assert_eq!(receipt.run_id, "run-bbb");
         assert_eq!(receipt.lane_status, "lane_exception_recorded");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -3982,6 +4011,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("run-graph dispatch receipt summary is inconsistent"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4065,6 +4095,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("downstream_dispatch_blockers must contain only non-empty ASCII lowercase canonical entries without whitespace, case, internal spacing, or unicode drift when downstream_dispatch_status `executed` is present"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4154,6 +4185,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("without whitespace, case, internal spacing, or unicode drift"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4246,6 +4278,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("non-empty ASCII lowercase canonical entries"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4338,6 +4371,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("non-empty ASCII lowercase canonical entries"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4429,6 +4463,7 @@ hierarchy: framework,contracts
         let expected_fragment = "downstream_dispatch_blockers must contain only non-empty ASCII lowercase canonical entries without whitespace, case, internal spacing, or unicode drift when downstream_dispatch_status `executed` is present";
         assert!(error.to_string().contains(expected_fragment));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4521,6 +4556,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("without whitespace, case, internal spacing, or unicode drift"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4614,6 +4650,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("duplicate canonical entries after lowercase canonicalization"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4705,6 +4742,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("duplicate canonical entries after lowercase canonicalization"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4794,6 +4832,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("without whitespace, case, internal spacing, or unicode drift"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4886,6 +4925,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("without whitespace, case, internal spacing, or unicode drift"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -4976,6 +5016,7 @@ hierarchy: framework,contracts
             .expect_err("unicode zero-width downstream blockers should fail closed");
         assert!(error.to_string().contains("unicode drift"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5062,6 +5103,7 @@ hierarchy: framework,contracts
             .to_string()
             .contains("downstream_dispatch_blockers must be present and non-empty"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5156,6 +5198,7 @@ hierarchy: framework,contracts
             ]
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5215,6 +5258,7 @@ hierarchy: framework,contracts
         assert!(summary.is_some(), "summary should be present");
         assert_eq!(summary.as_ref().unwrap().run_id, "run-current");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5328,6 +5372,7 @@ hierarchy: framework,contracts
             .expect_err("whitespace-only lane_status should fail closed");
         assert!(error.to_string().contains("lane_status must be non-empty"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5380,6 +5425,7 @@ hierarchy: framework,contracts
         assert_eq!(receipt_summary.cutover_readiness_receipts, 0);
         assert_eq!(receipt_summary.rollback_notes, 0);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5424,6 +5470,7 @@ hierarchy: framework,contracts
             .iter()
             .any(|blocker| blocker.contains("instruction runtime root unresolved")));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5483,6 +5530,7 @@ hierarchy: framework,contracts
             .iter()
             .any(|blocker| blocker.contains("authoritative_mutation_root=legacy task")));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5517,7 +5565,7 @@ hierarchy: framework,contracts
         assert_eq!(summary.compatibility_classification, "backward_compatible");
         assert_eq!(summary.migration_state, "no_migration_required");
 
-        drop(store);
+        store.close().await;
 
         let mut reopened = None;
         for _ in 0..10 {
@@ -5567,7 +5615,7 @@ hierarchy: framework,contracts
         assert_eq!(receipts.cutover_readiness_receipts, 0);
         assert_eq!(receipts.rollback_notes, 0);
 
-        drop(reopened);
+        reopened.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5614,6 +5662,7 @@ hierarchy: framework,contracts
         assert_eq!(row.active_root_artifact_id, "custom-root");
         assert_eq!(row.runtime_mode, "test_override");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5722,6 +5771,7 @@ hierarchy: framework,contracts
         let receipt_rows: Vec<CountRow> = receipt_query.take(0).expect("take receipt count");
         assert_eq!(receipt_rows.first().map(|row| row.count), Some(1));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5944,6 +5994,7 @@ hierarchy: framework,contracts
         assert_eq!(receipts[0].skipped_patch_ids, vec!["stale-binding-patch"]);
         assert!(receipts[0].failed_reason.contains("targets artifact hash"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6017,6 +6068,7 @@ hierarchy: framework,contracts
         );
         assert_eq!(receipts[0].optional_triggered_reads, Vec::<String>::new());
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6096,6 +6148,7 @@ hierarchy: framework,contracts
         assert!(pos_b < pos_d);
         assert!(pos_c < pos_d);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6161,6 +6214,7 @@ hierarchy: framework,contracts
             other => panic!("unexpected error: {other}"),
         }
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6216,6 +6270,7 @@ hierarchy: framework,contracts
             other => panic!("unexpected error: {other}"),
         }
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6334,6 +6389,7 @@ hierarchy: framework,contracts
             Some(&1)
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6390,6 +6446,7 @@ hierarchy: framework,contracts
             other => panic!("unexpected error: {other}"),
         }
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6458,6 +6515,7 @@ hierarchy: framework,contracts
         assert_eq!(receipts[0].dependency_count, 1);
         assert_eq!(receipts[0].stale_removed_count, 0);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6519,6 +6577,7 @@ hierarchy: framework,contracts
             Some(snapshot_path_string.as_str())
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6578,6 +6637,7 @@ hierarchy: framework,contracts
             Some(snapshot_path_string.as_str())
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6669,6 +6729,7 @@ hierarchy: framework,contracts
             Some(&1)
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6744,6 +6805,7 @@ hierarchy: framework,contracts
             Some(&1)
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6867,6 +6929,7 @@ hierarchy: framework,contracts
                 .contains("1 receipts (tasks=2, dependencies=1, stale_removed=1, operations: replace_snapshot=1; source_kinds: canonical_snapshot_memory=1;")
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6973,6 +7036,7 @@ hierarchy: framework,contracts
             .expect("graph validation should succeed");
         assert!(graph_issues.is_empty());
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -7092,6 +7156,7 @@ hierarchy: framework,contracts
         let tasks = store.all_tasks().await.expect("tasks should load");
         assert_eq!(tasks.len(), 3);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -7240,6 +7305,7 @@ hierarchy: framework,contracts
         assert_eq!(replaced.title, "Task A replaced");
         assert_eq!(replaced.status, "closed");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -7329,7 +7395,7 @@ hierarchy: framework,contracts
             .await
             .expect("file-backed replace should succeed");
 
-        drop(store);
+        store.close().await;
 
         let mut reopened = None;
         for _ in 0..10 {
@@ -7415,7 +7481,7 @@ hierarchy: framework,contracts
             .expect_err("stale task should remain removed after reopen");
         assert!(matches!(stale, StateStoreError::MissingTask { .. }));
 
-        drop(reopened);
+        reopened.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -7562,6 +7628,7 @@ hierarchy: framework,contracts
                 .contains("receipts=1 export=0 import=0 replace=1 object=0 memory=0 file=1 tasks=2 dependencies=1 stale_removed=1 latest=replace_snapshot via canonical_snapshot_file")
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -7892,6 +7959,7 @@ hierarchy: framework,contracts
         let tasks = store.all_tasks().await.expect("tasks should still load");
         assert!(tasks.is_empty(), "invalid import must not mutate store");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -7907,6 +7975,10 @@ hierarchy: framework,contracts
             nanos
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(run_graph_fixture_task("task-closure-ready"))
+            .await
+            .expect("seed live task for latest projection authority");
 
         let mut status = sample_run_graph_status();
         status.run_id = "run-closure-ready".to_string();
@@ -8021,6 +8093,7 @@ hierarchy: framework,contracts
             "non_blocking_only"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -8113,6 +8186,7 @@ hierarchy: framework,contracts
             Some("open_delegated_cycle")
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 }

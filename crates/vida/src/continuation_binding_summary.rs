@@ -434,6 +434,21 @@ pub(crate) fn downstream_dispatch_command_from_parts(
     command: Option<&str>,
     packet_path: Option<&str>,
 ) -> Option<String> {
+    agent_init_packet_command_from_parts(command, packet_path, "downstream-packet")
+}
+
+pub(crate) fn routed_dispatch_command_from_parts(
+    command: Option<&str>,
+    packet_path: Option<&str>,
+) -> Option<String> {
+    agent_init_packet_command_from_parts(command, packet_path, "dispatch-packet")
+}
+
+fn agent_init_packet_command_from_parts(
+    command: Option<&str>,
+    packet_path: Option<&str>,
+    packet_flag: &str,
+) -> Option<String> {
     let command = command.map(str::trim).filter(|value| !value.is_empty());
     let packet_path = packet_path.map(str::trim).filter(|value| !value.is_empty());
 
@@ -443,7 +458,8 @@ pub(crate) fn downstream_dispatch_command_from_parts(
 
     packet_path.map(|path| {
         format!(
-            "vida agent-init --downstream-packet {} --execute-dispatch",
+            "vida agent-init --{} {} --execute-dispatch",
+            packet_flag,
             crate::shell_quote(path)
         )
     })
