@@ -40,7 +40,10 @@ pub(crate) async fn build_operator_session_projection_from_rows_and_claims(
     .await?;
     let active_task_ids = tasks
         .iter()
-        .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
+        .filter(|task| {
+            taskflow_core::canonical_task_status(&task.status) == Some("in_progress")
+                && crate::state_store::work_item_is_active_bounded_unit_candidate(&task.issue_type)
+        })
         .map(|task| task.id.clone())
         .collect::<std::collections::BTreeSet<_>>();
     let is_active_task_claim = |claim: &crate::state_store::OrchestratorClaim| {

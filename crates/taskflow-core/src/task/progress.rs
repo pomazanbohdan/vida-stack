@@ -86,10 +86,32 @@ pub fn task_progress_summary_from_rows(
         .filter(|task| task.parent_id.as_deref() == Some(task_id))
         .map(|task| task.id.clone())
         .collect::<Vec<_>>();
+    let rows_by_id = rows
+        .iter()
+        .map(|task| (task.id.as_str(), task))
+        .collect::<BTreeMap<_, _>>();
+    let countable_child_ids = child_ids
+        .iter()
+        .filter(|id| {
+            rows_by_id
+                .get(id.as_str())
+                .is_some_and(|task| task_contributes_to_progress(task))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let scoped_ids = match basis {
-        TaskProgressBasis::DirectChildren => child_ids.iter().cloned().collect::<BTreeSet<_>>(),
+        TaskProgressBasis::DirectChildren => {
+            countable_child_ids.iter().cloned().collect::<BTreeSet<_>>()
+        }
         TaskProgressBasis::DescendantsExcludingRoot => {
             descendant_ids_from_rows(rows, task_id, &child_ids)
+                .into_iter()
+                .filter(|id| {
+                    rows_by_id
+                        .get(id.as_str())
+                        .is_some_and(|task| task_contributes_to_progress(task))
+                })
+                .collect::<BTreeSet<_>>()
         }
     };
 
@@ -125,7 +147,7 @@ pub fn task_progress_summary_from_rows(
     match basis {
         TaskProgressBasis::DirectChildren => Ok(direct_child_progress_summary(
             root_task,
-            child_ids.len(),
+            countable_child_ids.len(),
             descendant_count,
             open_count,
             in_progress_count,
@@ -138,7 +160,7 @@ pub fn task_progress_summary_from_rows(
         )),
         TaskProgressBasis::DescendantsExcludingRoot => Ok(descendant_progress_summary(
             root_task,
-            child_ids.len(),
+            countable_child_ids.len(),
             descendant_count,
             open_count,
             in_progress_count,
@@ -452,6 +474,29 @@ fn task_is_program_container(task: &TaskProgressRow) -> bool {
     task.issue_type.trim().eq_ignore_ascii_case("epic")
 }
 
+fn task_contributes_to_progress(task: &TaskProgressRow) -> bool {
+    !task_is_execution_step(task)
+}
+
+fn task_is_execution_step(task: &TaskProgressRow) -> bool {
+    matches!(
+        normalize_issue_type(&task.issue_type).as_str(),
+        "step" | "todo"
+    )
+}
+
+fn normalize_issue_type(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| match ch {
+            ' ' | '-' => '_',
+            _ => ch,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,6 +602,41 @@ mod tests {
         assert_eq!(summary.closure_candidate_state, "direct_children_remaining");
         assert_eq!(summary.closed_count, 1);
         assert_eq!(summary.percent_closed, 50.0);
+    }
+
+    #[test]
+    fn progress_excludes_step_and_todo_execution_rows_from_denominators() {
+        let rows = vec![
+            row("parent", "open", "epic", None),
+            row("task-child", "closed", "task", Some("parent")),
+            row("step-child", "open", "step", Some("parent")),
+            row("todo-grandchild", "open", "todo", Some("task-child")),
+        ];
+
+        let direct = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DirectChildren,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+        let descendants = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(direct.direct_child_count, 1);
+        assert_eq!(direct.descendant_count, 1);
+        assert_eq!(direct.closed_count, 1);
+        assert_eq!(direct.percent_closed, 100.0);
+        assert_eq!(descendants.descendant_count, 1);
+        assert_eq!(descendants.open_count, 0);
+        assert!(descendants.ready_for_close);
     }
 
     #[test]

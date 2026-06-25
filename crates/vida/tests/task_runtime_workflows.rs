@@ -49,6 +49,22 @@ fn run_json_success(state_dir: &str, args: &[&str]) -> Value {
     parse_json(args, &output)
 }
 
+fn run_failure(state_dir: &str, args: &[&str]) -> Output {
+    let output = vida()
+        .args(args)
+        .env("VIDA_STATE_DIR", state_dir)
+        .output()
+        .unwrap_or_else(|error| panic!("{} should run: {error}", args.join(" ")));
+    assert!(
+        !output.status.success(),
+        "{} should fail: stdout={}; stderr={}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
 fn parse_json(args: &[&str], output: &Output) -> Value {
     assert!(
         !output.stdout.is_empty(),
@@ -77,6 +93,151 @@ fn boot_state(state_dir: &str) {
         "boot should succeed: {}",
         String::from_utf8_lossy(&boot.stderr)
     );
+}
+
+#[test]
+fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item() {
+    let state_dir = unique_state_dir("step-subtask-workflow");
+    boot_state(&state_dir);
+
+    run_json_success(
+        &state_dir,
+        &[
+            "task",
+            "create",
+            "workflow-epic",
+            "Workflow Epic",
+            "--type",
+            "epic",
+            "--execution-mode",
+            "container_only",
+            "--json",
+        ],
+    );
+    run_json_success(
+        &state_dir,
+        &[
+            "task",
+            "create",
+            "workflow-task",
+            "Workflow Task",
+            "--type",
+            "task",
+            "--parent-id",
+            "workflow-epic",
+            "--json",
+        ],
+    );
+    let subtask = run_json_success(
+        &state_dir,
+        &[
+            "task",
+            "create",
+            "workflow-subtask",
+            "Workflow Subtask",
+            "--type",
+            "subtask",
+            "--parent-id",
+            "workflow-task",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        subtask["task"]["work_item_kind"]["canonical_issue_type"],
+        "subtask"
+    );
+    assert_eq!(subtask["task"]["work_item_kind"]["flow_bindable"], true);
+
+    let step = run_json_success(
+        &state_dir,
+        &[
+            "task",
+            "create",
+            "workflow-step",
+            "Workflow Step",
+            "--type",
+            "step",
+            "--parent-id",
+            "workflow-subtask",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        step["task"]["work_item_kind"]["canonical_issue_type"],
+        "step"
+    );
+    assert_eq!(step["task"]["work_item_kind"]["flow_bindable"], false);
+
+    let todo_alias = run_json_success(
+        &state_dir,
+        &[
+            "task",
+            "create",
+            "workflow-todo-alias",
+            "Workflow Todo Alias",
+            "--type",
+            "todo",
+            "--status",
+            "closed",
+            "--parent-id",
+            "workflow-task",
+            "--json",
+        ],
+    );
+    assert_eq!(todo_alias["task"]["issue_type"], "todo");
+    assert_eq!(
+        todo_alias["task"]["work_item_kind"]["canonical_issue_type"],
+        "step"
+    );
+
+    let invalid_subtask = run_failure(
+        &state_dir,
+        &[
+            "task",
+            "create",
+            "invalid-subtask",
+            "Invalid Subtask",
+            "--type",
+            "subtask",
+            "--parent-id",
+            "workflow-epic",
+            "--json",
+        ],
+    );
+    let invalid_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&invalid_subtask.stdout),
+        String::from_utf8_lossy(&invalid_subtask.stderr)
+    );
+    assert!(invalid_text.contains("invalid_parent_child_kind"));
+
+    let ready = run_json_success(&state_dir, &["task", "ready", "--json"]);
+    let ready_ids = ready["tasks"]
+        .as_array()
+        .expect("ready tasks should be array")
+        .iter()
+        .filter_map(|task| task["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(ready_ids.contains(&"workflow-subtask"));
+    assert!(!ready_ids.contains(&"workflow-step"));
+    assert!(!ready_ids.contains(&"workflow-todo-alias"));
+
+    let progress = run_json_success(&state_dir, &["task", "progress", "workflow-task", "--json"]);
+    assert_eq!(progress["progress"]["descendant_count"], 1);
+    assert_eq!(progress["progress"]["open_count"], 1);
+    assert_eq!(progress["progress"]["closed_count"], 0);
+    assert_eq!(
+        progress["progress"]["status_counts"]["open"],
+        serde_json::json!(1)
+    );
+
+    let status = run_json_success(&state_dir, &["status", "--json"]);
+    assert_eq!(status["taskflow_counts"]["total_count"], 3);
+    assert_eq!(status["taskflow_counts"]["open_count"], 3);
+    assert_eq!(status["taskflow_counts"]["ready_count"], 2);
+
+    let graph = run_json_success(&state_dir, &["task", "validate-graph", "--json"]);
+    assert_eq!(graph["status"], "pass");
 }
 
 #[test]
@@ -213,6 +374,23 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
     );
     assert_eq!(verify["source_fixed"], true);
     assert_eq!(verify["tests_green"], true);
+
+    run_json_success(
+        &state_dir,
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            "workflow-task",
+            "--proof-target",
+            "workflow proof",
+            "--result",
+            "pass",
+            "--evidence",
+            "workflow proof",
+            "--json",
+        ],
+    );
 
     let dispatch_init = run_json_success(
         &state_dir,

@@ -8352,6 +8352,25 @@ fn task_next_lawful_receipt(
                     );
                 };
                 if task.status == "closed" {
+                    if let [candidate] = ready_task_candidates.as_slice() {
+                        return pass_task_next_lawful_receipt(
+                            serde_json::json!({
+                                "task_id": candidate.task_id,
+                                "title": candidate.title,
+                                "status": candidate.status,
+                                "issue_type": candidate.issue_type,
+                            }),
+                            None,
+                            "single ready TaskFlow candidate after stale closed runtime binding",
+                            if candidate.ready_parallel_safe {
+                                "parallel_safe_single_candidate"
+                            } else {
+                                "sequential_only_single_candidate"
+                            },
+                            ready_task_candidates.clone(),
+                            format!("Continue ready task `{}`.", candidate.task_id),
+                        );
+                    }
                     return blocked_task_next_lawful_receipt(
                         binding.active_bounded_unit.clone(),
                         ready_task_candidates,
@@ -13089,7 +13108,7 @@ mod tests {
                 serde_json::json!({
                     "id": "bulk-child",
                     "title": "Bulk child",
-                    "type": "todo",
+                    "type": "task",
                     "parent_id": "bulk-parent"
                 }),
                 serde_json::json!({
@@ -13343,7 +13362,7 @@ mod tests {
                 &store,
                 "child-a",
                 "Child A",
-                "todo",
+                "subtask",
                 "closed",
                 2,
                 Some("parent-task"),
@@ -13353,7 +13372,7 @@ mod tests {
                 &store,
                 "child-b",
                 "Child B",
-                "todo",
+                "subtask",
                 "closed",
                 2,
                 Some("parent-task"),
@@ -19334,7 +19353,7 @@ mod tests {
         });
 
         assert_eq!(
-            runtime.block_on(crate::taskflow_proxy::run_taskflow_proxy(
+            runtime.block_on(Box::pin(crate::taskflow_proxy::run_taskflow_proxy(
                 crate::ProxyArgs {
                     args: vec![
                         "replan".to_string(),
@@ -19351,7 +19370,7 @@ mod tests {
                         "--json".to_string(),
                     ],
                 }
-            )),
+            ))),
             ExitCode::SUCCESS
         );
 

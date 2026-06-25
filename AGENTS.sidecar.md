@@ -98,18 +98,18 @@ Project-routing rule:
 
 1. Use `AGENTS.md` for lane routing and hard invariants.
 2. Use this sidecar for project-local agent instructions, project operating rules, and project-document orientation.
-3. **MANDATORY TODO BEFORE WRITE-PRODUCING ACTION:** Before every write-producing action (file edit, file create, file delete, config change, code modification, project mutation), first create a DB-backed `todo` task through the current TaskFlow command surface:
-   - command shape: `vida task create <todo-id> "<title>" --type todo --status in_progress --parent-id <active-task-id> --description "<what/why/outcome>" --notes "<owner/activeForm/stop>" --json`
+3. **MANDATORY STEP BEFORE WRITE-PRODUCING ACTION:** Before every write-producing action (file edit, file create, file delete, config change, code modification, project mutation), first create a DB-backed `step` task through the current TaskFlow command surface:
+   - command shape: `vida task create <step-id> "<title>" --type step --status in_progress --parent-id <active-task-id> --description "<what/why/outcome>" --notes "<owner/activeForm/stop>" --json`
    - title — one-line imperative description of the bounded action,
    - description — what will be done, why, and the expected outcome,
    - notes — owner, present-continuous `activeForm`, stop criterion, and immediate fallback when blocked,
-   - parent dependency — use `--parent-id <active-task-id>` when the todo belongs to the active bounded unit.
+   - parent dependency — use `--parent-id <active-task-id>` when the step belongs to the active bounded unit.
 4. **EXPLICIT STOP-CRITERION BEFORE EACH STEP:** Before every write-producing move, state explicitly:
    - `STEP N`: what will be done
    - `STOP`: what condition signals completion or a blocker
    - `IF_BLOCKED`: the immediate fallback when the stop-criterion is not met
    - If the stop-criterion cannot be stated, do NOT proceed. Ask the user to clarify the acceptance target before continuing.
-5. **NO WRITE WITHOUT TODO:** After creating the todo, execute only the single bounded action. Do not chain multiple write-producing actions in one turn without updating the todo list. After completing the action, close the todo through `vida task close <todo-id> --reason "<proof>" --json` and create the next todo before the following write-producing move. This prevents the "unbounded action loop" pattern where the model repeats the same action indefinitely without explicit stop conditions.
+5. **NO WRITE WITHOUT STEP:** After creating the step, execute only the single bounded action. Do not chain multiple write-producing actions in one turn without updating the step list. After completing the action, close the step through `vida task close <step-id> --reason "<proof>" --json` and create the next step before the following write-producing move. `todo` remains a deprecated TaskFlow input alias for `step`; do not use it in new project instructions. This prevents the "unbounded action loop" pattern where the model repeats the same action indefinitely without explicit stop conditions.
 6. **READ-ONLY EXCEPTION:** This rule does not apply to read-only actions: file reads, code analysis, diagnostic commands, searches, git log, status checks, or any operation that does not modify project files or state.
 7. **EXPLICIT RUNTIME-DEFECT BYPASS:** When the user/operator explicitly says VIDA runtime is defective for the current cleanup, planning, or documentation block, do not invent TODO receipts and do not run mutating VIDA runtime commands. Use bounded static analysis, file proof, script-only checks, and scoped commits. Record any missing TaskFlow/DocFlow evidence as a later runtime-repair follow-up once the runtime is usable.
 8. Prefer the project canonical maps here over broad manual repo scanning when the task depends on project/product understanding.

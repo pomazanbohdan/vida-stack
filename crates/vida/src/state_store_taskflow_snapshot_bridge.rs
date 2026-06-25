@@ -1,4 +1,5 @@
 use super::*;
+use crate::state_store::state_store_task_models::work_item_contributes_to_task_stats;
 use taskflow_core::task::import_export::{
     task_reconciliation_rollup as decide_task_reconciliation_rollup,
     TaskReconciliationRollupRowInput,
@@ -60,28 +61,32 @@ impl StateStore {
 
     pub async fn task_store_summary(&self) -> Result<TaskStoreSummary, StateStoreError> {
         let tasks = self.all_tasks().await?;
-        let open_count = tasks
+        let reportable_tasks = tasks
+            .iter()
+            .filter(|task| work_item_contributes_to_task_stats(&task.issue_type))
+            .collect::<Vec<_>>();
+        let open_count = reportable_tasks
             .iter()
             .filter(|task| taskflow_core::canonical_task_status(&task.status) == Some("open"))
             .count();
-        let in_progress_count = tasks
+        let in_progress_count = reportable_tasks
             .iter()
             .filter(|task| {
                 taskflow_core::canonical_task_status(&task.status) == Some("in_progress")
             })
             .count();
-        let closed_count = tasks
+        let closed_count = reportable_tasks
             .iter()
             .filter(|task| Self::task_status_is_closed_like(&task.status))
             .count();
-        let epic_count = tasks
+        let epic_count = reportable_tasks
             .iter()
-            .filter(|task| task.issue_type == "epic")
+            .filter(|task| work_item_is_program_container(&task.issue_type))
             .count();
         let ready_count = self.ready_tasks().await?.len();
 
         Ok(TaskStoreSummary {
-            total_count: tasks.len(),
+            total_count: reportable_tasks.len(),
             open_count,
             in_progress_count,
             closed_count,
@@ -567,12 +572,49 @@ mod tests {
                 .await
                 .expect("create task");
         }
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "reportable-parent",
+                title: "reportable-parent",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("open-alias"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create reportable parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "execution-step",
+                title: "execution-step",
+                display_id: None,
+                description: "",
+                issue_type: "todo",
+                status: "closed",
+                priority: 1,
+                parent_id: Some("reportable-parent"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create execution step");
 
         let summary = store
             .task_store_summary()
             .await
             .expect("load task store summary");
-        assert_eq!(summary.open_count, 1);
+        assert_eq!(summary.total_count, 4);
+        assert_eq!(summary.open_count, 2);
         assert_eq!(summary.in_progress_count, 1);
         assert_eq!(summary.closed_count, 1);
 

@@ -305,7 +305,8 @@ fn selected_dev_team_step_for_task(
     task: &state_store::TaskRecord,
     sequence: &[DevTeamSequenceStep],
 ) -> Option<DevTeamSequenceStep> {
-    if task.issue_type.trim() == "task" {
+    let canonical_issue_type = state_store::canonical_work_item_issue_type(&task.issue_type);
+    if matches!(canonical_issue_type.as_str(), "task" | "subtask") {
         if !task.planner_metadata.owned_paths.is_empty() && task.labels.is_empty() {
             if let Some(step) = sequence.iter().find(|step| {
                 step.requires_task

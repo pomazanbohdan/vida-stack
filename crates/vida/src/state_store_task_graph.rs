@@ -3,11 +3,11 @@ use crate::launcher_task_commands::shell_quote;
 use crate::state_store::state_store_task_models::{
     canonical_work_item_issue_type, task_is_spec_first_feature_parent, task_is_spec_pack_child,
     task_is_work_pool_pack_child, task_status_is_closed_like, task_status_is_open_like,
+    work_item_is_active_bounded_unit_candidate, work_item_is_execution_step,
     work_item_requires_parent,
 };
 use taskflow_core::scheduling::scheduler_dispatch::{self, ParallelSafetyInput};
 use taskflow_core::task::graph::{
-    validate_task_graph_rows_for_mutation as validate_core_task_graph_rows_for_mutation,
     TaskGraphDependencyRow as CoreTaskGraphDependencyRow, TaskGraphIssue as CoreTaskGraphIssue,
     TaskGraphRow as CoreTaskGraphRow, TaskGraphView as CoreTaskGraphView,
 };
@@ -197,9 +197,57 @@ fn task_progress_json_command(command: &str) -> String {
     }
 }
 
+fn validate_work_item_kind_parent_rules(snapshot: &TaskGraphSnapshot) -> Vec<TaskGraphIssue> {
+    let mut issues = Vec::new();
+    for task in snapshot.rows() {
+        let canonical_issue_type = canonical_work_item_issue_type(&task.issue_type);
+        if canonical_issue_type != "subtask" && canonical_issue_type != "step" {
+            continue;
+        }
+        if canonical_issue_type == "step" && task.issue_type.eq_ignore_ascii_case("todo") {
+            // Deprecated `todo` rows predate step parent rules and must not force a state rewrite.
+            continue;
+        }
+        let Some(parent_id) = task.dependencies.iter().find_map(|dependency| {
+            (dependency.edge_type == "parent-child").then_some(dependency.depends_on_id.as_str())
+        }) else {
+            continue;
+        };
+        let Some(parent) = snapshot.task(parent_id) else {
+            continue;
+        };
+        let parent_canonical = canonical_work_item_issue_type(&parent.issue_type);
+        let valid_parent = match canonical_issue_type.as_str() {
+            "subtask" => parent_canonical == "task",
+            "step" => parent_canonical == "task" || parent_canonical == "subtask",
+            _ => true,
+        };
+        if valid_parent {
+            continue;
+        }
+        let expected = if work_item_is_execution_step(&task.issue_type) {
+            "task or subtask"
+        } else {
+            "task"
+        };
+        issues.push(TaskGraphIssue {
+            issue_type: "invalid_parent_child_kind".to_string(),
+            issue_id: task.id.clone(),
+            depends_on_id: Some(parent.id.clone()),
+            edge_type: Some("parent-child".to_string()),
+            detail: format!(
+                "{} work item `{}` can only be parented by canonical {}, got `{}`",
+                canonical_issue_type, task.id, expected, parent.issue_type
+            ),
+        });
+    }
+    issues
+}
+
 impl StateStore {
     fn task_is_open_like(task: &TaskRecord) -> bool {
-        task_status_is_open_like(&task.status) && !work_item_is_program_container(&task.issue_type)
+        task_status_is_open_like(&task.status)
+            && work_item_is_active_bounded_unit_candidate(&task.issue_type)
     }
 
     fn task_blockers_from_snapshot(
@@ -266,7 +314,7 @@ impl StateStore {
 
     fn task_is_container_only(task: &TaskRecord) -> bool {
         task.execution_semantics.execution_mode.as_deref() == Some("container_only")
-            || work_item_is_program_container(&task.issue_type)
+            || !work_item_is_active_bounded_unit_candidate(&task.issue_type)
     }
 
     pub(crate) fn ready_tasks_scoped_from_rows(
@@ -754,7 +802,7 @@ impl StateStore {
             .iter()
             .filter(|task| {
                 task_status_is_open_like(&task.status)
-                    && !work_item_is_program_container(&task.issue_type)
+                    && work_item_is_active_bounded_unit_candidate(&task.issue_type)
             })
             .map(|task| task.id.clone())
             .collect::<Vec<_>>();
@@ -806,11 +854,27 @@ impl StateStore {
     pub(crate) fn validate_task_graph_snapshot(
         snapshot: &TaskGraphSnapshot,
     ) -> Vec<TaskGraphIssue> {
-        CoreTaskGraphView::from_rows(snapshot.rows().iter().map(task_graph_row_from_record))
-            .validate()
-            .into_iter()
-            .map(task_graph_issue_from_core)
-            .collect()
+        let mut issues =
+            CoreTaskGraphView::from_rows(snapshot.rows().iter().map(task_graph_row_from_record))
+                .validate()
+                .into_iter()
+                .map(task_graph_issue_from_core)
+                .collect::<Vec<_>>();
+        issues.extend(validate_work_item_kind_parent_rules(snapshot));
+        issues.sort_by(|left, right| {
+            left.issue_type
+                .cmp(&right.issue_type)
+                .then_with(|| left.issue_id.cmp(&right.issue_id))
+                .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
+                .then_with(|| left.edge_type.cmp(&right.edge_type))
+        });
+        issues.dedup_by(|left, right| {
+            left.issue_type == right.issue_type
+                && left.issue_id == right.issue_id
+                && left.depends_on_id == right.depends_on_id
+                && left.edge_type == right.edge_type
+        });
+        issues
     }
 
     pub(crate) fn validate_task_graph_rows_for_mutation(
@@ -818,11 +882,33 @@ impl StateStore {
         after: &[TaskRecord],
         touched_task_ids: &BTreeSet<String>,
     ) -> Vec<TaskGraphIssue> {
-        let before = before.iter().map(task_graph_row_from_record);
-        let after = after.iter().map(task_graph_row_from_record);
-        validate_core_task_graph_rows_for_mutation(before, after, touched_task_ids)
+        let existing_issues = Self::validate_task_graph_rows(before)
             .into_iter()
-            .map(task_graph_issue_from_core)
+            .map(|issue| {
+                (
+                    issue.issue_type,
+                    issue.issue_id,
+                    issue.depends_on_id,
+                    issue.edge_type,
+                )
+            })
+            .collect::<BTreeSet<_>>();
+
+        Self::validate_task_graph_rows(after)
+            .into_iter()
+            .filter(|issue| {
+                touched_task_ids.contains(&issue.issue_id)
+                    || issue
+                        .depends_on_id
+                        .as_ref()
+                        .is_some_and(|id| touched_task_ids.contains(id))
+                    || !existing_issues.contains(&(
+                        issue.issue_type.clone(),
+                        issue.issue_id.clone(),
+                        issue.depends_on_id.clone(),
+                        issue.edge_type.clone(),
+                    ))
+            })
             .collect()
     }
 
@@ -1265,6 +1351,45 @@ mod tests {
     }
 
     #[test]
+    fn step_and_todo_records_are_not_dispatchable_or_critical_path_work() {
+        let mut epic = task_record("parent-epic", "open");
+        epic.issue_type = "epic".to_string();
+        let mut parent = task_record("parent-task", "open");
+        parent.issue_type = "task".to_string();
+        parent
+            .dependencies
+            .push(parent_child_dependency("parent-task", "parent-epic"));
+        let mut step = task_record("step-child", "open");
+        step.issue_type = "step".to_string();
+        step.dependencies
+            .push(parent_child_dependency("step-child", "parent-task"));
+        let mut todo = task_record("todo-child", "in_progress");
+        todo.issue_type = "todo".to_string();
+        todo.dependencies
+            .push(parent_child_dependency("todo-child", "parent-task"));
+
+        let rows = [epic, parent.clone(), step, todo];
+        let ready = StateStore::ready_tasks_scoped_from_rows(&rows, None)
+            .expect("ready tasks should render");
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, "parent-task");
+
+        let projection =
+            StateStore::scheduling_projection_scoped_from_rows(&rows, None, None, &BTreeSet::new())
+                .expect("scheduling projection should render");
+        assert!(projection.ready.iter().all(|candidate| {
+            candidate.task.issue_type != "step" && candidate.task.issue_type != "todo"
+        }));
+
+        let critical_path =
+            StateStore::critical_path_from_rows(&rows).expect("critical path should render");
+        assert!(critical_path
+            .nodes
+            .iter()
+            .all(|node| node.issue_type != "step" && node.issue_type != "todo"));
+    }
+
+    #[test]
     fn validate_task_graph_flags_non_closed_parent_required_item_without_parent() {
         let child = task_record("child", "open");
 
@@ -1376,6 +1501,62 @@ mod tests {
                 && issue.issue_id == "child-epic"
                 && issue.depends_on_id.as_deref() == Some("parent")
         }));
+    }
+
+    #[test]
+    fn validate_task_graph_enforces_step_and_subtask_parent_kinds() {
+        let mut epic = task_record("epic-parent", "open");
+        epic.issue_type = "epic".to_string();
+        let parent_task = task_record("task-parent", "open");
+        let mut valid_subtask = task_record("valid-subtask", "open");
+        valid_subtask.issue_type = "subtask".to_string();
+        valid_subtask
+            .dependencies
+            .push(parent_child_dependency("valid-subtask", "task-parent"));
+        let mut invalid_subtask = task_record("invalid-subtask", "open");
+        invalid_subtask.issue_type = "subtask".to_string();
+        invalid_subtask
+            .dependencies
+            .push(parent_child_dependency("invalid-subtask", "epic-parent"));
+        let mut valid_step = task_record("valid-step", "open");
+        valid_step.issue_type = "todo".to_string();
+        valid_step
+            .dependencies
+            .push(parent_child_dependency("valid-step", "valid-subtask"));
+        let mut legacy_todo = task_record("legacy-todo", "open");
+        legacy_todo.issue_type = "todo".to_string();
+        legacy_todo
+            .dependencies
+            .push(parent_child_dependency("legacy-todo", "epic-parent"));
+        let mut invalid_step = task_record("invalid-step", "open");
+        invalid_step.issue_type = "step".to_string();
+        invalid_step
+            .dependencies
+            .push(parent_child_dependency("invalid-step", "epic-parent"));
+
+        let issues = StateStore::validate_task_graph_rows(&[
+            epic,
+            parent_task,
+            valid_subtask,
+            invalid_subtask,
+            valid_step,
+            legacy_todo,
+            invalid_step,
+        ]);
+
+        assert!(issues.iter().any(|issue| {
+            issue.issue_type == "invalid_parent_child_kind"
+                && issue.issue_id == "invalid-subtask"
+                && issue.depends_on_id.as_deref() == Some("epic-parent")
+        }));
+        assert!(issues.iter().any(|issue| {
+            issue.issue_type == "invalid_parent_child_kind"
+                && issue.issue_id == "invalid-step"
+                && issue.depends_on_id.as_deref() == Some("epic-parent")
+        }));
+        assert!(!issues.iter().any(|issue| issue.issue_id == "valid-subtask"));
+        assert!(!issues.iter().any(|issue| issue.issue_id == "valid-step"));
+        assert!(!issues.iter().any(|issue| issue.issue_id == "legacy-todo"));
     }
 
     #[test]

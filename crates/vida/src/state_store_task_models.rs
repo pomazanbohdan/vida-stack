@@ -7,6 +7,7 @@ pub const WORK_ITEM_TAXONOMY_SCHEMA_VERSION: u32 = 1;
 pub enum WorkItemCategory {
     ProgramContainer,
     Delivery,
+    Execution,
     Defect,
     Review,
     Architecture,
@@ -20,6 +21,7 @@ impl WorkItemCategory {
         match self {
             WorkItemCategory::ProgramContainer => "program_container",
             WorkItemCategory::Delivery => "delivery",
+            WorkItemCategory::Execution => "execution",
             WorkItemCategory::Defect => "defect",
             WorkItemCategory::Review => "review",
             WorkItemCategory::Architecture => "architecture",
@@ -101,6 +103,24 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
         flow_bindable: true,
         default_flow_binding: "default_delivery",
         source_tiers: &["operator_request", "planned_delivery"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "subtask",
+        aliases: &["sub_task"],
+        category: WorkItemCategory::Delivery,
+        parent_required: true,
+        flow_bindable: true,
+        default_flow_binding: "default_delivery",
+        source_tiers: &["operator_request", "planned_delivery"],
+    },
+    WorkItemTaxonomyEntry {
+        canonical_issue_type: "step",
+        aliases: &["todo"],
+        category: WorkItemCategory::Execution,
+        parent_required: true,
+        flow_bindable: false,
+        default_flow_binding: "execution_step",
+        source_tiers: &["operator_execution", "delegated_execution"],
     },
     WorkItemTaxonomyEntry {
         canonical_issue_type: "defect",
@@ -266,8 +286,15 @@ pub fn work_item_is_program_container(issue_type: &str) -> bool {
 }
 
 pub fn work_item_is_active_bounded_unit_candidate(issue_type: &str) -> bool {
-    !work_item_is_program_container(issue_type)
-        && canonical_work_item_issue_type(issue_type) != "todo"
+    !work_item_is_program_container(issue_type) && !work_item_is_execution_step(issue_type)
+}
+
+pub fn work_item_is_execution_step(issue_type: &str) -> bool {
+    canonical_work_item_issue_type(issue_type) == "step"
+}
+
+pub fn work_item_contributes_to_task_stats(issue_type: &str) -> bool {
+    !work_item_is_execution_step(issue_type)
 }
 
 pub(crate) fn task_has_label(task: &TaskRecord, label: &str) -> bool {
@@ -341,7 +368,8 @@ fn provider_issue_type_map(provider: &str, issue_type: &str) -> Option<&'static 
     match (provider.as_str(), issue_type.as_str()) {
         ("vida", value) => work_item_taxonomy_entry(value).map(|entry| entry.canonical_issue_type),
         ("jira", "epic") => Some("epic"),
-        ("jira", "story" | "task" | "subtask" | "sub_task") => Some("task"),
+        ("jira", "story" | "task") => Some("task"),
+        ("jira", "subtask" | "sub_task") => Some("subtask"),
         ("jira", "bug") => Some("defect"),
         ("github" | "github_issues", "issue") => Some("task"),
         ("github" | "github_issues", "pull_request" | "pr") => Some("pull_request"),
@@ -1135,11 +1163,11 @@ impl From<TaskDependencyJsonlRecord> for TaskDependencyRecord {
 mod tests {
     use super::{
         apply_provider_mapping_to_task_jsonl_record, canonical_work_item_issue_type,
-        normalize_work_item_issue_type, task_work_item_kind,
-        work_item_is_active_bounded_unit_candidate, work_item_is_program_container,
-        work_item_requires_parent, work_item_taxonomy_entry, TaskDependencyJsonlRecord,
-        TaskJsonlRecord, TaskPlannerMetadata, TaskProviderMapping, TaskStorageRow,
-        WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
+        normalize_work_item_issue_type, task_work_item_kind, work_item_contributes_to_task_stats,
+        work_item_is_active_bounded_unit_candidate, work_item_is_execution_step,
+        work_item_is_program_container, work_item_requires_parent, work_item_taxonomy_entry,
+        TaskDependencyJsonlRecord, TaskJsonlRecord, TaskPlannerMetadata, TaskProviderMapping,
+        TaskStorageRow, WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
     };
 
     #[test]
@@ -1193,6 +1221,18 @@ mod tests {
             "defect"
         );
         assert_eq!(
+            work_item_taxonomy_entry("todo")
+                .expect("todo alias")
+                .canonical_issue_type,
+            "step"
+        );
+        assert_eq!(
+            work_item_taxonomy_entry("sub-task")
+                .expect("subtask alias")
+                .canonical_issue_type,
+            "subtask"
+        );
+        assert_eq!(
             work_item_taxonomy_entry("spike")
                 .expect("spike alias")
                 .canonical_issue_type,
@@ -1217,12 +1257,17 @@ mod tests {
     }
 
     #[test]
-    fn active_bounded_unit_candidates_exclude_epics_and_todos() {
+    fn active_bounded_unit_candidates_exclude_epics_and_steps() {
         assert!(!work_item_is_active_bounded_unit_candidate("epic"));
+        assert!(!work_item_is_active_bounded_unit_candidate("step"));
         assert!(!work_item_is_active_bounded_unit_candidate("todo"));
         assert!(!work_item_is_active_bounded_unit_candidate("TODO"));
         assert!(work_item_is_active_bounded_unit_candidate("defect"));
         assert!(work_item_is_active_bounded_unit_candidate("task"));
+        assert!(work_item_is_active_bounded_unit_candidate("subtask"));
+        assert!(work_item_is_execution_step("todo"));
+        assert!(work_item_is_execution_step("step"));
+        assert!(!work_item_contributes_to_task_stats("todo"));
     }
 
     #[test]
@@ -1237,6 +1282,14 @@ mod tests {
         assert_eq!(kind.category, "defect");
         assert!(kind.parent_required);
         assert_eq!(kind.default_flow_binding, "defect_repair_verified");
+
+        let step = task_work_item_kind("todo");
+        assert_eq!(step.canonical_issue_type, "step");
+        assert_eq!(step.original_issue_type, "todo");
+        assert_eq!(step.provider_issue_type.as_deref(), Some("todo"));
+        assert_eq!(step.category, "execution");
+        assert!(step.parent_required);
+        assert!(!step.flow_bindable);
     }
 
     fn provider_mapping_record(provider_issue_type: &str) -> TaskJsonlRecord {
