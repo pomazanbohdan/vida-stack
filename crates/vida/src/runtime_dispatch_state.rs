@@ -5559,17 +5559,6 @@ fn normalized_explicit_allowed_next_target(target: Option<&str>) -> Option<Strin
         .map(str::to_string)
 }
 
-fn resolve_explicit_downstream_dispatch_target(
-    execution_plan: &serde_json::Value,
-    target: &str,
-) -> Option<String> {
-    let target = target.trim();
-    if target == "closure" {
-        return Some("closure".to_string());
-    }
-    resolve_runtime_dispatch_target(execution_plan, target).map(|target| target.dispatch_target)
-}
-
 fn invalid_allowed_next_node_for_execution_plan_blocker() -> String {
     "invalid_allowed_next_node_for_execution_plan".to_string()
 }
@@ -7402,17 +7391,13 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
         .and_then(|target| normalized_explicit_allowed_next_target(Some(target.as_str())));
     let result_explicit_downstream_dispatch_target =
         result_allowed_next_target.as_deref().and_then(|target| {
-            if target == "closure" {
-                Some("closure".to_string())
-            } else {
-                lawful_explicit_downstream_dispatch_target(
-                    &role_selection.execution_plan,
-                    &execution_lane_sequence,
-                    receipt,
-                    target,
-                )
-                .map(|resolution| resolution.dispatch_target)
-            }
+            lawful_explicit_downstream_dispatch_target(
+                &role_selection.execution_plan,
+                &execution_lane_sequence,
+                receipt,
+                target,
+            )
+            .map(|resolution| resolution.dispatch_target)
         });
     let invalid_result_allowed_next_target = result_allowed_next_target
         .as_deref()
@@ -18360,13 +18345,13 @@ host_environment:
                 "verdict": "pass",
                 "completion_verdict": "pass",
                 "run_id": "run-result-allowed-next-preview",
-                "dispatch_target": "prover",
-                "allowed_next_node": "closure",
-                "source_dispatch_packet_path": "/tmp/prover-packet.json",
+                "dispatch_target": "autotester",
+                "allowed_next_node": "developer",
+                "source_dispatch_packet_path": "/tmp/autotester-packet.json",
                 "host_tool_bridge_request": {
                     "run_id": "run-result-allowed-next-preview",
-                    "dispatch_target": "prover",
-                    "packet_path": "/tmp/prover-packet.json"
+                    "dispatch_target": "autotester",
+                    "packet_path": "/tmp/autotester-packet.json"
                 },
                 "activation_semantics": {
                     "records_completion_receipt": true
@@ -18400,7 +18385,7 @@ host_environment:
             let run_graph_bootstrap = json!({ "run_id": "run-result-allowed-next-preview" });
             let mut receipt = crate::state_store::RunGraphDispatchReceipt {
                 run_id: "run-result-allowed-next-preview".to_string(),
-                dispatch_target: "prover".to_string(),
+                dispatch_target: "autotester".to_string(),
                 dispatch_status: "executed".to_string(),
                 lane_status: "lane_completed".to_string(),
                 supersedes_receipt_id: None,
@@ -18408,7 +18393,7 @@ host_environment:
                 dispatch_kind: "agent_lane".to_string(),
                 dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
                 dispatch_command: Some("vida lane complete".to_string()),
-                dispatch_packet_path: Some("/tmp/prover-packet.json".to_string()),
+                dispatch_packet_path: Some("/tmp/autotester-packet.json".to_string()),
                 dispatch_result_path: Some(
                     result_path
                         .strip_prefix(&state_root)
@@ -18447,7 +18432,7 @@ host_environment:
 
             assert_eq!(
                 receipt.downstream_dispatch_target.as_deref(),
-                Some("closure")
+                Some("developer")
             );
             assert!(receipt.downstream_dispatch_ready);
             assert!(receipt.downstream_dispatch_blockers.is_empty());
@@ -18590,6 +18575,12 @@ host_environment:
                 "closure",
             ),
             ("next-placeholder", true, "/tmp/prover-packet.json", "next"),
+            (
+                "unsequenced-closure",
+                true,
+                "/tmp/prover-packet.json",
+                "closure",
+            ),
         ];
 
         for (case, receipt_backed, source_packet_path, allowed_next_node) in cases {
