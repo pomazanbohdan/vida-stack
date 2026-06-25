@@ -18119,6 +18119,48 @@ fn task_close_json_surfaces_canonical_feedback_blockers_without_masking_successf
         ],
         &state_dir,
     );
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-verifier-blockers-folded-in-close",
+            "Feedback verifier blockers folded in close",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-verifier-blockers-folded-into-close",
+            "Feedback verifier blockers folded into close",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-stale-blocker-cleared-close",
+            "Feedback stale blocker cleared close",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
 
     let audit_close = run_with_state_lock_retry(|| {
         let mut command = vida();
@@ -18189,6 +18231,117 @@ fn task_close_json_surfaces_canonical_feedback_blockers_without_masking_successf
         "success"
     );
     assert_eq!(proof_context_json["blocker_codes"], serde_json::json!([]));
+
+    let folded_in_close = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "task",
+                "close",
+                "feedback-verifier-blockers-folded-in-close",
+                "--reason",
+                "Verifier blockers folded in: in-flight read/parse now emit structured envelopes; proof passed.",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        folded_in_close.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&folded_in_close.stdout),
+        String::from_utf8_lossy(&folded_in_close.stderr)
+    );
+    let folded_in_json: serde_json::Value = serde_json::from_slice(&folded_in_close.stdout)
+        .expect("folded-in proof context close json should parse");
+    assert_eq!(folded_in_json["status"], "pass");
+    assert_eq!(folded_in_json["task"]["status"], "closed");
+    assert_eq!(folded_in_json["host_agent_telemetry"]["status"], "recorded");
+    assert_eq!(
+        folded_in_json["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(folded_in_json["blocker_codes"], serde_json::json!([]));
+
+    let folded_into_close = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "task",
+                "close",
+                "feedback-verifier-blockers-folded-into-close",
+                "--reason",
+                "Verifier blockers folded into structured close proof: in-flight read/parse now emit structured envelopes; proof passed.",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        folded_into_close.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&folded_into_close.stdout),
+        String::from_utf8_lossy(&folded_into_close.stderr)
+    );
+    let folded_into_json: serde_json::Value = serde_json::from_slice(&folded_into_close.stdout)
+        .expect("folded-into proof context close json should parse");
+    assert_eq!(folded_into_json["status"], "pass");
+    assert_eq!(folded_into_json["task"]["status"], "closed");
+    assert_eq!(
+        folded_into_json["host_agent_telemetry"]["status"],
+        "recorded"
+    );
+    assert_eq!(
+        folded_into_json["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(folded_into_json["blocker_codes"], serde_json::json!([]));
+
+    let stale_blocker_cleared_close = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "task",
+                "close",
+                "feedback-stale-blocker-cleared-close",
+                "--reason",
+                "Stale compile blocker cleared by current mainline proof; proof passed.",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        stale_blocker_cleared_close.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&stale_blocker_cleared_close.stdout),
+        String::from_utf8_lossy(&stale_blocker_cleared_close.stderr)
+    );
+    let stale_blocker_cleared_json: serde_json::Value =
+        serde_json::from_slice(&stale_blocker_cleared_close.stdout)
+            .expect("stale blocker cleared close json should parse");
+    assert_eq!(stale_blocker_cleared_json["status"], "pass");
+    assert_eq!(
+        stale_blocker_cleared_json["host_agent_telemetry"]["status"],
+        "recorded"
+    );
+    assert_eq!(
+        stale_blocker_cleared_json["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(
+        stale_blocker_cleared_json["blocker_codes"],
+        serde_json::json!([])
+    );
 
     let blocked_close = run_command_capture(
         &[

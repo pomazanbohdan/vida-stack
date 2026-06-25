@@ -787,9 +787,12 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "committed",
         "pushed",
         "regression",
+        "cleared",
         "proofs:",
         "proof:",
         "proof commands passed",
+        "folded in",
+        "folded into",
         "reported",
         "reports",
         "not a pr-specific blocker",
@@ -2000,6 +2003,38 @@ mod tests {
         assert!(ignored
             .iter()
             .any(|phrase| phrase == "implemented verifier blocker summary gate with tests"));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_verifier_blockers_folded_in_proof_context() {
+        for (reason, expected_ignored_phrase) in [
+            (
+                "Verifier blockers folded in: in-flight read/parse now emit structured envelopes; proof passed.",
+                "verifier blockers folded in: in-flight read/parse now emit structured envelopes",
+            ),
+            (
+                "Implementation complete: blocked state reproduced and fixed; proof passed.",
+                "implementation complete: blocked state reproduced and fixed",
+            ),
+            (
+                "Stale compile blocker cleared by current mainline proof; proof passed.",
+                "stale compile blocker cleared by current mainline proof",
+            ),
+        ] {
+            assert_eq!(super::canonical_close_status_from_reason(reason), None);
+            let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+            let score = super::default_feedback_score(outcome, "verification");
+            let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+            assert_eq!(outcome, "success");
+            assert_eq!(score, 88);
+            assert_eq!(inference["failure_markers"], serde_json::json!([]));
+            assert!(inference["ignored_meta_language"]
+                .as_array()
+                .expect("ignored meta language should render")
+                .iter()
+                .any(|phrase| phrase == expected_ignored_phrase));
+        }
     }
 
     #[test]

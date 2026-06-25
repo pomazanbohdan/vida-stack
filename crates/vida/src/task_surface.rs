@@ -18303,6 +18303,29 @@ mod tests {
     }
 
     #[test]
+    fn task_close_feedback_blocker_summary_ignores_verifier_blockers_folded_in_context() {
+        for reason in [
+            "Verifier blockers folded in: in-flight read/parse now emit structured envelopes; proof passed.",
+            "Stale compile blocker cleared by current mainline proof; proof passed.",
+        ] {
+            let telemetry = task_close_host_agent_telemetry(
+                std::path::Path::new(".vida/data/state"),
+                false,
+                None,
+                &serde_json::json!({"id": "task-close-feedback-verifier-blockers-folded-in"}),
+                reason,
+                "test",
+            );
+
+            assert_ne!(
+                telemetry["reason"],
+                "feedback_deferred_for_canonical_close_status"
+            );
+            assert!(task_close_feedback_blocker_summary(&telemetry).is_none());
+        }
+    }
+
+    #[test]
     fn task_close_feedback_records_advisory_for_historical_failure_state_evidence() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let project_root = harness.path();
