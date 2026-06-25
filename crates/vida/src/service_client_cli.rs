@@ -211,9 +211,14 @@ fn payload_for(operation: &str, args: &[String]) -> serde_json::Value {
 }
 
 fn project_ref_from_operation(operation: &str, args: &[String]) -> Option<VidaProjectRef> {
-    let project = value_after(args, "--project")
+    let schema = operation_input_schema(operation)?;
+    let project_field = schema.field("project")?;
+    let project = project_field
+        .cli_flag
+        .as_deref()
+        .and_then(|flag| value_after(args, flag))
         .map(str::to_string)
-        .or_else(|| schema_default_for_field(operation, "project"));
+        .or_else(|| project_field.default_value.clone());
     project.map(|project_id| VidaProjectRef::ProjectId {
         project_id: VidaProjectId(project_id.to_string()),
     })
@@ -256,13 +261,6 @@ fn parse_schema_field_value(kind: VidaOperationInputValueKind, raw: &str) -> ser
         | VidaOperationInputValueKind::Path
         | VidaOperationInputValueKind::EnumOne => json!(raw),
     }
-}
-
-fn schema_default_for_field(operation: &str, field_id: &str) -> Option<String> {
-    operation_input_schema(operation)?
-        .field(field_id)?
-        .default_value
-        .clone()
 }
 
 fn value_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
