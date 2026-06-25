@@ -52,12 +52,8 @@ pub(crate) fn doctor_launcher_summary_for_root(
     let installed_binaries = installed_launcher_binary_evidence(&active_executable_path)?;
     let path_resolution =
         launcher_path_resolution(&active_executable_path, install_layout.as_ref());
-    let divergent_installed_binaries = installed_binaries
-        .iter()
-        .map(|entry| entry.fingerprint.as_str())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len()
-        > 1;
+    let divergent_installed_binaries =
+        installed_binary_divergence(&installed_binaries, install_layout.as_ref());
     let mut next_actions = Vec::new();
     if divergent_installed_binaries {
         next_actions.push(
@@ -207,16 +203,44 @@ fn installed_launcher_binary_evidence(
     Ok(evidence)
 }
 
+fn installed_binary_divergence(
+    binaries: &[LauncherBinaryEvidence],
+    install_layout: Option<&crate::release_surface::ReleaseInstallLayout>,
+) -> bool {
+    let Some(install_layout) = install_layout else {
+        return false;
+    };
+    let install_root = Path::new(&install_layout.install_root);
+    binaries
+        .iter()
+        .filter(|entry| path_is_under(Path::new(&entry.path), install_root))
+        .map(|entry| entry.fingerprint.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        > 1
+}
+
 fn launcher_path_resolution(
     active_executable_path: &Path,
     install_layout: Option<&crate::release_surface::ReleaseInstallLayout>,
 ) -> LauncherPathResolution {
-    let resolved =
-        resolve_command_from_path_env(CANONICAL_LAUNCHER_COMMAND, std::env::var_os("PATH"));
+    launcher_path_resolution_with_path_env(
+        active_executable_path,
+        install_layout,
+        std::env::var_os("PATH"),
+    )
+}
+
+fn launcher_path_resolution_with_path_env(
+    active_executable_path: &Path,
+    install_layout: Option<&crate::release_surface::ReleaseInstallLayout>,
+    path_env: Option<std::ffi::OsString>,
+) -> LauncherPathResolution {
+    let resolved = resolve_command_from_path_env(CANONICAL_LAUNCHER_COMMAND, path_env.clone());
     let expected_runtime_bin_dir = install_layout.map(|layout| layout.runtime_bin_dir.clone());
     let expected_runtime_bin_on_path = expected_runtime_bin_dir
         .as_ref()
-        .is_some_and(|dir| path_env_contains_dir(Path::new(dir), std::env::var_os("PATH")));
+        .is_some_and(|dir| path_env_contains_dir(Path::new(dir), path_env));
     let active_executable_on_path = resolved
         .as_ref()
         .is_some_and(|path| same_path(path, active_executable_path));
@@ -729,7 +753,8 @@ mod tests {
     use super::{
         build_docflow_receipt_evidence, canonical_closure_admission_artifact_json,
         doctor_launcher_summary_for_root, launcher_binary_fingerprint_skipped,
-        RuntimeConsumptionClosureAdmission, RuntimeConsumptionEvidence, CANONICAL_LAUNCHER_COMMAND,
+        LauncherBinaryEvidence, RuntimeConsumptionClosureAdmission, RuntimeConsumptionEvidence,
+        CANONICAL_LAUNCHER_COMMAND,
     };
     use std::path::PathBuf;
 
@@ -842,6 +867,116 @@ mod tests {
         assert!(super::path_env_contains_dir(&bin, Some(path_env)));
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn installed_binary_divergence_ignores_non_installed_active_executable() {
+        let install_root = std::env::temp_dir().join("vida-launcher-install-root");
+        let layout = crate::release_surface::ReleaseInstallLayout {
+            env_file: install_root.join("env.ps1").display().to_string(),
+            install_root: install_root.display().to_string(),
+            current_root: install_root.join("current").display().to_string(),
+            runtime_bin_dir: install_root
+                .join("current")
+                .join("bin")
+                .display()
+                .to_string(),
+            platform: std::env::consts::OS.to_string(),
+        };
+        let installed = LauncherBinaryEvidence {
+            path: install_root
+                .join("releases")
+                .join("v0.9.7")
+                .join("bin")
+                .join(crate::release_surface::vida_binary_file_name())
+                .display()
+                .to_string(),
+            fingerprint: "installed-release".to_string(),
+            active: false,
+        };
+        let debug_active = LauncherBinaryEvidence {
+            path: std::env::temp_dir()
+                .join("vida-stack")
+                .join("target")
+                .join("debug")
+                .join(crate::release_surface::vida_binary_file_name())
+                .display()
+                .to_string(),
+            fingerprint: "debug-build".to_string(),
+            active: true,
+        };
+
+        assert!(!super::installed_binary_divergence(
+            &[installed.clone(), debug_active],
+            Some(&layout)
+        ));
+
+        let stale_installed = LauncherBinaryEvidence {
+            path: install_root
+                .join("releases")
+                .join("v0.9.6")
+                .join("bin")
+                .join(crate::release_surface::vida_binary_file_name())
+                .display()
+                .to_string(),
+            fingerprint: "stale-release".to_string(),
+            active: false,
+        };
+        assert!(super::installed_binary_divergence(
+            &[installed, stale_installed],
+            Some(&layout)
+        ));
+    }
+
+    #[test]
+    fn launcher_path_resolution_passes_when_path_resolves_installed_and_active_is_debug() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let install_root = std::env::temp_dir().join(format!(
+            "vida-launcher-installed-path-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let current_bin = install_root.join("current").join("bin");
+        std::fs::create_dir_all(&current_bin).expect("current bin dir should write");
+        let installed_binary = current_bin.join(crate::release_surface::vida_binary_file_name());
+        std::fs::write(&installed_binary, b"installed vida")
+            .expect("installed binary should write");
+        let layout = crate::release_surface::ReleaseInstallLayout {
+            env_file: install_root.join("env.ps1").display().to_string(),
+            install_root: install_root.display().to_string(),
+            current_root: install_root.join("current").display().to_string(),
+            runtime_bin_dir: current_bin.display().to_string(),
+            platform: std::env::consts::OS.to_string(),
+        };
+        let active_debug = install_root
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("vida-stack")
+            .join("target")
+            .join("debug")
+            .join(crate::release_surface::vida_binary_file_name());
+        let path_env = std::env::join_paths([current_bin.clone()]).expect("path env should join");
+
+        let resolution = super::launcher_path_resolution_with_path_env(
+            &active_debug,
+            Some(&layout),
+            Some(path_env),
+        );
+
+        assert_eq!(resolution.status, "pass");
+        assert!(resolution.expected_runtime_bin_on_path);
+        assert!(!resolution.active_executable_on_path);
+        assert_eq!(
+            PathBuf::from(resolution.resolved_path.expect("vida should resolve")),
+            installed_binary
+                .canonicalize()
+                .expect("installed binary should canonicalize")
+        );
+
+        let _ = std::fs::remove_dir_all(install_root);
     }
 
     #[test]
