@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "release-package", "release-install", "target-dir-policy", "invoke-timed-argv-smoke")]
+    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "target-dir-policy", "invoke-timed-argv-smoke")]
     [string]$Mode = "quick",
     [string]$Package = "vida",
     [string]$TestFilter = "",
@@ -8,9 +8,13 @@ param(
     [string]$ReleaseVersion = "",
     [string]$ReleaseBinDir = "",
     [string]$ReleaseSuffix = "",
+    [string]$CoverageOutputPath = ".vida/tmp/operator-output.lcov",
+    [string]$CrapOutputPath = ".vida/tmp/workspace-crap.json",
+    [double]$CoverageThreshold = 80.0,
     [int]$Jobs = 0,
     [switch]$SkipBuild,
     [switch]$Windows,
+    [switch]$CoverageIgnoreRunFail,
     [switch]$Json,
     [Alias("h")]
     [switch]$Help
@@ -182,6 +186,7 @@ function Test-ModeNeedsWindowsBuildEnvironment {
         "doc-test",
         "build-debug",
         "runtime-smoke",
+        "coverage",
         "release-install"
     )
 }
@@ -197,6 +202,7 @@ function Test-ModeNeedsBuildConcurrencyGuard {
         "doc-test",
         "build-debug",
         "runtime-smoke",
+        "coverage",
         "release-package",
         "release-install"
     )
@@ -244,12 +250,15 @@ Modes:
   doc-test          Workspace Rust doc tests.
   build-debug       Debug build of supported runtime entrypoints.
   runtime-smoke     Build debug vida and run status from the effective target dir.
+  coverage          Default test coverage gate: cargo llvm-cov LCOV, cargo-crap JSON, vida quality gate.
   release-package   Build release archives with native PowerShell scripts/build-release.ps1.
   release-install   Installed launcher proof through vida release install.
   target-dir-policy Print the effective Cargo target directory policy.
 
 Notes:
   Cargo modes set CARGO_TARGET_DIR unless the caller already provided it.
+  coverage runs cargo llvm-cov nextest, writes LCOV to -CoverageOutputPath (default .vida/tmp/operator-output.lcov), and writes CRAP JSON to -CrapOutputPath (default .vida/tmp/workspace-crap.json).
+  coverage fails on test failure unless -CoverageIgnoreRunFail is set, then still generates LCOV when cargo-llvm-cov can report it.
   release-package accepts explicit -SkipBuild, -Windows, -ReleaseBinDir, -ReleaseVersion, and -ReleaseSuffix flags for packaging already-built release binaries.
   release-package also honors VIDA_RELEASE_SKIP_BUILD=1, VIDA_RELEASE_BIN_DIR=<dir>, and VIDA_RELEASE_SUFFIX=<suffix> for compatibility.
   JSON mode records operation timing and log artifact paths under .vida/data/state/command-timing.
@@ -986,6 +995,34 @@ function Write-SafeStateFile {
     }
 }
 
+function Resolve-RepoOutputFilePath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "Output path cannot be empty."
+    }
+
+    $comparison = Get-PathComparison
+    $fullRoot = [System.IO.Path]::GetFullPath($RootDir).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $candidate = $Path
+    if (-not [System.IO.Path]::IsPathRooted($candidate)) {
+        $candidate = Join-Path $RootDir $candidate
+    }
+    $fullPath = [System.IO.Path]::GetFullPath($candidate)
+    if (-not (Test-PathInsideRoot -Root $fullRoot -Path $fullPath -Comparison $comparison)) {
+        throw "Output path is outside repository root: $Path"
+    }
+
+    $parent = Split-Path -Parent $fullPath
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    Assert-NoReparsePointInPath -Root $fullRoot -Path $parent -OriginalPath $parent
+    Assert-NoReparsePointInPath -Root $fullRoot -Path $fullPath -OriginalPath $Path
+    return $fullPath
+}
+
 function ConvertTo-RepoRelativePath {
     param([string]$Path)
 
@@ -1092,6 +1129,54 @@ function Invoke-ScopedFormat {
     }
 
     Assert-ScopedDirtyFiles -AllowedPaths $allowed -Phase "postcheck"
+}
+
+function Invoke-CoverageGate {
+    $coveragePath = Resolve-RepoOutputFilePath $CoverageOutputPath
+    $crapPath = Resolve-RepoOutputFilePath $CrapOutputPath
+    $thresholdText = $CoverageThreshold.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+
+    $llvmCovCommand = New-Object System.Collections.Generic.List[string]
+    $llvmCovCommand.Add("cargo")
+    $llvmCovCommand.Add("llvm-cov")
+    $llvmCovCommand.Add("nextest")
+    $llvmCovCommand.Add("--workspace")
+    $llvmCovCommand.Add("--lcov")
+    $llvmCovCommand.Add("--output-path")
+    $llvmCovCommand.Add($coveragePath)
+    if ($CoverageIgnoreRunFail) {
+        $llvmCovCommand.Add("--ignore-run-fail")
+    }
+    Invoke-Timed "cargo-llvm-cov-nextest-workspace-lcov" $llvmCovCommand.ToArray()
+
+    $crapCommand = New-Object System.Collections.Generic.List[string]
+    $crapCommand.Add("cargo")
+    $crapCommand.Add("crap")
+    $crapCommand.Add("--workspace")
+    $crapCommand.Add("--lcov")
+    $crapCommand.Add($coveragePath)
+    $crapCommand.Add("--format")
+    $crapCommand.Add("json")
+    $crapCommand.Add("--output")
+    $crapCommand.Add($crapPath)
+    if ($Jobs -gt 0) {
+        $crapCommand.Add("--jobs")
+        $crapCommand.Add([string]$Jobs)
+    }
+    Invoke-Timed "cargo-crap-workspace-json" $crapCommand.ToArray()
+
+    Invoke-Timed "vida-quality-gate-coverage" @(
+        (Resolve-InstalledVidaPath),
+        "quality",
+        "gate",
+        "--prepush",
+        "--coverage-file",
+        $coveragePath,
+        "--coverage-threshold",
+        $thresholdText,
+        "--advise",
+        "--json"
+    )
 }
 
 $BuildGuard = $null
@@ -1277,6 +1362,8 @@ exit 0
     } elseif ($Mode -eq "runtime-smoke") {
         Invoke-Timed "cargo-build-debug" @("cargo", "build", "--locked", "-p", "vida")
         Invoke-Timed "debug-vida-status" @($DebugVidaPath, "status", "--json")
+    } elseif ($Mode -eq "coverage") {
+        Invoke-CoverageGate
     } elseif ($Mode -eq "release-package") {
         $releaseCommand = New-Object System.Collections.Generic.List[string]
         $releaseCommand.Add($PwshPath)

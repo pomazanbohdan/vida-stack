@@ -1,4 +1,5 @@
 use super::*;
+use crate::RuntimeConsumptionLaneSelection;
 use crate::release1_contracts::lane_status_has_required_evidence;
 use crate::state_store::state_store_task_models::{
     task_has_label, task_is_spec_pack_child, task_is_work_pool_pack_child,
@@ -7,15 +8,15 @@ use crate::taskflow_run_graph::{
     approval_delegation_transition_kind, clear_run_graph_dispatch_init_fast_cache,
     is_dispatch_resume_handoff_done,
 };
-use crate::RuntimeConsumptionLaneSelection;
 use taskflow_authority::run_graph_evidence::{
-    blocked_source_lane_from_packet_evidence, downstream_handoff_ready_from_completion_evidence,
-    normalize_run_graph_node, rework_route_from_completion_evidence, RunGraphBlockedSourceLane,
-    RunGraphCompletionEvidence, RunGraphDownstreamPacketEvidence, RunGraphReworkEvidence,
+    RunGraphBlockedSourceLane, RunGraphCompletionEvidence, RunGraphDownstreamPacketEvidence,
+    RunGraphReworkEvidence, blocked_source_lane_from_packet_evidence,
+    downstream_handoff_ready_from_completion_evidence, normalize_run_graph_node,
+    rework_route_from_completion_evidence,
 };
 use taskflow_authority::run_graph_transition::{
-    admit_run_graph_transition, ready_run_graph_transition, ReadyRunGraphTransitionInput,
-    RunGraphAuthorityInput, RunGraphDispatchTargetFormat,
+    ReadyRunGraphTransitionInput, RunGraphAuthorityInput, RunGraphDispatchTargetFormat,
+    admit_run_graph_transition, ready_run_graph_transition,
 };
 use taskflow_core::run_graph::model::{
     DispatchReceiptSnapshot as CoreDispatchReceiptSnapshot,
@@ -128,6 +129,20 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.context_state = "sealed".to_string();
         status.checkpoint_kind = "none".to_string();
         status.recovery_ready = false;
+        return Ok(status);
+    }
+    if terminal_closure_supersedes_stale_handoff_receipt_fields(
+        &status,
+        &receipt.dispatch_kind,
+        &receipt.dispatch_status,
+        receipt.lane_status.as_deref(),
+        receipt.blocker_code.as_deref(),
+        receipt.supersedes_receipt_id.as_deref(),
+        receipt.exception_path_receipt_id.as_deref(),
+    ) {
+        if status.policy_gate != "historical_closed_task_stale_run_retired" {
+            status.policy_gate = "closed_task_stale_run_retired".to_string();
+        }
         return Ok(status);
     }
     let stale_downstream_blockers_are_superseded_by_ready_handoff =
@@ -858,27 +873,67 @@ fn terminal_closure_status(status: &RunGraphStatus) -> bool {
     status.is_terminal_closure()
 }
 
+fn terminal_closure_supersedes_stale_handoff_receipt_fields(
+    status: &RunGraphStatus,
+    dispatch_kind: &str,
+    dispatch_status: &str,
+    lane_status: Option<&str>,
+    blocker_code: Option<&str>,
+    supersedes_receipt_id: Option<&str>,
+    exception_path_receipt_id: Option<&str>,
+) -> bool {
+    if !terminal_closure_status(status)
+        || has_receipt_evidence_id(supersedes_receipt_id)
+        || has_receipt_evidence_id(exception_path_receipt_id)
+    {
+        return false;
+    }
+    let blocker_code = blocker_code.map(str::trim);
+    let stale_developer_handoff = dispatch_status == "blocked"
+        && blocker_code
+            == Some(crate::release1_contracts::blocker_code_str(
+                crate::release1_contracts::BlockerCode::PendingDeveloperHandoffPacket,
+            ));
+    let stale_host_bridge_handoff = dispatch_kind == "agent_lane"
+        && dispatch_status == "bridge_request_pending"
+        && blocker_code
+            == Some(crate::release1_contracts::blocker_code_str(
+                crate::release1_contracts::BlockerCode::HostToolBridgeAdapterRequired,
+            ))
+        && matches!(
+            lane_status.map(str::trim),
+            Some("lane_open" | "lane_running" | "lane_blocked") | None
+        );
+    stale_developer_handoff || stale_host_bridge_handoff
+}
+
 fn terminal_closure_supersedes_stale_handoff_receipt(
     status: &RunGraphStatus,
     receipt: &mut RunGraphDispatchReceipt,
 ) -> bool {
-    if !terminal_closure_status(status)
-        || receipt.dispatch_status != "blocked"
-        || receipt.blocker_code.as_deref()
-            != Some(crate::release1_contracts::blocker_code_str(
-                crate::release1_contracts::BlockerCode::PendingDeveloperHandoffPacket,
-            ))
-        || receipt.exception_path_receipt_id.is_some()
-        || receipt.supersedes_receipt_id.is_some()
-    {
+    if !terminal_closure_supersedes_stale_handoff_receipt_fields(
+        status,
+        &receipt.dispatch_kind,
+        &receipt.dispatch_status,
+        Some(receipt.lane_status.as_str()),
+        receipt.blocker_code.as_deref(),
+        receipt.supersedes_receipt_id.as_deref(),
+        receipt.exception_path_receipt_id.as_deref(),
+    ) {
         return false;
     }
+    let stale_kind = if receipt.dispatch_status == "bridge_request_pending" {
+        "host bridge"
+    } else {
+        "developer handoff"
+    };
     receipt.dispatch_status = "executed".to_string();
     receipt.lane_status = "lane_completed".to_string();
     receipt.blocker_code = None;
     receipt.downstream_dispatch_target = Some("closure".to_string());
-    receipt.downstream_dispatch_note =
-        Some("terminal closure superseded stale developer handoff blocker".to_string());
+    receipt.downstream_dispatch_note = Some(format!(
+        "terminal closure superseded stale {stale_kind} blocker"
+    ));
     receipt.downstream_dispatch_ready = false;
     receipt.downstream_dispatch_blockers.clear();
     receipt.downstream_dispatch_status = Some("executed".to_string());
@@ -1905,12 +1960,12 @@ impl StateStore {
         else {
             return Ok(None);
         };
-        let current_stable_fallback = evidence["current_session"]
-            ["fallback_replaces_legacy_stable_worktree_state_hash"]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
+        let current_stable_fallback =
+            evidence["current_session"]["fallback_replaces_legacy_stable_worktree_state_hash"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
         let mut scope = CurrentSessionRunGraphClaimScope {
             run_ids: Vec::new(),
             task_ids: Vec::new(),
@@ -2039,12 +2094,12 @@ impl StateStore {
             .ok_or_else(|| StateStoreError::InvalidTaskRecord {
                 reason: "test run-graph claim requires current session id".to_string(),
             })?;
-        let claim_session_id = current_session
-            ["fallback_replaces_legacy_stable_worktree_state_hash"]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(current_session_id);
+        let claim_session_id =
+            current_session["fallback_replaces_legacy_stable_worktree_state_hash"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(current_session_id);
         let worktree_environment_id = current_session["worktree_environment_id"]
             .as_str()
             .unwrap_or_else(|| self.root().to_str().unwrap_or_default())
@@ -2176,11 +2231,11 @@ impl StateStore {
             .ok_or_else(|| StateStoreError::InvalidTaskRecord {
                 reason: "run-graph mutation requires an active current session id".to_string(),
             })?;
-        let current_stable_fallback = evidence["current_session"]
-            ["fallback_replaces_legacy_stable_worktree_state_hash"]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
+        let current_stable_fallback =
+            evidence["current_session"]["fallback_replaces_legacy_stable_worktree_state_hash"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
 
         let active_claims = self.active_orchestrator_claims().await?;
         let run_task_id = self
@@ -5182,12 +5237,14 @@ mod tests {
         );
 
         let rows = vec![test_task_record("alias-task", "merged")];
-        assert!(store
-            .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
-                &status, &rows,
-            )
-            .await
-            .expect("task row lookup should succeed"));
+        assert!(
+            store
+                .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
+                    &status, &rows,
+                )
+                .await
+                .expect("task row lookup should succeed")
+        );
 
         close_store_and_remove_root(store, root).await;
     }
@@ -5210,10 +5267,12 @@ mod tests {
         status.recovery_ready = false;
         status.policy_gate = "historical_closed_task_stale_run_retired".to_string();
 
-        assert!(store
-            .run_graph_status_is_stale_for_task_continuation_binding(&status)
-            .await
-            .expect("terminal closure classifier should succeed"));
+        assert!(
+            store
+                .run_graph_status_is_stale_for_task_continuation_binding(&status)
+                .await
+                .expect("terminal closure classifier should succeed")
+        );
 
         let mut malicious_status = status.clone();
         malicious_status.run_id = "malicious-retired-run".to_string();
@@ -5224,18 +5283,22 @@ mod tests {
         malicious_status.checkpoint_kind = "execution_cursor".to_string();
         malicious_status.recovery_ready = true;
 
-        assert!(!store
-            .run_graph_status_is_stale_for_task_continuation_binding(&malicious_status)
-            .await
-            .expect("contradictory retired closure classifier should fail closed"));
+        assert!(
+            !store
+                .run_graph_status_is_stale_for_task_continuation_binding(&malicious_status)
+                .await
+                .expect("contradictory retired closure classifier should fail closed")
+        );
 
         let mut open_status = sample_run_graph_status();
         open_status.run_id = "active-run".to_string();
         open_status.task_id = "active-runtime-task".to_string();
-        assert!(!store
-            .run_graph_status_is_stale_for_task_continuation_binding(&open_status)
-            .await
-            .expect("active status classifier should succeed"));
+        assert!(
+            !store
+                .run_graph_status_is_stale_for_task_continuation_binding(&open_status)
+                .await
+                .expect("active status classifier should succeed")
+        );
 
         close_store_and_remove_root(store, root).await;
     }
@@ -5712,6 +5775,180 @@ mod tests {
             receipt.downstream_dispatch_status.as_deref(),
             Some("executed")
         );
+    }
+
+    #[test]
+    fn terminal_closure_supersedes_stale_host_bridge_pending_receipt() {
+        let mut status = sample_run_graph_status();
+        mark_terminal_closure_status(&mut status);
+
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "analyst".to_string(),
+            dispatch_status: "bridge_request_pending".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: Some(
+                crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::HostToolBridgeAdapterRequired,
+                )
+                .to_string(),
+            ),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-25T00:00:00Z".to_string(),
+        };
+
+        assert!(terminal_closure_supersedes_stale_handoff_receipt(
+            &status,
+            &mut receipt
+        ));
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert_eq!(receipt.blocker_code, None);
+        assert_eq!(
+            receipt.downstream_dispatch_target.as_deref(),
+            Some("closure")
+        );
+        assert_eq!(
+            receipt.downstream_dispatch_note.as_deref(),
+            Some("terminal closure superseded stale host bridge blocker")
+        );
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("executed")
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_closure_recovery_ignores_stale_host_bridge_pending_receipt() {
+        let root = temp_run_graph_root("vida-terminal-closure-stale-hostbridge");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "feature-terminal-hostbridge",
+                title: "Closed terminal closure host bridge task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create closed task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-terminal-hostbridge",
+            "delivery",
+            "delivery",
+        );
+        status.task_id = "feature-terminal-hostbridge".to_string();
+        mark_terminal_closure_status(&mut status);
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist terminal closure run-graph status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-terminal-hostbridge".to_string(),
+                dispatch_target: "analyst".to_string(),
+                dispatch_status: "bridge_request_pending".to_string(),
+                lane_status: "lane_open".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/analyst-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/analyst-result.json".to_string()),
+                blocker_code: Some(
+                    crate::release1_contracts::blocker_code_str(
+                        crate::release1_contracts::BlockerCode::HostToolBridgeAdapterRequired,
+                    )
+                    .to_string(),
+                ),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analyst".to_string()),
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-25T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale host bridge receipt");
+
+        let reconciled = store
+            .run_graph_status("run-terminal-hostbridge")
+            .await
+            .expect("load reconciled terminal closure status");
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.active_node, "closure");
+        assert_eq!(reconciled.lifecycle_stage, "closure_complete");
+        assert_eq!(reconciled.policy_gate, "closed_task_stale_run_retired");
+        assert_eq!(reconciled.resume_target, "none");
+        assert!(reconciled.is_reconciled_terminal_closure());
+        assert!(!reconciled.delegation_gate().delegated_cycle_open);
+
+        let recovery = store
+            .run_graph_recovery_summary("run-terminal-hostbridge")
+            .await
+            .expect("load recovery summary");
+        assert_eq!(recovery.resume_status, "completed");
+        assert_eq!(recovery.active_node, "closure");
+        assert_eq!(recovery.lifecycle_stage, "closure_complete");
+        assert_eq!(recovery.delegation_gate.blocker_code, None);
+
+        let receipt = store
+            .run_graph_dispatch_receipt_summary_for_status(&reconciled)
+            .await
+            .expect("load receipt summary")
+            .expect("receipt summary should exist");
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert_eq!(receipt.blocker_code, None);
+        assert_eq!(
+            receipt.downstream_dispatch_target.as_deref(),
+            Some("closure")
+        );
+
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
@@ -6338,11 +6575,13 @@ mod tests {
             .await
             .expect("read run graph status");
         assert_eq!(loaded.run_id, "run-read-only-owner-evidence");
-        assert!(store
-            .run_graph_owner_evidence_record("run-read-only-owner-evidence", "run_graph_status")
-            .await
-            .expect("read owner evidence")
-            .is_none());
+        assert!(
+            store
+                .run_graph_owner_evidence_record("run-read-only-owner-evidence", "run_graph_status")
+                .await
+                .expect("read owner evidence")
+                .is_none()
+        );
 
         close_store_and_remove_root(store, root).await;
     }
@@ -6367,19 +6606,23 @@ mod tests {
             .record_run_graph_status(&ownerless)
             .await
             .expect("persist ownerless run graph status");
-        assert!(store
-            .run_graph_legacy_ownerless("legacy-ownerless-run")
-            .await
-            .expect("classify ownerless run"));
+        assert!(
+            store
+                .run_graph_legacy_ownerless("legacy-ownerless-run")
+                .await
+                .expect("classify ownerless run")
+        );
 
         store
             .record_run_graph_owner_evidence("legacy-ownerless-run", "dispatch_context")
             .await
             .expect("record owner evidence");
-        assert!(!store
-            .run_graph_legacy_ownerless("legacy-ownerless-run")
-            .await
-            .expect("owner evidence should make run non-ownerless"));
+        assert!(
+            !store
+                .run_graph_legacy_ownerless("legacy-ownerless-run")
+                .await
+                .expect("owner evidence should make run non-ownerless")
+        );
 
         let mut claimed = sample_run_graph_status();
         claimed.run_id = "legacy-claimed-run".to_string();
@@ -6388,10 +6631,12 @@ mod tests {
             .record_run_graph_status(&claimed)
             .await
             .expect("persist claim-backed run graph status");
-        assert!(store
-            .run_graph_legacy_ownerless("legacy-claimed-run")
-            .await
-            .expect("classify pre-claim run"));
+        assert!(
+            store
+                .run_graph_legacy_ownerless("legacy-claimed-run")
+                .await
+                .expect("classify pre-claim run")
+        );
         let claim = store
             .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
                 claim_id: "legacy-claimed-run-write".to_string(),
@@ -6411,18 +6656,22 @@ mod tests {
             })
             .await
             .expect("acquire claim");
-        assert!(!store
-            .run_graph_legacy_ownerless("legacy-claimed-run")
-            .await
-            .expect("claim should make run non-ownerless"));
+        assert!(
+            !store
+                .run_graph_legacy_ownerless("legacy-claimed-run")
+                .await
+                .expect("claim should make run non-ownerless")
+        );
         store
             .release_orchestrator_claim(&claim.claim_id, claim.resource_revision, "test release")
             .await
             .expect("release claim");
-        assert!(store
-            .run_graph_legacy_ownerless("legacy-claimed-run")
-            .await
-            .expect("released claim should not block ownerless classification"));
+        assert!(
+            store
+                .run_graph_legacy_ownerless("legacy-claimed-run")
+                .await
+                .expect("released claim should not block ownerless classification")
+        );
 
         let mut expired = sample_run_graph_status();
         expired.run_id = "legacy-expired-claim-run".to_string();
@@ -6457,10 +6706,12 @@ mod tests {
                 .expect("expire stale claims"),
             1
         );
-        assert!(store
-            .run_graph_legacy_ownerless("legacy-expired-claim-run")
-            .await
-            .expect("expired claim should not block ownerless classification"));
+        assert!(
+            store
+                .run_graph_legacy_ownerless("legacy-expired-claim-run")
+                .await
+                .expect("expired claim should not block ownerless classification")
+        );
 
         close_store_and_remove_root(store, root).await;
     }
@@ -6895,11 +7146,13 @@ mod tests {
                 .run_id,
             "run-foreign"
         );
-        assert!(store
-            .latest_run_graph_status_for_current_session()
-            .await
-            .expect("read scoped latest")
-            .is_none());
+        assert!(
+            store
+                .latest_run_graph_status_for_current_session()
+                .await
+                .expect("read scoped latest")
+                .is_none()
+        );
 
         let mut current_status = sample_run_graph_status();
         current_status.run_id = "run-current".to_string();
@@ -7601,8 +7854,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_explicit_continuation_binding_for_current_session_uses_current_owner_evidence_without_claim(
-    ) {
+    async fn latest_explicit_continuation_binding_for_current_session_uses_current_owner_evidence_without_claim()
+     {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
         unsafe {
@@ -7620,11 +7873,13 @@ mod tests {
             .await
             .expect("persist owner-evidence binding");
 
-        assert!(store
-            .active_orchestrator_claims()
-            .await
-            .expect("read claims")
-            .is_empty());
+        assert!(
+            store
+                .active_orchestrator_claims()
+                .await
+                .expect("read claims")
+                .is_empty()
+        );
         assert_eq!(
             store
                 .latest_explicit_run_graph_continuation_binding_for_current_session()
@@ -7684,11 +7939,13 @@ mod tests {
             .await
             .expect("persist owner-evidence binding");
 
-        assert!(store
-            .active_orchestrator_claims()
-            .await
-            .expect("read claims")
-            .is_empty());
+        assert!(
+            store
+                .active_orchestrator_claims()
+                .await
+                .expect("read claims")
+                .is_empty()
+        );
         assert_eq!(
             store
                 .latest_run_graph_status_for_current_session()
@@ -7850,8 +8107,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch(
-    ) {
+    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -8885,8 +9142,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active(
-    ) {
+    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -9925,18 +10182,20 @@ mod tests {
             .await
             .expect("record completed explicit binding");
 
-        assert!(store
-            .latest_explicit_run_graph_continuation_binding()
-            .await
-            .expect("read latest explicit binding")
-            .is_none());
+        assert!(
+            store
+                .latest_explicit_run_graph_continuation_binding()
+                .await
+                .expect("read latest explicit binding")
+                .is_none()
+        );
 
         close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
-    async fn active_exception_takeover_reconciles_stale_continuation_binding_for_next_lawful_sources(
-    ) {
+    async fn active_exception_takeover_reconciles_stale_continuation_binding_for_next_lawful_sources()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10259,8 +10518,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open(
-    ) {
+    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10783,8 +11042,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none(
-    ) {
+    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

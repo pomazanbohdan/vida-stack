@@ -97,11 +97,23 @@ dependency, proof, release-install, or monorepo optimization work:
    - when a root `[workspace.dependencies]` entry needs a version bump and the
      local Cargo surface has no workspace-edit flag, make a bounded manifest
      patch, then run `cargo update` immediately.
-5. `git`
+5. `cargo-llvm-cov`
+   - canonical executable: `C:\Users\pomaz\.cargo\bin\cargo-llvm-cov.exe`,
+   - current default coverage generator for Rust test coverage evidence,
+   - write LCOV with `cargo llvm-cov nextest --workspace --lcov --output-path .vida/tmp/operator-output.lcov`,
+   - use `--ignore-run-fail` only for diagnostic baseline capture when failing
+     tests are already tracked; normal closure coverage must fail on test
+     failure.
+6. `cargo-crap`
+   - canonical executable: `C:\Users\pomaz\.cargo\bin\cargo-crap.exe`,
+   - current default analyzer for risky under-tested Rust functions,
+   - read the LCOV file from `cargo-llvm-cov` and write the baseline JSON with
+     `cargo crap --workspace --lcov .vida/tmp/operator-output.lcov --format json --output .vida/tmp/workspace-crap.json`.
+7. `git`
    - canonical executable: `C:\Program Files\Git\cmd\git.exe`,
    - use the absolute path for status, diff, commit, and push from stripped
      shells.
-6. `vida`
+8. `vida`
    - canonical installed runtime executable:
      `C:\Users\pomaz\AppData\Local\vida-stack\current\bin\vida.exe`,
    - after every closed task in the current operator session, run the release
@@ -152,15 +164,27 @@ systems:
 4. `cargo-nextest` remains the default scalable Rust test runner for workspace
    test execution. Prefer focused package/filter runs during development and the
    existing CI/workspace shards for broad proof.
-5. `sccache` is the preferred optional compiler cache when it is installed and
+5. `cargo-llvm-cov` plus `cargo-crap` are the default coverage measurement
+   toolchain. Use the project gate instead of ad hoc coverage commands:
+
+```powershell
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode coverage -Json
+```
+
+   The gate writes `.vida/tmp/operator-output.lcov`, writes
+   `.vida/tmp/workspace-crap.json`, and then runs
+   `vida quality gate --prepush --coverage-file .vida/tmp/operator-output.lcov --coverage-threshold 80 --advise --json`.
+   A below-threshold result is a coverage blocker, not a script failure to
+   ignore.
+6. `sccache` is the preferred optional compiler cache when it is installed and
    validated on the host. Do not set `RUSTC_WRAPPER` in project config until
    `sccache --show-stats` and a local compile proof show that it improves this
    Windows/MSVC environment rather than serializing or hiding linker failures.
-6. `cargo-hakari` is a candidate only after measurement shows feature-unification
+7. `cargo-hakari` is a candidate only after measurement shows feature-unification
    churn across workspace crates. Do not add a workspace-hack crate without a
    before/after timing record and a TaskFlow task that owns generated manifest
    changes.
-7. `cargo-chef` is relevant to container or Docker-layer caching only. Do not add
+8. `cargo-chef` is relevant to container or Docker-layer caching only. Do not add
    it to local Windows proof paths unless a packaging/container task owns that
    admission surface.
 

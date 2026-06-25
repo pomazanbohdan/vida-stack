@@ -7,6 +7,7 @@ pub struct TerminalClosureStatus<'a> {
     pub next_node: Option<&'a str>,
     pub status: &'a str,
     pub lifecycle_stage: &'a str,
+    pub resume_target: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +23,7 @@ pub fn terminal_missing_task_closure_has_clean_dispatch_receipt(
     status: &TerminalClosureStatus<'_>,
     receipt: Option<&TerminalClosureReceipt<'_>>,
 ) -> bool {
-    if !status_is_terminal_closure(status) {
+    if !status_is_terminal_closure_without_next_unit(status) {
         return false;
     }
     let Some(receipt) = receipt else {
@@ -42,10 +43,14 @@ pub fn terminal_missing_task_closure_has_clean_dispatch_receipt(
         || receipt.dispatch_target == status.active_node
 }
 
-fn status_is_terminal_closure(status: &TerminalClosureStatus<'_>) -> bool {
+pub fn status_is_terminal_closure_without_next_unit(status: &TerminalClosureStatus<'_>) -> bool {
     status.lifecycle_stage == "closure_complete"
         && matches!(status.status, "completed" | "pass")
         && status.next_node.is_none()
+        && status
+            .resume_target
+            .map(str::trim)
+            .is_none_or(|value| value.is_empty() || value == "none")
 }
 
 #[cfg(test)]
@@ -62,6 +67,7 @@ mod tests {
             next_node: None,
             status: "completed",
             lifecycle_stage: "closure_complete",
+            resume_target: Some("none"),
         }
     }
 
@@ -117,6 +123,17 @@ mod tests {
     fn terminal_missing_task_closure_rejects_non_terminal_status() {
         let mut status = terminal_status();
         status.lifecycle_stage = "closure_active";
+
+        assert!(!terminal_missing_task_closure_has_clean_dispatch_receipt(
+            &status,
+            Some(&clean_receipt())
+        ));
+    }
+
+    #[test]
+    fn terminal_closure_rejects_pending_resume_target() {
+        let mut status = terminal_status();
+        status.resume_target = Some("dispatch.developer");
 
         assert!(!terminal_missing_task_closure_has_clean_dispatch_receipt(
             &status,

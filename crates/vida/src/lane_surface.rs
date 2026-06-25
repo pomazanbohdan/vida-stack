@@ -4,11 +4,13 @@ use std::time::Duration;
 
 use runtime_path_policy::atomic_write::{write_json_new, write_json_replace};
 use runtime_path_policy::{
-    existing_regular_file_under_root, new_output_path_under_root, path_contains_dot_segment,
-    ArtifactPathKind, PathPolicyError, StateRoot,
+    ArtifactPathKind, PathPolicyError, StateRoot, existing_regular_file_under_root,
+    new_output_path_under_root, path_contains_dot_segment,
 };
 use serde::Serialize;
 use taskflow_host_bridge::{
+    DispatchReceiptBindingInput, HostBridgeCompletionInput, HostBridgeProvenanceInput,
+    HostBridgeRequest, HostBridgeRequestPath,
     host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_has_preview_refresh_evidence,
@@ -20,14 +22,13 @@ use taskflow_host_bridge::{
     materialize_host_bridge_completion_evidence as materialize_shared_host_bridge_completion_evidence,
     normalize_host_bridge_provenance_for_completion,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
-    validate_host_bridge_request_provenance, DispatchReceiptBindingInput,
-    HostBridgeCompletionInput, HostBridgeProvenanceInput, HostBridgeRequest, HostBridgeRequestPath,
+    validate_host_bridge_request_provenance,
 };
 use time::format_description::well_known::Rfc3339;
 
 use crate::contract_profile_adapter::render_operator_contract_envelope;
 use crate::taskflow_task_bridge::proxy_state_dir;
-use crate::{state_store::StateStore, ProxyArgs};
+use crate::{ProxyArgs, state_store::StateStore};
 
 const LANE_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -844,15 +845,16 @@ fn build_lane_envelope_with_owned_scope(
     let current_exception_path_metadata = root_local_write_allowed
         .then_some(exception_path_metadata)
         .flatten();
-    let next_action = lane_ready_downstream_next_action(&summary, blocked).or_else(|| {
-        lane_blocked_next_action(
-            &summary,
-            status.as_ref(),
-            blocked,
-            &next_actions,
-            owned_write_scope_hint,
-        )
-    });
+    let next_action = lane_ready_downstream_next_action(&summary, status.as_ref(), blocked)
+        .or_else(|| {
+            lane_blocked_next_action(
+                &summary,
+                status.as_ref(),
+                blocked,
+                &next_actions,
+                owned_write_scope_hint,
+            )
+        });
     let recommended_command = next_action.as_ref().map(|action| action.command.clone());
     let recommended_surface = next_action.as_ref().map(|action| action.surface.clone());
     let selected_backend = status
@@ -1064,9 +1066,13 @@ fn lane_recommended_surface_for_command(command: &str) -> String {
 
 fn lane_ready_downstream_next_action(
     summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    status: Option<&crate::state_store::RunGraphStatus>,
     blocked: bool,
 ) -> Option<LaneNextAction> {
-    if blocked || !lane_summary_has_ready_downstream_handoff(summary) {
+    if blocked
+        || status.is_some_and(lane_status_is_terminal_closure_without_next_unit)
+        || !lane_summary_has_ready_downstream_handoff(summary)
+    {
         return None;
     }
     let command =
@@ -1088,6 +1094,26 @@ fn lane_ready_downstream_next_action(
                 .unwrap_or("next")
         ),
     })
+}
+
+fn lane_status_is_terminal_closure_without_next_unit(
+    status: &crate::state_store::RunGraphStatus,
+) -> bool {
+    let next_node = status
+        .next_node
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    taskflow_authority::terminal_closure::status_is_terminal_closure_without_next_unit(
+        &taskflow_authority::terminal_closure::TerminalClosureStatus {
+            run_id: &status.run_id,
+            active_node: &status.active_node,
+            next_node,
+            status: &status.status,
+            lifecycle_stage: &status.lifecycle_stage,
+            resume_target: Some(&status.resume_target),
+        },
+    )
 }
 
 fn lane_blocked_next_action(
@@ -4531,13 +4557,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             );
         }
         LaneCommand::ShowRun { run_id, as_json } => {
-            if *as_json {
-                if let Some(cached) =
-                    read_cached_lane_show_projection(&state_dir, &lane_show_projection_name(run_id))
-                {
-                    return emit_cached_lane_show_projection(cached);
-                }
-            }
             let store = match StateStore::open_existing_read_only_with_timeout(
                 state_dir.clone(),
                 LANE_SURFACE_LOCK_TIMEOUT,
@@ -4581,6 +4600,19 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 != crate::LaneStatus::LaneCompleted.as_str()
                 || summary.dispatch_status != "executed"
                 || summary.blocker_code.is_some()
+                || summary.downstream_dispatch_ready
+                || summary
+                    .downstream_dispatch_status
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .is_some()
+                || summary
+                    .downstream_dispatch_target
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .is_some()
                 || summary
                     .downstream_dispatch_blockers
                     .iter()
@@ -7179,18 +7211,24 @@ mod tests {
         let truth = derive_lane_show_truth(&summary, None);
 
         assert!(truth.blocked);
-        assert!(truth
-            .next_actions
-            .iter()
-            .any(|action| action.contains("vida taskflow recovery status run-lane-test")));
-        assert!(truth
-            .next_actions
-            .iter()
-            .any(|action| action.contains("vida lane show run-lane-test")));
-        assert!(truth
-            .next_actions
-            .iter()
-            .all(|action| !action.contains("--json")));
+        assert!(
+            truth
+                .next_actions
+                .iter()
+                .any(|action| action.contains("vida taskflow recovery status run-lane-test"))
+        );
+        assert!(
+            truth
+                .next_actions
+                .iter()
+                .any(|action| action.contains("vida lane show run-lane-test"))
+        );
+        assert!(
+            truth
+                .next_actions
+                .iter()
+                .all(|action| !action.contains("--json"))
+        );
     }
 
     #[test]
@@ -7228,17 +7266,23 @@ mod tests {
         let truth = derive_lane_show_truth(&summary, Some(&recovery));
 
         assert!(truth.blocked);
-        assert!(truth
-            .blocker_codes
-            .contains(&"internal_activation_view_only".to_string()));
-        assert!(truth
-            .next_actions
-            .iter()
-            .any(|action| action.contains("vida taskflow recovery status run-lane-test")));
-        assert!(truth
-            .next_actions
-            .iter()
-            .all(|action| !action.contains("--json")));
+        assert!(
+            truth
+                .blocker_codes
+                .contains(&"internal_activation_view_only".to_string())
+        );
+        assert!(
+            truth
+                .next_actions
+                .iter()
+                .any(|action| action.contains("vida taskflow recovery status run-lane-test"))
+        );
+        assert!(
+            truth
+                .next_actions
+                .iter()
+                .all(|action| !action.contains("--json"))
+        );
     }
 
     #[test]
@@ -7253,9 +7297,11 @@ mod tests {
         let truth = derive_lane_show_truth(&summary, None);
 
         assert!(truth.blocked);
-        assert!(truth
-            .blocker_codes
-            .contains(&"missing_owned_write_scope".to_string()));
+        assert!(
+            truth
+                .blocker_codes
+                .contains(&"missing_owned_write_scope".to_string())
+        );
     }
 
     #[test]
@@ -7271,17 +7317,23 @@ mod tests {
         let truth = derive_lane_show_truth(&summary, None);
 
         assert!(truth.blocked);
-        assert!(truth
-            .blocker_codes
-            .contains(&"missing_owned_write_scope".to_string()));
-        assert!(truth
-            .next_actions
-            .iter()
-            .any(|action| action.contains("vida taskflow recovery status run-lane-test")));
-        assert!(truth
-            .next_actions
-            .iter()
-            .all(|action| !action.contains("--json")));
+        assert!(
+            truth
+                .blocker_codes
+                .contains(&"missing_owned_write_scope".to_string())
+        );
+        assert!(
+            truth
+                .next_actions
+                .iter()
+                .any(|action| action.contains("vida taskflow recovery status run-lane-test"))
+        );
+        assert!(
+            truth
+                .next_actions
+                .iter()
+                .all(|action| !action.contains("--json"))
+        );
     }
 
     #[test]
@@ -7317,9 +7369,11 @@ mod tests {
         let truth = derive_lane_show_truth(&summary, Some(&recovery));
 
         assert!(!truth.blocked);
-        assert!(!truth
-            .blocker_codes
-            .contains(&"open_delegated_cycle".to_string()));
+        assert!(
+            !truth
+                .blocker_codes
+                .contains(&"open_delegated_cycle".to_string())
+        );
         assert!(truth.next_actions.is_empty());
     }
 
@@ -7355,17 +7409,23 @@ mod tests {
         let truth = derive_lane_show_truth(&summary, Some(&recovery));
 
         assert!(truth.blocked);
-        assert!(truth
-            .blocker_codes
-            .contains(&"open_delegated_cycle".to_string()));
-        assert!(truth
-            .next_actions
-            .iter()
-            .any(|action| action.contains("vida taskflow recovery status run-lane-test")));
-        assert!(truth
-            .next_actions
-            .iter()
-            .all(|action| !action.contains("--json")));
+        assert!(
+            truth
+                .blocker_codes
+                .contains(&"open_delegated_cycle".to_string())
+        );
+        assert!(
+            truth
+                .next_actions
+                .iter()
+                .any(|action| action.contains("vida taskflow recovery status run-lane-test"))
+        );
+        assert!(
+            truth
+                .next_actions
+                .iter()
+                .all(|action| !action.contains("--json"))
+        );
     }
 
     #[test]
@@ -7397,7 +7457,7 @@ mod tests {
         assert!(envelope.next_actions.is_empty());
         assert_eq!(
             envelope.recommended_command.as_deref(),
-            Some("vida agent-init --downstream-packet packet.json --execute-dispatch --json")
+            Some("vida agent-init --downstream-packet packet.json --execute-dispatch")
         );
         assert_eq!(
             envelope.recommended_surface.as_deref(),
@@ -7408,8 +7468,56 @@ mod tests {
                 .next_action
                 .as_ref()
                 .map(|action| action.command.as_str()),
-            Some("vida agent-init --downstream-packet packet.json --execute-dispatch --json")
+            Some("vida agent-init --downstream-packet packet.json --execute-dispatch")
         );
+    }
+
+    #[test]
+    fn lane_envelope_suppresses_downstream_command_for_terminal_closure() {
+        let mut receipt = sample_receipt("executed");
+        receipt.blocker_code = None;
+        receipt.lane_status = crate::LaneStatus::LaneRunning.as_str().to_string();
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+        receipt.downstream_dispatch_target = Some("writer".to_string());
+        receipt.downstream_dispatch_command =
+            Some("vida agent-init --downstream-packet packet.json --json".to_string());
+        receipt.downstream_dispatch_packet_path = Some("packet.json".to_string());
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-lane-test",
+            "closure",
+            "closure",
+        );
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "closed_task_stale_run_retired".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        let recovery = crate::state_store::RunGraphRecoverySummary::from_status(status.clone());
+        let truth = derive_lane_show_truth(&summary, Some(&recovery));
+
+        let envelope = build_lane_envelope(
+            summary,
+            Some(status),
+            None,
+            None,
+            serde_json::json!({}),
+            truth.blocked,
+            truth.blocker_codes,
+            truth.next_actions,
+        );
+
+        assert_eq!(envelope.status, "pass");
+        assert!(envelope.next_actions.is_empty());
+        assert!(envelope.next_action.is_none());
+        assert!(envelope.recommended_command.is_none());
+        assert!(envelope.recommended_surface.is_none());
     }
 
     #[test]
@@ -7474,10 +7582,12 @@ mod tests {
             envelope.recommended_surface.as_deref(),
             Some("vida agent-init")
         );
-        assert!(envelope
-            .recommended_command
-            .as_deref()
-            .is_some_and(|command| !command.contains("exception-takeover")));
+        assert!(
+            envelope
+                .recommended_command
+                .as_deref()
+                .is_some_and(|command| !command.contains("exception-takeover"))
+        );
     }
 
     #[test]
@@ -7767,9 +7877,11 @@ mod tests {
             Vec::new(),
             Vec::new(),
         );
-        assert!(stale_envelope
-            .root_local_write_allowed_for_only_these_paths
-            .is_empty());
+        assert!(
+            stale_envelope
+                .root_local_write_allowed_for_only_these_paths
+                .is_empty()
+        );
         assert!(!stale_envelope.root_local_write_allowed);
         assert!(stale_envelope.owned_write_scope.is_empty());
         assert_eq!(
@@ -7834,9 +7946,11 @@ mod tests {
             Some("/tmp/exception.json")
         );
         assert!(active_envelope.exception_path_metadata.is_some());
-        assert!(active_envelope
-            .historical_exception_path_metadata_path
-            .is_none());
+        assert!(
+            active_envelope
+                .historical_exception_path_metadata_path
+                .is_none()
+        );
         assert_eq!(
             active_envelope.owned_write_scope,
             vec!["crates/vida/src/lane_surface.rs".to_string()]
@@ -7980,9 +8094,11 @@ mod tests {
         assert_eq!(envelope.status, "pass");
         assert!(!envelope.root_local_write_allowed);
         assert!(envelope.owned_write_scope.is_empty());
-        assert!(envelope
-            .root_local_write_allowed_for_only_these_paths
-            .is_empty());
+        assert!(
+            envelope
+                .root_local_write_allowed_for_only_these_paths
+                .is_empty()
+        );
         assert_eq!(envelope.exception_path_metadata_state, Some("historical"));
         assert!(envelope.exception_path_metadata_path.is_none());
         assert!(envelope.exception_path_metadata.is_none());
@@ -7990,9 +8106,11 @@ mod tests {
             envelope.historical_exception_path_metadata_path.as_deref(),
             Some("/tmp/exception.json")
         );
-        assert!(!envelope
-            .blocker_codes
-            .contains(&"open_delegated_cycle".to_string()));
+        assert!(
+            !envelope
+                .blocker_codes
+                .contains(&"open_delegated_cycle".to_string())
+        );
     }
 
     #[test]
@@ -8095,16 +8213,22 @@ mod tests {
         let truth = derive_lane_show_truth(&summary, Some(&recovery));
 
         assert!(truth.blocked);
-        assert!(truth
-            .blocker_codes
-            .contains(&"open_delegated_cycle".to_string()));
-        assert!(truth
-            .blocker_codes
-            .contains(&"internal_dispatch_timeout_without_receipt".to_string()));
-        assert!(truth
-            .next_actions
-            .iter()
-            .any(|value| value.contains("finish the bounded exception unit")));
+        assert!(
+            truth
+                .blocker_codes
+                .contains(&"open_delegated_cycle".to_string())
+        );
+        assert!(
+            truth
+                .blocker_codes
+                .contains(&"internal_dispatch_timeout_without_receipt".to_string())
+        );
+        assert!(
+            truth
+                .next_actions
+                .iter()
+                .any(|value| value.contains("finish the bounded exception unit"))
+        );
     }
 
     #[test]
@@ -8255,6 +8379,94 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[tokio::test]
+    async fn lane_show_json_ignores_stale_cache_for_terminal_closure() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-terminal-stale-cache-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-terminal-stale-cache";
+        crate::operator_projection_cache::write_json_projection(
+            store.root(),
+            &lane_show_projection_name(run_id),
+            &serde_json::json!({
+                "surface": "vida lane",
+                "status": "pass",
+                "run_id": run_id,
+                "lane_status": "lane_completed",
+                "dispatch_status": "executed",
+                "recommended_command": "vida agent-init --downstream-packet stale.json --execute-dispatch",
+                "recommended_surface": "vida agent-init",
+                "next_action": {
+                    "command": "vida agent-init --downstream-packet stale.json --execute-dispatch",
+                    "surface": "vida agent-init",
+                    "reason": "stale cached command"
+                }
+            }),
+        );
+
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, run_id, "closure");
+        status.status = "completed".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        status.handoff_state = "none".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist terminal closure status");
+
+        let mut receipt = sample_receipt("executed");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "tester".to_string();
+        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+        receipt.blocker_code = None;
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_target = Some("prover".to_string());
+        receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+        receipt.downstream_dispatch_packet_path =
+            Some("runtime-consumption/downstream-dispatch-packets/stale-prover.json".to_string());
+        receipt.downstream_dispatch_command = Some(
+            "vida agent-init --downstream-packet stale-prover.json --execute-dispatch --json"
+                .to_string(),
+        );
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist stale downstream receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let show_args = ProxyArgs {
+            args: vec!["show".to_string(), run_id.to_string(), "--json".to_string()],
+        };
+        assert_eq!(run_lane(show_args).await, ExitCode::SUCCESS);
+
+        let cached = read_cached_lane_show_projection(&root, &lane_show_projection_name(run_id))
+            .expect("lane show projection cache should be rewritten");
+        let cached_json: serde_json::Value =
+            serde_json::from_str(&cached).expect("cached lane show projection should be json");
+        assert_eq!(cached_json["status"], "pass");
+        assert_eq!(cached_json["run_id"], run_id);
+        assert_eq!(cached_json["lane_status"], "lane_completed");
+        assert_eq!(cached_json["recommended_command"], serde_json::Value::Null);
+        assert_eq!(cached_json["recommended_surface"], serde_json::Value::Null);
+        assert_eq!(cached_json["next_action"], serde_json::Value::Null);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn derive_lane_show_truth_accepts_superseded_exception_with_stale_recorded_lane_status() {
         let mut receipt = sample_receipt("blocked");
@@ -8301,9 +8513,11 @@ mod tests {
         let truth = derive_lane_show_truth(&summary, Some(&recovery));
 
         assert!(truth.blocked);
-        assert!(truth
-            .blocker_codes
-            .contains(&"open_delegated_cycle".to_string()));
+        assert!(
+            truth
+                .blocker_codes
+                .contains(&"open_delegated_cycle".to_string())
+        );
     }
 
     #[test]
@@ -8326,9 +8540,11 @@ mod tests {
         let truth = derive_lane_show_truth(&summary, Some(&recovery));
 
         assert!(truth.blocked);
-        assert!(truth
-            .blocker_codes
-            .contains(&"supersession_without_receipt".to_string()));
+        assert!(
+            truth
+                .blocker_codes
+                .contains(&"supersession_without_receipt".to_string())
+        );
         assert!(truth.next_actions.iter().any(|value| {
             value.contains("vida lane supersede run-lane-test --receipt-id exception-1")
         }));
@@ -8820,11 +9036,13 @@ mod tests {
         assert!(receipt.downstream_dispatch_target.is_none());
         assert!(receipt.downstream_dispatch_command.is_none());
         assert!(receipt.downstream_dispatch_packet_path.is_none());
-        assert!(store
-            .run_graph_continuation_binding(run_id)
-            .await
-            .expect("read continuation binding")
-            .is_none());
+        assert!(
+            store
+                .run_graph_continuation_binding(run_id)
+                .await
+                .expect("read continuation binding")
+                .is_none()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -9110,11 +9328,13 @@ mod tests {
             receipt.downstream_dispatch_status.as_deref(),
             Some("retired_closed_task_run")
         );
-        assert!(store
-            .run_graph_continuation_binding(run_id)
-            .await
-            .expect("read continuation binding")
-            .is_none());
+        assert!(
+            store
+                .run_graph_continuation_binding(run_id)
+                .await
+                .expect("read continuation binding")
+                .is_none()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -9195,11 +9415,13 @@ mod tests {
             Some("retired_closed_task_run")
         );
         assert!(receipt.dispatch_packet_path.is_some());
-        assert!(store
-            .run_graph_continuation_binding(run_id)
-            .await
-            .expect("read continuation binding")
-            .is_none());
+        assert!(
+            store
+                .run_graph_continuation_binding(run_id)
+                .await
+                .expect("read continuation binding")
+                .is_none()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -9326,11 +9548,13 @@ mod tests {
             receipt.downstream_dispatch_status.as_deref(),
             Some("retired_closed_task_run")
         );
-        assert!(store
-            .run_graph_continuation_binding(run_id)
-            .await
-            .expect("read prelaunch continuation binding")
-            .is_none());
+        assert!(
+            store
+                .run_graph_continuation_binding(run_id)
+                .await
+                .expect("read prelaunch continuation binding")
+                .is_none()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -9465,8 +9689,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lane_retire_rejects_exception_takeover_missing_task_stale_blocked_run_without_closed_unit(
-    ) {
+    async fn lane_retire_rejects_exception_takeover_missing_task_stale_blocked_run_without_closed_unit()
+     {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -9764,11 +9988,13 @@ mod tests {
             receipt.downstream_dispatch_status.as_deref(),
             Some("retired_closed_task_run")
         );
-        assert!(store
-            .run_graph_continuation_binding(run_id)
-            .await
-            .expect("read continuation binding")
-            .is_none());
+        assert!(
+            store
+                .run_graph_continuation_binding(run_id)
+                .await
+                .expect("read continuation binding")
+                .is_none()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -11109,10 +11335,12 @@ mod tests {
             .expect("receipt should exist");
         assert_eq!(after.dispatch_status, "executed");
         assert_eq!(after.lane_status, crate::LaneStatus::LaneCompleted.as_str());
-        assert!(after
-            .dispatch_result_path
-            .as_deref()
-            .is_some_and(|path| path.ends_with("run-host-bridge-stale-result.json")));
+        assert!(
+            after
+                .dispatch_result_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("run-host-bridge-stale-result.json"))
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -11200,12 +11428,16 @@ mod tests {
             trusted.request_path,
             std::fs::canonicalize(&request_path).unwrap()
         );
-        assert!(trusted
-            .result_path
-            .ends_with("host-tool-bridge/results/run-large-result.json"));
-        assert!(trusted
-            .receipt_path
-            .ends_with("host-tool-bridge/receipts/run-large-result.json"));
+        assert!(
+            trusted
+                .result_path
+                .ends_with("host-tool-bridge/results/run-large-result.json")
+        );
+        assert!(
+            trusted
+                .receipt_path
+                .ends_with("host-tool-bridge/receipts/run-large-result.json")
+        );
 
         let untrusted_error = match validated_host_bridge_paths_from_receipt(
             &root,
@@ -11515,10 +11747,12 @@ mod tests {
         assert_eq!(after.lane_status, crate::LaneStatus::LaneCompleted.as_str());
         assert!(after.downstream_dispatch_ready);
         assert!(after.downstream_dispatch_blockers.is_empty());
-        assert!(after
-            .dispatch_result_path
-            .as_deref()
-            .is_some_and(|path| path.ends_with("run-host-bridge-summary-retry.json")));
+        assert!(
+            after
+                .dispatch_result_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("run-host-bridge-summary-retry.json"))
+        );
 
         let bridge_result: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(&result_path).expect("read retried host bridge result"),
@@ -12501,11 +12735,13 @@ mod tests {
         );
 
         assert_eq!(validation["status"], "blocked");
-        assert!(validation["blocker_codes"]
-            .as_array()
-            .expect("blocker codes")
-            .iter()
-            .any(|code| code == "implementation_artifact_contract_invalid"));
+        assert!(
+            validation["blocker_codes"]
+                .as_array()
+                .expect("blocker codes")
+                .iter()
+                .any(|code| code == "implementation_artifact_contract_invalid")
+        );
     }
 
     #[test]
@@ -13176,11 +13412,13 @@ mod tests {
         )
         .expect("host bridge result should be json");
         assert_eq!(result["status"], "blocked");
-        assert!(result["blocker_codes"]
-            .as_array()
-            .expect("blocker codes")
-            .iter()
-            .any(|code| code == "implementation_attempt_scope_guard_violation"));
+        assert!(
+            result["blocker_codes"]
+                .as_array()
+                .expect("blocker codes")
+                .iter()
+                .any(|code| code == "implementation_attempt_scope_guard_violation")
+        );
         assert_eq!(
             result["scope_validation"]["owned_paths"],
             serde_json::json!(["allowed"])
@@ -14358,14 +14596,14 @@ mod tests {
             .expect("persist run graph status");
 
         let mut role_selection = lane_complete_role_selection(run_id);
-        role_selection.execution_plan["development_flow"]["dispatch_contract"]
-            ["execution_lane_sequence"] = serde_json::json!([
-            "developer",
-            "duplication_reviewer",
-            "tester",
-            "duplication_reviewer",
-            "verification"
-        ]);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["execution_lane_sequence"] =
+            serde_json::json!([
+                "developer",
+                "duplication_reviewer",
+                "tester",
+                "duplication_reviewer",
+                "verification"
+            ]);
         role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
             "developer": {
                 "dispatch_target": "developer",
@@ -14579,8 +14817,8 @@ mod tests {
             .expect("persist run graph status");
 
         let mut role_selection = lane_complete_role_selection(run_id);
-        role_selection.execution_plan["development_flow"]["dispatch_contract"]
-            ["execution_lane_sequence"] = serde_json::json!(["developer", "tester"]);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["execution_lane_sequence"] =
+            serde_json::json!(["developer", "tester"]);
         role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
             "developer": {
                 "dispatch_target": "developer",
@@ -14769,8 +15007,8 @@ mod tests {
             .expect("persist run graph status");
 
         let mut role_selection = lane_complete_role_selection(run_id);
-        role_selection.execution_plan["development_flow"]["dispatch_contract"]
-            ["execution_lane_sequence"] = serde_json::json!(["developer", "tester"]);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["execution_lane_sequence"] =
+            serde_json::json!(["developer", "tester"]);
         role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
             "developer": {
                 "dispatch_target": "developer",
