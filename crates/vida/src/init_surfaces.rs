@@ -612,6 +612,88 @@ fn emit_agent_init_dispatch_timeout_payload(payload: &serde_json::Value, json_ou
     }
 }
 
+fn agent_init_dispatch_result_error_payload(
+    dispatch_mode: &serde_json::Value,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    error_kind: &str,
+    error: &str,
+) -> serde_json::Value {
+    let blocker_codes = vec![crate::contract_profile_adapter::blocker_code_str(
+        crate::contract_profile_adapter::BlockerCode::ToolExecutionFailed,
+    )
+    .to_string()];
+    let seed = serde_json::json!({
+        "dispatch_packet_path": dispatch_receipt.dispatch_packet_path.as_deref(),
+        "dispatch_result_path": dispatch_receipt.dispatch_result_path.as_deref(),
+        "selected_backend": dispatch_receipt.selected_backend.as_deref(),
+        "activation_agent_type": dispatch_receipt.activation_agent_type.as_deref(),
+        "activation_runtime_role": dispatch_receipt.activation_runtime_role.as_deref(),
+        "dispatch_target": dispatch_receipt.dispatch_target.as_str(),
+    });
+    let artifact_refs = agent_init_dispatch_timeout_artifact_refs_from_result(
+        &dispatch_receipt.run_id,
+        &seed,
+        dispatch_receipt.dispatch_result_path.as_deref(),
+        0,
+    );
+    let next_actions = vec![
+        format!(
+            "Inspect continuation evidence with `{}`.",
+            agent_init_dispatch_timeout_recovery_command(&dispatch_receipt.run_id)
+        ),
+        format!(
+            "Retry only after preserving the failed dispatch artifact with `{}`.",
+            agent_init_dispatch_timeout_retry_command(&seed)
+        ),
+    ];
+    serde_json::json!({
+        "surface": "vida agent-init",
+        "status": "blocked",
+        "execution_state": "blocked",
+        "dispatch_mode": dispatch_mode,
+        "blocker_code": blocker_codes[0],
+        "blocker_codes": blocker_codes,
+        "error_kind": error_kind,
+        "provider_error": error,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null,
+        },
+        "shared_fields": {
+            "status": "blocked",
+            "blocker_codes": blocker_codes,
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+        },
+    })
+}
+
+fn emit_agent_init_dispatch_result_error_payload(
+    dispatch_mode: &serde_json::Value,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    error_kind: &str,
+    error: &str,
+    json_output: bool,
+) -> ExitCode {
+    let payload = agent_init_dispatch_result_error_payload(
+        dispatch_mode,
+        dispatch_receipt,
+        error_kind,
+        error,
+    );
+    emit_agent_init_dispatch_timeout_payload(&payload, json_output);
+    ExitCode::from(1)
+}
+
 fn render_agent_init_dispatch_result_from_receipt(
     dispatch_mode: &serde_json::Value,
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -620,17 +702,42 @@ fn render_agent_init_dispatch_result_from_receipt(
     warning: Option<&str>,
 ) -> Result<ExitCode, String> {
     let Some(dispatch_result_path) = dispatch_receipt.dispatch_result_path.as_deref() else {
-        return Err(
-            "Agent init execute-dispatch did not produce a dispatch result artifact.".to_string(),
-        );
+        return Ok(emit_agent_init_dispatch_result_error_payload(
+            dispatch_mode,
+            dispatch_receipt,
+            "dispatch_result_missing",
+            "Agent init execute-dispatch did not produce a dispatch result artifact.",
+            json_output,
+        ));
     };
-    let result_body = std::fs::read_to_string(dispatch_result_path).map_err(|error| {
-        format!("Failed to read agent-init dispatch result `{dispatch_result_path}`: {error}")
-    })?;
-    let mut result_json =
-        serde_json::from_str::<serde_json::Value>(&result_body).map_err(|error| {
-            format!("Failed to parse agent-init dispatch result `{dispatch_result_path}`: {error}")
-        })?;
+    let result_body = match std::fs::read_to_string(dispatch_result_path) {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(emit_agent_init_dispatch_result_error_payload(
+                dispatch_mode,
+                dispatch_receipt,
+                "dispatch_result_unreadable",
+                &format!(
+                    "Failed to read agent-init dispatch result `{dispatch_result_path}`: {error}"
+                ),
+                json_output,
+            ));
+        }
+    };
+    let mut result_json = match serde_json::from_str::<serde_json::Value>(&result_body) {
+        Ok(result_json) => result_json,
+        Err(error) => {
+            return Ok(emit_agent_init_dispatch_result_error_payload(
+                dispatch_mode,
+                dispatch_receipt,
+                "dispatch_result_invalid_json",
+                &format!(
+                    "Failed to parse agent-init dispatch result `{dispatch_result_path}`: {error}"
+                ),
+                json_output,
+            ));
+        }
+    };
     if let Some(timeout_seconds) = timeout_seconds {
         result_json = agent_init_dispatch_timeout_operator_envelope(
             result_json,
@@ -789,8 +896,14 @@ fn spawn_agent_init_execute_dispatch_worker_windows(
         "--state-dir".to_string(),
         state_root.display().to_string(),
     ];
-    let worker_pid =
-        windows_spawn_detached_process(executable, project_root, &worker_args)?.to_string();
+    let worker_pid = windows_spawn_detached_process(
+        executable,
+        project_root,
+        &worker_args,
+        stdout_path,
+        stderr_path,
+    )?
+    .to_string();
     Ok(serde_json::json!({
         "worker_id": worker_id,
         "worker_pid": worker_pid,
@@ -815,12 +928,67 @@ fn windows_dispatch_worker_creation_flags() -> u32 {
 }
 
 #[cfg(windows)]
+fn windows_use_explorer_parent_process(has_redirected_stdio: bool) -> bool {
+    !has_redirected_stdio
+}
+
+#[cfg(windows)]
 fn windows_spawn_detached_process(
     executable: &Path,
     working_dir: &Path,
     args: &[String],
+    stdout_path: &Path,
+    stderr_path: &Path,
 ) -> Result<u32, String> {
-    windows_create_detached_process(executable, working_dir, args)
+    let stdio = WindowsInheritedWorkerStdio::open(stdout_path, stderr_path)?;
+    windows_create_detached_process(executable, working_dir, args, Some(&stdio))
+}
+
+#[cfg(windows)]
+struct WindowsInheritedWorkerStdio {
+    stdin: std::fs::File,
+    stdout: std::fs::File,
+    stderr: std::fs::File,
+}
+
+#[cfg(windows)]
+impl WindowsInheritedWorkerStdio {
+    fn open(stdout_path: &Path, stderr_path: &Path) -> Result<Self, String> {
+        let stdin = std::fs::File::open("NUL")
+            .map_err(|error| format!("Failed to open NUL stdin for dispatch worker: {error}"))?;
+        let stdout = std::fs::File::create(stdout_path).map_err(|error| {
+            format!(
+                "Failed to create dispatch worker stdout log `{}`: {error}",
+                stdout_path.display()
+            )
+        })?;
+        let stderr = std::fs::File::create(stderr_path).map_err(|error| {
+            format!(
+                "Failed to create dispatch worker stderr log `{}`: {error}",
+                stderr_path.display()
+            )
+        })?;
+        let stdio = Self {
+            stdin,
+            stdout,
+            stderr,
+        };
+        stdio.make_inheritable()?;
+        Ok(stdio)
+    }
+
+    fn make_inheritable(&self) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle;
+
+        for (label, handle) in [
+            ("stdin", self.stdin.as_raw_handle()),
+            ("stdout", self.stdout.as_raw_handle()),
+            ("stderr", self.stderr.as_raw_handle()),
+        ] {
+            windows_set_handle_inheritable(label, handle)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
@@ -972,7 +1140,30 @@ extern "system" {
         bInheritHandle: i32,
         dwProcessId: u32,
     ) -> *mut std::ffi::c_void;
+    fn SetHandleInformation(hObject: *mut std::ffi::c_void, dwMask: u32, dwFlags: u32) -> i32;
     fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+}
+
+#[cfg(windows)]
+fn windows_set_handle_inheritable(
+    label: &str,
+    handle: std::os::windows::io::RawHandle,
+) -> Result<(), String> {
+    const HANDLE_FLAG_INHERIT: u32 = 0x00000001;
+    if handle.is_null() {
+        return Err(format!(
+            "Failed to make dispatch worker {label} handle inheritable: null handle"
+        ));
+    }
+    let updated =
+        unsafe { SetHandleInformation(handle.cast(), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+    if updated == 0 {
+        return Err(format!(
+            "Failed to make dispatch worker {label} handle inheritable: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1015,18 +1206,32 @@ fn windows_create_detached_process(
     executable: &Path,
     working_dir: &Path,
     args: &[String],
+    stdio: Option<&WindowsInheritedWorkerStdio>,
 ) -> Result<u32, String> {
     const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x00080000;
     const PROC_THREAD_ATTRIBUTE_PARENT_PROCESS: usize = 0x00020000;
+    const STARTF_USESTDHANDLES: u32 = 0x00000100;
     let mut command_line = windows_wide_null(&windows_command_line(executable, args));
     let working_dir = windows_wide_null(&working_dir.display().to_string());
     let old_worker_env = std::env::var_os(AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV);
     std::env::set_var(AGENT_INIT_EXECUTE_DISPATCH_WORKER_ENV, "1");
 
-    let parent = windows_find_explorer_parent_process();
+    let parent = if windows_use_explorer_parent_process(stdio.is_some()) {
+        windows_find_explorer_parent_process()
+    } else {
+        None
+    };
     let mut attribute_storage = Vec::<usize>::new();
     let mut startup = unsafe { std::mem::zeroed::<WindowsStartupInfoExW>() };
     startup.StartupInfo.cb = std::mem::size_of::<WindowsStartupInfoExW>() as u32;
+    if let Some(stdio) = stdio {
+        use std::os::windows::io::AsRawHandle;
+
+        startup.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = stdio.stdin.as_raw_handle().cast();
+        startup.StartupInfo.hStdOutput = stdio.stdout.as_raw_handle().cast();
+        startup.StartupInfo.hStdError = stdio.stderr.as_raw_handle().cast();
+    }
 
     let mut creation_flags = windows_dispatch_worker_creation_flags();
     if let Some(parent_handle) = parent {
@@ -1068,7 +1273,7 @@ fn windows_create_detached_process(
             command_line.as_mut_ptr(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            0,
+            if stdio.is_some() { 1 } else { 0 },
             creation_flags,
             std::ptr::null_mut(),
             working_dir.as_ptr(),
@@ -1197,12 +1402,33 @@ async fn start_agent_init_dispatch_worker_and_return(
         format!(
             "Failed to read in-flight agent-init dispatch result `{dispatch_result_path}`: {error}"
         )
-    })?;
-    let result_json = serde_json::from_str::<serde_json::Value>(&result_body).map_err(|error| {
-        format!(
-            "Failed to parse in-flight agent-init dispatch result `{dispatch_result_path}`: {error}"
-        )
-    })?;
+    });
+    let result_body = match result_body {
+        Ok(result_body) => result_body,
+        Err(error) => {
+            return Ok(emit_agent_init_dispatch_result_error_payload(
+                dispatch_mode,
+                &resume_inputs.dispatch_receipt,
+                "in_flight_dispatch_result_unreadable",
+                &error,
+                json_output,
+            ));
+        }
+    };
+    let result_json = match serde_json::from_str::<serde_json::Value>(&result_body) {
+        Ok(result_json) => result_json,
+        Err(error) => {
+            return Ok(emit_agent_init_dispatch_result_error_payload(
+                dispatch_mode,
+                &resume_inputs.dispatch_receipt,
+                "in_flight_dispatch_result_invalid_json",
+                &format!(
+                    "Failed to parse in-flight agent-init dispatch result `{dispatch_result_path}`: {error}"
+                ),
+                json_output,
+            ));
+        }
+    };
     let result_json = agent_init_dispatch_started_payload(
         result_json,
         dispatch_mode,
@@ -3157,6 +3383,181 @@ mod tests {
         if let Err(panic) = handle.join() {
             std::panic::resume_unwind(panic);
         }
+    }
+
+    fn sample_agent_init_dispatch_receipt() -> RunGraphDispatchReceipt {
+        RunGraphDispatchReceipt {
+            run_id: "run-agent-init-error".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some(
+                "vida agent-init --dispatch-packet packet.json --execute-dispatch".to_string(),
+            ),
+            dispatch_packet_path: Some("packet.json".to_string()),
+            dispatch_result_path: Some("missing-result.json".to_string()),
+            blocker_code: Some("tool_execution_failed".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["tool_execution_failed".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("implementer".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-25T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn agent_init_dispatch_result_error_payload_is_actionable() {
+        let receipt = sample_agent_init_dispatch_receipt();
+        let payload = agent_init_dispatch_result_error_payload(
+            &json!({ "mode": "execute_dispatch" }),
+            &receipt,
+            "dispatch_result_unreadable",
+            "Failed to read agent-init dispatch result `missing-result.json`: missing",
+        );
+
+        assert_eq!(payload["surface"], "vida agent-init");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(payload["error_kind"], "dispatch_result_unreadable");
+        assert_eq!(
+            payload["artifact_refs"]["run_id"],
+            serde_json::json!("run-agent-init-error")
+        );
+        assert_eq!(
+            payload["artifact_refs"]["dispatch_packet_path"],
+            serde_json::json!("packet.json")
+        );
+        assert!(payload["artifact_refs"]["retry_command"]
+            .as_str()
+            .is_some_and(|command| command
+                .contains("vida agent-init --dispatch-packet packet.json --execute-dispatch")));
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .is_some_and(|action| action.contains("vida taskflow recovery status"))));
+        assert_eq!(
+            crate::release1_operator_output::shared_operator_output_contract_parity_error(&payload),
+            None
+        );
+    }
+
+    #[test]
+    fn agent_init_dispatch_result_error_payload_covers_duplicate_failure_paths() {
+        let receipt = sample_agent_init_dispatch_receipt();
+        for error_kind in [
+            "in_flight_dispatch_result_unreadable",
+            "in_flight_dispatch_result_invalid_json",
+            "dispatch_execution_failed",
+            "prelaunch_blocker_materialization_failed",
+            "prelaunch_dispatch_result_missing",
+            "prelaunch_dispatch_result_unreadable",
+            "prelaunch_dispatch_result_invalid_json",
+        ] {
+            let payload = agent_init_dispatch_result_error_payload(
+                &json!({ "mode": "execute_dispatch" }),
+                &receipt,
+                error_kind,
+                "duplicate dispatch-result failure path should be structured",
+            );
+
+            assert_eq!(payload["status"], "blocked", "{error_kind}");
+            assert_eq!(
+                payload["shared_fields"]["status"], "blocked",
+                "{error_kind}"
+            );
+            assert_eq!(
+                payload["operator_contracts"]["status"], "blocked",
+                "{error_kind}"
+            );
+            assert_eq!(payload["error_kind"], error_kind, "{error_kind}");
+            assert!(payload["blocker_codes"]
+                .as_array()
+                .expect("blocker_codes should be an array")
+                .iter()
+                .any(|code| code.as_str() == Some("tool_execution_failed")));
+            assert_eq!(
+                crate::release1_operator_output::shared_operator_output_contract_parity_error(
+                    &payload
+                ),
+                None,
+                "{error_kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_init_dispatch_result_renderer_blocks_missing_or_invalid_artifacts() {
+        let dispatch_mode = json!({ "mode": "execute_dispatch" });
+        let missing_receipt = sample_agent_init_dispatch_receipt();
+        let missing_exit = render_agent_init_dispatch_result_from_receipt(
+            &dispatch_mode,
+            &missing_receipt,
+            true,
+            None,
+            None,
+        )
+        .expect("missing dispatch result should render a structured blocker");
+        assert_eq!(missing_exit, std::process::ExitCode::from(1));
+
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-result-invalid-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("dispatch result temp root should create");
+        let invalid_path = root.join("invalid-result.json");
+        fs::write(&invalid_path, "{not-json")
+            .expect("invalid dispatch result fixture should write");
+        let mut invalid_receipt = sample_agent_init_dispatch_receipt();
+        invalid_receipt.dispatch_result_path = Some(invalid_path.display().to_string());
+
+        let invalid_exit = render_agent_init_dispatch_result_from_receipt(
+            &dispatch_mode,
+            &invalid_receipt,
+            true,
+            None,
+            None,
+        )
+        .expect("invalid dispatch result should render a structured blocker");
+        assert_eq!(invalid_exit, std::process::ExitCode::from(1));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_worker_stdio_paths_are_created_before_spawn() {
+        let root = std::env::temp_dir().join(format!("vida-worker-stdio-{}", std::process::id()));
+        fs::create_dir_all(&root).expect("worker stdio temp root should create");
+        let stdout_path = root.join("worker.stdout.jsonl");
+        let stderr_path = root.join("worker.stderr.log");
+
+        let stdio = WindowsInheritedWorkerStdio::open(&stdout_path, &stderr_path)
+            .expect("worker stdio should open inheritable log handles");
+
+        assert!(stdout_path.is_file());
+        assert!(stderr_path.is_file());
+        assert!(!windows_use_explorer_parent_process(true));
+        assert!(windows_use_explorer_parent_process(false));
+        drop(stdio);
+        let _ = fs::remove_dir_all(root);
     }
 
     fn agent_lane_test_execution_plan(executor_backend: &str) -> serde_json::Value {
@@ -5545,8 +5946,13 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
                     }
                 }
             }
-            eprintln!("Failed to execute agent-init dispatch packet: {error}");
-            return ExitCode::from(1);
+            return emit_agent_init_dispatch_result_error_payload(
+                dispatch_mode,
+                &resume_inputs.dispatch_receipt,
+                "dispatch_execution_failed",
+                &format!("Failed to execute agent-init dispatch packet: {error}"),
+                json_output,
+            );
         }
         Err(_) => {
             match super::runtime_dispatch_state::apply_existing_executed_dispatch_result_to_receipt(
@@ -5693,8 +6099,13 @@ async fn execute_agent_init_prelaunch_blocker_without_store_reopen(
             &mut resume_inputs.dispatch_receipt,
         )
     {
-        eprintln!("Failed to materialize agent-init prelaunch blocker result: {error}");
-        return Some(ExitCode::from(1));
+        return Some(emit_agent_init_dispatch_result_error_payload(
+            dispatch_mode,
+            &resume_inputs.dispatch_receipt,
+            "prelaunch_blocker_materialization_failed",
+            &format!("Failed to materialize agent-init prelaunch blocker result: {error}"),
+            json_output,
+        ));
     }
     let persist_warning = persist_agent_init_prelaunch_blocked_dispatch_receipt(
         state_root,
@@ -5706,25 +6117,40 @@ async fn execute_agent_init_prelaunch_blocker_without_store_reopen(
         .dispatch_result_path
         .as_deref()
     else {
-        eprintln!("Agent init prelaunch blocker did not produce a dispatch result artifact.");
-        return Some(ExitCode::from(1));
+        return Some(emit_agent_init_dispatch_result_error_payload(
+            dispatch_mode,
+            &resume_inputs.dispatch_receipt,
+            "prelaunch_dispatch_result_missing",
+            "Agent init prelaunch blocker did not produce a dispatch result artifact.",
+            json_output,
+        ));
     };
     let result_body = match std::fs::read_to_string(dispatch_result_path) {
         Ok(body) => body,
         Err(error) => {
-            eprintln!(
-                "Failed to read agent-init prelaunch dispatch result `{dispatch_result_path}`: {error}"
-            );
-            return Some(ExitCode::from(1));
+            return Some(emit_agent_init_dispatch_result_error_payload(
+                dispatch_mode,
+                &resume_inputs.dispatch_receipt,
+                "prelaunch_dispatch_result_unreadable",
+                &format!(
+                    "Failed to read agent-init prelaunch dispatch result `{dispatch_result_path}`: {error}"
+                ),
+                json_output,
+            ));
         }
     };
     let mut result_json = match serde_json::from_str::<serde_json::Value>(&result_body) {
         Ok(json) => json,
         Err(error) => {
-            eprintln!(
-                "Failed to parse agent-init prelaunch dispatch result `{dispatch_result_path}`: {error}"
-            );
-            return Some(ExitCode::from(1));
+            return Some(emit_agent_init_dispatch_result_error_payload(
+                dispatch_mode,
+                &resume_inputs.dispatch_receipt,
+                "prelaunch_dispatch_result_invalid_json",
+                &format!(
+                    "Failed to parse agent-init prelaunch dispatch result `{dispatch_result_path}`: {error}"
+                ),
+                json_output,
+            ));
         }
     };
     if let Some(object) = result_json.as_object_mut() {

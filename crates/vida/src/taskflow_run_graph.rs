@@ -629,6 +629,85 @@ fn recovery_json_error_payload(
     })
 }
 
+fn run_graph_status_error_payload(
+    state_dir: &std::path::Path,
+    run_id: &str,
+    error_kind: &str,
+    error: &str,
+) -> serde_json::Value {
+    let latest_command = "vida taskflow run-graph latest".to_string();
+    let next_actions = vec![
+        format!("Inspect the latest run-graph state with `{latest_command}`."),
+        format!(
+            "Validate the run id `{}` before retrying `vida taskflow run-graph status {}`.",
+            run_id,
+            shell_quote(run_id)
+        ),
+    ];
+    build_run_graph_operator_surface_payload(
+        "vida taskflow run-graph status",
+        run_id,
+        vec![fallback_dispatch_issue_code()],
+        next_actions,
+        serde_json::json!({
+            "error_kind": error_kind,
+            "error": error,
+            "state_dir": state_dir.display().to_string(),
+            "recommended_surface": "vida taskflow run-graph latest",
+            "recommended_command": latest_command,
+        }),
+    )
+    .unwrap_or_else(|payload_error| {
+        serde_json::json!({
+            "surface": "vida taskflow run-graph status",
+            "run_id": run_id,
+            "status": "blocked",
+            "blocker_codes": [fallback_dispatch_issue_code()],
+            "next_actions": [
+                format!("Inspect latest run-graph state before retrying `{}`.", run_id)
+            ],
+            "artifact_refs": run_graph_operator_artifact_refs("vida taskflow run-graph status", run_id),
+            "error_kind": error_kind,
+            "error": error,
+            "payload_error": payload_error,
+            "state_dir": state_dir.display().to_string(),
+        })
+    })
+}
+
+fn emit_run_graph_status_error(
+    state_dir: &std::path::Path,
+    run_id: &str,
+    error_kind: &str,
+    error: &str,
+    as_json: bool,
+) -> ExitCode {
+    let payload = run_graph_status_error_payload(state_dir, run_id, error_kind, error);
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        print_surface_header(RenderMode::Plain, "vida taskflow run-graph status");
+        print_surface_line(RenderMode::Plain, "run", run_id);
+        print_surface_line(RenderMode::Plain, "status", "blocked");
+        print_surface_line(
+            RenderMode::Plain,
+            "blocker_codes",
+            &payload["blocker_codes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        print_surface_line(RenderMode::Plain, "error", error);
+        if let Some(command) = payload["recommended_command"].as_str() {
+            print_surface_line(RenderMode::Plain, "next", command);
+        }
+    }
+    exit_code_for_operator_payload(&payload)
+}
+
 fn emit_recovery_json_error(
     state_dir: &std::path::Path,
     run_id: &str,
@@ -3689,16 +3768,26 @@ async fn run_taskflow_run_graph_state(
                 let projection_truth = match run_graph_projection_truth(&store, &status).await {
                     Ok(truth) => truth,
                     Err(error) => {
-                        eprintln!("Failed to build run-graph projection truth: {error}");
-                        return ExitCode::from(1);
+                        return emit_run_graph_status_error(
+                            state_dir,
+                            run_id,
+                            "projection_truth_unavailable",
+                            &error.to_string(),
+                            as_json,
+                        );
                     }
                 };
                 let task_identity =
                     match store.run_graph_dispatch_task_identity(&status.run_id).await {
                         Ok(identity) => identity,
                         Err(error) => {
-                            eprintln!("Failed to read run-graph task identity: {error}");
-                            return ExitCode::from(1);
+                            return emit_run_graph_status_error(
+                                state_dir,
+                                run_id,
+                                "task_identity_unavailable",
+                                &error.to_string(),
+                                as_json,
+                            );
                         }
                     };
                 if as_json {
@@ -3717,12 +3806,13 @@ async fn run_taskflow_run_graph_state(
                             );
                             ExitCode::SUCCESS
                         }
-                        Err(error) => {
-                            eprintln!(
-                                "Failed to render normalized run-graph status payload: {error}"
-                            );
-                            ExitCode::from(1)
-                        }
+                        Err(error) => emit_run_graph_status_error(
+                            state_dir,
+                            run_id,
+                            "payload_render_failed",
+                            &error,
+                            as_json,
+                        ),
                     }
                 } else {
                     let blocker_codes =
@@ -3798,15 +3888,23 @@ async fn run_taskflow_run_graph_state(
                         ExitCode::SUCCESS
                     }
                 } else {
-                    eprintln!("Failed to read run-graph status: {error}");
-                    ExitCode::from(1)
+                    emit_run_graph_status_error(
+                        state_dir,
+                        run_id,
+                        "run_graph_status_unavailable",
+                        &error.to_string(),
+                        as_json,
+                    )
                 }
             }
         },
-        Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            ExitCode::from(1)
-        }
+        Err(error) => emit_run_graph_status_error(
+            state_dir,
+            run_id,
+            "state_store_unavailable",
+            &error.to_string(),
+            as_json,
+        ),
     }
 }
 
@@ -12238,6 +12336,51 @@ mod tests {
             payload["artifact_refs"]["surface"],
             serde_json::json!("vida taskflow run-graph status")
         );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn run_graph_status_error_payload_is_actionable_and_parity_safe() {
+        let state_dir = std::env::temp_dir().join("vida-run-graph-status-error-payload-test");
+        let payload = run_graph_status_error_payload(
+            &state_dir,
+            "missing-run",
+            "run_graph_status_unavailable",
+            "task is missing: run_graph:missing-run",
+        );
+
+        assert_eq!(payload["surface"], "vida taskflow run-graph status");
+        assert_eq!(payload["run_id"], "missing-run");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should be an array")
+            .iter()
+            .any(|code| code
+                .as_str()
+                .is_some_and(|code| code == fallback_dispatch_issue_code())));
+        assert_eq!(payload["error_kind"], "run_graph_status_unavailable");
+        assert_eq!(
+            payload["artifact_refs"]["surface"],
+            serde_json::json!("vida taskflow run-graph status")
+        );
+        assert_eq!(
+            payload["artifact_refs"]["run_id"],
+            serde_json::json!("missing-run")
+        );
+        assert_eq!(
+            payload["recommended_command"],
+            serde_json::json!("vida taskflow run-graph latest")
+        );
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .is_some_and(|action| action.contains("vida taskflow run-graph latest"))));
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
