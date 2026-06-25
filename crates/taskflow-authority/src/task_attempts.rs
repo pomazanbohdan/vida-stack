@@ -345,6 +345,26 @@ mod tests {
     }
 
     #[test]
+    fn task_stage_summary_prefers_stage_receipt_when_latest_attempt_has_none() {
+        let decision = summarize_task_stage_attempts(
+            &[TaskAttemptSummaryInput {
+                attempt_id: "attempt-b".to_string(),
+                status: "accepted".to_string(),
+                artifact_refs: vec!["artifact-b".to_string()],
+                consolidation_receipt_id: None,
+                updated_at: "2026-06-05T00:01:00Z".to_string(),
+            }],
+            Some("stage-receipt-b".to_string()),
+        );
+
+        assert_eq!(decision.latest_attempt_id.as_deref(), Some("attempt-b"));
+        assert_eq!(
+            decision.latest_consolidation_receipt_id.as_deref(),
+            Some("stage-receipt-b")
+        );
+    }
+
+    #[test]
     fn task_attempt_statuses_fail_closed() {
         let error = normalize_task_attempt_status("completed").expect_err("completed is legacy");
         assert!(error.contains("expected one of submitted, running, produced"));

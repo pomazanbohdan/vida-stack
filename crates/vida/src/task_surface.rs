@@ -2913,7 +2913,12 @@ async fn task_stage_ensemble_operator_summary(
 ) -> Result<serde_json::Value, state_store::StateStoreError> {
     let task = store.show_task(task_id).await?;
     let attempts = store.task_attempts_for_task(task_id).await?;
-    Ok(task_stage_ensemble_operator_summary_value(&task, &attempts))
+    let stage_summaries = store.task_stage_summaries_for_task(task_id).await?;
+    Ok(task_stage_ensemble_operator_summary_value(
+        &task,
+        &attempts,
+        &stage_summaries,
+    ))
 }
 
 async fn task_stage_ensemble_operator_summary_from_state_dir(
@@ -2931,11 +2936,12 @@ async fn task_stage_ensemble_operator_summary_from_state_dir(
 pub(crate) fn task_stage_ensemble_operator_summary_value(
     task: &state_store::TaskRecord,
     attempts: &[state_store::TaskAttemptRecord],
+    stage_summaries: &[state_store::TaskStageSummary],
 ) -> serde_json::Value {
     let mut stage_ids = std::collections::BTreeSet::<String>::new();
     let mut status_counts = std::collections::BTreeMap::<String, usize>::new();
     let mut latest_attempt: Option<&state_store::TaskAttemptRecord> = None;
-    let mut latest_consolidation_receipt_id: Option<String> = None;
+    let mut attempt_consolidation_receipt_id: Option<String> = None;
     let mut stale_count = 0usize;
 
     for attempt in attempts {
@@ -2944,14 +2950,14 @@ pub(crate) fn task_stage_ensemble_operator_summary_value(
         if attempt.status == "stale" || attempt.freshness != task.updated_at {
             stale_count += 1;
         }
-        if latest_consolidation_receipt_id.is_none() {
-            latest_consolidation_receipt_id = attempt.consolidation_receipt_id.clone();
+        if attempt_consolidation_receipt_id.is_none() {
+            attempt_consolidation_receipt_id = attempt.consolidation_receipt_id.clone();
         } else if attempt.consolidation_receipt_id.is_some()
             && latest_attempt
                 .map(|latest| attempt.updated_at >= latest.updated_at)
                 .unwrap_or(true)
         {
-            latest_consolidation_receipt_id = attempt.consolidation_receipt_id.clone();
+            attempt_consolidation_receipt_id = attempt.consolidation_receipt_id.clone();
         }
         if latest_attempt
             .map(|latest| {
@@ -2968,7 +2974,17 @@ pub(crate) fn task_stage_ensemble_operator_summary_value(
     }
 
     let active_stage = latest_attempt.map(|attempt| attempt.stage_id.clone());
-    let latest_attempt_status = latest_attempt.map(|attempt| attempt.status.clone());
+    let active_stage_summary = active_stage.as_deref().and_then(|stage_id| {
+        stage_summaries
+            .iter()
+            .find(|summary| summary.stage_id == stage_id)
+    });
+    let latest_attempt_status = active_stage_summary
+        .and_then(|summary| summary.latest_attempt_status.clone())
+        .or_else(|| latest_attempt.map(|attempt| attempt.status.clone()));
+    let latest_consolidation_receipt_id = active_stage_summary
+        .and_then(|summary| summary.latest_consolidation_receipt_id.clone())
+        .or(attempt_consolidation_receipt_id);
     let next_command = task_stage_ensemble_next_command(
         task,
         active_stage.as_deref(),
@@ -14430,6 +14446,52 @@ mod tests {
         assert_eq!(
             command,
             "vida task attempt dispatch leaf-task --stage implementation"
+        );
+    }
+
+    #[test]
+    fn task_stage_ensemble_uses_stage_summary_receipt_for_status_guidance() {
+        let task = owned_task_record("leaf-task", Vec::new());
+        let attempt = crate::state_store::TaskAttemptRecord {
+            attempt_id: "attempt-b".to_string(),
+            task_id: "leaf-task".to_string(),
+            stage_id: "implementation".to_string(),
+            backend: "internal".to_string(),
+            model_profile: "medium".to_string(),
+            isolation: "readonly".to_string(),
+            freshness: task.updated_at.clone(),
+            status: "accepted".to_string(),
+            artifact_refs: vec!["artifact-b".to_string()],
+            consolidation_receipt_id: None,
+            selected_model_profile_readiness_status: Some("ready".to_string()),
+            budget_posture: None,
+            cap_posture: None,
+            write_scope_classification: None,
+            created_at: "2026-06-05T00:01:00Z".to_string(),
+            updated_at: "2026-06-05T00:01:00Z".to_string(),
+        };
+        let stage_summary = crate::state_store::TaskStageSummary {
+            task_id: "leaf-task".to_string(),
+            stage_id: "implementation".to_string(),
+            stage_status: Some("accepted".to_string()),
+            attempt_count: 1,
+            status_counts: [("accepted".to_string(), 1)].into_iter().collect(),
+            latest_attempt_id: Some("attempt-b".to_string()),
+            latest_attempt_status: Some("accepted".to_string()),
+            latest_consolidation_receipt_id: Some("receipt-b".to_string()),
+            artifact_refs: vec!["artifact-b".to_string()],
+        };
+
+        let summary =
+            super::task_stage_ensemble_operator_summary_value(&task, &[attempt], &[stage_summary]);
+
+        assert_eq!(
+            summary["latest_consolidation_receipt_id"].as_str(),
+            Some("receipt-b")
+        );
+        assert_eq!(
+            summary["next_command"].as_str(),
+            Some("vida task stage status leaf-task --stage implementation")
         );
     }
 

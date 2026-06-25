@@ -5658,7 +5658,15 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
                     .task_attempts_for_task(task_id)
                     .await
                     .unwrap_or_default();
-                crate::task_surface::task_stage_ensemble_operator_summary_value(task, &attempts)
+                let stage_summaries = store
+                    .task_stage_summaries_for_task(task_id)
+                    .await
+                    .unwrap_or_default();
+                crate::task_surface::task_stage_ensemble_operator_summary_value(
+                    task,
+                    &attempts,
+                    &stage_summaries,
+                )
             })
     } else {
         None

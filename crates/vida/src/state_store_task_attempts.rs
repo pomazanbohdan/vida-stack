@@ -452,6 +452,33 @@ impl StateStore {
         ))
     }
 
+    pub async fn task_stage_summaries_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskStageSummary>, StateStoreError> {
+        let task_id = normalize_non_empty("task_id", task_id)?;
+        let attempts = self.task_attempts_for_task(&task_id).await?;
+        let mut attempts_by_stage = BTreeMap::<String, Vec<TaskAttemptRecord>>::new();
+        for attempt in attempts {
+            attempts_by_stage
+                .entry(attempt.stage_id.clone())
+                .or_default()
+                .push(attempt);
+        }
+
+        let mut summaries = Vec::with_capacity(attempts_by_stage.len());
+        for (stage_id, attempts) in attempts_by_stage {
+            let stage = self.task_stage_record(&task_id, &stage_id).await?;
+            summaries.push(task_stage_summary_from_attempts(
+                task_id.clone(),
+                stage_id,
+                stage.as_ref(),
+                &attempts,
+            ));
+        }
+        Ok(summaries)
+    }
+
     pub async fn task_stage_attempts(
         &self,
         task_id: &str,
@@ -621,7 +648,13 @@ impl StateStore {
             task_id: attempt.task_id.clone(),
             stage_id: attempt.stage_id.clone(),
             status: attempt.status.clone(),
-            latest_consolidation_receipt_id: attempt.consolidation_receipt_id.clone(),
+            latest_consolidation_receipt_id: attempt.consolidation_receipt_id.clone().or_else(
+                || {
+                    existing
+                        .as_ref()
+                        .and_then(|stage| stage.latest_consolidation_receipt_id.clone())
+                },
+            ),
             created_at: existing
                 .as_ref()
                 .map(|stage| stage.created_at.clone())
@@ -807,7 +840,7 @@ mod tests {
                 freshness: "snapshot-b".to_string(),
                 status: "accepted".to_string(),
                 artifact_refs: vec!["artifact-a".to_string(), "artifact-b".to_string()],
-                consolidation_receipt_id: Some("receipt-b".to_string()),
+                consolidation_receipt_id: None,
                 selected_model_profile_readiness_status: Some("ready".to_string()),
                 budget_posture: Some("in_budget".to_string()),
                 cap_posture: Some("cap_ready".to_string()),

@@ -219,14 +219,14 @@ fn validate_work_item_kind_parent_rules(snapshot: &TaskGraphSnapshot) -> Vec<Tas
         let parent_canonical = canonical_work_item_issue_type(&parent.issue_type);
         let valid_parent = match canonical_issue_type.as_str() {
             "subtask" => parent_canonical == "task",
-            "step" => parent_canonical == "task" || parent_canonical == "subtask",
+            "step" => work_item_is_active_bounded_unit_candidate(&parent.issue_type),
             _ => true,
         };
         if valid_parent {
             continue;
         }
         let expected = if work_item_is_execution_step(&task.issue_type) {
-            "task or subtask"
+            "active bounded work item"
         } else {
             "task"
         };
@@ -1508,6 +1508,8 @@ mod tests {
         let mut epic = task_record("epic-parent", "open");
         epic.issue_type = "epic".to_string();
         let parent_task = task_record("task-parent", "open");
+        let mut runtime_defect = task_record("runtime-defect-parent", "open");
+        runtime_defect.issue_type = "runtime_defect".to_string();
         let mut valid_subtask = task_record("valid-subtask", "open");
         valid_subtask.issue_type = "subtask".to_string();
         valid_subtask
@@ -1523,6 +1525,14 @@ mod tests {
         valid_step
             .dependencies
             .push(parent_child_dependency("valid-step", "valid-subtask"));
+        let mut valid_runtime_defect_step = task_record("valid-runtime-defect-step", "open");
+        valid_runtime_defect_step.issue_type = "step".to_string();
+        valid_runtime_defect_step
+            .dependencies
+            .push(parent_child_dependency(
+                "valid-runtime-defect-step",
+                "runtime-defect-parent",
+            ));
         let mut legacy_todo = task_record("legacy-todo", "open");
         legacy_todo.issue_type = "todo".to_string();
         legacy_todo
@@ -1537,9 +1547,11 @@ mod tests {
         let issues = StateStore::validate_task_graph_rows(&[
             epic,
             parent_task,
+            runtime_defect,
             valid_subtask,
             invalid_subtask,
             valid_step,
+            valid_runtime_defect_step,
             legacy_todo,
             invalid_step,
         ]);
@@ -1556,6 +1568,9 @@ mod tests {
         }));
         assert!(!issues.iter().any(|issue| issue.issue_id == "valid-subtask"));
         assert!(!issues.iter().any(|issue| issue.issue_id == "valid-step"));
+        assert!(!issues
+            .iter()
+            .any(|issue| issue.issue_id == "valid-runtime-defect-step"));
         assert!(!issues.iter().any(|issue| issue.issue_id == "legacy-todo"));
     }
 

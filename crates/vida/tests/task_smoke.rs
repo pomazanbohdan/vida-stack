@@ -6286,6 +6286,27 @@ fn task_attempt_consolidate_validates_artifacts_and_emits_canonical_receipt() {
         consolidate["stage_summary"]["latest_consolidation_receipt_id"],
         "receipt-analysis-consolidated"
     );
+    let progress = run_command_json(&["task", "progress", &task_id, "--json"], &state_dir);
+    assert_eq!(
+        progress["stage_ensemble"]["latest_consolidation_receipt_id"],
+        "receipt-analysis-consolidated"
+    );
+    assert_eq!(
+        progress["stage_ensemble"]["next_command"],
+        format!("vida task stage status {task_id} --stage analysis")
+    );
+    let graph_summary = run_command_json(
+        &["taskflow", "graph-summary", "--operator", "--json"],
+        &state_dir,
+    );
+    assert_eq!(
+        graph_summary["stage_ensemble"]["latest_consolidation_receipt_id"],
+        "receipt-analysis-consolidated"
+    );
+    assert_eq!(
+        graph_summary["stage_ensemble"]["next_command"],
+        format!("vida task stage status {task_id} --stage analysis")
+    );
 
     let default_output = run_and_assert_success_with_explicit_state_dir(
         &[
