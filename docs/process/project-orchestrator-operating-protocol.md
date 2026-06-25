@@ -96,7 +96,8 @@ Project residue:
 4. prefer local focused proof and documented script modes before expensive workspace, release, installer, or CI gates,
 5. treat CI after push as diagnostic unless the active bounded unit is release/mainline/installer/CI architecture admission,
 6. keep historical release labels and concrete blocker names as evidence only, not permanent routing law,
-7. when `vida.config.yaml -> autonomous_execution.agent_only_development` is true, the project default is VIDA agent orchestration; a current VIDA `agent-init` packet, host-tool bridge request, sticky continuation intent, or visible agent-only runtime policy is not by itself explicit authorization to use a spawn-capable host subagent bridge when the host tool requires separate explicit subagent/delegation permission.
+7. when `vida.config.yaml -> autonomous_execution.agent_only_development` is true, the project default is VIDA agent orchestration; a current VIDA `agent-init` packet, host-tool bridge request, sticky continuation intent, or visible agent-only runtime policy is not by itself explicit authorization to use a spawn-capable host subagent bridge when the host tool requires separate explicit subagent/delegation permission,
+8. when the same runtime defect, blocker code, command-surface failure, lane/receipt/dispatch defect, or session-blocking symptom appears more than once in one session, raise or keep its owning TaskFlow item at priority 1, append recurrence evidence, and route it before unrelated runtime-DX cleanup unless a higher-severity blocker is already active.
 
 Active-epic publication residue:
 
@@ -351,7 +352,13 @@ metadata discovered after creation.
     closes a wave,
 12. release-install and smoke the system `vida` binary before treating a wave as
     operationally closed,
-13. select the next task using the updated scorecard, self-analysis, and
+13. for a runtime defect that blocked the current session, continuation, lane
+    execution, receipt/proof truth, or installed CLI behavior, run
+    `vida release install --json` and an installed-binary smoke check after the
+    focused fix proof unless the current explicit operator policy already
+    requires a system build after every task; if release install cannot run,
+    keep closure blocked or record the proof blocker,
+14. select the next task using the updated scorecard, self-analysis, and
     closure-distance data.
 
 ## Post-Task Self-Analysis Gate
