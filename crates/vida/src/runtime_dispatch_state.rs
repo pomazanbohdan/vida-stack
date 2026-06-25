@@ -5411,6 +5411,158 @@ fn readable_result_path(state_root: &Path, path: Option<&str>) -> Option<String>
     resolved.exists().then_some(candidate)
 }
 
+fn result_json_from_receipt_path(
+    state_root: &Path,
+    path: Option<&str>,
+) -> Option<serde_json::Value> {
+    let candidate = nonempty_result_path(path)?;
+    let resolved = if Path::new(&candidate).is_absolute() {
+        Path::new(&candidate).to_path_buf()
+    } else {
+        state_root.join(&candidate)
+    };
+    let raw = std::fs::read_to_string(resolved).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn dispatch_result_field_normalized(result: &serde_json::Value, field: &str) -> Option<String> {
+    result
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "next")
+        .map(|value| value.replace('-', "_"))
+}
+
+fn dispatch_result_is_rework_or_blocker(result: &serde_json::Value) -> bool {
+    ["decision", "verdict", "completion_verdict"]
+        .iter()
+        .filter_map(|field| {
+            result
+                .get(*field)
+                .and_then(serde_json::Value::as_str)
+                .map(|value| value.trim().to_ascii_lowercase())
+        })
+        .any(|value| matches!(value.as_str(), "rework_required" | "blocked" | "blocker"))
+        || dispatch_result_field_normalized(result, "rework_target").is_some()
+        || result.get("blocker_code").is_some()
+}
+
+fn dispatch_result_is_pass_completion(result: &serde_json::Value) -> bool {
+    !dispatch_result_is_rework_or_blocker(result)
+        && (matches!(
+            crate::json_string(result.get("execution_state")).as_deref(),
+            Some("executed")
+        ) || matches!(
+            crate::json_string(result.get("status")).as_deref(),
+            Some("pass")
+        ) || matches!(
+            crate::json_string(result.get("decision")).as_deref(),
+            Some("approve" | "pass")
+        ) || matches!(
+            crate::json_string(result.get("verdict")).as_deref(),
+            Some("pass")
+        ) || matches!(
+            crate::json_string(result.get("completion_verdict")).as_deref(),
+            Some("pass")
+        ))
+}
+
+fn dispatch_result_receipt_backed(result: &serde_json::Value) -> bool {
+    result["artifact_kind"].as_str() == Some("host_tool_bridge_result")
+        && result["execution_evidence"]["receipt_backed"]
+            .as_bool()
+            .unwrap_or(false)
+        && result["activation_semantics"]["records_completion_receipt"]
+            .as_bool()
+            .unwrap_or(false)
+}
+
+fn dispatch_result_matches_receipt_target(
+    result: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    [
+        result.get("dispatch_target"),
+        result.get("completed_target"),
+        result
+            .get("host_tool_bridge_request")
+            .and_then(|request| request.get("dispatch_target")),
+    ]
+    .into_iter()
+    .filter_map(crate::json_string)
+    .map(|target| target.trim().replace('-', "_"))
+    .any(|target| target == receipt.dispatch_target.replace('-', "_"))
+}
+
+fn normalized_runtime_path_matches(left: &str, right: &str) -> bool {
+    normalize_persisted_runtime_path(left) == normalize_persisted_runtime_path(right)
+}
+
+fn dispatch_result_matches_receipt_source_packet(
+    result: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    let Some(receipt_packet_path) = receipt
+        .dispatch_packet_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    [
+        result.get("source_dispatch_packet_path"),
+        result
+            .get("host_tool_bridge_request")
+            .and_then(|request| request.get("packet_path")),
+    ]
+    .into_iter()
+    .filter_map(crate::json_string)
+    .map(|path| path.trim().to_string())
+    .filter(|path| !path.is_empty())
+    .any(|path| normalized_runtime_path_matches(&path, receipt_packet_path))
+}
+
+fn dispatch_result_is_trusted_receipt_completion(
+    result: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    dispatch_result_is_pass_completion(result)
+        && dispatch_result_receipt_backed(result)
+        && result["run_id"].as_str() == Some(receipt.run_id.as_str())
+        && dispatch_result_matches_receipt_target(result, receipt)
+        && dispatch_result_matches_receipt_source_packet(result, receipt)
+}
+
+fn receipt_result_allowed_next_target(
+    state_root: &Path,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Option<String> {
+    [
+        receipt.downstream_dispatch_result_path.as_deref(),
+        receipt.dispatch_result_path.as_deref(),
+    ]
+    .into_iter()
+    .filter_map(|path| result_json_from_receipt_path(state_root, path))
+    .filter(|result| dispatch_result_is_trusted_receipt_completion(result, receipt))
+    .find_map(|result| {
+        dispatch_result_field_normalized(&result, "allowed_next_node")
+            .or_else(|| dispatch_result_field_normalized(&result, "downstream_dispatch_target"))
+    })
+}
+
+fn resolve_explicit_downstream_dispatch_target(
+    execution_plan: &serde_json::Value,
+    target: &str,
+) -> Option<String> {
+    let target = target.trim();
+    if target == "closure" {
+        return Some("closure".to_string());
+    }
+    resolve_runtime_dispatch_target(execution_plan, target).map(|target| target.dispatch_target)
+}
+
 fn readable_verification_evidence_result_path(
     state_root: &Path,
     path: Option<&str>,
@@ -7209,10 +7361,25 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     implementation_owned_paths_override: &[String],
 ) -> Result<(), String> {
+    let receipt_has_terminal_lane_evidence =
+        matches!(receipt.dispatch_status.as_str(), "executed" | "pass")
+            && (dispatch_receipt_has_execution_evidence(receipt)
+                || dispatch_receipt_allows_synthetic_lane_completion(receipt));
+    let explicit_downstream_dispatch_target = receipt
+        .downstream_dispatch_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "next")
+        .map(str::to_string)
+        .or_else(|| receipt_result_allowed_next_target(store.root(), receipt))
+        .as_deref()
+        .and_then(|target| {
+            resolve_explicit_downstream_dispatch_target(&role_selection.execution_plan, target)
+        });
     let (
-        downstream_dispatch_target,
-        downstream_dispatch_command,
-        downstream_dispatch_note,
+        mut downstream_dispatch_target,
+        mut downstream_dispatch_command,
+        mut downstream_dispatch_note,
         downstream_dispatch_ready,
         downstream_dispatch_blockers,
     ) = derive_downstream_dispatch_preview(store, role_selection, receipt).await;
@@ -7236,6 +7403,31 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
         downstream_dispatch_blockers.retain(|blocker| blocker != "missing_owned_write_scope");
         if downstream_dispatch_blockers.is_empty() {
             downstream_dispatch_ready = true;
+        }
+    }
+    if downstream_dispatch_target.is_none() && receipt_has_terminal_lane_evidence {
+        if let Some(explicit_target) = explicit_downstream_dispatch_target {
+            let missing_owned_scope =
+                dispatch_target_requires_owned_write_scope(role_selection, &explicit_target)
+                    && !request_has_explicit_owned_scope(&role_selection.request)
+                    && implementation_owned_paths.is_empty();
+            downstream_dispatch_target = Some(explicit_target.clone());
+            downstream_dispatch_command = Some("vida agent-init".to_string());
+            downstream_dispatch_note = Some(format!(
+                "after `{}` evidence is recorded, activate explicitly allowed `{}` for the next bounded lane",
+                receipt.dispatch_target, explicit_target
+            ));
+            if missing_owned_scope {
+                if !downstream_dispatch_blockers
+                    .iter()
+                    .any(|blocker| blocker == "missing_owned_write_scope")
+                {
+                    downstream_dispatch_blockers.push(missing_owned_write_scope_blocker());
+                }
+                downstream_dispatch_ready = false;
+            } else if downstream_dispatch_blockers.is_empty() {
+                downstream_dispatch_ready = true;
+            }
         }
     }
     if let Some(error) = downstream_dispatch_ready_blocker_parity_error(
@@ -18019,8 +18211,20 @@ host_environment:
                 .await
                 .expect("state store should open");
             let owned_paths = vec!["crates/vida/src/runtime_dispatch_state.rs".to_string()];
-            let role_selection =
-                configured_first_step_role_selection(Some("developer"), Some("developer"));
+            let mut role_selection =
+                configured_first_step_role_selection(Some("autotester"), Some("autotester"));
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["execution_lane_sequence"] = json!(["autotester", "developer", "coach"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_catalog"]["developer"] = json!({
+                "dispatch_target": "developer",
+                "task_class": "implementation",
+                "closure_class": "implementation",
+                "activation": {
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
+                }
+            });
             let run_graph_bootstrap = json!({ "run_id": "run-explicit-allowed-next-preview" });
             let mut receipt = crate::state_store::RunGraphDispatchReceipt {
                 run_id: "run-explicit-allowed-next-preview".to_string(),
@@ -18079,6 +18283,323 @@ host_environment:
             assert_eq!(
                 packet["delivery_task_packet"]["owned_paths"],
                 serde_json::json!(owned_paths)
+            );
+        });
+    }
+
+    #[test]
+    fn refresh_downstream_dispatch_preview_uses_result_allowed_next_target() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        let result_dir = state_root
+            .join("runtime-consumption")
+            .join("dispatch-results");
+        fs::create_dir_all(&result_dir).expect("dispatch-results dir should exist");
+        let result_path = result_dir.join("prover-result.json");
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "status": "pass",
+                "execution_state": "executed",
+                "decision": "approve",
+                "verdict": "pass",
+                "completion_verdict": "pass",
+                "run_id": "run-result-allowed-next-preview",
+                "dispatch_target": "prover",
+                "allowed_next_node": "closure",
+                "source_dispatch_packet_path": "/tmp/prover-packet.json",
+                "host_tool_bridge_request": {
+                    "run_id": "run-result-allowed-next-preview",
+                    "dispatch_target": "prover",
+                    "packet_path": "/tmp/prover-packet.json"
+                },
+                "activation_semantics": {
+                    "records_completion_receipt": true
+                },
+                "execution_evidence": {
+                    "receipt_backed": true
+                }
+            }))
+            .expect("result json should encode"),
+        )
+        .expect("result artifact should write");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let mut role_selection =
+                configured_first_step_role_selection(Some("autotester"), Some("autotester"));
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["execution_lane_sequence"] = json!(["autotester", "developer", "coach"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_catalog"]["developer"] = json!({
+                "dispatch_target": "developer",
+                "task_class": "implementation",
+                "closure_class": "implementation",
+                "activation": {
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
+                }
+            });
+            let run_graph_bootstrap = json!({ "run_id": "run-result-allowed-next-preview" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-result-allowed-next-preview".to_string(),
+                dispatch_target: "prover".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
+                dispatch_command: Some("vida lane complete".to_string()),
+                dispatch_packet_path: Some("/tmp/prover-packet.json".to_string()),
+                dispatch_result_path: Some(
+                    result_path
+                        .strip_prefix(&state_root)
+                        .expect("result path should be inside state root")
+                        .display()
+                        .to_string(),
+                ),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-23T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview_with_owned_paths(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+                &[],
+            )
+            .await
+            .expect("preview should use result-backed allowed_next target");
+
+            assert_eq!(
+                receipt.downstream_dispatch_target.as_deref(),
+                Some("closure")
+            );
+            assert!(receipt.downstream_dispatch_ready);
+            assert!(receipt.downstream_dispatch_blockers.is_empty());
+            assert_eq!(
+                receipt.downstream_dispatch_status.as_deref(),
+                Some("packet_ready")
+            );
+        });
+    }
+
+    #[test]
+    fn refresh_downstream_dispatch_preview_rejects_untrusted_result_allowed_next_target() {
+        let cases = [
+            ("unbacked", false, "/tmp/prover-packet.json", "closure"),
+            (
+                "mismatched-source",
+                true,
+                "/tmp/other-prover-packet.json",
+                "closure",
+            ),
+            ("next-placeholder", true, "/tmp/prover-packet.json", "next"),
+        ];
+
+        for (case, receipt_backed, source_packet_path, allowed_next_node) in cases {
+            let harness = TempStateHarness::new().expect("temp state harness should initialize");
+            let state_root = harness.path().join(crate::state_store::default_state_dir());
+            let result_dir = state_root
+                .join("runtime-consumption")
+                .join("dispatch-results");
+            fs::create_dir_all(&result_dir).expect("dispatch-results dir should exist");
+            let result_path = result_dir.join(format!("{case}-prover-result.json"));
+            fs::write(
+                &result_path,
+                serde_json::to_string_pretty(&json!({
+                    "artifact_kind": "host_tool_bridge_result",
+                    "status": "pass",
+                    "execution_state": "executed",
+                    "decision": "approve",
+                    "verdict": "pass",
+                    "completion_verdict": "pass",
+                    "run_id": "run-result-allowed-next-negative",
+                    "dispatch_target": "prover",
+                    "allowed_next_node": allowed_next_node,
+                    "source_dispatch_packet_path": source_packet_path,
+                    "host_tool_bridge_request": {
+                        "run_id": "run-result-allowed-next-negative",
+                        "dispatch_target": "prover",
+                        "packet_path": source_packet_path
+                    },
+                    "activation_semantics": {
+                        "records_completion_receipt": receipt_backed
+                    },
+                    "execution_evidence": {
+                        "receipt_backed": receipt_backed
+                    }
+                }))
+                .expect("result json should encode"),
+            )
+            .expect("result artifact should write");
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+            runtime.block_on(async {
+                let store = crate::StateStore::open(state_root.clone())
+                    .await
+                    .expect("state store should open");
+                let mut role_selection =
+                    configured_first_step_role_selection(Some("autotester"), Some("autotester"));
+                role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                    ["execution_lane_sequence"] = json!(["autotester", "developer", "coach"]);
+                let run_graph_bootstrap = json!({
+                    "run_id": "run-result-allowed-next-negative"
+                });
+                let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                    run_id: "run-result-allowed-next-negative".to_string(),
+                    dispatch_target: "prover".to_string(),
+                    dispatch_status: "executed".to_string(),
+                    lane_status: "lane_completed".to_string(),
+                    supersedes_receipt_id: None,
+                    exception_path_receipt_id: None,
+                    dispatch_kind: "agent_lane".to_string(),
+                    dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
+                    dispatch_command: Some("vida lane complete".to_string()),
+                    dispatch_packet_path: Some("/tmp/prover-packet.json".to_string()),
+                    dispatch_result_path: Some(
+                        result_path
+                            .strip_prefix(&state_root)
+                            .expect("result path should be inside state root")
+                            .display()
+                            .to_string(),
+                    ),
+                    blocker_code: None,
+                    downstream_dispatch_target: None,
+                    downstream_dispatch_command: None,
+                    downstream_dispatch_note: None,
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: Vec::new(),
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: None,
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("middle".to_string()),
+                    activation_runtime_role: Some("business_analyst".to_string()),
+                    selected_backend: Some("internal_subagents".to_string()),
+                    recorded_at: "2026-04-23T00:00:00Z".to_string(),
+                };
+
+                refresh_downstream_dispatch_preview_with_owned_paths(
+                    &store,
+                    &role_selection,
+                    &run_graph_bootstrap,
+                    &mut receipt,
+                    &[],
+                )
+                .await
+                .expect("preview should ignore untrusted allowed_next target");
+
+                assert_ne!(
+                    receipt.downstream_dispatch_target.as_deref(),
+                    Some("closure"),
+                    "{case}"
+                );
+                assert!(!receipt.downstream_dispatch_ready, "{case}");
+                assert!(receipt.downstream_dispatch_packet_path.is_none(), "{case}");
+            });
+        }
+    }
+
+    #[test]
+    fn refresh_downstream_dispatch_preview_does_not_materialize_inflight_explicit_target() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let owned_paths = vec!["crates/vida/src/runtime_dispatch_state.rs".to_string()];
+            let mut role_selection =
+                configured_first_step_role_selection(Some("autotester"), Some("autotester"));
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["execution_lane_sequence"] = json!(["autotester", "developer", "coach"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_catalog"]["developer"] = json!({
+                "dispatch_target": "developer",
+                "task_class": "implementation",
+                "closure_class": "implementation",
+                "activation": {
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
+                }
+            });
+            let run_graph_bootstrap = json!({ "run_id": "run-inflight-explicit-target-preview" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-inflight-explicit-target-preview".to_string(),
+                dispatch_target: "analyst".to_string(),
+                dispatch_status: "executing".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/analyst-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("developer".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analyst".to_string()),
+                downstream_dispatch_last_target: Some("analyst".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-23T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview_with_owned_paths(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+                &owned_paths,
+            )
+            .await
+            .expect("preview should keep in-flight dispatch non-ready");
+
+            assert_ne!(
+                receipt.downstream_dispatch_target.as_deref(),
+                Some("developer")
+            );
+            assert!(!receipt.downstream_dispatch_ready);
+            assert!(receipt.downstream_dispatch_packet_path.is_none());
+            assert_ne!(
+                receipt.downstream_dispatch_status.as_deref(),
+                Some("packet_ready")
             );
         });
     }
@@ -19484,6 +20005,65 @@ host_environment:
         assert_eq!(advanced.handoff_state, "awaiting_coach");
         assert_eq!(advanced.resume_target, "dispatch.coach_lane");
         assert_eq!(advanced.lifecycle_stage, "implementer_active");
+    }
+
+    #[test]
+    fn apply_first_handoff_execution_terminalizes_allowed_closure_downstream() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-prover-closure",
+            "verification",
+            "verification",
+        );
+        status.task_id = "run-prover-closure".to_string();
+        status.active_node = "prover".to_string();
+        status.next_node = None;
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "prover_active".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-prover-closure".to_string(),
+            dispatch_target: "prover".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
+            dispatch_command: Some("vida lane complete".to_string()),
+            dispatch_packet_path: Some("/tmp/prover-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/prover-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: Some("terminal closure target".to_string()),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/prover-result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("closure".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-16T00:00:00Z".to_string(),
+        };
+
+        let advanced = apply_first_handoff_execution_to_run_graph_status(&status, &receipt);
+
+        assert_eq!(advanced.active_node, "closure");
+        assert_eq!(advanced.status, "completed");
+        assert_eq!(advanced.lifecycle_stage, "closure_complete");
+        assert_eq!(advanced.resume_target, "none");
+        assert!(advanced.recovery_ready);
     }
 
     #[test]
@@ -26328,7 +26908,13 @@ pub(crate) fn apply_first_handoff_execution_to_run_graph_status(
     status: &crate::state_store::RunGraphStatus,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> crate::state_store::RunGraphStatus {
-    if receipt.dispatch_target == "closure" {
+    let terminal_closure_lineage = receipt.dispatch_target == "closure"
+        || (receipt.downstream_dispatch_target.as_deref().map(str::trim) == Some("closure")
+            && receipt.dispatch_status == "executed"
+            && canonical_lane_status_str(&receipt.lane_status) == Some("lane_completed")
+            && receipt.blocker_code.is_none()
+            && receipt.downstream_dispatch_blockers.is_empty());
+    if terminal_closure_lineage {
         if canonical_lane_status_str(&receipt.lane_status) != Some("lane_completed") {
             return crate::state_store::RunGraphStatus {
                 run_id: status.run_id.clone(),
