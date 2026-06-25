@@ -3143,6 +3143,7 @@ fn host_bridge_completion_rework_target_is_present(value: &str) -> bool {
 fn read_supplied_host_bridge_completion_result(
     state_root: &Path,
     result_file: Option<&str>,
+    request_path: Option<&str>,
 ) -> Result<Option<serde_json::Value>, String> {
     let Some(result_file) = result_file.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -3154,6 +3155,29 @@ fn read_supplied_host_bridge_completion_result(
         Path::new(&normalized_path),
         "host bridge result",
     )?;
+
+    if let Some(request_path) = request_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let request = read_host_bridge_request(state_root, request_path)?;
+        let expected_result_path = host_bridge_path_string(&request, "result_path")?;
+        let normalized_expected_result_path =
+            crate::runtime_dispatch_state::normalize_persisted_runtime_path(expected_result_path);
+        let canonical_expected_result_path = canonicalize_existing_state_path(
+            state_root,
+            Path::new(&normalized_expected_result_path),
+            "host bridge result",
+        )?;
+        if canonical_path != canonical_expected_result_path {
+            return Err(format!(
+                "Host bridge result file `{}` does not match request result_path `{}`.",
+                canonical_path.display(),
+                canonical_expected_result_path.display()
+            ));
+        }
+    }
+
     read_host_bridge_json_artifact_at_path(&canonical_path).map(Some)
 }
 
@@ -5145,6 +5169,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             let supplied_completion_result = match read_supplied_host_bridge_completion_result(
                 store.root(),
                 supplied_completion_result_args.result_file,
+                host_bridge_request,
             ) {
                 Ok(result) => result,
                 Err(error) => {
@@ -5252,15 +5277,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
-                .or_else(|| {
-                    supplied_completion_result
-                        .as_ref()
-                        .and_then(|result| result.get("allowed_next_node"))
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(str::to_string)
-                })
                 .or_else(|| {
                     supplied_host_bridge_completion_result_rework_next_node(
                         &supplied_completion_result_args,
@@ -12497,6 +12513,95 @@ mod tests {
         });
         rx.recv_timeout(std::time::Duration::from_secs(2))
             .expect("host bridge request read should return quickly")
+    }
+
+    #[test]
+    fn supplied_host_bridge_result_must_match_request_result_path() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-result-binding-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let request_path = root.join("host-tool-bridge/requests/request.json");
+        let expected_result_path = root.join("host-tool-bridge/results/request-owned.json");
+        let forged_result_path = root.join("host-tool-bridge/results/forged.json");
+        for path in [&request_path, &expected_result_path, &forged_result_path] {
+            std::fs::create_dir_all(path.parent().expect("host bridge test path parent"))
+                .expect("create host bridge test parent");
+        }
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "result-binding",
+                "run_id": "run-result-binding",
+                "task_id": "run-result-binding",
+                "dispatch_target": "verification",
+                "dispatch_transport": "host_tool_bridge",
+                "receipt_mode": "host_bridge_receipt",
+                "request_path": request_path.display().to_string(),
+                "packet_path": root.join("runtime-consumption/dispatch-packets/run-result-binding.json").display().to_string(),
+                "result_path": expected_result_path.display().to_string(),
+                "receipt_path": root.join("host-tool-bridge/receipts/request-owned.json").display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        std::fs::write(
+            &expected_result_path,
+            serde_json::json!({
+                "decision": "pass",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "rework_target": "none",
+                "allowed_next_node": "next"
+            })
+            .to_string(),
+        )
+        .expect("write expected result");
+        std::fs::write(
+            &forged_result_path,
+            serde_json::json!({
+                "decision": "pass",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "rework_target": "none",
+                "allowed_next_node": "closure"
+            })
+            .to_string(),
+        )
+        .expect("write forged result");
+
+        let request_path_string = request_path.display().to_string();
+        let forged_result_path_string = forged_result_path.display().to_string();
+        let error = read_supplied_host_bridge_completion_result(
+            &root,
+            Some(&forged_result_path_string),
+            Some(&request_path_string),
+        )
+        .expect_err("forged result path must be rejected");
+        assert!(
+            error.contains("does not match request result_path"),
+            "unexpected error: {error}"
+        );
+
+        let expected_result_path_string = expected_result_path.display().to_string();
+        let result = read_supplied_host_bridge_completion_result(
+            &root,
+            Some(&expected_result_path_string),
+            Some(&request_path_string),
+        )
+        .expect("request-owned result path should be accepted")
+        .expect("result should be present");
+        assert_eq!(result["allowed_next_node"], "next");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
