@@ -2,8 +2,9 @@ use std::process::ExitCode;
 
 use serde_json::json;
 use vida_contracts::{
-    operation_spec, operations, VidaClientKind, VidaCommandEnvelope, VidaCommandResponse,
-    VidaIdempotencyKey, VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId, VidaSessionId,
+    operation_input_schema, operation_spec, operations, VidaClientKind, VidaCommandEnvelope,
+    VidaCommandResponse, VidaIdempotencyKey, VidaOperation, VidaOperationInputField,
+    VidaOperationInputValueKind, VidaProjectId, VidaProjectRef, VidaRequestId, VidaSessionId,
     VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
 };
 
@@ -75,6 +76,24 @@ pub(crate) fn run_with_client<C: VidaClient>(
     args: ProxyArgs,
     client: &C,
 ) -> ExitCode {
+    if service_cli_help_requested(&args.args) {
+        let args_without_help = args
+            .args
+            .iter()
+            .filter(|arg| !matches!(arg.as_str(), "--help" | "-h"))
+            .cloned()
+            .collect::<Vec<_>>();
+        let request = match service_cli_request(family, &args_without_help) {
+            Ok(request) => request,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::from(2);
+            }
+        };
+        print_service_operation_help(&request);
+        return ExitCode::SUCCESS;
+    }
+
     let request = match service_cli_request(family, &args.args) {
         Ok(request) => request,
         Err(error) => {
@@ -84,6 +103,11 @@ pub(crate) fn run_with_client<C: VidaClient>(
     };
     let response = execute_service_cli_request(client, &request);
     emit_service_client_response(&request, &response)
+}
+
+fn service_cli_help_requested(args: &[String]) -> bool {
+    args.iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
 }
 
 pub(crate) fn execute_service_cli_request<C: VidaClient>(
@@ -103,7 +127,6 @@ pub(crate) fn service_cli_request(
         .map(String::as_str)
         .unwrap_or("status");
     let as_json = args.iter().any(|arg| arg == "--json");
-    let project_ref = project_ref_from_args(args);
     let operation = match (&family, command) {
         (ServiceCliFamily::Service, "hello") => operations::SERVICE_HELLO,
         (ServiceCliFamily::Service, "status") => operations::SERVICE_STATUS,
@@ -129,6 +152,7 @@ pub(crate) fn service_cli_request(
             ));
         }
     };
+    let project_ref = project_ref_from_operation(operation, args);
     Ok(ServiceCliRequest {
         family,
         command: command.to_string(),
@@ -174,45 +198,81 @@ fn envelope_for_request(request: &ServiceCliRequest) -> VidaCommandEnvelope {
 }
 
 fn payload_for(operation: &str, args: &[String]) -> serde_json::Value {
-    match operation {
-        operations::EVENTS_SINCE => {
-            json!({ "cursor": value_after(args, "--cursor").unwrap_or("latest") })
+    let Some(schema) = operation_input_schema(operation) else {
+        return json!({});
+    };
+    let mut payload = serde_json::Map::new();
+    for field in schema.fields {
+        if let Some(value) = payload_value_for_field(&field, args) {
+            payload.insert(field.payload_key, value);
         }
-        operations::SERVICE_LIFECYCLE_PLAN => {
-            json!({ "mode": value_after(args, "--mode").unwrap_or("dry_run") })
+    }
+    serde_json::Value::Object(payload)
+}
+
+fn project_ref_from_operation(operation: &str, args: &[String]) -> Option<VidaProjectRef> {
+    let project = value_after(args, "--project")
+        .map(str::to_string)
+        .or_else(|| schema_default_for_field(operation, "project"));
+    project.map(|project_id| VidaProjectRef::ProjectId {
+        project_id: VidaProjectId(project_id.to_string()),
+    })
+}
+
+fn payload_value_for_field(
+    field: &VidaOperationInputField,
+    args: &[String],
+) -> Option<serde_json::Value> {
+    let raw = field
+        .cli_flag
+        .as_deref()
+        .and_then(|flag| value_after(args, flag))
+        .map(str::to_string)
+        .or_else(|| {
+            if matches!(field.value_kind, VidaOperationInputValueKind::Boolean)
+                && field
+                    .cli_flag
+                    .as_deref()
+                    .is_some_and(|flag| flag_present(args, flag))
+            {
+                Some("true".to_string())
+            } else {
+                field.default_value.clone()
+            }
+        })?;
+    Some(parse_schema_field_value(field.value_kind, &raw))
+}
+
+fn parse_schema_field_value(kind: VidaOperationInputValueKind, raw: &str) -> serde_json::Value {
+    match kind {
+        VidaOperationInputValueKind::Boolean => json!(matches!(
+            raw.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )),
+        VidaOperationInputValueKind::JsonObject => {
+            serde_json::from_str(raw).unwrap_or_else(|_| json!({}))
         }
-        operations::PROJECT_REGISTRY_GET
-        | operations::PROJECT_RESOLVE
-        | operations::PROJECT_STATUS => {
-            json!({ "project": value_after(args, "--project").unwrap_or("vida-stack") })
-        }
-        operations::WIZARD_SCHEMA_GET => {
-            json!({ "wizard_kind": value_after(args, "--kind").unwrap_or("project_init") })
-        }
-        operations::WIZARD_SESSION_START
-        | operations::WIZARD_SESSION_VALIDATE
-        | operations::WIZARD_SESSION_DIFF => json!({
-            "wizard_kind": value_after(args, "--kind").unwrap_or("project_init"),
-            "dry_run": true
-        }),
-        operations::JOBS_GET => json!({ "job_id": value_after(args, "--job").unwrap_or("latest") }),
-        operations::RECEIPTS_GET => {
-            json!({ "receipt_id": value_after(args, "--receipt").unwrap_or("latest") })
-        }
-        _ => json!({}),
+        VidaOperationInputValueKind::String
+        | VidaOperationInputValueKind::Path
+        | VidaOperationInputValueKind::EnumOne => json!(raw),
     }
 }
 
-fn project_ref_from_args(args: &[String]) -> Option<VidaProjectRef> {
-    value_after(args, "--project").map(|project_id| VidaProjectRef::ProjectId {
-        project_id: VidaProjectId(project_id.to_string()),
-    })
+fn schema_default_for_field(operation: &str, field_id: &str) -> Option<String> {
+    operation_input_schema(operation)?
+        .field(field_id)?
+        .default_value
+        .clone()
 }
 
 fn value_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.windows(2)
         .find(|window| window[0] == flag)
         .map(|window| window[1].as_str())
+}
+
+fn flag_present(args: &[String], flag: &str) -> bool {
+    args.iter().any(|arg| arg == flag)
 }
 
 fn emit_service_client_response(
@@ -300,6 +360,40 @@ fn emit_default_service_client_response(
         family_name(&request.family),
         request.command,
         response.status
+    );
+}
+
+fn print_service_operation_help(request: &ServiceCliRequest) {
+    println!("vida {} {}", family_name(&request.family), request.command);
+    println!("  operation: {}", request.operation);
+    let schema = operation_input_schema(request.operation);
+    let fields = schema
+        .as_ref()
+        .map(|schema| schema.fields.as_slice())
+        .unwrap_or(&[]);
+    println!(
+        "  inputs[{}]{{field_id,label,required,default,cli,control}}:",
+        fields.len()
+    );
+    for field in fields {
+        print_operation_field_help(field);
+    }
+    println!("  --json    Emit machine-readable JSON output");
+}
+
+fn print_operation_field_help(field: &VidaOperationInputField) {
+    let cli = field.cli_flag.as_deref().unwrap_or("");
+    let control =
+        serde_json::to_value(field.tui_control).expect("TUI control should serialize to JSON");
+    let control = control.as_str().unwrap_or("");
+    println!(
+        "    {},{},{},{},{},{}",
+        terminal_safe_text(&field.field_id),
+        terminal_safe_text(&field.label),
+        field.required,
+        terminal_safe_text(field.default_value.as_deref().unwrap_or("")),
+        terminal_safe_text(&cli),
+        control
     );
 }
 

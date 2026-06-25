@@ -18,6 +18,12 @@ fn ratatui_snapshots_render_fixture_operator_console_mvp_without_live_daemon() {
     assert_eq!(snapshot.project_id, "vida-stack");
     assert_eq!(snapshot.wizard_step, "inspect");
     assert!(!snapshot.wizard_apply_supported);
+    assert_eq!(snapshot.wizard_form_fields.len(), 2);
+    assert_eq!(snapshot.wizard_form_fields[0].field_id, "project");
+    assert!(snapshot.wizard_form_fields[0].required);
+    assert_eq!(snapshot.wizard_form_fields[0].control, "text_input");
+    assert_eq!(snapshot.wizard_form_fields[1].field_id, "wizard_kind");
+    assert_eq!(snapshot.wizard_form_fields[1].control, "select");
     assert_eq!(snapshot.wizard_validation_findings, 1);
     assert_eq!(snapshot.wizard_diff_change_count, 4);
     assert_eq!(
@@ -57,6 +63,9 @@ fn ratatui_snapshots_render_fixture_operator_console_mvp_without_live_daemon() {
     assert!(rendered.contains(
         "Wizard: step=inspect | validation_findings=1 | diff_changes=4 | apply_supported=false"
     ));
+    assert!(rendered.contains(
+        "Wizard form fields[2]{field_id,label,required,control}: project:Project:true:text_input | wizard_kind:Wizard kind:false:select"
+    ));
     assert!(rendered
         .contains("Disabled action: apply-token and claim-proof execution are not implemented"));
     assert!(rendered
@@ -68,6 +77,26 @@ fn ratatui_snapshots_render_fixture_operator_console_mvp_without_live_daemon() {
     assert!(rendered.contains(
         "Orchestration: workspace_owner=task_worktree_assignment | parallelism_source=taskflow_execution_semantics | tui_projection=true"
     ));
+}
+
+#[test]
+fn tui_shell_does_not_import_direct_project_state_writers() {
+    let source = include_str!("../src/vida_tui_shell.rs");
+    for forbidden in [
+        "StateStore",
+        "std::fs::write",
+        "write_all",
+        "remove_file",
+        "remove_dir",
+        "create_dir",
+        "taskflow_state",
+        ".vida/data/state",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "TUI shell should not directly mutate project state through `{forbidden}`"
+        );
+    }
 }
 
 fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {

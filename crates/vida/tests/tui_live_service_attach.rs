@@ -60,6 +60,11 @@ fn ratatui_live_attach_renders_operator_console_from_tarpc_local_socket() {
     assert_eq!(snapshot.project_count, 1);
     assert_eq!(snapshot.project_id, "vida-stack");
     assert_eq!(snapshot.wizard_step, "inspect");
+    assert_eq!(snapshot.wizard_form_fields.len(), 2);
+    assert_eq!(snapshot.wizard_form_fields[0].field_id, "project");
+    assert_eq!(snapshot.wizard_form_fields[0].control, "text_input");
+    assert_eq!(snapshot.wizard_form_fields[1].field_id, "wizard_kind");
+    assert_eq!(snapshot.wizard_form_fields[1].control, "select");
     assert_eq!(snapshot.wizard_validation_findings, 0);
     assert_eq!(snapshot.wizard_diff_change_count, 0);
     assert_eq!(snapshot.job_status, "unavailable");
@@ -81,6 +86,9 @@ fn ratatui_live_attach_renders_operator_console_from_tarpc_local_socket() {
         .contains("Projects: count=1 | active=vida-stack | Worktree: C:\\project\\vida-stack"));
     assert!(rendered.contains(
         "Wizard: step=inspect | validation_findings=0 | diff_changes=0 | apply_supported=false"
+    ));
+    assert!(rendered.contains(
+        "Wizard form fields[2]{field_id,label,required,control}: project:Project:true:text_input | wizard_kind:Wizard kind:false:select"
     ));
     assert!(
         rendered.contains("Jobs/Events/Receipts: job_status=unavailable | events=1 | receipts=1")

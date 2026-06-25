@@ -264,6 +264,50 @@ fn cli_service_capabilities_default_output_is_actionable_without_json() {
         json["response"]["result"]["engine_capabilities"]["contract_version"],
         "vida-runtime-engine-v1"
     );
+    assert_eq!(
+        json["response"]["result"]["operation_catalog"][0]["input_schema"]["fields"]
+            .as_array()
+            .expect("catalog entry should expose input fields")
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn cli_operation_help_matches_contract_schema_catalog() {
+    let help = vida()
+        .args(["wizard", "inspect", "--help"])
+        .output()
+        .expect("wizard inspect help should execute");
+    assert!(
+        help.status.success(),
+        "wizard inspect help should succeed: stderr={}",
+        String::from_utf8_lossy(&help.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(stdout.contains("vida wizard inspect"));
+    assert!(stdout.contains("operation: vida.wizard.schema.get"));
+    assert!(stdout.contains("inputs[2]{field_id,label,required,default,cli,control}:"));
+    assert!(stdout.contains("project,Project,true,vida-stack,--project,text_input"));
+    assert!(stdout.contains("wizard_kind,Wizard kind,false,project_init,--kind,select"));
+
+    let endpoints = run_json(&["service", "endpoints", "--json"]);
+    let endpoints = endpoints["response"]["result"]["endpoints"]
+        .as_array()
+        .expect("endpoints array");
+    let wizard = endpoints
+        .iter()
+        .find(|entry| entry["operation"] == "vida.wizard.schema.get")
+        .expect("wizard endpoint catalog entry");
+    let fields = wizard["input_schema"]["fields"]
+        .as_array()
+        .expect("input schema fields");
+    assert_eq!(fields[0]["field_id"], "project");
+    assert_eq!(fields[0]["cli_flag"], "--project");
+    assert_eq!(fields[0]["tui_control"], "text_input");
+    assert_eq!(fields[1]["field_id"], "wizard_kind");
+    assert_eq!(fields[1]["cli_flag"], "--kind");
+    assert_eq!(fields[1]["tui_control"], "select");
 }
 
 #[test]

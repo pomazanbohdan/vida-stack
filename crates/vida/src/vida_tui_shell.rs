@@ -21,6 +21,7 @@ pub(crate) struct VidaTuiShellSnapshot {
     pub(crate) worktree_environment_id: String,
     pub(crate) wizard_step: String,
     pub(crate) wizard_apply_supported: bool,
+    pub(crate) wizard_form_fields: Vec<VidaTuiFormFieldSnapshot>,
     pub(crate) wizard_validation_findings: usize,
     pub(crate) wizard_diff_change_count: usize,
     pub(crate) wizard_disabled_apply_reason: String,
@@ -35,6 +36,14 @@ pub(crate) struct VidaTuiShellSnapshot {
     pub(crate) orchestration_workspace_owner: String,
     pub(crate) orchestration_parallelism_source: String,
     pub(crate) orchestration_tui_projection: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VidaTuiFormFieldSnapshot {
+    pub(crate) field_id: String,
+    pub(crate) label: String,
+    pub(crate) required: bool,
+    pub(crate) control: String,
 }
 
 impl VidaTuiShellSnapshot {
@@ -150,6 +159,7 @@ impl VidaTuiShellSnapshot {
                 .unwrap_or("unknown")
                 .to_string(),
             wizard_apply_supported: wizard_schema["apply_supported"].as_bool().unwrap_or(false),
+            wizard_form_fields: operation_form_fields(&wizard_schema),
             wizard_validation_findings: wizard_validate["validation"]["findings"]
                 .as_array()
                 .map_or(0, std::vec::Vec::len),
@@ -227,6 +237,11 @@ pub(crate) fn render_app_shell(frame: &mut Frame<'_>, snapshot: &VidaTuiShellSna
             snapshot.wizard_apply_supported
         ))]),
         Line::from(vec![Span::raw(format!(
+            "Wizard form fields[{}]{{field_id,label,required,control}}: {}",
+            snapshot.wizard_form_fields.len(),
+            form_field_summary(&snapshot.wizard_form_fields)
+        ))]),
+        Line::from(vec![Span::raw(format!(
             "Disabled action: {}",
             snapshot.wizard_disabled_apply_reason
         ))]),
@@ -252,6 +267,33 @@ pub(crate) fn render_app_shell(frame: &mut Frame<'_>, snapshot: &VidaTuiShellSna
         ))]),
     ];
     frame.render_widget(Paragraph::new(lines), frame.area());
+}
+
+fn operation_form_fields(schema: &serde_json::Value) -> Vec<VidaTuiFormFieldSnapshot> {
+    schema["operation_input_schema"]["fields"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|field| VidaTuiFormFieldSnapshot {
+            field_id: field["field_id"].as_str().unwrap_or("").to_string(),
+            label: field["label"].as_str().unwrap_or("").to_string(),
+            required: field["required"].as_bool().unwrap_or(false),
+            control: field["tui_control"].as_str().unwrap_or("").to_string(),
+        })
+        .collect()
+}
+
+fn form_field_summary(fields: &[VidaTuiFormFieldSnapshot]) -> String {
+    fields
+        .iter()
+        .map(|field| {
+            format!(
+                "{}:{}:{}:{}",
+                field.field_id, field.label, field.required, field.control
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 fn envelope(operation: &str) -> VidaCommandEnvelope {

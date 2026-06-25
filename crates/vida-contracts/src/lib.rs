@@ -352,6 +352,41 @@ pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
     ]
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaOperationCatalogEntry {
+    pub operation: VidaOperation,
+    pub scope: VidaOperationScope,
+    pub posture: VidaOperationPosture,
+    pub requires_project_ref: bool,
+    pub requires_apply_token: bool,
+    pub required_capabilities: Vec<VidaCapabilityScope>,
+    pub input_schema: VidaOperationInputSchema,
+}
+
+impl VidaOperationCatalogEntry {
+    #[must_use]
+    pub fn from_spec(spec: VidaOperationSpec) -> Self {
+        let input_schema = input_schema_for_spec(&spec);
+        Self {
+            operation: spec.operation,
+            scope: spec.scope,
+            posture: spec.posture,
+            requires_project_ref: spec.requires_project_ref,
+            requires_apply_token: spec.requires_apply_token,
+            required_capabilities: spec.required_capabilities,
+            input_schema,
+        }
+    }
+}
+
+#[must_use]
+pub fn mvp_operation_catalog() -> Vec<VidaOperationCatalogEntry> {
+    mvp_operation_registry()
+        .into_iter()
+        .map(VidaOperationCatalogEntry::from_spec)
+        .collect()
+}
+
 pub fn operation_spec(operation_id: &str) -> Option<VidaOperationSpec> {
     let operation_id = match resolve_operation_alias(operation_id) {
         Ok(VidaOperationAliasResolution::Canonical { operation })
@@ -361,6 +396,19 @@ pub fn operation_spec(operation_id: &str) -> Option<VidaOperationSpec> {
     mvp_operation_registry()
         .into_iter()
         .find(|spec| spec.operation.0 == operation_id)
+}
+
+#[must_use]
+pub fn operation_input_schema(operation_id: &str) -> Option<VidaOperationInputSchema> {
+    let operation_id = match resolve_operation_alias(operation_id) {
+        Ok(VidaOperationAliasResolution::Canonical { operation })
+        | Ok(VidaOperationAliasResolution::Alias { operation, .. }) => operation.0,
+        Err(_) => return None,
+    };
+    mvp_operation_registry()
+        .into_iter()
+        .find(|spec| spec.operation.0 == operation_id)
+        .map(|spec| input_schema_for_spec(&spec))
 }
 
 pub fn unsupported_operation_problem(operation_id: &str) -> VidaProblem {
@@ -639,6 +687,209 @@ impl VidaOperationSpec {
             automation_posture: automation_for_posture(posture),
             result_schema: result_schema_for_posture(posture),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaOperationInputSchema {
+    pub operation: VidaOperation,
+    pub schema_ref: VidaSchemaRef,
+    pub fields: Vec<VidaOperationInputField>,
+}
+
+impl VidaOperationInputSchema {
+    #[must_use]
+    pub fn field(&self, field_id: &str) -> Option<&VidaOperationInputField> {
+        self.fields.iter().find(|field| field.field_id == field_id)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaOperationInputField {
+    pub field_id: String,
+    pub payload_key: String,
+    pub label: String,
+    pub value_kind: VidaOperationInputValueKind,
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli_flag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enum_values: Vec<String>,
+    pub help: String,
+    pub tui_control: VidaOperationTuiControl,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VidaOperationInputValueKind {
+    String,
+    Path,
+    Boolean,
+    EnumOne,
+    JsonObject,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VidaOperationTuiControl {
+    TextInput,
+    PathInput,
+    Checkbox,
+    Select,
+    JsonEditor,
+}
+
+fn input_schema_for_spec(spec: &VidaOperationSpec) -> VidaOperationInputSchema {
+    let mut fields = Vec::new();
+    if spec.requires_project_ref {
+        fields.push(project_ref_field());
+    }
+    fields.extend(input_fields_for_operation(&spec.operation.0));
+    VidaOperationInputSchema {
+        operation: spec.operation.clone(),
+        schema_ref: VidaSchemaRef {
+            schema_id: VidaSchemaId(format!("{}.input", spec.operation.0)),
+            version: VidaSchemaVersion(1),
+        },
+        fields,
+    }
+}
+
+fn input_fields_for_operation(operation_id: &str) -> Vec<VidaOperationInputField> {
+    use operations::*;
+
+    match operation_id {
+        EVENTS_SINCE => vec![field(
+            "cursor",
+            "cursor",
+            "Cursor",
+            VidaOperationInputValueKind::String,
+            false,
+            Some("--cursor"),
+            Some("latest"),
+            "Event cursor to read from.",
+            VidaOperationTuiControl::TextInput,
+        )],
+        SERVICE_LIFECYCLE_PLAN => vec![field(
+            "mode",
+            "mode",
+            "Mode",
+            VidaOperationInputValueKind::EnumOne,
+            false,
+            Some("--mode"),
+            Some("dry_run"),
+            "Lifecycle planning mode.",
+            VidaOperationTuiControl::Select,
+        )
+        .with_enum_values(["dry_run"])],
+        WIZARD_SCHEMA_GET
+        | WIZARD_SESSION_START
+        | WIZARD_SESSION_GET
+        | WIZARD_SESSION_UPDATE_INPUT
+        | WIZARD_SESSION_VALIDATE
+        | WIZARD_SESSION_DIFF
+        | WIZARD_SESSION_APPLY => {
+            let mut fields = vec![field(
+                "wizard_kind",
+                "wizard_kind",
+                "Wizard kind",
+                VidaOperationInputValueKind::EnumOne,
+                false,
+                Some("--kind"),
+                Some("project_init"),
+                "Wizard schema kind.",
+                VidaOperationTuiControl::Select,
+            )
+            .with_enum_values(["project_init"])];
+            if matches!(
+                operation_id,
+                WIZARD_SESSION_START | WIZARD_SESSION_VALIDATE | WIZARD_SESSION_DIFF
+            ) {
+                fields.push(field(
+                    "dry_run",
+                    "dry_run",
+                    "Dry run",
+                    VidaOperationInputValueKind::Boolean,
+                    false,
+                    Some("--dry-run"),
+                    Some("true"),
+                    "Plan or validate without applying project changes.",
+                    VidaOperationTuiControl::Checkbox,
+                ));
+            }
+            fields
+        }
+        JOBS_GET => vec![field(
+            "job_id",
+            "job_id",
+            "Job id",
+            VidaOperationInputValueKind::String,
+            false,
+            Some("--job"),
+            Some("latest"),
+            "Job id to inspect.",
+            VidaOperationTuiControl::TextInput,
+        )],
+        RECEIPTS_GET | MATERIALIZATION_RECEIPTS_LIST => vec![field(
+            "receipt_id",
+            "receipt_id",
+            "Receipt id",
+            VidaOperationInputValueKind::String,
+            false,
+            Some("--receipt"),
+            Some("latest"),
+            "Receipt id to inspect.",
+            VidaOperationTuiControl::TextInput,
+        )],
+        _ => Vec::new(),
+    }
+}
+
+fn project_ref_field() -> VidaOperationInputField {
+    field(
+        "project",
+        "project",
+        "Project",
+        VidaOperationInputValueKind::String,
+        true,
+        Some("--project"),
+        Some("vida-stack"),
+        "Project id or registry entry to resolve.",
+        VidaOperationTuiControl::TextInput,
+    )
+}
+
+fn field(
+    field_id: &str,
+    payload_key: &str,
+    label: &str,
+    value_kind: VidaOperationInputValueKind,
+    required: bool,
+    cli_flag: Option<&str>,
+    default_value: Option<&str>,
+    help: &str,
+    tui_control: VidaOperationTuiControl,
+) -> VidaOperationInputField {
+    VidaOperationInputField {
+        field_id: field_id.to_string(),
+        payload_key: payload_key.to_string(),
+        label: label.to_string(),
+        value_kind,
+        required,
+        cli_flag: cli_flag.map(str::to_string),
+        default_value: default_value.map(str::to_string),
+        enum_values: Vec::new(),
+        help: help.to_string(),
+        tui_control,
+    }
+}
+
+impl VidaOperationInputField {
+    fn with_enum_values<const N: usize>(mut self, values: [&str; N]) -> Self {
+        self.enum_values = values.into_iter().map(str::to_string).collect();
+        self
     }
 }
 
@@ -2747,6 +2998,48 @@ mod tests {
                 "registry should include `{operation_id}`"
             );
         }
+    }
+
+    #[test]
+    fn operation_input_schema_defines_project_field_once_for_cli_and_tui() {
+        let schema = operation_input_schema(operations::WIZARD_SCHEMA_GET)
+            .expect("wizard schema operation should expose input schema");
+        let project = schema
+            .fields
+            .iter()
+            .find(|field| field.field_id == "project")
+            .expect("project field");
+        assert_eq!(project.label, "Project");
+        assert!(project.required);
+        assert_eq!(project.payload_key, "project");
+        assert_eq!(project.cli_flag.as_deref(), Some("--project"));
+        assert_eq!(project.tui_control, VidaOperationTuiControl::TextInput);
+
+        let wizard_kind = schema
+            .fields
+            .iter()
+            .find(|field| field.field_id == "wizard_kind")
+            .expect("wizard kind field");
+        assert_eq!(wizard_kind.cli_flag.as_deref(), Some("--kind"));
+        assert_eq!(wizard_kind.default_value.as_deref(), Some("project_init"));
+        assert_eq!(wizard_kind.tui_control, VidaOperationTuiControl::Select);
+    }
+
+    #[test]
+    fn operation_catalog_exposes_input_schemas_for_external_clients() {
+        let catalog = mvp_operation_catalog();
+        let wizard = catalog
+            .iter()
+            .find(|entry| entry.operation.0 == operations::WIZARD_SCHEMA_GET)
+            .expect("wizard schema catalog entry");
+        let field_ids = wizard
+            .input_schema
+            .fields
+            .iter()
+            .map(|field| field.field_id.as_str())
+            .collect::<Vec<_>>();
+        assert!(field_ids.contains(&"project"));
+        assert!(field_ids.contains(&"wizard_kind"));
     }
 
     #[test]

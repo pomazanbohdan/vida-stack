@@ -3,9 +3,9 @@ use crate::vida_client::{
 };
 use serde_json::json;
 use vida_contracts::{
-    mvp_operation_registry, operations, VidaCommandEnvelope, VidaCommandResponse, VidaEvent,
-    VidaEventCursor, VidaProblem, VidaProblemSeverity, VidaProjectId, VidaProjectRef,
-    VidaRequestId, VidaSessionId,
+    mvp_operation_catalog, operation_input_schema, operations, VidaCommandEnvelope,
+    VidaCommandResponse, VidaEvent, VidaEventCursor, VidaProblem, VidaProblemSeverity,
+    VidaProjectId, VidaProjectRef, VidaRequestId, VidaSessionId,
 };
 
 #[derive(Debug, Clone)]
@@ -70,6 +70,8 @@ impl FixtureVidaClient {
     }
 
     fn capabilities(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
+        let operation_catalog =
+            serde_json::to_value(mvp_operation_catalog()).expect("serialize operation catalog");
         pass_response(
             envelope,
             json!({
@@ -86,25 +88,14 @@ impl FixtureVidaClient {
                     "materialization_read",
                     "materialization_plan",
                     "orchestration_control_plane_read"
-                ]
+                ],
+                "operation_catalog": operation_catalog
             }),
         )
     }
 
     fn endpoint_status(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {
-        let endpoints: Vec<_> = mvp_operation_registry()
-            .into_iter()
-            .map(|spec| {
-                json!({
-                    "operation": spec.operation.0,
-                    "scope": spec.scope,
-                    "posture": spec.posture,
-                    "requires_project_ref": spec.requires_project_ref,
-                    "requires_apply_token": spec.requires_apply_token,
-                    "required_capabilities": spec.required_capabilities
-                })
-            })
-            .collect();
+        let endpoints = mvp_operation_catalog();
         pass_response(
             envelope,
             json!({
@@ -283,6 +274,7 @@ impl FixtureVidaClient {
             envelope,
             json!({
                 "schema_id": "vida.project_init.fixture.v1",
+                "operation_input_schema": operation_input_schema(operations::WIZARD_SCHEMA_GET),
                 "wizard_kind": envelope
                     .payload
                     .get("wizard_kind")
