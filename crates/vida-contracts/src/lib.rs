@@ -1,5 +1,5 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 pub const VIDA_CONTRACTS_SCHEMA_VERSION: &str = "vida-contracts-v1";
 pub const VIDA_COMMAND_PROTOCOL_VERSION: &str = "vida-command-v1";
@@ -45,14 +45,138 @@ pub mod operations {
     pub const SERVICE_LIFECYCLE_APPLY: &str = "vida.service.lifecycle.apply";
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VidaLegacyOperationAlias {
+    pub alias: String,
+    pub canonical_operation: VidaOperation,
+    pub deprecated_since: String,
+    pub removal_target: Option<String>,
+    pub receipt_code: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VidaOperationAliasResolution {
+    Canonical {
+        operation: VidaOperation,
+    },
+    Alias {
+        alias: String,
+        operation: VidaOperation,
+        receipt: VidaLegacyOperationAlias,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VidaOperationAliasProblem {
+    pub alias: String,
+    pub blocker_code: String,
+    pub message: String,
+    pub candidates: Vec<VidaOperation>,
+}
+
+impl std::fmt::Display for VidaOperationAliasProblem {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+impl std::error::Error for VidaOperationAliasProblem {}
+
+pub fn legacy_operation_aliases() -> Vec<VidaLegacyOperationAlias> {
+    use operations::*;
+    [
+        ("service.hello", SERVICE_HELLO),
+        ("service.status", SERVICE_STATUS),
+        ("project.resolve", PROJECT_RESOLVE),
+        ("project.status", PROJECT_STATUS),
+        ("task.apply", TASK_APPLY),
+        ("run.advance", RUN_ADVANCE),
+        ("completion.record", COMPLETION_RECORD),
+        ("packet.dispatch", PACKET_DISPATCH),
+        ("claim.acquire", CLAIM_ACQUIRE),
+        ("projection.rebuild", PROJECTION_REBUILD),
+        ("repair.apply", REPAIR_APPLY),
+    ]
+    .into_iter()
+    .map(|(alias, canonical)| VidaLegacyOperationAlias {
+        alias: alias.to_string(),
+        canonical_operation: VidaOperation(canonical.to_string()),
+        deprecated_since: "vida-contracts-v1".to_string(),
+        removal_target: Some("Use the vida.* canonical operation id.".to_string()),
+        receipt_code: "legacy_operation_alias_used".to_string(),
+    })
+    .collect()
+}
+
+pub fn resolve_operation_alias(
+    operation_id: &str,
+) -> Result<VidaOperationAliasResolution, VidaOperationAliasProblem> {
+    if mvp_operation_registry()
+        .iter()
+        .any(|spec| spec.operation.0 == operation_id)
+    {
+        return Ok(VidaOperationAliasResolution::Canonical {
+            operation: VidaOperation(operation_id.to_string()),
+        });
+    }
+
+    if operation_id == "status" {
+        return Err(VidaOperationAliasProblem {
+            alias: operation_id.to_string(),
+            blocker_code: "ambiguous_legacy_operation_alias".to_string(),
+            message:
+                "Legacy operation alias `status` is ambiguous; use a canonical vida.* operation id."
+                    .to_string(),
+            candidates: vec![
+                VidaOperation(operations::SERVICE_STATUS.to_string()),
+                VidaOperation(operations::PROJECT_STATUS.to_string()),
+            ],
+        });
+    }
+
+    let matches: Vec<_> = legacy_operation_aliases()
+        .into_iter()
+        .filter(|alias| alias.alias == operation_id)
+        .collect();
+
+    match matches.as_slice() {
+        [receipt] => Ok(VidaOperationAliasResolution::Alias {
+            alias: operation_id.to_string(),
+            operation: receipt.canonical_operation.clone(),
+            receipt: receipt.clone(),
+        }),
+        [] => Ok(VidaOperationAliasResolution::Canonical {
+            operation: VidaOperation(operation_id.to_string()),
+        }),
+        receipts => Err(VidaOperationAliasProblem {
+            alias: operation_id.to_string(),
+            blocker_code: "ambiguous_legacy_operation_alias".to_string(),
+            message: format!(
+                "Legacy operation alias `{operation_id}` resolves to multiple canonical operations."
+            ),
+            candidates: receipts
+                .iter()
+                .map(|receipt| receipt.canonical_operation.clone())
+                .collect(),
+        }),
+    }
+}
+
+pub fn legacy_operation_alias_receipt(operation_id: &str) -> Option<VidaLegacyOperationAlias> {
+    match resolve_operation_alias(operation_id).ok()? {
+        VidaOperationAliasResolution::Alias { receipt, .. } => Some(receipt),
+        VidaOperationAliasResolution::Canonical { .. } => None,
+    }
+}
+
 pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
+    use operations::*;
     use VidaCapabilityScope::{
         ClaimWrite, CompletionRecord, MaterializationPlan, MaterializationRead,
         OrchestrationControlPlaneRead, PacketDispatch, ProjectRegistryRead, ProjectionRebuild,
         ReadEvents, ReadReceipts, ReadStatus, RepairApply, RunAdvance, ServiceAdmin,
         ServiceInstallApply, ServiceInstallPlan, TaskApply, WizardApply, WizardPlan, WizardRead,
     };
-    use operations::*;
     vec![
         VidaOperationSpec::read_with_capabilities(
             SERVICE_HELLO,
@@ -229,6 +353,11 @@ pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
 }
 
 pub fn operation_spec(operation_id: &str) -> Option<VidaOperationSpec> {
+    let operation_id = match resolve_operation_alias(operation_id) {
+        Ok(VidaOperationAliasResolution::Canonical { operation })
+        | Ok(VidaOperationAliasResolution::Alias { operation, .. }) => operation.0,
+        Err(_) => return None,
+    };
     mvp_operation_registry()
         .into_iter()
         .find(|spec| spec.operation.0 == operation_id)
@@ -642,9 +771,23 @@ pub struct VidaRequestId(pub String);
 #[serde(transparent)]
 pub struct VidaProjectId(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, JsonSchema)]
 #[serde(transparent)]
 pub struct VidaOperation(pub String);
+
+impl<'de> Deserialize<'de> for VidaOperation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match resolve_operation_alias(&value) {
+            Ok(VidaOperationAliasResolution::Canonical { operation })
+            | Ok(VidaOperationAliasResolution::Alias { operation, .. }) => Ok(operation),
+            Err(problem) => Err(serde::de::Error::custom(problem.message)),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
@@ -753,7 +896,7 @@ pub enum VidaClaimKind {
 }
 
 #[serde_with::skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct VidaCommandEnvelope {
     pub schema_version: String,
     pub protocol_version: String,
@@ -781,6 +924,120 @@ pub struct VidaCommandEnvelope {
     pub idempotency_key: Option<VidaIdempotencyKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apply_token: Option<VidaApplyToken>,
+}
+
+impl VidaCommandEnvelope {
+    pub fn canonicalize_operation_alias(&mut self) -> Result<(), VidaOperationAliasProblem> {
+        match resolve_operation_alias(&self.operation.0)? {
+            VidaOperationAliasResolution::Canonical { operation } => {
+                self.operation = operation;
+                Ok(())
+            }
+            VidaOperationAliasResolution::Alias {
+                operation, receipt, ..
+            } => {
+                self.operation = operation;
+                self.correlation = Some(correlation_with_alias_receipt(
+                    self.correlation.take(),
+                    receipt,
+                ));
+                Ok(())
+            }
+        }
+    }
+}
+
+fn correlation_with_alias_receipt(
+    correlation: Option<serde_json::Value>,
+    receipt: VidaLegacyOperationAlias,
+) -> serde_json::Value {
+    let receipt = serde_json::to_value(receipt)
+        .expect("legacy operation alias receipt should serialize to JSON");
+    match correlation {
+        Some(serde_json::Value::Object(mut object)) => {
+            object.insert("operation_alias_receipt".to_string(), receipt);
+            serde_json::Value::Object(object)
+        }
+        Some(value) => serde_json::json!({
+            "operation_alias_receipt": receipt,
+            "original_correlation": value
+        }),
+        None => serde_json::json!({
+            "operation_alias_receipt": receipt
+        }),
+    }
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Deserialize)]
+struct VidaCommandEnvelopeWire {
+    schema_version: String,
+    protocol_version: String,
+    operation: String,
+    session_id: VidaSessionId,
+    request_id: VidaRequestId,
+    #[serde(default)]
+    command_id: Option<VidaCommandRef>,
+    #[serde(default)]
+    causation_id: Option<VidaCommandRef>,
+    #[serde(default)]
+    expected_stream_version: Option<VidaStreamVersion>,
+    #[serde(default)]
+    consistency: Option<VidaConsistencyRequirement>,
+    #[serde(default)]
+    deadline: Option<VidaTimestamp>,
+    client_kind: VidaClientKind,
+    project_ref: Option<VidaProjectRef>,
+    claim_kind: Option<VidaClaimKind>,
+    #[serde(default)]
+    payload: serde_json::Value,
+    #[serde(default)]
+    correlation: Option<serde_json::Value>,
+    #[serde(default)]
+    idempotency_key: Option<VidaIdempotencyKey>,
+    #[serde(default)]
+    apply_token: Option<VidaApplyToken>,
+}
+
+impl<'de> Deserialize<'de> for VidaCommandEnvelope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = VidaCommandEnvelopeWire::deserialize(deserializer)?;
+        let (operation, correlation) = match resolve_operation_alias(&wire.operation) {
+            Ok(VidaOperationAliasResolution::Canonical { operation }) => {
+                (operation, wire.correlation)
+            }
+            Ok(VidaOperationAliasResolution::Alias {
+                operation, receipt, ..
+            }) => (
+                operation,
+                Some(correlation_with_alias_receipt(wire.correlation, receipt)),
+            ),
+            Err(problem) => return Err(serde::de::Error::custom(problem.message)),
+        };
+
+        Ok(Self {
+            schema_version: wire.schema_version,
+            protocol_version: wire.protocol_version,
+            operation,
+            session_id: wire.session_id,
+            request_id: wire.request_id,
+            command_id: wire.command_id,
+            causation_id: wire.causation_id,
+            expected_stream_version: wire.expected_stream_version,
+            consistency: wire.consistency,
+            deadline: wire.deadline,
+            client_kind: wire.client_kind,
+            project_ref: wire.project_ref,
+            claim_kind: wire.claim_kind,
+            payload: wire.payload,
+            correlation,
+            idempotency_key: wire.idempotency_key,
+            apply_token: wire.apply_token,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2453,10 +2710,9 @@ mod tests {
         assert_eq!(spec.scope, VidaOperationScope::Project);
         assert!(spec.requires_project_ref);
         assert!(!spec.requires_apply_token);
-        assert!(
-            spec.required_capabilities
-                .contains(&VidaCapabilityScope::WizardPlan)
-        );
+        assert!(spec
+            .required_capabilities
+            .contains(&VidaCapabilityScope::WizardPlan));
     }
 
     #[test]
@@ -2491,6 +2747,112 @@ mod tests {
                 "registry should include `{operation_id}`"
             );
         }
+    }
+
+    #[test]
+    fn retained_legacy_operation_aliases_reach_canonical_operation_specs() {
+        for receipt in legacy_operation_aliases() {
+            let canonical =
+                operation_spec(&receipt.canonical_operation.0).expect("canonical operation spec");
+            let alias = operation_spec(&receipt.alias).expect("legacy alias operation spec");
+
+            assert_eq!(alias, canonical, "alias {}", receipt.alias);
+        }
+    }
+
+    #[test]
+    fn legacy_operation_alias_matrix_deserializes_to_canonical_command_envelopes() {
+        for receipt in legacy_operation_aliases() {
+            let canonical =
+                operation_spec(&receipt.canonical_operation.0).expect("canonical operation spec");
+            let canonical_json = command_envelope_json(&receipt.canonical_operation.0, &canonical);
+            let alias_json = command_envelope_json(&receipt.alias, &canonical);
+
+            let canonical: VidaCommandEnvelope =
+                serde_json::from_value(canonical_json).expect("canonical command envelope");
+            let alias: VidaCommandEnvelope =
+                serde_json::from_value(alias_json).expect("alias command envelope");
+
+            assert_eq!(
+                alias.operation, canonical.operation,
+                "alias {} should canonicalize",
+                receipt.alias
+            );
+            validate_command_envelope_domain(&alias).expect("alias envelope should validate");
+            assert_alias_receipt(&alias, &receipt);
+        }
+    }
+
+    fn command_envelope_json(operation: &str, spec: &VidaOperationSpec) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "schema_version": VIDA_CONTRACTS_SCHEMA_VERSION,
+            "protocol_version": VIDA_COMMAND_PROTOCOL_VERSION,
+            "operation": operation,
+            "session_id": "session-1",
+            "request_id": "request-1",
+            "client_kind": "cli",
+            "project_ref": null,
+            "claim_kind": serde_json::to_value(&spec.required_claim)
+                .expect("claim kind serializes"),
+            "payload": {}
+        });
+
+        if spec.requires_idempotency_key {
+            value["idempotency_key"] = serde_json::json!("idem-1");
+        }
+        if spec.requires_apply_token {
+            value["apply_token"] = serde_json::json!("apply-1");
+        }
+        value
+    }
+
+    fn assert_alias_receipt(envelope: &VidaCommandEnvelope, expected: &VidaLegacyOperationAlias) {
+        let receipt = envelope
+            .correlation
+            .as_ref()
+            .and_then(|value| value.get("operation_alias_receipt"))
+            .expect("alias receipt should be observable in command correlation");
+
+        assert_eq!(receipt["alias"], expected.alias);
+        assert_eq!(
+            receipt["canonical_operation"],
+            expected.canonical_operation.0
+        );
+        assert_eq!(receipt["receipt_code"], "legacy_operation_alias_used");
+    }
+
+    #[test]
+    fn legacy_operation_alias_receipt_is_measurable_and_serializable() {
+        let receipt = legacy_operation_alias_receipt("task.apply").expect("alias receipt");
+        let receipt_json = serde_json::to_value(&receipt).expect("receipt serializes");
+
+        assert_eq!(receipt_json["alias"], "task.apply");
+        assert_eq!(receipt_json["canonical_operation"], operations::TASK_APPLY);
+        assert_eq!(receipt_json["receipt_code"], "legacy_operation_alias_used");
+        assert!(receipt_json["deprecated_since"].is_string());
+    }
+
+    #[test]
+    fn ambiguous_legacy_operation_alias_fails_before_command_envelope() {
+        let error = serde_json::from_value::<VidaCommandEnvelope>(serde_json::json!({
+            "schema_version": VIDA_CONTRACTS_SCHEMA_VERSION,
+            "protocol_version": VIDA_COMMAND_PROTOCOL_VERSION,
+            "operation": "status",
+            "session_id": "session-1",
+            "request_id": "request-1",
+            "client_kind": "cli",
+            "project_ref": null,
+            "claim_kind": "observe",
+            "payload": {}
+        }))
+        .expect_err("ambiguous alias should fail while parsing the envelope");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Legacy operation alias `status` is ambiguous"),
+            "{error}"
+        );
     }
 
     #[test]

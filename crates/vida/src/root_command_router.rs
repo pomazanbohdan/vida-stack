@@ -78,23 +78,11 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         }
         Some(Command::Session(args)) => session_surface::run_session(args).await,
         Some(Command::Quality(args)) => quality_surface::run_quality(args).await,
-        Some(Command::Consume(args)) => {
-            let mut prefixed = vec!["consume".to_string()];
-            prefixed.extend(args.args);
-            run_taskflow_proxy(super::ProxyArgs { args: prefixed }).await
-        }
+        Some(Command::Consume(args)) => run_legacy_taskflow_root_alias("consume", args).await,
         Some(Command::Lane(args)) => lane_surface::run_lane(args).await,
         Some(Command::Approval(args)) => approval_surface::run_approval(args).await,
-        Some(Command::Recovery(args)) => {
-            let mut prefixed = vec!["recovery".to_string()];
-            prefixed.extend(args.args);
-            run_taskflow_proxy(super::ProxyArgs { args: prefixed }).await
-        }
-        Some(Command::Route(args)) => {
-            let mut prefixed = vec!["route".to_string()];
-            prefixed.extend(args.args);
-            run_taskflow_proxy(super::ProxyArgs { args: prefixed }).await
-        }
+        Some(Command::Recovery(args)) => run_legacy_taskflow_root_alias("recovery", args).await,
+        Some(Command::Route(args)) => run_legacy_taskflow_root_alias("route", args).await,
         Some(Command::Release(args)) => match args.command {
             ReleaseCommand::Install(args) => release_surface::run_release_install(args),
         },
@@ -108,6 +96,19 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
     );
     timing.finalize_and_emit(exit_code);
     exit_code
+}
+
+async fn run_legacy_taskflow_root_alias(alias: &'static str, args: super::ProxyArgs) -> ExitCode {
+    match crate::compat::resolve_legacy_root_alias(alias, args) {
+        Ok(resolution) => {
+            eprintln!("{}", resolution.deprecation_notice);
+            run_taskflow_proxy(resolution.canonical_args).await
+        }
+        Err(error) => {
+            eprintln!("{}: {}", error.blocker_code, error.message);
+            error.exit_code
+        }
+    }
 }
 
 async fn run_state(args: StateArgs) -> ExitCode {

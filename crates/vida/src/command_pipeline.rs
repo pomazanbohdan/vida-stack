@@ -61,7 +61,7 @@ impl<H> VidaCommandPipeline<H> {
 }
 
 impl<H: VidaClient> VidaCommandPipeline<H> {
-    pub(crate) fn execute(&self, envelope: VidaCommandEnvelope) -> VidaCommandResponse {
+    pub(crate) fn execute(&self, mut envelope: VidaCommandEnvelope) -> VidaCommandResponse {
         let mut trace = Vec::with_capacity(COMMAND_PIPELINE_LAYER_ORDER.len());
 
         trace.push(CommandPipelineLayer::Trace);
@@ -84,6 +84,17 @@ impl<H: VidaClient> VidaCommandPipeline<H> {
                 "Command protocol version mismatch",
                 "protocol_version",
                 "Use the current VIDA command protocol version.",
+            );
+        }
+        if let Err(problem) = envelope.canonicalize_operation_alias() {
+            let blocker_code = problem.blocker_code;
+            let message = problem.message;
+            return blocked_response(
+                envelope,
+                &blocker_code,
+                "Legacy operation alias is ambiguous",
+                "operation",
+                &message,
             );
         }
 
@@ -206,5 +217,95 @@ fn layer_name(layer: CommandPipelineLayer) -> &'static str {
         CommandPipelineLayer::Concurrency => "concurrency",
         CommandPipelineLayer::Handler => "handler",
         CommandPipelineLayer::ResponseMapping => "response_mapping",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VidaCommandPipeline;
+    use crate::vida_client::{pass_response, VidaClient};
+    use serde_json::json;
+    use vida_contracts::{
+        operations, VidaClaimKind, VidaClientKind, VidaCommandEnvelope, VidaCommandResponse,
+        VidaOperation, VidaProjectRef, VidaRequestId, VidaResponseStatus, VidaSessionId,
+        VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
+    };
+
+    #[derive(Debug, Clone)]
+    struct EchoOperationClient;
+
+    impl VidaClient for EchoOperationClient {
+        fn execute(&self, envelope: VidaCommandEnvelope) -> VidaCommandResponse {
+            let alias_receipt = envelope
+                .correlation
+                .as_ref()
+                .and_then(|value| value.get("operation_alias_receipt"))
+                .cloned();
+            pass_response(
+                &envelope,
+                json!({
+                    "operation": envelope.operation.0,
+                    "alias_receipt": alias_receipt
+                }),
+            )
+        }
+    }
+
+    fn service_status_envelope(operation: &str) -> VidaCommandEnvelope {
+        VidaCommandEnvelope {
+            schema_version: VIDA_CONTRACTS_SCHEMA_VERSION.to_string(),
+            protocol_version: VIDA_COMMAND_PROTOCOL_VERSION.to_string(),
+            operation: VidaOperation(operation.to_string()),
+            session_id: VidaSessionId("session-1".to_string()),
+            request_id: VidaRequestId("request-1".to_string()),
+            command_id: None,
+            causation_id: None,
+            expected_stream_version: None,
+            consistency: None,
+            deadline: None,
+            client_kind: VidaClientKind::Cli,
+            project_ref: None::<VidaProjectRef>,
+            claim_kind: Some(VidaClaimKind::SharedRead),
+            payload: json!({}),
+            correlation: None,
+            idempotency_key: None,
+            apply_token: None,
+        }
+    }
+
+    #[test]
+    fn pipeline_routes_direct_legacy_alias_to_canonical_handler_operation() {
+        let pipeline = VidaCommandPipeline::new(EchoOperationClient);
+        let canonical = pipeline.execute(service_status_envelope(operations::SERVICE_STATUS));
+        let alias = pipeline.execute(service_status_envelope("service.status"));
+
+        assert_eq!(canonical.status, VidaResponseStatus::Pass);
+        assert_eq!(alias.status, VidaResponseStatus::Pass);
+        assert_eq!(
+            alias.result.as_ref().expect("alias result")["operation"],
+            canonical.result.as_ref().expect("canonical result")["operation"]
+        );
+        assert_eq!(
+            alias.result.as_ref().expect("alias result")["alias_receipt"]["alias"],
+            "service.status"
+        );
+    }
+
+    #[test]
+    fn pipeline_blocks_ambiguous_legacy_alias_before_handler() {
+        let pipeline = VidaCommandPipeline::new(EchoOperationClient);
+        let response = pipeline.execute(VidaCommandEnvelope {
+            operation: VidaOperation("status".to_string()),
+            claim_kind: Some(VidaClaimKind::SharedRead),
+            idempotency_key: None,
+            apply_token: None,
+            ..service_status_envelope(operations::SERVICE_STATUS)
+        });
+
+        assert_eq!(response.status, VidaResponseStatus::Blocked);
+        assert_eq!(
+            response.blockers[0].code,
+            "ambiguous_legacy_operation_alias"
+        );
     }
 }
