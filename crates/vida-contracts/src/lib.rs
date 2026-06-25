@@ -1388,6 +1388,53 @@ pub struct VidaProjectionCheckpoint {
     pub updated_at: VidaTimestamp,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionDriftClass {
+    #[serde(rename = "june_2026_pass_result_blocked_run")]
+    June2026PassResultBlockedRun,
+    ProjectionFailureRecorded,
+    SafeProjectionLag,
+    PassResultLegacyContradiction,
+    UnrepairableProjectionFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectionDriftFinding {
+    pub drift_class: ProjectionDriftClass,
+    pub blocker_code: String,
+    pub projection_id: String,
+    pub source_event_cursor: Option<VidaEventCursor>,
+    pub failure_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectionRepairPlan {
+    pub plan_id: String,
+    pub drift_class: ProjectionDriftClass,
+    pub state_mutation_allowed: bool,
+    pub required_existing_event_cursors: Vec<VidaEventCursor>,
+    pub actions: Vec<String>,
+    #[serde(default)]
+    pub auto_repair_allowed: bool,
+    #[serde(default)]
+    pub canonical_passed_evidence_required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectionRepairReceipt {
+    pub plan_id: String,
+    pub applied: bool,
+    pub idempotency_key: String,
+    pub event_backing_cursors: Vec<VidaEventCursor>,
+    #[serde(default)]
+    pub applied_actions: Vec<String>,
+    #[serde(default)]
+    pub before_health_hash: String,
+    #[serde(default)]
+    pub after_health_hash: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct VidaReceipt {
     pub receipt_id: VidaReceiptId,
