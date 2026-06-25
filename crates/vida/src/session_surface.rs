@@ -154,7 +154,7 @@ async fn build_session_triage_payload(command: &SessionTriageArgs) -> Value {
 
     let explicit_active_target = command.task_id.as_ref().and(target_task).filter(|task| {
         task.status == "in_progress"
-            && !crate::state_store::work_item_is_program_container(&task.issue_type)
+            && crate::state_store::work_item_is_active_bounded_unit_candidate(&task.issue_type)
     });
     let active_bounded_unit = explicit_active_target
         .or_else(|| {
@@ -305,7 +305,9 @@ fn active_bounded_task_candidates(tasks: &[TaskRecord]) -> Vec<&TaskRecord> {
     let mut active = tasks
         .iter()
         .filter(|task| task.status == "in_progress")
-        .filter(|task| !crate::state_store::work_item_is_program_container(&task.issue_type))
+        .filter(|task| {
+            crate::state_store::work_item_is_active_bounded_unit_candidate(&task.issue_type)
+        })
         .collect::<Vec<_>>();
     active.sort_by(|left, right| {
         left.priority
@@ -340,6 +342,7 @@ fn task_tree_summary(tasks: &[TaskRecord], root: Option<&TaskRecord>) -> Value {
     let direct_children = tasks
         .iter()
         .filter(|task| parent_task_id(task) == Some(root.id.as_str()))
+        .filter(|task| crate::state_store::work_item_contributes_to_task_stats(&task.issue_type))
         .collect::<Vec<_>>();
     let mut status_counts = BTreeMap::new();
     for child in &direct_children {
@@ -380,4 +383,79 @@ fn compact_run_graph_status(status: &crate::state_store::RunGraphStatus) -> Valu
         "recovery_ready": status.recovery_ready,
         "resume_target": status.resume_target,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{active_bounded_task_candidates, task_tree_summary};
+    use crate::state_store::{TaskDependencyRecord, TaskRecord};
+
+    fn task(id: &str, status: &str, issue_type: &str, parent_id: Option<&str>) -> TaskRecord {
+        TaskRecord {
+            id: id.to_string(),
+            display_id: None,
+            title: id.to_string(),
+            description: String::new(),
+            status: status.to_string(),
+            priority: 1,
+            issue_type: issue_type.to_string(),
+            created_at: "0".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "0".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: Default::default(),
+            planner_metadata: Default::default(),
+            provider_mapping: None,
+            dependencies: parent_id
+                .map(|parent_id| {
+                    vec![TaskDependencyRecord {
+                        issue_id: id.to_string(),
+                        depends_on_id: parent_id.to_string(),
+                        edge_type: "parent-child".to_string(),
+                        created_at: "0".to_string(),
+                        created_by: "test".to_string(),
+                        metadata: "{}".to_string(),
+                        thread_id: String::new(),
+                    }]
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn session_active_candidates_exclude_step_and_todo_alias() {
+        let rows = vec![
+            task("active-task", "in_progress", "task", None),
+            task("active-step", "in_progress", "step", Some("active-task")),
+            task("active-todo", "in_progress", "todo", Some("active-task")),
+        ];
+
+        let active = active_bounded_task_candidates(&rows);
+
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, "active-task");
+    }
+
+    #[test]
+    fn session_tree_summary_excludes_execution_steps_from_counts() {
+        let root = task("root", "in_progress", "task", None);
+        let rows = vec![
+            root.clone(),
+            task("delivery-child", "open", "subtask", Some("root")),
+            task("step-child", "in_progress", "step", Some("root")),
+            task("todo-child", "open", "todo", Some("root")),
+        ];
+
+        let summary = task_tree_summary(&rows, Some(&root));
+
+        assert_eq!(summary["direct_child_count"], 1);
+        assert_eq!(summary["open_or_in_progress_count"], 1);
+        assert_eq!(summary["status_counts"]["open"], 1);
+    }
 }

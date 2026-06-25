@@ -13985,6 +13985,7 @@ fn dev_team_dispatch_keeps_configured_first_step_despite_unrelated_stale_missing
             "--dev-team",
             "--lanes",
             "1",
+            "--full",
             "--json",
         ],
         &state_dir,

@@ -307,7 +307,7 @@ impl StateStore {
         let mut response = match self.db.query(query).await {
             Ok(response) => response,
             Err(error) if task_runtime_reference_missing_optional_table(&error.to_string()) => {
-                return Ok(Vec::new())
+                return Ok(Vec::new());
             }
             Err(error) => return Err(error.into()),
         };

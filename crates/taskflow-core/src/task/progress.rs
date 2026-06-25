@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::verify::task_verify_label_is_runtime_proof_blocker;
-use crate::{TaskStatus, parse_task_status, task_status_is_closed_like};
+use crate::{
+    TaskStatus, issue_type_contributes_to_task_stats, parse_task_status, task_status_is_closed_like,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskProgressBasis {
@@ -475,26 +477,7 @@ fn task_is_program_container(task: &TaskProgressRow) -> bool {
 }
 
 fn task_contributes_to_progress(task: &TaskProgressRow) -> bool {
-    !task_is_execution_step(task)
-}
-
-fn task_is_execution_step(task: &TaskProgressRow) -> bool {
-    matches!(
-        normalize_issue_type(&task.issue_type).as_str(),
-        "step" | "todo"
-    )
-}
-
-fn normalize_issue_type(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .chars()
-        .map(|ch| match ch {
-            ' ' | '-' => '_',
-            _ => ch,
-        })
-        .collect()
+    issue_type_contributes_to_task_stats(&task.issue_type)
 }
 
 #[cfg(test)]

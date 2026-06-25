@@ -2716,9 +2716,14 @@ fn task_close_epic_progress_summary(
             .unwrap_or(&[]);
         let tasks = children
             .iter()
+            .filter(|task| state_store::work_item_contributes_to_task_stats(&task.issue_type))
             .take(TASK_CLOSE_EPIC_PROGRESS_CHILD_LIMIT)
             .map(|task| task_close_epic_progress_task_row(task, &task_by_id))
             .collect::<Vec<_>>();
+        let reportable_child_count = children
+            .iter()
+            .filter(|task| state_store::work_item_contributes_to_task_stats(&task.issue_type))
+            .count();
         epic_rows.push(TaskCloseEpicProgressRow {
             epic_id: epic.id.clone(),
             epic_title: epic.title.clone(),
@@ -2727,10 +2732,10 @@ fn task_close_epic_progress_summary(
             closed_count: progress.closed_count,
             total_count: progress.descendant_count,
             percent_closed: progress.percent_closed,
-            child_task_count: children.len(),
+            child_task_count: reportable_child_count,
             reported_child_task_count: tasks.len(),
             child_task_report_limit: TASK_CLOSE_EPIC_PROGRESS_CHILD_LIMIT,
-            truncated_child_tasks: children.len() > TASK_CLOSE_EPIC_PROGRESS_CHILD_LIMIT,
+            truncated_child_tasks: reportable_child_count > TASK_CLOSE_EPIC_PROGRESS_CHILD_LIMIT,
             tasks,
         });
     }
@@ -13125,6 +13130,70 @@ mod tests {
             .expect("expanded test stack thread should spawn")
             .join()
             .expect("expanded test stack thread should complete");
+    }
+
+    fn task_record_for_progress(
+        task_id: &str,
+        status: &str,
+        issue_type: &str,
+        parent_id: Option<&str>,
+    ) -> state_store::TaskRecord {
+        state_store::TaskRecord {
+            id: task_id.to_string(),
+            display_id: None,
+            title: task_id.to_string(),
+            description: String::new(),
+            status: status.to_string(),
+            priority: 1,
+            issue_type: issue_type.to_string(),
+            created_at: "0".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "0".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: Default::default(),
+            planner_metadata: Default::default(),
+            provider_mapping: None,
+            dependencies: parent_id
+                .map(|parent_id| {
+                    vec![state_store::TaskDependencyRecord {
+                        issue_id: task_id.to_string(),
+                        depends_on_id: parent_id.to_string(),
+                        edge_type: "parent-child".to_string(),
+                        created_at: "0".to_string(),
+                        created_by: "test".to_string(),
+                        metadata: "{}".to_string(),
+                        thread_id: String::new(),
+                    }]
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn close_epic_progress_excludes_execution_steps_from_child_report() {
+        let rows = vec![
+            task_record_for_progress("epic", "open", "epic", None),
+            task_record_for_progress("delivery-task", "closed", "task", Some("epic")),
+            task_record_for_progress("step-child", "open", "step", Some("epic")),
+            task_record_for_progress("todo-child", "open", "todo", Some("epic")),
+        ];
+
+        let summary = task_close_epic_progress_summary(&rows, "delivery-task", true)
+            .expect("epic progress should summarize");
+
+        assert_eq!(summary.epics.len(), 1);
+        let epic = &summary.epics[0];
+        assert_eq!(epic.total_count, 1);
+        assert_eq!(epic.closed_count, 1);
+        assert_eq!(epic.child_task_count, 1);
+        assert_eq!(epic.reported_child_task_count, 1);
+        assert_eq!(epic.tasks[0].task_id, "delivery-task");
     }
 
     fn task_bulk_import_command_for_test(

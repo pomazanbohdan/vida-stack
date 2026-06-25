@@ -197,15 +197,18 @@ fn task_progress_json_command(command: &str) -> String {
     }
 }
 
+fn work_item_can_parent_execution_step(issue_type: &str) -> bool {
+    let canonical_issue_type = canonical_work_item_issue_type(issue_type);
+    canonical_issue_type == "epic"
+        || work_item_is_active_bounded_unit_candidate(issue_type)
+        || work_item_is_execution_step(issue_type)
+}
+
 fn validate_work_item_kind_parent_rules(snapshot: &TaskGraphSnapshot) -> Vec<TaskGraphIssue> {
     let mut issues = Vec::new();
     for task in snapshot.rows() {
         let canonical_issue_type = canonical_work_item_issue_type(&task.issue_type);
         if canonical_issue_type != "subtask" && canonical_issue_type != "step" {
-            continue;
-        }
-        if canonical_issue_type == "step" && task.issue_type.eq_ignore_ascii_case("todo") {
-            // Deprecated `todo` rows predate step parent rules and must not force a state rewrite.
             continue;
         }
         let Some(parent_id) = task.dependencies.iter().find_map(|dependency| {
@@ -219,7 +222,7 @@ fn validate_work_item_kind_parent_rules(snapshot: &TaskGraphSnapshot) -> Vec<Tas
         let parent_canonical = canonical_work_item_issue_type(&parent.issue_type);
         let valid_parent = match canonical_issue_type.as_str() {
             "subtask" => parent_canonical == "task",
-            "step" => work_item_is_active_bounded_unit_candidate(&parent.issue_type),
+            "step" => work_item_can_parent_execution_step(&parent.issue_type),
             _ => true,
         };
         if valid_parent {
@@ -1390,6 +1393,70 @@ mod tests {
     }
 
     #[test]
+    fn validate_task_graph_allows_step_parent_migration_shapes_for_todo_alias() {
+        let mut epic = task_record("parent-epic", "open");
+        epic.issue_type = "epic".to_string();
+        let mut task = task_record("parent-task", "open");
+        task.issue_type = "task".to_string();
+        task.dependencies
+            .push(parent_child_dependency("parent-task", "parent-epic"));
+        let mut subtask = task_record("parent-subtask", "open");
+        subtask.issue_type = "subtask".to_string();
+        subtask
+            .dependencies
+            .push(parent_child_dependency("parent-subtask", "parent-task"));
+        let mut legacy_todo_parent = task_record("legacy-todo-parent", "open");
+        legacy_todo_parent.issue_type = "todo".to_string();
+        legacy_todo_parent
+            .dependencies
+            .push(parent_child_dependency("legacy-todo-parent", "parent-epic"));
+        let mut todo_under_epic = task_record("todo-under-epic", "open");
+        todo_under_epic.issue_type = "todo".to_string();
+        todo_under_epic
+            .dependencies
+            .push(parent_child_dependency("todo-under-epic", "parent-epic"));
+        let mut step_under_task = task_record("step-under-task", "open");
+        step_under_task.issue_type = "step".to_string();
+        step_under_task
+            .dependencies
+            .push(parent_child_dependency("step-under-task", "parent-task"));
+        let mut step_under_subtask = task_record("step-under-subtask", "open");
+        step_under_subtask.issue_type = "step".to_string();
+        step_under_subtask
+            .dependencies
+            .push(parent_child_dependency(
+                "step-under-subtask",
+                "parent-subtask",
+            ));
+        let mut step_under_legacy_todo = task_record("step-under-legacy-todo", "open");
+        step_under_legacy_todo.issue_type = "step".to_string();
+        step_under_legacy_todo
+            .dependencies
+            .push(parent_child_dependency(
+                "step-under-legacy-todo",
+                "legacy-todo-parent",
+            ));
+
+        let issues = StateStore::validate_task_graph_rows(&[
+            epic,
+            task,
+            subtask,
+            legacy_todo_parent,
+            todo_under_epic,
+            step_under_task,
+            step_under_subtask,
+            step_under_legacy_todo,
+        ]);
+
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.issue_type == "invalid_parent_child_kind"),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
     fn validate_task_graph_flags_non_closed_parent_required_item_without_parent() {
         let child = task_record("child", "open");
 
@@ -1504,7 +1571,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_task_graph_enforces_step_and_subtask_parent_kinds() {
+    fn validate_task_graph_enforces_subtask_parent_kinds_and_allows_step_migration_parents() {
         let mut epic = task_record("epic-parent", "open");
         epic.issue_type = "epic".to_string();
         let parent_task = task_record("task-parent", "open");
@@ -1538,11 +1605,11 @@ mod tests {
         legacy_todo
             .dependencies
             .push(parent_child_dependency("legacy-todo", "epic-parent"));
-        let mut invalid_step = task_record("invalid-step", "open");
-        invalid_step.issue_type = "step".to_string();
-        invalid_step
+        let mut epic_step = task_record("epic-step", "open");
+        epic_step.issue_type = "step".to_string();
+        epic_step
             .dependencies
-            .push(parent_child_dependency("invalid-step", "epic-parent"));
+            .push(parent_child_dependency("epic-step", "epic-parent"));
 
         let issues = StateStore::validate_task_graph_rows(&[
             epic,
@@ -1553,17 +1620,12 @@ mod tests {
             valid_step,
             valid_runtime_defect_step,
             legacy_todo,
-            invalid_step,
+            epic_step,
         ]);
 
         assert!(issues.iter().any(|issue| {
             issue.issue_type == "invalid_parent_child_kind"
                 && issue.issue_id == "invalid-subtask"
-                && issue.depends_on_id.as_deref() == Some("epic-parent")
-        }));
-        assert!(issues.iter().any(|issue| {
-            issue.issue_type == "invalid_parent_child_kind"
-                && issue.issue_id == "invalid-step"
                 && issue.depends_on_id.as_deref() == Some("epic-parent")
         }));
         assert!(!issues.iter().any(|issue| issue.issue_id == "valid-subtask"));
@@ -1572,6 +1634,7 @@ mod tests {
             .iter()
             .any(|issue| issue.issue_id == "valid-runtime-defect-step"));
         assert!(!issues.iter().any(|issue| issue.issue_id == "legacy-todo"));
+        assert!(!issues.iter().any(|issue| issue.issue_id == "epic-step"));
     }
 
     #[test]

@@ -297,7 +297,10 @@ async fn ensure_current_session_claims_for_active_task_rows(
     let state_root_id = store.root().display().to_string();
     let active_tasks = tasks
         .iter()
-        .filter(|task| task.status == "in_progress" && task.issue_type != "epic")
+        .filter(|task| {
+            task.status == "in_progress"
+                && crate::state_store::work_item_is_active_bounded_unit_candidate(&task.issue_type)
+        })
         .collect::<Vec<_>>();
     let mut auto_claimed = Vec::new();
     let mut blockers = Vec::new();
@@ -573,6 +576,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn projection_does_not_auto_claim_active_execution_steps() {
+        let root = temp_state_dir("auto-claim-execution-step");
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let mut task = task_record("active-task", "in_progress");
+        task.issue_type = "task".to_string();
+        let mut step = task_record("active-step", "in_progress");
+        step.issue_type = "step".to_string();
+        let mut todo = task_record("active-todo", "in_progress");
+        todo.issue_type = "todo".to_string();
+        store.persist_task_record(task).await.expect("persist task");
+        store.persist_task_record(step).await.expect("persist step");
+        store.persist_task_record(todo).await.expect("persist todo");
+
+        let projection = build_operator_session_projection(&store)
+            .await
+            .expect("projection");
+        let claimed_task_ids = projection["auto_claimed_active_tasks"]
+            .as_array()
+            .expect("auto claimed")
+            .iter()
+            .filter_map(|claim| claim["task_id"].as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(claimed_task_ids, vec!["active-task"]);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn projection_reports_foreign_active_task_claim_for_transfer() {
         let root = temp_state_dir("foreign-active-task-transfer");
         let store = crate::state_store::StateStore::open(root.clone())
@@ -793,8 +827,12 @@ pub(crate) fn projection_plain_summary(projection: &serde_json::Value) -> String
         projection["current_session"]["session_id"]
             .as_str()
             .unwrap_or("unknown"),
-        projection["project_foreign_runs"].as_array().map_or(0, Vec::len),
-        projection["project_foreign_blockers"].as_array().map_or(0, Vec::len),
+        projection["project_foreign_runs"]
+            .as_array()
+            .map_or(0, Vec::len),
+        projection["project_foreign_blockers"]
+            .as_array()
+            .map_or(0, Vec::len),
         projection["global_blockers"].as_array().map_or(0, Vec::len),
         projection["claim_conflicts"].as_array().map_or(0, Vec::len),
     )

@@ -126,7 +126,7 @@ pub(crate) use state_store_task_models::{
     TaskDependencyJsonlRecord, TaskJsonlRecord, TaskStorageRow, TaskStorageRowStored,
 };
 pub use state_store_task_models::{
-    canonical_work_item_issue_type, task_work_item_kind,
+    canonical_work_item_issue_type, task_work_item_kind, work_item_contributes_to_task_stats,
     work_item_is_active_bounded_unit_candidate, work_item_is_program_container,
     work_item_requires_parent, work_item_taxonomy_entry, BlockedTaskRecord, CreateTaskRequest,
     TaskBulkReparentResult, TaskCriticalPath, TaskCriticalPathNode, TaskDefectBatchRehomeResult,
@@ -1355,8 +1355,7 @@ hierarchy: framework,contracts
             .task_progress_summary(unsafe_task_id)
             .await
             .expect("progress summary");
-        let expected_command =
-            "vida task close 'vida-root; touch /tmp/pwned #' --reason \"all descendants closed\" --json";
+        let expected_command = "vida task close 'vida-root; touch /tmp/pwned #' --reason \"all descendants closed\" --json";
         assert!(summary.closure_candidate);
         assert!(summary.recommended_next_action.contains(expected_command));
         assert_eq!(summary.canonical_commands, vec![expected_command]);

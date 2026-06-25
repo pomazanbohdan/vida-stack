@@ -108,7 +108,7 @@ Runtime state should persist a `TaskAttempt` record:
   "attempt_id": "task-id:analysis:vibe_cli:001",
   "task_id": "task-id",
   "stage_id": "analysis",
-  "todo_id": "optional-todo-id",
+  "step_id": "optional-step-id",
   "backend": "vibe_cli",
   "model_profile": "deep",
   "mode": "read_only",
@@ -355,10 +355,10 @@ stage=analysis attempts=2/2 produced=2 accepted=1 rejected=1 consolidation=accep
 artifact_path: product/spec/multi-agent-stage-ensemble-contract
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-06-13
+artifact_revision: 2026-06-25
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/multi-agent-stage-ensemble-contract.md
 created_at: 2026-06-03T14:40:00+03:00
-updated_at: 2026-06-13T00:00:00+03:00
+updated_at: 2026-06-25T00:00:00+03:00
 changelog_ref: multi-agent-stage-ensemble-contract.changelog.jsonl

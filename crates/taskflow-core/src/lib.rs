@@ -146,8 +146,34 @@ pub fn task_status_is_open_like(value: &str) -> bool {
 pub enum IssueType {
     Epic,
     Task,
+    Subtask,
+    Step,
     Bug,
     Spike,
+}
+
+#[must_use]
+pub fn normalize_issue_type(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace(['-', ' '], "_")
+}
+
+#[must_use]
+pub fn canonical_issue_type(value: &str) -> String {
+    match normalize_issue_type(value).as_str() {
+        "sub_task" => "subtask".to_string(),
+        "todo" => "step".to_string(),
+        canonical => canonical.to_string(),
+    }
+}
+
+#[must_use]
+pub fn issue_type_is_execution_step(value: &str) -> bool {
+    canonical_issue_type(value) == "step"
+}
+
+#[must_use]
+pub fn issue_type_contributes_to_task_stats(value: &str) -> bool {
+    !issue_type_is_execution_step(value)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,8 +210,9 @@ pub fn validate_task_id(id: &TaskId) -> Result<(), TaskflowCoreError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TaskId, TaskStatus, canonical_task_status, parse_task_status, task_status_is_closed_like,
-        task_status_is_open_like, validate_task_id,
+        TaskId, TaskStatus, canonical_issue_type, canonical_task_status,
+        issue_type_contributes_to_task_stats, issue_type_is_execution_step, parse_task_status,
+        task_status_is_closed_like, task_status_is_open_like, validate_task_id,
     };
 
     #[test]
@@ -220,6 +247,18 @@ mod tests {
         }
         assert_eq!(canonical_task_status("cancelled"), None);
         assert!(!task_status_is_closed_like("cancelled"));
+    }
+
+    #[test]
+    fn issue_type_taxonomy_canonicalizes_step_and_subtask() {
+        assert_eq!(canonical_issue_type("sub-task"), "subtask");
+        assert_eq!(canonical_issue_type("Sub Task"), "subtask");
+        assert_eq!(canonical_issue_type("todo"), "step");
+        assert_eq!(canonical_issue_type("TODO"), "step");
+        assert!(issue_type_is_execution_step("step"));
+        assert!(issue_type_is_execution_step("todo"));
+        assert!(!issue_type_contributes_to_task_stats("todo"));
+        assert!(issue_type_contributes_to_task_stats("subtask"));
     }
 
     #[test]

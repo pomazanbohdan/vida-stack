@@ -8,11 +8,11 @@ Use this reference when a VIDA runtime session touches TaskFlow, DocFlow, GitHub
    - `vida orchestrator-init --json`
    - `vida task validate-graph --json`
 2. If no active bounded unit exists, bind the current user request to the current epic before writing.
-3. Before writes, create a DB-backed `todo` with owner, active form, stop criterion, and fallback.
+3. Before writes, create a DB-backed `step` with owner, active form, stop criterion, and fallback.
 4. Keep TaskFlow mutations sequential.
 5. Use up to four parallel read-only checks only when scopes are disjoint.
 6. After mutation, validate graph and inspect the affected task/tree.
-7. Close the TODO only after validation.
+7. Close the step only after validation.
 
 ## Session-Derived Operator Gaps
 
@@ -41,4 +41,4 @@ For closeout or issue-triage work, collect:
 3. open GitHub issue list or target issue state,
 4. status/doctor parity when runtime state is involved,
 5. clean git status,
-6. TODO close evidence.
+6. step close evidence.

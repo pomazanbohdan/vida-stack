@@ -53,6 +53,8 @@ pub(super) fn parse_canonical_issue_type(
     match value {
         "epic" => Ok(CanonicalIssueType::Epic),
         "task" => Ok(CanonicalIssueType::Task),
+        "subtask" => Ok(CanonicalIssueType::Subtask),
+        "step" => Ok(CanonicalIssueType::Step),
         "bug" => Ok(CanonicalIssueType::Bug),
         "spike" => Ok(CanonicalIssueType::Spike),
         other => Err(StateStoreError::InvalidCanonicalTaskflowExport {
@@ -112,6 +114,8 @@ pub(super) fn canonical_issue_type_label(issue_type: CanonicalIssueType) -> &'st
     match issue_type {
         CanonicalIssueType::Epic => "epic",
         CanonicalIssueType::Task => "task",
+        CanonicalIssueType::Subtask => "subtask",
+        CanonicalIssueType::Step => "step",
         CanonicalIssueType::Bug => "bug",
         CanonicalIssueType::Spike => "spike",
     }
@@ -327,5 +331,17 @@ mod tests {
             }
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    #[test]
+    fn parse_canonical_issue_type_accepts_subtask_and_step() {
+        assert_eq!(
+            parse_canonical_issue_type("subtask").expect("subtask should parse"),
+            CanonicalIssueType::Subtask
+        );
+        assert_eq!(
+            parse_canonical_issue_type("step").expect("step should parse"),
+            CanonicalIssueType::Step
+        );
     }
 }

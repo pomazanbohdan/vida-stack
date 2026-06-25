@@ -15,7 +15,7 @@ Use this skill to keep VIDA runtime work evidence-first, TaskFlow-backed, and lo
    - `active_bounded_unit`
    - `why_this_unit`
    - `sequential_vs_parallel_posture`
-4. If a write is needed, create a DB-backed `todo` first.
+4. If a write is needed, create a DB-backed `step` first.
 5. For runtime defects, load `docs/process/project-error-search-runtime-diagnostics-protocol.md`.
 6. For command/output/timing friction, load `docs/process/command-timing-and-gate-optimization-protocol.md`.
 7. For session-level runbook details, load `references/session-runtime-runbook.md`.
@@ -37,10 +37,10 @@ Do not treat derived summaries, stale cache, lane preview, or advisory text as s
 
 Before every project mutation:
 
-1. Create a `todo` under the active task or current epic.
+1. Create a `step` under the active task or current epic.
 2. State `STEP`, `STOP`, and `IF_BLOCKED`.
 3. Keep writes sequential when they mutate the same TaskFlow graph, docs map, skill folder, or runtime state.
-4. Close the TODO only after validation passes.
+4. Close the step only after validation passes.
 5. If `task close` rejects a valid close because of literal words in the reason, record that as operator-surface evidence and retry with neutral wording only for the same bounded close step.
 6. For runtime defects, prefer architectural contract fixes over local symptom patches. Move duplicated or fragile behavior into a named helper or contract boundary when the defect affects more than one surface, receipt, JSON field family, or operator workflow.
 7. Do not preserve a narrow workaround if it leaves the same invariant implicit elsewhere. Make the invariant explicit, reusable, and covered by public-surface tests.

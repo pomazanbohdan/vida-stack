@@ -250,10 +250,8 @@ fn dev_team_sequence_from_explicit_flow(
             Some((role_id.to_string(), role))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    flow["ordered_steps"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    configured_flow_steps(flow)
+        .iter()
         .filter_map(|step| {
             let role_id = step["role_id"].as_str()?;
             let role = roles.get(role_id)?;
@@ -350,7 +348,7 @@ fn dev_team_sequence_from_readiness_with_default(
         return Vec::new();
     }
     if let Some(steps) = selected_flow
-        .and_then(|flow| flow["ordered_steps"].as_array())
+        .map(configured_flow_steps)
         .filter(|steps| !steps.is_empty())
     {
         return steps
@@ -499,6 +497,28 @@ fn dev_team_sequence_from_carrier_runtime(
         .collect()
 }
 
+fn configured_flow_steps(flow: &serde_json::Value) -> Vec<serde_json::Value> {
+    let ordered_steps = flow["ordered_steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    if !ordered_steps.is_empty() {
+        return ordered_steps;
+    }
+    flow["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|step| {
+            step.as_str()
+                .map(|role_id| serde_json::json!({ "role_id": role_id }))
+                .or_else(|| step.as_object().map(|_| step.clone()))
+        })
+        .collect()
+}
+
 fn policy_field_from_step_or_role(
     step: &serde_json::Value,
     role: &serde_json::Value,
@@ -588,4 +608,41 @@ pub(crate) fn task_flow_lookup_keys(task: &state_store::TaskRecord) -> Vec<Strin
     push_unique_lookup_key(&mut keys, &task.issue_type);
     push_unique_lookup_key(&mut keys, work_item_kind.default_flow_binding);
     keys
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_team_sequence_accepts_flow_steps_shorthand() {
+        let readiness = serde_json::json!({
+            "default_flow_id": "runtime_defect_remediation",
+            "work_item_flow_bindings": {
+                "runtime_defect": "runtime_defect_remediation"
+            },
+            "roles": [
+                {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]}
+            ],
+            "flows": [
+                {
+                    "flow_id": "runtime_defect_remediation",
+                    "enabled": true,
+                    "work_item_bindings": ["runtime_defect"],
+                    "steps": ["analyst", {"role_id": "developer", "task_class": "implementation"}]
+                }
+            ]
+        });
+
+        let sequence = dev_team_sequence_from_readiness(&readiness, Some("runtime_defect"));
+
+        assert_eq!(sequence.len(), 2);
+        assert_eq!(sequence[0].role_label, "analyst");
+        assert_eq!(sequence[0].runtime_role, "business_analyst");
+        assert_eq!(sequence[0].task_class, "specification");
+        assert_eq!(sequence[1].role_label, "developer");
+        assert_eq!(sequence[1].runtime_role, "worker");
+        assert_eq!(sequence[1].task_class, "implementation");
+    }
 }

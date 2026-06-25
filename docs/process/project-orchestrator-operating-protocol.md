@@ -311,7 +311,7 @@ Every task in a long-running refactor epic uses:
 8. model-routing expectation for executor and validator,
 9. stop condition and blocked fallback.
 
-When a new TaskFlow child/TODO/follow-up is needed and the metadata is already
+When a new TaskFlow child/step/follow-up is needed and the metadata is already
 known, `Bind` must create it in one `vida task create` command with parent,
 description or notes, owned paths, acceptance target, proof target, and execution
 semantics instead of creating the item first and immediately updating the same

@@ -251,15 +251,7 @@ pub const WORK_ITEM_TAXONOMY: &[WorkItemTaxonomyEntry] = &[
 ];
 
 pub fn normalize_work_item_issue_type(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .chars()
-        .map(|ch| match ch {
-            ' ' | '-' => '_',
-            _ => ch,
-        })
-        .collect()
+    taskflow_core::normalize_issue_type(value)
 }
 
 pub fn work_item_taxonomy_entry(issue_type: &str) -> Option<&'static WorkItemTaxonomyEntry> {
@@ -290,11 +282,11 @@ pub fn work_item_is_active_bounded_unit_candidate(issue_type: &str) -> bool {
 }
 
 pub fn work_item_is_execution_step(issue_type: &str) -> bool {
-    canonical_work_item_issue_type(issue_type) == "step"
+    taskflow_core::issue_type_is_execution_step(&canonical_work_item_issue_type(issue_type))
 }
 
 pub fn work_item_contributes_to_task_stats(issue_type: &str) -> bool {
-    !work_item_is_execution_step(issue_type)
+    taskflow_core::issue_type_contributes_to_task_stats(&canonical_work_item_issue_type(issue_type))
 }
 
 pub(crate) fn task_has_label(task: &TaskRecord, label: &str) -> bool {

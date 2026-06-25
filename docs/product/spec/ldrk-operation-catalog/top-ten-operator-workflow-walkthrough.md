@@ -10,7 +10,7 @@ Rule: every workflow enters one canonical operation family and carries semantic 
 | 2 | Dispatch next agent lane | `vida agent dispatch-next / vida agent-init` | `vida plan lane.dispatch then vida apply lane.start` |
 | 3 | Complete host bridge verifier result | `vida agent host-bridge --complete --decision --verdict --blocker-code --rework-target --allowed-next-node` | `vida apply host_bridge.complete --payload outcome.json` |
 | 4 | Inspect backlog readiness | `vida task ready / vida task next-lawful` | `vida get task.ready --payload query.json` |
-| 5 | Create implementation todo | `vida task create --type todo --status in_progress` | `vida apply task.create --payload task.json` |
+| 5 | Create implementation step | `vida task create --type step --status in_progress` | `vida apply task.create --payload task.json` |
 | 6 | Attach proof evidence | `vida task proof attach-evidence ...` | `vida apply proof.attach --payload evidence.json` |
 | 7 | Close task after proof | `vida task close <id> --reason ...` | `vida apply task.close --payload closure.json` |
 | 8 | Run runtime diagnostics | `vida diagnostics post-commit` | `vida get diagnostics.post_commit or vida apply diagnostics.record` |

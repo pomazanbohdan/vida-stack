@@ -1,7 +1,7 @@
 # VIDA Current Spec Map
 
 Status: active canonical map
-Revision: 2026-06-21
+Revision: 2026-06-25
 
 Purpose: provide the short routing map for the active current product/spec canon after the detailed catalog was split into a companion document.
 
@@ -62,6 +62,8 @@ Companion rule:
     - accepted LDRK `ldr-004` architecture decision record
 24. [tower-based-canonical-command-pipeline-phase-design.md](tower-based-canonical-command-pipeline-phase-design.md)
     - proposed LDRK `ldr-040` Tower-based canonical command pipeline phase design
+25. [multi-agent-stage-ensemble-contract.md](multi-agent-stage-ensemble-contract.md)
+    - multi-agent stage attempt ledger and consolidation contract
 
 ## Detailed Catalog Companions
 
@@ -104,10 +106,10 @@ Companion rule:
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-06-21
+artifact_revision: 2026-06-25
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-10T10:20:00+02:00'
-updated_at: 2026-06-13T00:00:00+03:00
+updated_at: 2026-06-25T00:00:00+03:00
 changelog_ref: current-spec-map.changelog.jsonl
