@@ -40,6 +40,7 @@ pub(crate) struct ExternalProviderHealthState {
     pub(crate) latency_ms_avg: Option<u64>,
     pub(crate) error_rate_window: f64,
     pub(crate) consecutive_failures: u64,
+    pub(crate) latest_error_class: Option<String>,
     pub(crate) cooldown_until: Option<String>,
     pub(crate) blocker_codes: Vec<String>,
     pub(crate) next_actions: Vec<String>,
@@ -61,8 +62,9 @@ pub(crate) fn evaluate_external_provider_health(
     input: ExternalProviderHealthInput<'_>,
     config: &ExternalHealthCircuitBreakerConfig,
 ) -> ExternalProviderHealthState {
+    let latest_error_class = normalized_error_class(input.latest_error_class);
     let weighted_failures =
-        input.consecutive_failures + latest_error_weight(input.latest_error_class, config);
+        input.consecutive_failures + latest_error_weight(latest_error_class, config);
     let mut blocker_codes = Vec::new();
     let mut next_actions = Vec::new();
     let cooldown_active = input
@@ -70,7 +72,12 @@ pub(crate) fn evaluate_external_provider_health(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .is_some();
-    let status = if cooldown_active {
+    let status = if latest_error_class == Some("auth_error") {
+        blocker_codes.push("provider_auth_failed".to_string());
+        next_actions
+            .push("repair external provider credentials before routing new work".to_string());
+        "blocked"
+    } else if cooldown_active {
         blocker_codes.push("external_provider_cooldown_active".to_string());
         next_actions.push("wait for cooldown or refresh external carrier readiness".to_string());
         "cooldown"
@@ -93,6 +100,7 @@ pub(crate) fn evaluate_external_provider_health(
         latency_ms_avg: input.latency_ms_avg,
         error_rate_window: round4(input.error_rate_window.max(0.0)),
         consecutive_failures: input.consecutive_failures,
+        latest_error_class: latest_error_class.map(str::to_string),
         cooldown_until: input.cooldown_until.map(str::to_string),
         blocker_codes,
         next_actions,
@@ -105,10 +113,7 @@ pub(crate) fn latest_error_weight(
     latest_error_class: Option<&str>,
     config: &ExternalHealthCircuitBreakerConfig,
 ) -> u64 {
-    match latest_error_class
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    match normalized_error_class(latest_error_class) {
         Some("timeout") | Some("provider_timeout") => config.timeout_failure_weight,
         Some("provider_error") | Some("auth_error") | Some("rate_limited") => {
             config.provider_error_failure_weight
@@ -119,6 +124,153 @@ pub(crate) fn latest_error_weight(
         Some(_) => 1,
         None => 0,
     }
+}
+
+pub(crate) fn classify_external_provider_error(text: &str) -> Option<&'static str> {
+    let normalized = text.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    if normalized.contains("invalid api key")
+        || normalized.contains("missing api key")
+        || normalized.contains("authentication failed")
+        || normalized.contains("auth failure")
+        || normalized.contains("unauthorized")
+        || normalized.contains("invalid access token")
+        || normalized.contains("token expired")
+    {
+        return Some("auth_error");
+    }
+    if normalized.contains("rate limit")
+        || normalized.contains("too many requests")
+        || normalized.contains("quota exceeded")
+        || normalized.contains("exceeded your current quota")
+    {
+        return Some("rate_limited");
+    }
+    if normalized.contains("timed out") || normalized.contains("timeout") {
+        return Some("provider_timeout");
+    }
+    if normalized.contains("api error") || normalized.contains("provider error") {
+        return Some("provider_error");
+    }
+    None
+}
+
+pub(crate) fn latest_dispatch_result_health_for_backend(
+    project_root: &std::path::Path,
+    backend_id: &str,
+    provider: &str,
+) -> Option<ExternalProviderHealthState> {
+    let dispatch_results_dir = project_root
+        .join(".vida")
+        .join("data")
+        .join("state")
+        .join("runtime-consumption")
+        .join("dispatch-results");
+    let mut entries = std::fs::read_dir(dispatch_results_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            let modified = metadata.modified().ok()?;
+            Some((modified, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| right.0.cmp(&left.0));
+
+    for (_modified, path) in entries.into_iter().take(64) {
+        let text = std::fs::read_to_string(&path).ok()?;
+        if !text.contains(backend_id) {
+            continue;
+        }
+        let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+        if !dispatch_result_matches_backend(&value, backend_id) {
+            continue;
+        }
+        if dispatch_result_is_success(&value) {
+            return None;
+        }
+        let combined_error_text = dispatch_result_error_text(&value);
+        let latest_error_class = value
+            .pointer("/external_provider_health/latest_error_class")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| normalized_error_class(Some(value)))
+            .or_else(|| classify_external_provider_error(&combined_error_text))?;
+        return Some(evaluate_external_provider_health(
+            ExternalProviderHealthInput {
+                backend_id,
+                provider,
+                last_probe_at: value.get("recorded_at").and_then(serde_json::Value::as_str),
+                latency_ms_avg: None,
+                error_rate_window: 0.0,
+                consecutive_failures: 1,
+                latest_error_class: Some(latest_error_class),
+                cooldown_until: None,
+            },
+            &Default::default(),
+        ));
+    }
+    None
+}
+
+fn normalized_error_class(latest_error_class: Option<&str>) -> Option<&'static str> {
+    match latest_error_class
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("auth_error" | "authentication_failed" | "invalid_api_key") => Some("auth_error"),
+        Some("timeout" | "provider_timeout") => Some("provider_timeout"),
+        Some("rate_limited" | "quota_exceeded") => Some("rate_limited"),
+        Some("malformed_result" | "invalid_receipt") => Some("malformed_result"),
+        Some("provider_error") => Some("provider_error"),
+        Some(_) => Some("provider_error"),
+        None => None,
+    }
+}
+
+fn dispatch_result_matches_backend(value: &serde_json::Value, backend_id: &str) -> bool {
+    value.get("surface").and_then(serde_json::Value::as_str)
+        == Some(format!("external_cli:{backend_id}").as_str())
+        || value
+            .get("selected_backend")
+            .and_then(serde_json::Value::as_str)
+            == Some(backend_id)
+        || value
+            .pointer("/backend_dispatch/selected_backend")
+            .and_then(serde_json::Value::as_str)
+            == Some(backend_id)
+        || value
+            .pointer("/backend_dispatch/backend_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(backend_id)
+}
+
+fn dispatch_result_is_success(value: &serde_json::Value) -> bool {
+    value.get("status").and_then(serde_json::Value::as_str) == Some("pass")
+        || value
+            .get("execution_state")
+            .and_then(serde_json::Value::as_str)
+            == Some("executed")
+}
+
+fn dispatch_result_error_text(value: &serde_json::Value) -> String {
+    [
+        value.get("provider_error"),
+        value.get("provider_error_message"),
+        value.get("blocker_reason"),
+        value.pointer("/external_provider_health/latest_error_class"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(serde_json::Value::as_str)
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 fn round4(value: f64) -> f64 {
@@ -203,5 +355,61 @@ mod tests {
             health.next_actions,
             vec!["wait for cooldown or refresh external carrier readiness".to_string()]
         );
+    }
+
+    #[test]
+    fn auth_error_blocks_immediately() {
+        let health = evaluate_external_provider_health(
+            ExternalProviderHealthInput {
+                latest_error_class: Some("auth_error"),
+                ..input()
+            },
+            &Default::default(),
+        );
+
+        assert_eq!(health.status, "blocked");
+        assert!(health.blocks_candidate());
+        assert_eq!(health.latest_error_class.as_deref(), Some("auth_error"));
+        assert_eq!(health.blocker_codes, vec!["provider_auth_failed"]);
+    }
+
+    #[test]
+    fn latest_dispatch_result_health_classifies_invalid_api_key() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-provider-health-dispatch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let dispatch_dir = root
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join("runtime-consumption")
+            .join("dispatch-results");
+        std::fs::create_dir_all(&dispatch_dir).expect("dispatch dir");
+        std::fs::write(
+            dispatch_dir.join("result.json"),
+            r#"{
+              "surface": "external_cli:vibe_cli",
+              "status": "blocked",
+              "execution_state": "blocked",
+              "provider_error": "Error: Invalid API key. Please check your API key.",
+              "blocker_code": "configured_backend_dispatch_failed",
+              "recorded_at": "2026-06-25T14:00:00Z"
+            }"#,
+        )
+        .expect("dispatch result");
+
+        let health = latest_dispatch_result_health_for_backend(&root, "vibe_cli", "vibe")
+            .expect("health should be derived");
+
+        assert_eq!(health.status, "blocked");
+        assert_eq!(health.latest_error_class.as_deref(), Some("auth_error"));
+        assert_eq!(health.blocker_codes, vec!["provider_auth_failed"]);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -236,6 +236,69 @@ fn hydrate_dispatch_packet_owned_paths_from_task(
     hydrated
 }
 
+fn reconcile_dispatch_packet_owned_paths_from_task(
+    dispatch_packet_body: &mut serde_json::Value,
+    task: &TaskRecord,
+) -> bool {
+    let owned_paths = &task.planner_metadata.owned_paths;
+    if owned_paths.is_empty() {
+        return false;
+    }
+    let mut repaired =
+        crate::runtime_dispatch_state::apply_owned_paths(dispatch_packet_body, owned_paths);
+    let Some(applied_owned_paths) = packet_string_array(dispatch_packet_body, "owned_paths") else {
+        return repaired;
+    };
+    let packet_template_kind = packet_trimmed_string(dispatch_packet_body, "packet_template_kind")
+        .unwrap_or("delivery_task_packet")
+        .to_string();
+    if let Some(active_packet) = dispatch_packet_body.get_mut(&packet_template_kind) {
+        repaired |= crate::runtime_dispatch_state::apply_owned_paths(active_packet, owned_paths);
+        let handoff_task_class =
+            packet_trimmed_string(active_packet, "handoff_task_class").unwrap_or("implementation");
+        let implementation_isolation =
+            crate::runtime_dispatch_packets::implementation_isolation_contract(
+                handoff_task_class,
+                &applied_owned_paths,
+            );
+        if !implementation_isolation.is_null() {
+            if let Some(object) = active_packet.as_object_mut() {
+                if object.get("implementation_isolation") != Some(&implementation_isolation) {
+                    object.insert(
+                        "implementation_isolation".to_string(),
+                        implementation_isolation.clone(),
+                    );
+                    repaired = true;
+                }
+            }
+            if let Some(object) = dispatch_packet_body.as_object_mut() {
+                if object.get("implementation_isolation") != Some(&implementation_isolation) {
+                    object.insert(
+                        "implementation_isolation".to_string(),
+                        implementation_isolation,
+                    );
+                    repaired = true;
+                }
+            }
+        }
+    }
+    repaired
+}
+
+fn packet_string_array(packet: &serde_json::Value, key: &str) -> Option<Vec<String>> {
+    Some(
+        packet
+            .get(key)?
+            .as_array()?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
 fn repair_delivery_task_packet_identity(dispatch_packet_body: &mut serde_json::Value) -> bool {
     let Some(delivery_task_packet) = dispatch_packet_body
         .get_mut("delivery_task_packet")
@@ -382,7 +445,7 @@ async fn repair_persisted_dispatch_packet_from_task(
     let mut packet = read_packet_body(dispatch_packet_path)?;
     validate_packet_repair_binding(run_id, task, &status, &receipt, &packet)?;
     let mut repaired = repair_delivery_task_packet_identity(&mut packet);
-    repaired |= hydrate_dispatch_packet_owned_paths_from_task(&mut packet, task);
+    repaired |= reconcile_dispatch_packet_owned_paths_from_task(&mut packet, task);
     crate::validate_runtime_dispatch_packet_contract(&packet, "Repaired dispatch packet").map_err(
         |error| {
             format!("execution_preparation_gate_blocked: {error}; dispatch packet `{display_path}`")
@@ -730,8 +793,32 @@ async fn run_taskflow_packet_repair(run_id: &str, task_id: &str, as_json: bool) 
         if let Some(command) = payload["dispatch_init_command"].as_str() {
             print_surface_line(RenderMode::Plain, "bind_command", command);
         }
+        if let Some(blockers) = payload["blocker_codes"].as_array() {
+            let blocker_codes = blockers
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>();
+            if !blocker_codes.is_empty() {
+                print_surface_line(RenderMode::Plain, "blocker_codes", &blocker_codes.join(","));
+            }
+        }
         if let Some(error) = payload["load_error"].as_str() {
             print_surface_line(RenderMode::Plain, "blocker", error);
+        }
+        if let Some(error) = payload["repair_error"].as_str() {
+            print_surface_line(RenderMode::Plain, "repair_error", error);
+        }
+        if let Some(actions) = payload["next_actions"].as_array() {
+            for (index, action) in actions
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .enumerate()
+            {
+                let label = format!("next_action_{}", index + 1);
+                print_surface_line(RenderMode::Plain, &label, action);
+            }
         }
     }
 
@@ -1695,6 +1782,76 @@ mod tests {
             assert_eq!(
                 repaired["delivery_task_packet"]["owned_paths"],
                 serde_json::json!(["crates/vida/src/taskflow_packet.rs"])
+            );
+        }
+        .await;
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        let _ = fs::remove_dir_all(&root);
+        result
+    }
+
+    #[tokio::test]
+    async fn packet_repair_reconciles_stale_owned_path_mirrors_from_task_metadata() {
+        let root = packet_repair_temp_root("stale-owned-path-mirrors");
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(root.clone()));
+        let result = async {
+            fs::create_dir_all(&root).expect("create state root");
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let mut task = packet_repair_task_with_metadata();
+            task.id = "task-stale-owned-paths".to_string();
+            task.planner_metadata.owned_paths = vec![
+                "crates/vida/src/taskflow_packet.rs".to_string(),
+                "crates/vida/src/agent_dispatch_surface.rs".to_string(),
+            ];
+            let run_id = "run-stale-owned-paths";
+            store
+                .record_run_graph_status(&packet_repair_status(run_id, &task.id))
+                .await
+                .expect("persist status");
+            let packet_path = root
+                .join("runtime-consumption")
+                .join("run-stale-owned-paths.json");
+            fs::create_dir_all(packet_path.parent().expect("packet parent"))
+                .expect("create packet parent");
+            let mut packet = packet_repair_dispatch_packet(run_id);
+            packet["owned_paths"] = serde_json::json!(["crates/vida/src/taskflow_packet.rs"]);
+            packet["delivery_task_packet"]["owned_paths"] =
+                serde_json::json!(["crates/vida/src/taskflow_packet.rs"]);
+            fs::write(
+                &packet_path,
+                serde_json::to_vec_pretty(&packet).expect("encode packet"),
+            )
+            .expect("write packet");
+            store
+                .record_run_graph_dispatch_receipt(&packet_repair_receipt(run_id, &packet_path))
+                .await
+                .expect("persist receipt");
+
+            let mutation = repair_persisted_dispatch_packet_from_task(&store, run_id, &task)
+                .await
+                .expect("repair stale owned-path mirrors");
+
+            assert!(mutation.repaired);
+            assert!(mutation.contract_validated);
+            let repaired: serde_json::Value =
+                serde_json::from_slice(&fs::read(&packet_path).expect("read repaired packet"))
+                    .expect("decode repaired packet");
+            let expected_paths = serde_json::json!([
+                "crates/vida/src/taskflow_packet.rs",
+                "crates/vida/src/agent_dispatch_surface.rs"
+            ]);
+            assert_eq!(repaired["owned_paths"], expected_paths);
+            assert_eq!(
+                repaired["delivery_task_packet"]["owned_paths"],
+                expected_paths
+            );
+            assert_eq!(
+                repaired["implementation_isolation"]["owned_paths"],
+                expected_paths
+            );
+            assert_eq!(
+                repaired["delivery_task_packet"]["implementation_isolation"]["owned_paths"],
+                expected_paths
             );
         }
         .await;

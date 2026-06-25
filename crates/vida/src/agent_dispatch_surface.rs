@@ -819,14 +819,34 @@ fn host_bridge_adapter_payload(
             crate::shell_quote("<changed-file>")
         )
     });
-    build_host_bridge_adapter_payload(HostBridgeAdapterPayloadInput {
-        request_path,
-        request,
-        provenance_blockers,
-        retryable_completion_request,
-        completion_command,
-        artifact_attach_command,
-    })
+    normalize_host_bridge_payload_operator_fields(build_host_bridge_adapter_payload(
+        HostBridgeAdapterPayloadInput {
+            request_path,
+            request,
+            provenance_blockers,
+            retryable_completion_request,
+            completion_command,
+            artifact_attach_command,
+        },
+    ))
+}
+
+fn normalize_host_bridge_payload_operator_fields(
+    mut payload: serde_json::Value,
+) -> serde_json::Value {
+    if payload.get("next_actions").is_none() {
+        let next_actions = payload["shared_fields"]["next_actions"].clone();
+        if !next_actions.is_null() {
+            payload["next_actions"] = next_actions;
+        }
+    }
+    if payload.get("artifact_refs").is_none() {
+        let artifact_refs = payload["shared_fields"]["artifact_refs"].clone();
+        if !artifact_refs.is_null() {
+            payload["artifact_refs"] = artifact_refs;
+        }
+    }
+    payload
 }
 
 fn emit_host_bridge_payload(payload: &serde_json::Value, as_json: bool) -> ExitCode {
@@ -864,6 +884,30 @@ fn emit_host_bridge_payload(payload: &serde_json::Value, as_json: bool) -> ExitC
                     serde_json::Value::Array(blockers.clone()),
                 ));
             }
+        }
+        let next_actions = if payload["next_actions"].is_null() {
+            &payload["shared_fields"]["next_actions"]
+        } else {
+            &payload["next_actions"]
+        };
+        if let Some(actions) = next_actions.as_array() {
+            if !actions.is_empty() {
+                fields.push(operator_output::toon_report::OperatorToonField::value(
+                    "next_actions",
+                    serde_json::Value::Array(actions.clone()),
+                ));
+            }
+        }
+        let artifact_refs = if payload["artifact_refs"].is_null() {
+            &payload["shared_fields"]["artifact_refs"]
+        } else {
+            &payload["artifact_refs"]
+        };
+        if !artifact_refs.is_null() {
+            fields.push(operator_output::toon_report::OperatorToonField::value(
+                "artifact_refs",
+                artifact_refs.clone(),
+            ));
         }
         operator_output::toon_report::print("vida agent host-bridge", fields);
     }
@@ -2485,9 +2529,8 @@ fn build_agent_dispatch_next_preview_dev_team(
     let mut next_actions = Vec::new();
     let mut selected_lanes = Vec::new();
     let mut blocked_candidates = Vec::new();
-    let current_task_matches = projection
-        .current_task_id
-        .as_deref()
+    let current_task_id = projection.current_task_id.as_deref();
+    let current_task_matches = current_task_id
         .map(|current_task_id| {
             projection
                 .ready
@@ -2496,6 +2539,8 @@ fn build_agent_dispatch_next_preview_dev_team(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let current_task_missing_from_ready =
+        current_task_id.is_some() && current_task_matches.is_empty();
     let all_ready_flow_ids = projection
         .ready
         .iter()
@@ -2521,6 +2566,8 @@ fn build_agent_dispatch_next_preview_dev_team(
             || has_unsafe_ready_candidates);
     let selected_ready_candidates = if scoped_current_task_dev_team {
         current_task_matches
+    } else if current_task_missing_from_ready {
+        Vec::new()
     } else {
         projection.ready.iter().collect::<Vec<_>>()
     };
@@ -2550,6 +2597,15 @@ fn build_agent_dispatch_next_preview_dev_team(
     } else {
         activation_bundle["dev_team_readiness"]["default_flow_id"].as_str()
     };
+
+    if let Some(current_task_id) = current_task_id.filter(|_| current_task_missing_from_ready) {
+        blocker_codes.push(format!(
+            "current_task_not_ready_for_dev_team_dispatch:task={current_task_id}"
+        ));
+        next_actions.push(format!(
+            "Current task `{current_task_id}` is not ready for dev-team dispatch; resolve its blockers before dispatching unrelated ready work."
+        ));
+    }
 
     if lanes_requested == 0 {
         blocker_codes.push("invalid_lanes_requested".to_string());
@@ -2757,10 +2813,11 @@ fn build_agent_dispatch_next_preview_dev_team(
         ));
     }
     for candidate in &projection.blocked {
-        blocked_candidates.push(blocked_candidate(
-            candidate,
-            vec!["graph_blocked".to_string()],
-        ));
+        let mut reasons = vec!["graph_blocked".to_string()];
+        if current_task_missing_from_ready && Some(candidate.task.id.as_str()) == current_task_id {
+            reasons.push("current_task_not_ready_for_dev_team_dispatch".to_string());
+        }
+        blocked_candidates.push(blocked_candidate(candidate, reasons));
     }
 
     if selected_lanes.is_empty()
@@ -3763,6 +3820,60 @@ fn resolve_agent_dispatch_next_current_task_ids<'a>(
             .or(explicit_bound_current_task_id)
             .or(taskflow_single_in_progress_task_id),
     }
+}
+
+fn agent_dispatch_next_summary_task_id(summary: &serde_json::Value) -> Option<&str> {
+    if summary.get("continuation_allowed") != Some(&serde_json::Value::Bool(true)) {
+        return None;
+    }
+    let active_bounded_unit = summary.get("active_bounded_unit")?;
+    if !matches!(
+        active_bounded_unit
+            .get("kind")
+            .and_then(serde_json::Value::as_str),
+        Some("task_graph_task" | "run_graph_task")
+    ) {
+        return None;
+    }
+    active_bounded_unit
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|task_id| !task_id.is_empty())
+}
+
+fn agent_dispatch_next_bound_current_task_id(
+    binding: Option<&state_store::RunGraphContinuationBinding>,
+    latest_status: Option<&state_store::RunGraphStatus>,
+    latest_dispatch_receipt: Option<&state_store::RunGraphDispatchReceiptSummary>,
+) -> Option<String> {
+    if let Some(task_id) =
+        crate::continuation_binding_summary::explicit_task_graph_continuation_task_id(binding)
+    {
+        return Some(task_id.to_string());
+    }
+    let summary = crate::continuation_binding_summary::build_continuation_binding_summary(
+        binding,
+        latest_status,
+        None,
+        latest_dispatch_receipt,
+        None,
+        false,
+    );
+    agent_dispatch_next_summary_task_id(&summary).map(str::to_string)
+}
+
+fn agent_dispatch_next_preserve_current_task_id(
+    projection: &mut state_store::TaskSchedulingProjection,
+    current_task_id: Option<&str>,
+) {
+    let Some(current_task_id) = current_task_id
+        .map(str::trim)
+        .filter(|task_id| !task_id.is_empty())
+    else {
+        return;
+    };
+    projection.current_task_id = Some(current_task_id.to_string());
 }
 
 fn compact_agent_dispatch_packet_materialization(value: &serde_json::Value) -> serde_json::Value {
@@ -4839,11 +4950,71 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
             } else {
                 None
             };
-            let explicit_bound_current_task_id =
-                crate::continuation_binding_summary::explicit_task_graph_continuation_task_id(
-                    explicit_binding.as_ref(),
-                )
-                .map(str::to_string);
+            let latest_run_graph_status = if command.current_task_id.is_none() {
+                let current_session_status =
+                    match store.latest_run_graph_status_for_current_session().await {
+                        Ok(status) => status,
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read latest current-session run-graph status: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    };
+                if current_session_status.is_some() {
+                    current_session_status
+                } else {
+                    match store.latest_run_graph_status().await {
+                        Ok(Some(status)) if status.status == "blocked" => Some(status),
+                        Ok(_) => None,
+                        Err(error) => {
+                            eprintln!("Failed to read latest global run-graph status: {error}");
+                            return ExitCode::from(1);
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+            let latest_run_graph_dispatch_receipt = if command.current_task_id.is_none() {
+                let current_session_receipt = match store
+                    .latest_run_graph_dispatch_receipt_summary_for_current_session()
+                    .await
+                {
+                    Ok(status) => status,
+                    Err(error) => {
+                        eprintln!(
+                            "Failed to read latest current-session run-graph dispatch receipt: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                };
+                if current_session_receipt.is_some() {
+                    current_session_receipt
+                } else if let Some(status) = latest_run_graph_status.as_ref() {
+                    match store
+                        .run_graph_dispatch_receipt_summary_for_status(status)
+                        .await
+                    {
+                        Ok(receipt) => receipt,
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read run-graph dispatch receipt for active status: {error}"
+                            );
+                            return ExitCode::from(1);
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let explicit_bound_current_task_id = agent_dispatch_next_bound_current_task_id(
+                explicit_binding.as_ref(),
+                latest_run_graph_status.as_ref(),
+                latest_run_graph_dispatch_receipt.as_ref(),
+            );
             let taskflow_single_in_progress_task_id =
                 if command.current_task_id.is_none() && explicit_bound_current_task_id.is_none() {
                     StateStore::read_fresh_tasks_from_jsonl_snapshot(store.root())
@@ -4862,7 +5033,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
             let preview = if command.dev_team {
                 let configured_max_parallel_agents =
                     configured_max_parallel_agents_from_activation_bundle(&activation_bundle);
-                let projection =
+                let mut projection =
                     match StateStore::read_fresh_tasks_from_jsonl_snapshot(store.root()) {
                         Ok(rows) => {
                             let critical_path_ids = match StateStore::critical_path_from_rows(&rows)
@@ -4901,6 +5072,10 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                             }
                         },
                     };
+                agent_dispatch_next_preserve_current_task_id(
+                    &mut projection,
+                    resolved_current_task_ids.preview_current_task_id,
+                );
                 let readiness = crate::taskflow_consume_bundle::build_dev_team_readiness(
                     "vida.config.yaml",
                     &activation_bundle,
@@ -5087,8 +5262,10 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_dispatch_existing_packet_fast_path_payload, agent_dispatch_next_compact_payload,
-        agent_dispatch_next_effective_materialize_packets, agent_dispatch_next_projection_name,
+        agent_dispatch_existing_packet_fast_path_payload,
+        agent_dispatch_next_bound_current_task_id, agent_dispatch_next_compact_payload,
+        agent_dispatch_next_effective_materialize_packets,
+        agent_dispatch_next_preserve_current_task_id, agent_dispatch_next_projection_name,
         agent_status_runtime_task_stale_code, apply_continuation_dispatch_gate_to_preview,
         build_agent_dispatch_next_preview, canonical_host_bridge_request_path,
         completed_host_bridge_completion_request_for_state_root,
@@ -6847,6 +7024,10 @@ mod tests {
         );
 
         assert_eq!(payload["status"], super::release1_blocked_status());
+        assert!(payload["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty()));
+        assert_eq!(payload["artifact_refs"]["request_path"], "request.json");
         assert!(super::host_bridge_payload_should_show_completion_command(
             &payload
         ));
@@ -7902,6 +8083,115 @@ mod tests {
         assert_eq!(
             resolved.scheduler_current_task_id,
             Some("single-in-progress")
+        );
+    }
+
+    #[test]
+    fn agent_dispatch_next_current_task_uses_explicit_run_graph_binding() {
+        let binding = state_store::RunGraphContinuationBinding {
+            run_id: "run-active".to_string(),
+            task_id: "task-active".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "run_id": "run-active",
+                "task_id": "task-active",
+                "active_node": "coach_implementation_gate"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "active run graph".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+            request_text: None,
+            recorded_at: "2026-06-25T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            agent_dispatch_next_bound_current_task_id(Some(&binding), None, None),
+            Some("task-active".to_string())
+        );
+    }
+
+    #[test]
+    fn agent_dispatch_next_current_task_uses_active_exception_takeover_status() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-active",
+            "runtime_defect",
+            "runtime_defect",
+        );
+        status.task_id = "task-active".to_string();
+        status.active_node = "coach_implementation_gate".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_implementation_gate_blocked".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        let dispatch =
+            state_store::RunGraphDispatchReceiptSummary::from_receipt(RunGraphDispatchReceipt {
+                run_id: "run-active".to_string(),
+                dispatch_target: "coach_implementation_gate".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_exception_takeover".to_string(),
+                supersedes_receipt_id: Some("developer-receipt".to_string()),
+                exception_path_receipt_id: Some("exception-takeover-receipt".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida lane exception-takeover".to_string()),
+                dispatch_command: Some("vida lane exception-takeover run-active".to_string()),
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("vibe_cli".to_string()),
+                activation_runtime_role: Some("coach".to_string()),
+                selected_backend: Some("vibe_cli".to_string()),
+                recorded_at: "2026-06-25T00:00:00Z".to_string(),
+            });
+
+        assert_eq!(
+            agent_dispatch_next_bound_current_task_id(None, Some(&status), Some(&dispatch)),
+            Some("task-active".to_string())
+        );
+    }
+
+    #[test]
+    fn agent_dispatch_next_preserves_bound_current_task_when_projection_drops_it() {
+        let mut projection = TaskSchedulingProjection {
+            current_task_id: Some("unrelated-ready".to_string()),
+            ready: vec![candidate_with_type(
+                "unrelated-ready",
+                "Unrelated ready",
+                true,
+                true,
+                "task",
+            )],
+            blocked: vec![candidate_with_type(
+                "runtime-defect-active",
+                "Active runtime defect",
+                false,
+                false,
+                "runtime_defect",
+            )],
+            parallel_candidates_after_current: Vec::new(),
+        };
+
+        agent_dispatch_next_preserve_current_task_id(
+            &mut projection,
+            Some("runtime-defect-active"),
+        );
+
+        assert_eq!(
+            projection.current_task_id.as_deref(),
+            Some("runtime-defect-active")
         );
     }
 
@@ -9359,6 +9649,48 @@ mod tests {
         assert!(!preview.selected_lanes[0]
             .dispatch_command
             .contains("--json"));
+    }
+
+    #[test]
+    fn agent_dispatch_next_preview_dev_team_fails_closed_when_current_task_is_not_ready() {
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle_with_dev_team_selection_truth(),
+            &TaskSchedulingProjection {
+                current_task_id: Some("runtime-defect-active".to_string()),
+                ready: vec![candidate_with_type(
+                    "unrelated-ready",
+                    "Unrelated ready",
+                    true,
+                    true,
+                    "task",
+                )],
+                blocked: vec![candidate_with_type(
+                    "runtime-defect-active",
+                    "Active runtime defect",
+                    false,
+                    false,
+                    "runtime_defect",
+                )],
+                parallel_candidates_after_current: Vec::new(),
+            },
+            1,
+            1,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "blocked", "{preview:#?}");
+        assert_eq!(preview.lanes_selected, 0);
+        assert!(preview.selected_lanes.is_empty());
+        assert!(preview.blocker_codes.iter().any(|code| {
+            code == "current_task_not_ready_for_dev_team_dispatch:task=runtime-defect-active"
+        }));
+        assert!(preview.blocked_candidates.iter().any(|candidate| {
+            candidate.task_id == "runtime-defect-active"
+                && candidate
+                    .reasons
+                    .contains(&"current_task_not_ready_for_dev_team_dispatch".to_string())
+        }));
     }
 
     #[test]

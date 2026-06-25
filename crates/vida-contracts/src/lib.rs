@@ -170,13 +170,13 @@ pub fn legacy_operation_alias_receipt(operation_id: &str) -> Option<VidaLegacyOp
 }
 
 pub fn mvp_operation_registry() -> Vec<VidaOperationSpec> {
-    use operations::*;
     use VidaCapabilityScope::{
         ClaimWrite, CompletionRecord, MaterializationPlan, MaterializationRead,
         OrchestrationControlPlaneRead, PacketDispatch, ProjectRegistryRead, ProjectionRebuild,
         ReadEvents, ReadReceipts, ReadStatus, RepairApply, RunAdvance, ServiceAdmin,
         ServiceInstallApply, ServiceInstallPlan, TaskApply, WizardApply, WizardPlan, WizardRead,
     };
+    use operations::*;
     vec![
         VidaOperationSpec::read_with_capabilities(
             SERVICE_HELLO,
@@ -772,18 +772,20 @@ fn input_fields_for_operation(operation_id: &str) -> Vec<VidaOperationInputField
             "Event cursor to read from.",
             VidaOperationTuiControl::TextInput,
         )],
-        SERVICE_LIFECYCLE_PLAN => vec![field(
-            "mode",
-            "mode",
-            "Mode",
-            VidaOperationInputValueKind::EnumOne,
-            false,
-            Some("--mode"),
-            Some("dry_run"),
-            "Lifecycle planning mode.",
-            VidaOperationTuiControl::Select,
-        )
-        .with_enum_values(["dry_run"])],
+        SERVICE_LIFECYCLE_PLAN => vec![
+            field(
+                "mode",
+                "mode",
+                "Mode",
+                VidaOperationInputValueKind::EnumOne,
+                false,
+                Some("--mode"),
+                Some("dry_run"),
+                "Lifecycle planning mode.",
+                VidaOperationTuiControl::Select,
+            )
+            .with_enum_values(["dry_run"]),
+        ],
         WIZARD_SCHEMA_GET
         | WIZARD_SESSION_START
         | WIZARD_SESSION_GET
@@ -791,18 +793,20 @@ fn input_fields_for_operation(operation_id: &str) -> Vec<VidaOperationInputField
         | WIZARD_SESSION_VALIDATE
         | WIZARD_SESSION_DIFF
         | WIZARD_SESSION_APPLY => {
-            let mut fields = vec![field(
-                "wizard_kind",
-                "wizard_kind",
-                "Wizard kind",
-                VidaOperationInputValueKind::EnumOne,
-                false,
-                Some("--kind"),
-                Some("project_init"),
-                "Wizard schema kind.",
-                VidaOperationTuiControl::Select,
-            )
-            .with_enum_values(["project_init"])];
+            let mut fields = vec![
+                field(
+                    "wizard_kind",
+                    "wizard_kind",
+                    "Wizard kind",
+                    VidaOperationInputValueKind::EnumOne,
+                    false,
+                    Some("--kind"),
+                    Some("project_init"),
+                    "Wizard schema kind.",
+                    VidaOperationTuiControl::Select,
+                )
+                .with_enum_values(["project_init"]),
+            ];
             if matches!(
                 operation_id,
                 WIZARD_SESSION_START | WIZARD_SESSION_VALIDATE | WIZARD_SESSION_DIFF
@@ -2961,9 +2965,10 @@ mod tests {
         assert_eq!(spec.scope, VidaOperationScope::Project);
         assert!(spec.requires_project_ref);
         assert!(!spec.requires_apply_token);
-        assert!(spec
-            .required_capabilities
-            .contains(&VidaCapabilityScope::WizardPlan));
+        assert!(
+            spec.required_capabilities
+                .contains(&VidaCapabilityScope::WizardPlan)
+        );
     }
 
     #[test]

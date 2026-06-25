@@ -693,7 +693,11 @@ impl Release1ContractStatus {
     }
 
     pub(crate) const fn from_bool(ok: bool) -> Self {
-        if ok { Self::Pass } else { Self::Blocked }
+        if ok {
+            Self::Pass
+        } else {
+            Self::Blocked
+        }
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
@@ -2205,17 +2209,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        ApprovalStatus, BlockerCode, CanonicalApprovalArtifact, CanonicalApprovalRecord,
-        CanonicalArtifactHeader, CanonicalArtifactType, CanonicalClosureAdmissionArtifact,
-        CanonicalClosureAdmissionRecord, CanonicalEvaluationArtifact, CanonicalEvaluationRun,
-        CanonicalFeedbackArtifact, CanonicalFeedbackEvent, CanonicalIncidentEvidenceArtifact,
-        CanonicalIncidentEvidenceBundle, CanonicalLaneExecutionReceipt,
-        CanonicalLaneExecutionReceiptArtifact, CanonicalMemoryArtifact, CanonicalMemoryRecord,
-        CanonicalPolicyDecision, CanonicalPolicyDecisionArtifact, CanonicalToolContract,
-        CanonicalToolContractArtifact, CanonicalTraceArtifact, CanonicalTraceEvent,
-        CompatibilityBoundary, CompatibilityClass, ExceptionTakeoverState, GateLevel, LaneStatus,
-        Release1ContractStatus, Release1ContractType, Release1SchemaVersion, RiskTier,
-        WorkflowClass, blocker_code_str, blocker_code_value, canonical_approval_status_str,
+        blocker_code_str, blocker_code_value, canonical_approval_status_str,
         canonical_artifact_type_str, canonical_blocker_code_list,
         canonical_compatibility_class_str, canonical_gate_level_str,
         canonical_release1_contract_status_str, canonical_release1_contract_type_str,
@@ -2224,7 +2218,17 @@ mod tests {
         cli_probe_incident_baseline_summary, cli_probe_tool_contract_summary,
         cli_probe_trace_baseline_summary, evaluate_policy_gate_protocol_binding,
         exception_takeover_state, missing_downstream_lane_evidence_blocker,
-        release1_contract_status_str,
+        release1_contract_status_str, ApprovalStatus, BlockerCode, CanonicalApprovalArtifact,
+        CanonicalApprovalRecord, CanonicalArtifactHeader, CanonicalArtifactType,
+        CanonicalClosureAdmissionArtifact, CanonicalClosureAdmissionRecord,
+        CanonicalEvaluationArtifact, CanonicalEvaluationRun, CanonicalFeedbackArtifact,
+        CanonicalFeedbackEvent, CanonicalIncidentEvidenceArtifact, CanonicalIncidentEvidenceBundle,
+        CanonicalLaneExecutionReceipt, CanonicalLaneExecutionReceiptArtifact,
+        CanonicalMemoryArtifact, CanonicalMemoryRecord, CanonicalPolicyDecision,
+        CanonicalPolicyDecisionArtifact, CanonicalToolContract, CanonicalToolContractArtifact,
+        CanonicalTraceArtifact, CanonicalTraceEvent, CompatibilityBoundary, CompatibilityClass,
+        ExceptionTakeoverState, GateLevel, LaneStatus, Release1ContractStatus,
+        Release1ContractType, Release1SchemaVersion, RiskTier, WorkflowClass,
     };
 
     #[test]
