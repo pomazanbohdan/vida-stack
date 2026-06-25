@@ -1128,6 +1128,9 @@ fn lane_blocked_next_action(
     if let Some(action) = pending_host_bridge_next_action(summary, status) {
         return Some(action);
     }
+    if let Some(action) = lane_authorized_rework_next_action(summary) {
+        return Some(action);
+    }
     if let Some(receipt_id) = summary
         .exception_path_receipt_id
         .as_deref()
@@ -1234,6 +1237,33 @@ fn lane_blocked_next_action(
         surface: lane_recommended_surface_for_command(&command),
         command,
         reason: "record bounded exception-path evidence for the dispatch blocker before local recovery work".to_string(),
+    })
+}
+
+fn lane_authorized_rework_next_action(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> Option<LaneNextAction> {
+    let route = crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_route_from_receipt_fields(
+        summary.downstream_dispatch_result_path.as_deref(),
+        summary.dispatch_result_path.as_deref(),
+        summary.dispatch_packet_path.as_deref(),
+        &summary.dispatch_target,
+    )?;
+    let run_id = summary.run_id.trim();
+    if run_id.is_empty() {
+        return None;
+    }
+    let command = format!(
+        "vida taskflow consume continue --run-id {}",
+        crate::shell_quote(run_id)
+    );
+    Some(LaneNextAction {
+        surface: "vida taskflow consume continue".to_string(),
+        command,
+        reason: format!(
+            "continue the authorized `{}` rework handoff from receipt-backed completion evidence",
+            route.allowed_next_node
+        ),
     })
 }
 
@@ -5933,6 +5963,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -7557,6 +7588,111 @@ mod tests {
             .recommended_command
             .as_deref()
             .is_some_and(|command| !command.contains("exception-takeover")));
+    }
+
+    #[test]
+    fn lane_envelope_prefers_authorized_rework_handoff_over_exception_takeover() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-authorized-rework-{}",
+            std::process::id()
+        ));
+        let packet_path =
+            root.join(".vida/data/state/runtime-consumption/dispatch-packets/coach.json");
+        let result_path =
+            root.join(".vida/data/state/runtime-consumption/dispatch-results/coach-result.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("packet parent should create");
+        fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("result parent should create");
+        fs::write(
+            &packet_path,
+            serde_json::to_string(&serde_json::json!({
+                "run_id": "run-lane-test",
+                "dispatch_target": "coach_implementation_gate",
+                "role_selection_full": {
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "lane_catalog": {
+                                    "developer": {"dispatch_target": "developer"},
+                                    "coach_implementation_gate": {"dispatch_target": "coach_implementation_gate"},
+                                    "tester": {"dispatch_target": "tester"}
+                                },
+                                "execution_lane_sequence": [
+                                    "developer",
+                                    "coach_implementation_gate",
+                                    "tester"
+                                ]
+                            }
+                        }
+                    }
+                }
+            }))
+            .expect("packet json should encode"),
+        )
+        .expect("packet should write");
+        fs::write(
+            &result_path,
+            serde_json::to_string(&serde_json::json!({
+                "status": "blocked",
+                "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_code": "coach_rework_required",
+                "blocker_codes": ["coach_rework_required"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer_rework",
+                "completion_verdict": "rework_required"
+            }))
+            .expect("result json should encode"),
+        )
+        .expect("result should write");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.dispatch_target = "coach_implementation_gate".to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_surface = Some("external_cli:vibe_cli".to_string());
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
+        receipt.blocker_code = Some("configured_backend_dispatch_failed".to_string());
+        receipt.lane_status = crate::LaneStatus::LaneBlocked.as_str().to_string();
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let truth = derive_lane_show_truth(&summary, None);
+
+        let envelope = build_lane_envelope(
+            summary,
+            None,
+            None,
+            None,
+            serde_json::json!({}),
+            true,
+            truth.blocker_codes,
+            vec!["record structured exception takeover for blocked delegated cycle".to_string()],
+        );
+
+        assert_eq!(
+            envelope.recommended_surface.as_deref(),
+            Some("vida taskflow consume continue")
+        );
+        assert_eq!(
+            envelope.recommended_command.as_deref(),
+            Some("vida taskflow consume continue --run-id run-lane-test")
+        );
+        assert!(envelope
+            .recommended_command
+            .as_deref()
+            .is_some_and(|command| !command.contains("exception-takeover")));
+        assert_eq!(
+            envelope
+                .next_action
+                .as_ref()
+                .map(|action| action.reason.as_str()),
+            Some(
+                "continue the authorized `developer_rework` rework handoff from receipt-backed completion evidence"
+            )
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
