@@ -36,7 +36,7 @@ The epic is closeable only when `vida task progress VIDA-RUNTIME-HARDENING --jso
 The final wave must preserve these invariants:
 
 1. TaskFlow remains the execution authority; repository files are projections or implementation artifacts.
-2. Every write-producing step has a DB-backed TODO under the active task unless the runtime is explicitly bypassed for a documented VIDA runtime defect.
+2. Every write-producing mutation has a DB-backed `step` under the active task unless the runtime is explicitly bypassed for a documented VIDA runtime defect.
 3. Root-local writes require either delegated execution evidence or an active exception takeover with the exact owned path scope.
 4. Structured proof evidence must be attached for every configured proof target before closing a non-container task.
 5. `vida task validate-graph --json` must pass after TaskFlow mutations and before treating a task closure as stable.

@@ -135,7 +135,7 @@ Project-routing rule:
    - release/version/readiness gates: the mapped release and runtime readiness process/spec owners.
 18. Project residue that remains valid in this sidecar:
    - active repository paths and canonical docs maps,
-   - DB-backed TODO-before-write command shape and explicit stop criteria,
+   - DB-backed step-before-write command shape and explicit stop criteria,
    - root `AGENTS.md` and `install/assets/AGENTS.scaffold.md` synchronization when either bootstrap carrier changes,
    - current local proof scripts and release/install timing decisions as documented in the command-timing protocol,
    - vida-stack temporary artifact commit guard and project-local worktree-root policy.

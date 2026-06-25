@@ -36,7 +36,7 @@ For every runtime development session:
 2. run `vida orchestrator-init --json`,
 3. record `active_bounded_unit`, `why_this_unit`, and `sequential_vs_parallel_posture`,
 4. load the relevant skill body before packet shaping or writes,
-5. create a DB-backed `todo` before any write-producing mutation,
+5. create a DB-backed `step` before any write-producing mutation,
 6. validate TaskFlow graph after mutations.
 
 ## Current Installed Runtime Environment
