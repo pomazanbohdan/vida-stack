@@ -108,6 +108,7 @@ fn host_bridge_completion_command_resolves_packet_next_target() {
             "run_id": "run-analyst",
             "task_id": "run-analyst",
             "dispatch_target": "analyst",
+            "allowed_next_node": "closure",
             "packet_path": packet_path.display().to_string(),
             "runtime_role": "business_analyst",
             "task_class": "specification",
@@ -151,8 +152,12 @@ fn host_bridge_completion_command_resolves_packet_next_target() {
     let command = payload["host_bridge"]["completion_command"]
         .as_str()
         .expect("completion command should render");
-    assert!(command.contains("--allowed-next-node designer"));
-    assert!(!command.contains("--allowed-next-node next "));
+    assert!(
+        !command.contains("--allowed-next-node"),
+        "completion command must not trust packet/request next-node routing: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

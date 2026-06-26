@@ -750,39 +750,6 @@ fn retryable_host_bridge_completion_request(
         })
 }
 
-fn host_bridge_completion_allowed_next_node(
-    request: &serde_json::Value,
-    state_root: Option<&Path>,
-) -> Option<String> {
-    for field in ["allowed_next_node", "downstream_dispatch_target"] {
-        if let Some(target) = host_bridge_request_string(request, field)
-            .map(str::trim)
-            .filter(|target| !target.is_empty())
-        {
-            return Some(target.to_string());
-        }
-    }
-    let packet_path = host_bridge_request_string(request, "packet_path")?;
-    let packet_path = if let Some(state_root) = state_root {
-        canonical_state_artifact_path(state_root, packet_path, true).ok()?
-    } else {
-        std::path::PathBuf::from(packet_path)
-    };
-    let packet =
-        read_canonical_host_bridge_json_artifact(&packet_path, "host bridge packet").ok()?;
-    for field in ["allowed_next_node", "downstream_dispatch_target"] {
-        if let Some(target) = packet
-            .get(field)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|target| !target.is_empty())
-        {
-            return Some(target.to_string());
-        }
-    }
-    None
-}
-
 fn host_bridge_adapter_payload(
     request_path: &Path,
     request: &serde_json::Value,
@@ -799,7 +766,7 @@ fn host_bridge_adapter_payload(
             let dispatch_target = request.dispatch_target.as_str();
             format!("{run_id}-{dispatch_target}-host-bridge-receipt")
         };
-        let mut command = format!(
+        let command = format!(
             "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --host-bridge-result-file {}",
             crate::shell_quote(&request.run_id),
             crate::shell_quote(&receipt_id),
@@ -807,12 +774,6 @@ fn host_bridge_adapter_payload(
             crate::shell_quote("<host-agent-id>"),
             crate::shell_quote(&request.result_path.display().to_string())
         );
-        if let Some(allowed_next_node) =
-            host_bridge_completion_allowed_next_node(&effective_request, state_root)
-        {
-            command.push_str(" --allowed-next-node ");
-            command.push_str(&crate::shell_quote(&allowed_next_node));
-        }
         command
     } else {
         "repair host bridge request run_id before completion".to_string()
@@ -5798,7 +5759,7 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_adapter_completion_command_uses_supported_receipt_command() {
+    fn host_bridge_adapter_completion_command_omits_untrusted_packet_next_node() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -5833,6 +5794,7 @@ mod tests {
             "run_id": "run-analyst",
             "task_id": "run-analyst",
             "dispatch_target": "analyst",
+            "allowed_next_node": "closure",
             "packet_path": packet_path.display().to_string(),
             "runtime_role": "business_analyst",
             "task_class": "specification",
@@ -5862,7 +5824,10 @@ mod tests {
         assert!(completion_command.contains("--host-agent-id '<host-agent-id>'"));
         assert!(completion_command.contains("--host-bridge-result-file"));
         assert!(!completion_command.contains("--host-bridge-summary"));
-        assert!(completion_command.contains("--allowed-next-node designer"));
+        assert!(
+            !completion_command.contains("--allowed-next-node"),
+            "completion command must not promote packet/request routing into CLI override: {completion_command}"
+        );
         assert!(!completion_command.contains("--blocker-codes"));
         let _ = std::fs::remove_dir_all(&root);
     }
