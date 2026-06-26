@@ -179,13 +179,21 @@ pub fn summarize_task_stage_attempts(
             .cmp(&right.updated_at)
             .then_with(|| left.attempt_id.cmp(&right.attempt_id))
     });
+    let latest_consolidation_receipt_id = latest
+        .and_then(|attempt| attempt.consolidation_receipt_id.clone())
+        .or_else(|| {
+            if attempts.is_empty() {
+                stage_latest_consolidation_receipt_id
+            } else {
+                None
+            }
+        });
     TaskStageSummaryDecision {
         attempt_count: attempts.len(),
         status_counts,
         latest_attempt_id: latest.map(|attempt| attempt.attempt_id.clone()),
         latest_attempt_status: latest.map(|attempt| attempt.status.clone()),
-        latest_consolidation_receipt_id: stage_latest_consolidation_receipt_id
-            .or_else(|| latest.and_then(|attempt| attempt.consolidation_receipt_id.clone())),
+        latest_consolidation_receipt_id,
         artifact_refs,
     }
 }
@@ -345,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn task_stage_summary_prefers_stage_receipt_when_latest_attempt_has_none() {
+    fn task_stage_summary_ignores_stage_receipt_when_latest_attempt_has_none() {
         let decision = summarize_task_stage_attempts(
             &[TaskAttemptSummaryInput {
                 attempt_id: "attempt-b".to_string(),
@@ -358,6 +366,14 @@ mod tests {
         );
 
         assert_eq!(decision.latest_attempt_id.as_deref(), Some("attempt-b"));
+        assert_eq!(decision.latest_consolidation_receipt_id.as_deref(), None);
+    }
+
+    #[test]
+    fn task_stage_summary_reports_stage_receipt_when_no_attempts_exist() {
+        let decision = summarize_task_stage_attempts(&[], Some("stage-receipt-b".to_string()));
+
+        assert_eq!(decision.latest_attempt_id.as_deref(), None);
         assert_eq!(
             decision.latest_consolidation_receipt_id.as_deref(),
             Some("stage-receipt-b")

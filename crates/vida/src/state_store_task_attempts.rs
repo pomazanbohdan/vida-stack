@@ -862,10 +862,7 @@ mod tests {
         assert_eq!(summary.status_counts["rejected"], 1);
         assert_eq!(summary.status_counts["accepted"], 1);
         assert_eq!(summary.latest_attempt_id.as_deref(), Some("attempt-b"));
-        assert_eq!(
-            summary.latest_consolidation_receipt_id.as_deref(),
-            Some("receipt-b")
-        );
+        assert_eq!(summary.latest_consolidation_receipt_id.as_deref(), None);
         assert_eq!(
             summary.artifact_refs,
             vec!["artifact-a".to_string(), "artifact-b".to_string()]
