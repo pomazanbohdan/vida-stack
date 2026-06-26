@@ -68,6 +68,16 @@ fn runtime_bundle_retrieval_trust_evidence(
     .unwrap_or_else(|| serde_json::json!({}))
 }
 
+fn apply_terminal_task_active_run_graph_verdict(
+    latest_run_graph_task_missing: &mut bool,
+    verdict: &crate::taskflow_run_graph_task_authority::RunGraphTaskAuthorityVerdict,
+) -> bool {
+    if verdict.task_missing() {
+        *latest_run_graph_task_missing = true;
+    }
+    verdict.task_missing()
+}
+
 pub(crate) async fn build_taskflow_consume_bundle_payload(
     store: &StateStore,
 ) -> Result<TaskflowConsumeBundlePayload, String> {
@@ -192,7 +202,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .list_tasks(None, true)
         .await
         .map_err(|error| format!("Failed to read tasks for runtime bundle: {error}"))?;
-    let (mut latest_run_graph_task_closed, mut latest_run_graph_task_missing) =
+    let (latest_run_graph_task_closed, mut latest_run_graph_task_missing) =
         match effective_latest_run_graph_status {
             Some(status) => {
                 let verdict =
@@ -231,9 +241,10 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
                             "Failed to read terminal task-active run graph task authority: {error}"
                         )
                     })?;
-                latest_run_graph_task_closed |= verdict.stale_for_active_projection();
-                latest_run_graph_task_missing |= verdict.task_missing();
-                verdict.task_missing()
+                apply_terminal_task_active_run_graph_verdict(
+                    &mut latest_run_graph_task_missing,
+                    &verdict,
+                )
             }
             None => false,
         }
@@ -1983,6 +1994,36 @@ mod tests {
             nanos,
             counter
         ))
+    }
+
+    #[test]
+    fn terminal_task_active_verdict_does_not_reopen_closed_projection_mismatch() {
+        let mut task_missing = false;
+        let terminal_ok = crate::taskflow_run_graph_task_authority::RunGraphTaskAuthorityVerdict {
+            kind: crate::taskflow_run_graph_task_authority::RunGraphTaskAuthorityKind::TerminalClosureOk,
+            run_id: "closed-run".to_string(),
+            task_id: "closed-task".to_string(),
+            task_status: Some("closed".to_string()),
+        };
+
+        assert!(!super::apply_terminal_task_active_run_graph_verdict(
+            &mut task_missing,
+            &terminal_ok
+        ));
+        assert!(!task_missing);
+        assert!(!terminal_ok.stale_for_active_projection());
+
+        let missing = crate::taskflow_run_graph_task_authority::RunGraphTaskAuthorityVerdict {
+            kind: crate::taskflow_run_graph_task_authority::RunGraphTaskAuthorityKind::MissingTaskStaleRun,
+            run_id: "missing-run".to_string(),
+            task_id: "missing-task".to_string(),
+            task_status: None,
+        };
+        assert!(super::apply_terminal_task_active_run_graph_verdict(
+            &mut task_missing,
+            &missing
+        ));
+        assert!(task_missing);
     }
 
     fn write_project_protocol_projection_fixture(

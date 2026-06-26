@@ -902,17 +902,6 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                         _ => false,
                     };
-                let latest_recovery_is_terminal_retired_runtime_run = crate::runtime_dispatch_receipt_helpers::
-                    recovery_summary_is_reconciled_terminal_retired_runtime_run(
-                        latest_run_graph_status.as_ref(),
-                        latest_run_graph_recovery.as_ref(),
-                    );
-                let closed_task_active_run_projection_mismatch =
-                    !latest_recovery_is_terminal_retired_runtime_run
-                        && (latest_run_graph_task_closed
-                            || global_closed_run_is_current
-                            || terminal_closed_run_is_current
-                            || latest_run_graph_terminal_closure_without_truth);
                 let taskflow_active_candidates =
                     crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
                         &all_tasks,
@@ -1035,6 +1024,17 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     _ => latest_run_graph_recovery,
                 };
+                let latest_recovery_is_terminal_retired_runtime_run = crate::runtime_dispatch_receipt_helpers::
+                    recovery_summary_is_reconciled_terminal_retired_runtime_run(
+                        latest_run_graph_status.as_ref(),
+                        latest_run_graph_recovery.as_ref(),
+                    );
+                let closed_task_active_run_projection_mismatch =
+                    !latest_recovery_is_terminal_retired_runtime_run
+                        && (latest_run_graph_task_closed
+                            || global_closed_run_is_current
+                            || terminal_closed_run_is_current
+                            || latest_run_graph_terminal_closure_without_truth);
                 let continuation_binding =
                     crate::continuation_binding_summary::build_continuation_binding_summary_with_task_authority(
                         explicit_continuation_binding.as_ref(),
@@ -1954,6 +1954,19 @@ async fn refresh_cached_status_projection_runtime_fields(
         crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root()).ok()?
     } else {
         latest_run_graph_dispatch_receipt
+    };
+    let latest_run_graph_recovery = match latest_run_graph_dispatch_receipt.as_ref() {
+        Some(receipt)
+            if latest_run_graph_recovery
+                .as_ref()
+                .is_none_or(|recovery| recovery.run_id != receipt.run_id)
+                && latest_run_graph_status
+                    .as_ref()
+                    .is_some_and(|status| status.run_id == receipt.run_id) =>
+        {
+            store.run_graph_recovery_summary(&receipt.run_id).await.ok()
+        }
+        _ => latest_run_graph_recovery,
     };
     let latest_run_graph_effective_run_id = latest_run_graph_status
         .as_ref()
