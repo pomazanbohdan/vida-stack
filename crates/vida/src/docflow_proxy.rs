@@ -82,3 +82,53 @@ pub(crate) fn run_docflow_proxy(args: ProxyArgs) -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::process::ExitCode;
+
+    use super::{proxy_requested_help, run_docflow_proxy};
+    use crate::ProxyArgs;
+
+    fn proxy_args(args: &[&str]) -> ProxyArgs {
+        ProxyArgs {
+            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn proxy_help_detection_accepts_empty_help_and_flags() {
+        assert!(proxy_requested_help(&[]));
+        assert!(proxy_requested_help(&["help".to_string()]));
+        assert!(proxy_requested_help(&["--help".to_string()]));
+        assert!(proxy_requested_help(&["-h".to_string()]));
+        assert!(!proxy_requested_help(&["overview".to_string()]));
+    }
+
+    #[test]
+    fn docflow_proxy_returns_success_for_help_version_and_overview() {
+        assert_eq!(run_docflow_proxy(proxy_args(&["help"])), ExitCode::SUCCESS);
+        assert_eq!(
+            run_docflow_proxy(proxy_args(&["--version"])),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            run_docflow_proxy(proxy_args(&[
+                "overview",
+                "--registry-count",
+                "2",
+                "--relation-count",
+                "1",
+            ])),
+            ExitCode::SUCCESS
+        );
+    }
+
+    #[test]
+    fn docflow_proxy_rejects_unknown_docflow_commands() {
+        assert_eq!(
+            run_docflow_proxy(proxy_args(&["unknown-docflow-command"])),
+            ExitCode::from(2)
+        );
+    }
+}

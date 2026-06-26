@@ -207,6 +207,232 @@ fn write_task_doc(root: &std::path::Path, task_id: &str) {
     .expect("changelog should be written");
 }
 
+fn run_docflow_owned(args: Vec<String>) -> std::process::Output {
+    vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args(args)
+        .output()
+        .expect("docflow binary should run")
+}
+
+fn assert_docflow_success(
+    context: &vida_test_support::CommandContext,
+    output: &std::process::Output,
+) {
+    assert!(output.status.success(), "{}", context.diagnostics(output));
+}
+
+#[test]
+fn file_commands_render_validation_readiness_reporting_and_read_errors() {
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("file-commands");
+    write_task_doc(&root, "TASK-FILE");
+    let file = root.join("docs/process/a.md");
+    let file_arg = file.to_string_lossy().to_string();
+    let body = fs::read_to_string(&file).expect("fixture body should be readable");
+
+    let validation = run_docflow_owned(vec![
+        "validate-footer".to_string(),
+        "--path".to_string(),
+        "docs/process/a.md".to_string(),
+        "--content".to_string(),
+        body.clone(),
+    ]);
+    assert_docflow_success(&context, &validation);
+    assert!(String::from_utf8_lossy(&validation.stdout).starts_with("validation\n"));
+
+    let readiness = run_docflow_owned(vec![
+        "readiness".to_string(),
+        "--path".to_string(),
+        "docs/process/a.md".to_string(),
+        "--content".to_string(),
+        body,
+    ]);
+    assert_docflow_success(&context, &readiness);
+    assert!(String::from_utf8_lossy(&readiness.stdout).starts_with("readiness\n"));
+
+    for (command, root_key, count_key) in [
+        ("check-file", "validation", "issue_count"),
+        ("readiness-file", "readiness", "row_count"),
+        ("report-check", "reporting", "issue_count"),
+    ] {
+        let output = run_docflow_owned(vec![
+            command.to_string(),
+            "--path".to_string(),
+            file_arg.clone(),
+            "--json".to_string(),
+        ]);
+        assert_docflow_success(&context, &output);
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("file command json should parse");
+        assert_eq!(parsed[root_key]["path"], file_arg);
+        assert!(parsed[root_key][count_key].is_number(), "{parsed}");
+    }
+
+    let missing = run_docflow_owned(vec![
+        "check-file".to_string(),
+        "--path".to_string(),
+        root.join("missing.md").to_string_lossy().to_string(),
+        "--json".to_string(),
+    ]);
+    assert_docflow_success(&context, &missing);
+    let missing_json: serde_json::Value =
+        serde_json::from_slice(&missing.stdout).expect("missing file json should parse");
+    assert_eq!(missing_json["validation"]["verdict"], "blocking");
+    assert_eq!(
+        missing_json["validation"]["errors"][0]["code"],
+        "read_error"
+    );
+
+    fs::remove_dir_all(root).expect("root should be removed");
+}
+
+#[test]
+fn relation_changelog_and_impact_commands_cover_docflow_fixture_paths() {
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("relation-impact");
+    write_task_doc(&root, "TASK-IMPACT");
+    let file = root.join("docs/process/a.md");
+    let file_arg = file.to_string_lossy().to_string();
+    let root_arg = root.to_string_lossy().to_string();
+
+    let deps = run_docflow_owned(vec![
+        "deps".to_string(),
+        "--path".to_string(),
+        file_arg.clone(),
+    ]);
+    assert_docflow_success(&context, &deps);
+    let deps_json: serde_json::Value =
+        serde_json::from_slice(&deps.stdout).expect("deps json should parse");
+    assert_eq!(deps_json["path"], file_arg);
+
+    for command in ["links", "deps-map"] {
+        let output = run_docflow_owned(vec![
+            command.to_string(),
+            "--path".to_string(),
+            file_arg.clone(),
+        ]);
+        assert_docflow_success(&context, &output);
+    }
+
+    let changelog = run_docflow_owned(vec![
+        "changelog".to_string(),
+        root.join("docs/process/a.changelog.jsonl")
+            .to_string_lossy()
+            .to_string(),
+        "--limit".to_string(),
+        "1".to_string(),
+        "--newest-first".to_string(),
+    ]);
+    assert_docflow_success(&context, &changelog);
+    assert!(String::from_utf8_lossy(&changelog.stdout).starts_with("changelog\n"));
+
+    let changelog_task = run_docflow_owned(vec![
+        "changelog-task".to_string(),
+        "--root".to_string(),
+        root_arg.clone(),
+        "--task-id".to_string(),
+        "TASK-IMPACT".to_string(),
+    ]);
+    assert_docflow_success(&context, &changelog_task);
+    assert!(String::from_utf8_lossy(&changelog_task.stdout).starts_with("changelog-task\n"));
+
+    let task_summary = run_docflow_owned(vec![
+        "task-summary".to_string(),
+        "--root".to_string(),
+        root_arg.clone(),
+        "--task-id".to_string(),
+        "TASK-IMPACT".to_string(),
+        "--format".to_string(),
+        "jsonl".to_string(),
+    ]);
+    assert_docflow_success(&context, &task_summary);
+    let summary_line = String::from_utf8_lossy(&task_summary.stdout)
+        .lines()
+        .next()
+        .expect("task summary should render a row")
+        .to_string();
+    let summary_json: serde_json::Value =
+        serde_json::from_str(&summary_line).expect("task summary jsonl should parse");
+    assert_eq!(summary_json["summary"], "task");
+    assert_eq!(summary_json["task_id"], "TASK-IMPACT");
+
+    let artifact_impact = run_docflow_owned(vec![
+        "artifact-impact".to_string(),
+        "--root".to_string(),
+        root_arg.clone(),
+        "--artifact".to_string(),
+        "process/a".to_string(),
+        "--format".to_string(),
+        "jsonl".to_string(),
+    ]);
+    assert_docflow_success(&context, &artifact_impact);
+    let artifact_json: serde_json::Value =
+        serde_json::from_slice(&artifact_impact.stdout).expect("artifact impact json should parse");
+    assert_eq!(artifact_json["command"], "artifact-impact");
+    assert_eq!(artifact_json["artifact"], "process/a");
+
+    let task_impact = run_docflow_owned(vec![
+        "task-impact".to_string(),
+        "--root".to_string(),
+        root_arg.clone(),
+        "--task-id".to_string(),
+        "TASK-IMPACT".to_string(),
+        "--format".to_string(),
+        "jsonl".to_string(),
+    ]);
+    assert_docflow_success(&context, &task_impact);
+    let task_impact_json: serde_json::Value =
+        serde_json::from_slice(&task_impact.stdout).expect("task impact json should parse");
+    assert_eq!(task_impact_json["command"], "task-impact");
+    assert_eq!(task_impact_json["task_id"], "TASK-IMPACT");
+
+    fs::remove_dir_all(root).expect("root should be removed");
+}
+
+#[test]
+fn tree_scan_commands_cover_registry_validation_and_readiness_outputs() {
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("tree-scan");
+    write_task_doc(&root, "TASK-TREE");
+    let root_arg = root.to_string_lossy().to_string();
+
+    for (command, expected) in [
+        ("summary", "summary\n"),
+        ("overview-scan", "docflow overview\n"),
+        ("relations-scan", "relations\n"),
+        ("scan", "{\"artifact_path\""),
+        ("registry-scan", "registry\n"),
+        ("registry", "{\"artifact_path\""),
+        ("validate-tree", "validation-tree\n"),
+        ("readiness-tree", "readiness-tree\n"),
+    ] {
+        let output = run_docflow_owned(vec![
+            command.to_string(),
+            "--root".to_string(),
+            root_arg.clone(),
+        ]);
+        assert_docflow_success(&context, &output);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.starts_with(expected) || stdout.contains(expected),
+            "expected {expected:?} in {command} stdout: {stdout}"
+        );
+    }
+
+    let readiness_check = run_docflow_owned(vec![
+        "readiness-check".to_string(),
+        "--root".to_string(),
+        root_arg.clone(),
+        "--format".to_string(),
+        "toon".to_string(),
+        "docs/process/a.md".to_string(),
+    ]);
+    assert_docflow_success(&context, &readiness_check);
+    assert!(String::from_utf8_lossy(&readiness_check.stdout).contains("readiness-check"));
+
+    fs::remove_dir_all(root).expect("root should be removed");
+}
+
 fn write_task_protocol_doc(root: &std::path::Path, task_id: &str) {
     fs::create_dir_all(root.join("vida/config/instructions/instruction-contracts"))
         .expect("instruction-contracts dir should be created");
