@@ -3437,10 +3437,7 @@ fn trusted_host_bridge_completion_request_context(
         }
     }
     let receipt_target_matches_request = receipt.dispatch_target.trim() == dispatch_target;
-    if retryable_completion_context
-        && !adapter_gate_context
-        && !receipt_target_matches_request
-    {
+    if retryable_completion_context && !adapter_gate_context && !receipt_target_matches_request {
         return Err(
             "Retryable host bridge request dispatch target does not match persisted dispatch receipt evidence."
                 .to_string(),

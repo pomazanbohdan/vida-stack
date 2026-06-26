@@ -289,8 +289,11 @@ mod tests {
                 {"role_id": "analyst", "runtime_role": "implementation", "task_classes": ["analysis"]},
                 {"role_id": "developer", "runtime_role": "implementation", "task_classes": ["implementation"], "packet_template_kind": "delivery_task_packet"},
                 {"role_id": "tester", "runtime_role": "verification", "task_classes": ["verification"], "proof_gate": "test_report"},
-                {"role_id": "architect", "runtime_role": "reviewer", "task_classes": ["architecture"]},
-                {"role_id": "closer", "runtime_role": "prover", "task_classes": ["closure"]}
+                {"role_id": "architect", "runtime_role": "solution_architect", "task_classes": ["architecture"]},
+                {"role_id": "closer", "runtime_role": "prover", "task_classes": ["closure"]},
+                {"role_id": "specifier", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                {"role_id": "coder", "runtime_role": "worker", "task_classes": ["implementation"], "packet_template_kind": "delivery_task_packet"},
+                {"role_id": "refactorer", "runtime_role": "worker", "task_classes": ["implementation"]}
             ],
             "flows": [
                 {"flow_id": "task", "work_item_bindings": ["task"], "ordered_steps": [
@@ -299,8 +302,11 @@ mod tests {
                 {"flow_id": "defect", "work_item_bindings": ["defect", "bug"], "ordered_steps": [
                     {"role_id": "analyst"}, {"role_id": "developer"}, {"role_id": "tester"}
                 ]},
-                {"flow_id": "runtime_defect", "work_item_bindings": ["runtime_defect"], "ordered_steps": [
-                    {"role_id": "analyst"}, {"role_id": "developer", "requires_user_approval": true}, {"role_id": "tester"}
+                {"flow_id": "runtime_defect_remediation", "work_item_bindings": ["runtime_defect"], "ordered_steps": [
+                    {"role_id": "specifier"},
+                    {"role_id": "coder", "requires_user_approval": true},
+                    {"role_id": "refactorer"},
+                    {"role_id": "architect"}
                 ]},
                 {"flow_id": "architecture", "work_item_bindings": ["architecture"], "ordered_steps": [
                     {"role_id": "architect"}, {"role_id": "developer"}, {"role_id": "tester"}, {"role_id": "closer"}
@@ -314,7 +320,12 @@ mod tests {
         let flows = compile_all_dev_team_flows(&readiness_fixture()).expect("flows compile");
 
         assert_eq!(flows.len(), 4);
-        for flow_id in ["task", "defect", "runtime_defect", "architecture"] {
+        for flow_id in [
+            "task",
+            "defect",
+            "runtime_defect_remediation",
+            "architecture",
+        ] {
             let flow = flows
                 .iter()
                 .find(|flow| flow.flow.flow_id == flow_id)
@@ -333,7 +344,7 @@ mod tests {
                 .unwrap()
                 .flow
                 .flow_id,
-            "runtime_defect"
+            "runtime_defect_remediation"
         );
         assert_eq!(
             compile_dev_team_flow_for_work_item(&readiness, "unknown")

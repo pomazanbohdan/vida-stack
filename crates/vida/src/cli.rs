@@ -592,7 +592,7 @@ pub(crate) struct AgentDispatchNextArgs {
 
     #[arg(
         long = "dev-team",
-        help = "Preview configured dev-team flow sequence from vida.config.yaml, for example analyst, autotester, developer, coach-validator, tester/prover, and release closure"
+        help = "Preview configured dev-team flow sequence from vida.config.yaml, for example specifier, coder, refactorer, and architect for the clean four-pack runtime-defect flow"
     )]
     pub(crate) dev_team: bool,
 

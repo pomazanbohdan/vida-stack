@@ -138,7 +138,7 @@ The root project config and generated template must keep the same standard flow 
 | --- | --- | --- |
 | `epic`, `task` | `default_delivery` | analyst, test author when required, developer, coach, verifier, prover, release closure |
 | `defect` | `defect_repair_verified` | analyst, test author, developer, coach, verifier |
-| `runtime_defect` | `runtime_defect_remediation` | runtime-surface analyst, regression author, developer, verifier, prover |
+| `runtime_defect` | `runtime_defect_remediation` | specifier, coder, refactorer, solution architect |
 | `pull_request`, `pr_repair` | `pr_repair_verified` | PR triage analyst, CI/review verifier, repair/integration developer, coach, proof/disposition prover |
 | `architecture` | `architecture_design` | analyst with user approval pause, execution-preparation worker, verifier |
 | `release_readiness` | `release_readiness_gate` | verifier, prover |

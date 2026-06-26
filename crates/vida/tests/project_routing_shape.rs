@@ -313,11 +313,10 @@ fn assert_enabled_hooks_have_templates(
 }
 
 #[test]
-fn project_routing_shape_separates_internal_host_agents_from_codex_cli_exec() {
+fn project_routing_shape_uses_internal_host_agents_only() {
     let config = project_config();
     let codex_system = &config["host_environment"]["systems"]["codex"];
     let internal = subagent(&config, "internal_subagents");
-    let cli_exec = subagent(&config, "codex_cli_exec");
 
     assert_eq!(
         yaml_string(&codex_system["execution_class"]),
@@ -353,22 +352,9 @@ fn project_routing_shape_separates_internal_host_agents_from_codex_cli_exec() {
         Some("host_bridge_receipt")
     );
 
-    assert_eq!(
-        yaml_string(&cli_exec["subagent_backend_class"]),
-        Some("external_cli")
-    );
-    assert_eq!(
-        yaml_string(&cli_exec["execution_boundary"]),
-        Some("child_process")
-    );
-    assert_eq!(
-        yaml_string(&cli_exec["dispatch_transport"]),
-        Some("codex_cli_exec")
-    );
-    assert_eq!(yaml_string(&cli_exec["dispatch"]["command"]), Some("codex"));
-    assert_eq!(
-        yaml_string_list(&cli_exec["dispatch"]["static_args"]),
-        vec!["exec".to_string(), "--json".to_string()]
+    assert!(
+        config["agent_system"]["subagents"]["codex_cli_exec"].is_null(),
+        "internal-only config must not keep the external codex cli exec backend enabled"
     );
 }
 

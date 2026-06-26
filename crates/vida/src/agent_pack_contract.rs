@@ -844,4 +844,57 @@ mod tests {
         assert_eq!(canonical_receive_mode("task"), "task");
         assert_eq!(canonical_receive_mode("batch"), "batch");
     }
+
+    #[test]
+    fn project_pack_registry_resolves_configured_role_pack_flows() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+
+        let registry =
+            load_pack_registry_for_root(&root).expect("project pack registry should load");
+        let overlay =
+            crate::config_value_utils::load_project_overlay_yaml_for_root(&root).expect("overlay");
+        let configured_flow_path = crate::yaml_string(crate::yaml_lookup(
+            &overlay,
+            &["agent_extensions", "registries", "flows"],
+        ));
+        assert_eq!(
+            configured_flow_path.as_deref(),
+            Some("docs/process/agent-extensions/flows.yaml")
+        );
+        let flow_registry_path = crate::project_activator_surface::resolve_overlay_path(
+            &root,
+            configured_flow_path.as_deref().expect("flow path"),
+        );
+        let flow_registry =
+            crate::project_activator_surface::read_yaml_file_checked(&flow_registry_path)
+                .expect("flow registry should read");
+        assert!(
+            crate::yaml_lookup(&flow_registry, &["flow_sets"])
+                .and_then(serde_yaml::Value::as_sequence)
+                .is_some_and(|rows| rows.iter().any(|row| {
+                    crate::yaml_string(crate::yaml_lookup(row, &["flow_id"])).as_deref()
+                        == Some("quick-two-pack-flow")
+                })),
+            "flow registry path: {}",
+            flow_registry_path.display()
+        );
+        let flow_ids = configured_flow_ids(&root, &overlay);
+
+        assert!(
+            flow_ids.contains("quick-two-pack-flow"),
+            "flow ids: {:?}",
+            flow_ids
+        );
+
+        assert!(
+            !registry
+                .blocker_codes
+                .iter()
+                .any(|code| code.starts_with("unknown_pack_flow_id:")),
+            "{:?}",
+            registry.blocker_codes
+        );
+    }
 }

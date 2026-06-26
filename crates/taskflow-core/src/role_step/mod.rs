@@ -330,6 +330,10 @@ mod tests {
     use super::*;
 
     fn flow(flow_id: &str) -> RoleStepFlowDefinition {
+        if flow_id == "runtime_defect_remediation" {
+            return runtime_defect_flow();
+        }
+
         RoleStepFlowDefinition {
             flow_id: flow_id.to_string(),
             schema_hash: format!("{flow_id}-hash-1"),
@@ -362,9 +366,55 @@ mod tests {
         }
     }
 
+    fn runtime_defect_flow() -> RoleStepFlowDefinition {
+        RoleStepFlowDefinition {
+            flow_id: "runtime_defect_remediation".to_string(),
+            schema_hash: "runtime_defect_remediation-hash-1".to_string(),
+            steps: vec![
+                RoleStepDefinition {
+                    role_id: "specifier".to_string(),
+                    runtime_role: "business_analyst".to_string(),
+                    task_class: "specification".to_string(),
+                    lifecycle_stage: "specification".to_string(),
+                    proof_gate: None,
+                    closes_workflow: false,
+                },
+                RoleStepDefinition {
+                    role_id: "coder".to_string(),
+                    runtime_role: "worker".to_string(),
+                    task_class: "implementation".to_string(),
+                    lifecycle_stage: "implementation".to_string(),
+                    proof_gate: Some("implementation_receipt".to_string()),
+                    closes_workflow: false,
+                },
+                RoleStepDefinition {
+                    role_id: "refactorer".to_string(),
+                    runtime_role: "worker".to_string(),
+                    task_class: "implementation".to_string(),
+                    lifecycle_stage: "refactor".to_string(),
+                    proof_gate: Some("refactor_receipt".to_string()),
+                    closes_workflow: false,
+                },
+                RoleStepDefinition {
+                    role_id: "architect".to_string(),
+                    runtime_role: "solution_architect".to_string(),
+                    task_class: "architecture".to_string(),
+                    lifecycle_stage: "architecture_review".to_string(),
+                    proof_gate: Some("architecture_review".to_string()),
+                    closes_workflow: false,
+                },
+            ],
+        }
+    }
+
     #[test]
     fn golden_state_progression_covers_task_defect_runtime_defect_and_architecture_flows() {
-        for flow_id in ["task", "defect", "runtime_defect", "architecture"] {
+        for flow_id in [
+            "task",
+            "defect",
+            "runtime_defect_remediation",
+            "architecture",
+        ] {
             let flow = flow(flow_id);
             let mut state = TaskRoleStepState::from_first_step(&flow).unwrap();
             state.mark_ready().unwrap();
@@ -376,14 +426,24 @@ mod tests {
                 .unwrap();
             state.validate().unwrap();
             state.complete().unwrap();
+            let expected_next_role = if flow_id == "runtime_defect_remediation" {
+                "coder"
+            } else {
+                "developer"
+            };
+            let expected_next_proof = if flow_id == "runtime_defect_remediation" {
+                "implementation_receipt"
+            } else {
+                "implementation_receipt"
+            };
             let next = state
-                .accept_next(&flow, "developer", &flow.schema_hash)
+                .accept_next(&flow, expected_next_role, &flow.schema_hash)
                 .unwrap();
 
             assert_eq!(next.flow_id, flow_id);
-            assert_eq!(next.role_id, "developer");
+            assert_eq!(next.role_id, expected_next_role);
             assert_eq!(next.status, TaskRoleStepStatus::Accepted);
-            assert_eq!(next.proof_gate.as_deref(), Some("implementation_receipt"));
+            assert_eq!(next.proof_gate.as_deref(), Some(expected_next_proof));
         }
     }
 

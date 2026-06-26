@@ -597,17 +597,31 @@ pub(crate) fn task_flow_lookup_keys(task: &state_store::TaskRecord) -> Vec<Strin
     let mut keys = Vec::new();
     let task_value = serde_json::to_value(task).unwrap_or(serde_json::Value::Null);
     let inferred_task_class = crate::infer_task_class_from_task_payload(&task_value);
+    let work_item_kind = state_store::task_work_item_kind(&task.issue_type);
+    let explicit_kind_is_generic_task = work_item_kind.canonical_issue_type == "task";
+    if !explicit_kind_is_generic_task {
+        push_work_item_lookup_keys(&mut keys, &work_item_kind, &task.issue_type);
+    }
     if inferred_task_class != "implementation" {
         push_unique_lookup_key(&mut keys, inferred_task_class);
     }
-    let work_item_kind = state_store::task_work_item_kind(&task.issue_type);
-    push_unique_lookup_key(&mut keys, work_item_kind.canonical_issue_type);
-    if let Some(provider_issue_type) = work_item_kind.provider_issue_type {
-        push_unique_lookup_key(&mut keys, provider_issue_type);
+    if explicit_kind_is_generic_task {
+        push_work_item_lookup_keys(&mut keys, &work_item_kind, &task.issue_type);
     }
-    push_unique_lookup_key(&mut keys, &task.issue_type);
-    push_unique_lookup_key(&mut keys, work_item_kind.default_flow_binding);
     keys
+}
+
+fn push_work_item_lookup_keys(
+    keys: &mut Vec<String>,
+    work_item_kind: &state_store::TaskWorkItemKind,
+    issue_type: &str,
+) {
+    push_unique_lookup_key(keys, &work_item_kind.canonical_issue_type);
+    if let Some(provider_issue_type) = &work_item_kind.provider_issue_type {
+        push_unique_lookup_key(keys, provider_issue_type);
+    }
+    push_unique_lookup_key(keys, issue_type);
+    push_unique_lookup_key(keys, &work_item_kind.default_flow_binding);
 }
 
 #[cfg(test)]
@@ -622,27 +636,40 @@ mod tests {
                 "runtime_defect": "runtime_defect_remediation"
             },
             "roles": [
-                {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
-                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]}
+                {"role_id": "specifier", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                {"role_id": "coder", "runtime_role": "worker", "task_classes": ["implementation"]},
+                {"role_id": "refactorer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                {"role_id": "architect", "runtime_role": "solution_architect", "task_classes": ["architecture"]}
             ],
             "flows": [
                 {
                     "flow_id": "runtime_defect_remediation",
                     "enabled": true,
                     "work_item_bindings": ["runtime_defect"],
-                    "steps": ["analyst", {"role_id": "developer", "task_class": "implementation"}]
+                    "steps": [
+                        "specifier",
+                        {"role_id": "coder", "task_class": "implementation"},
+                        {"role_id": "refactorer", "task_class": "implementation"},
+                        {"role_id": "architect", "task_class": "architecture"}
+                    ]
                 }
             ]
         });
 
         let sequence = dev_team_sequence_from_readiness(&readiness, Some("runtime_defect"));
 
-        assert_eq!(sequence.len(), 2);
-        assert_eq!(sequence[0].role_label, "analyst");
+        assert_eq!(sequence.len(), 4);
+        assert_eq!(sequence[0].role_label, "specifier");
         assert_eq!(sequence[0].runtime_role, "business_analyst");
         assert_eq!(sequence[0].task_class, "specification");
-        assert_eq!(sequence[1].role_label, "developer");
+        assert_eq!(sequence[1].role_label, "coder");
         assert_eq!(sequence[1].runtime_role, "worker");
         assert_eq!(sequence[1].task_class, "implementation");
+        assert_eq!(sequence[2].role_label, "refactorer");
+        assert_eq!(sequence[2].runtime_role, "worker");
+        assert_eq!(sequence[2].task_class, "implementation");
+        assert_eq!(sequence[3].role_label, "architect");
+        assert_eq!(sequence[3].runtime_role, "solution_architect");
+        assert_eq!(sequence[3].task_class, "architecture");
     }
 }

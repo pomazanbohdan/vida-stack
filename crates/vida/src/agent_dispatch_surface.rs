@@ -9566,6 +9566,68 @@ mod tests {
     }
 
     #[test]
+    fn development_flow_binding_prefers_explicit_runtime_defect_kind_over_inferred_architecture() {
+        let task = task_with_labels_and_type(
+            "runtime-defect-architect",
+            "Repair architect dispatch admissibility",
+            &["architecture"],
+            "runtime_defect",
+        );
+        let sequence = dev_team_sequence_for_task(
+            &serde_json::json!({
+                "dev_team_readiness": {
+                    "default_flow_id": "default_delivery",
+                    "work_item_flow_bindings": {
+                        "runtime_defect": "runtime_defect_remediation",
+                        "architecture": "architecture_design",
+                        "task": "default_delivery"
+                    },
+                    "roles": [
+                        {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "specifier", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                        {"role_id": "coder", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "refactorer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                        {"role_id": "architect", "runtime_role": "solution_architect", "task_classes": ["architecture"]}
+                    ],
+                    "sequence": ["developer"],
+                    "flows": [
+                        {
+                            "flow_id": "default_delivery",
+                            "enabled": true,
+                            "default": true,
+                            "ordered_steps": [{"role_id": "developer"}]
+                        },
+                        {
+                            "flow_id": "architecture_design",
+                            "enabled": true,
+                            "work_item_bindings": ["architecture"],
+                            "ordered_steps": [{"role_id": "architect", "runtime_role": "solution_architect", "task_class": "architecture"}]
+                        },
+                        {
+                            "flow_id": "runtime_defect_remediation",
+                            "enabled": true,
+                            "work_item_bindings": ["runtime_defect"],
+                            "ordered_steps": [
+                                {"role_id": "specifier", "runtime_role": "business_analyst", "task_class": "specification"},
+                                {"role_id": "coder", "runtime_role": "worker", "task_class": "implementation"},
+                                {"role_id": "refactorer", "runtime_role": "worker", "task_class": "implementation"},
+                                {"role_id": "architect", "runtime_role": "solution_architect", "task_class": "architecture"}
+                            ]
+                        }
+                    ]
+                }
+            }),
+            &task,
+        );
+
+        assert_eq!(sequence.len(), 4);
+        assert_eq!(sequence[0].role_label, "specifier");
+        assert_eq!(sequence[1].role_label, "coder");
+        assert_eq!(sequence[2].role_label, "refactorer");
+        assert_eq!(sequence[3].role_label, "architect");
+    }
+
+    #[test]
     fn development_flow_binding_selects_sequence_from_scalar_comma_bindings() {
         let sequence = dev_team_sequence_for_work_item(
             &serde_json::json!({
@@ -9881,21 +9943,21 @@ mod tests {
     fn dev_team_validation_step_uses_coach_assignment_alias_truth() {
         let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
         activation_bundle["dev_team_readiness"] = serde_json::json!({
-            "default_flow_id": "runtime_defect_remediation",
+            "default_flow_id": "defect_repair",
             "work_item_flow_bindings": {
-                "runtime_defect": "runtime_defect_remediation"
+                "defect": "defect_repair"
             },
             "roles": [
-                {"role_id": "coach_validator", "runtime_role": "coach", "task_classes": ["validation"]}
+                {"role_id": "coach_validator", "runtime_role": "coach", "task_classes": ["coach"]}
             ],
             "flows": [
                 {
-                    "flow_id": "runtime_defect_remediation",
+                    "flow_id": "defect_repair",
                     "enabled": true,
                     "default": true,
-                    "work_item_bindings": ["runtime_defect"],
+                    "work_item_bindings": ["defect"],
                     "ordered_steps": [
-                        {"role_id": "coach_validator", "runtime_role": "coach", "task_class": "validation"}
+                        {"role_id": "coach_validator", "runtime_role": "coach", "task_class": "coach"}
                     ]
                 }
             ]
@@ -9904,13 +9966,9 @@ mod tests {
         let preview = build_agent_dispatch_next_preview(
             &activation_bundle,
             &TaskSchedulingProjection {
-                current_task_id: Some("runtime-defect-a".to_string()),
+                current_task_id: Some("defect-a".to_string()),
                 ready: vec![candidate_with_type(
-                    "runtime-defect-a",
-                    "Runtime defect A",
-                    true,
-                    false,
-                    "runtime_defect",
+                    "defect-a", "Defect A", true, false, "defect",
                 )],
                 blocked: Vec::new(),
                 parallel_candidates_after_current: Vec::new(),
@@ -9924,7 +9982,7 @@ mod tests {
         assert_eq!(preview.status, "pass", "{preview:#?}");
         assert_eq!(preview.lanes_selected, 1);
         assert_eq!(preview.selected_lanes[0].runtime_role, "coach");
-        assert_eq!(preview.selected_lanes[0].task_class, "validation");
+        assert_eq!(preview.selected_lanes[0].task_class, "coach");
         assert_eq!(
             preview.selected_lanes[0].selection_truth.selected_carrier,
             "coach-seat"
@@ -10310,9 +10368,9 @@ mod tests {
     fn dev_team_explicit_lanes_can_expose_tester_beyond_parallel_cap() {
         let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
         activation_bundle["dev_team_readiness"] = serde_json::json!({
-            "default_flow_id": "runtime_defect_remediation",
+            "default_flow_id": "defect_repair",
             "work_item_flow_bindings": {
-                "runtime_defect": "runtime_defect_remediation"
+                "defect": "defect_repair"
             },
             "roles": [
                 {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
@@ -10323,10 +10381,10 @@ mod tests {
             ],
             "flows": [
                 {
-                    "flow_id": "runtime_defect_remediation",
+                    "flow_id": "defect_repair",
                     "enabled": true,
                     "default": true,
-                    "work_item_bindings": ["runtime_defect"],
+                    "work_item_bindings": ["defect"],
                     "ordered_steps": [
                         {"role_id": "analyst", "runtime_role": "business_analyst", "task_class": "specification"},
                         {"role_id": "autotester", "runtime_role": "worker", "task_class": "implementation"},
@@ -10341,13 +10399,9 @@ mod tests {
         let preview = build_agent_dispatch_next_preview(
             &activation_bundle,
             &TaskSchedulingProjection {
-                current_task_id: Some("runtime-defect-a".to_string()),
+                current_task_id: Some("defect-a".to_string()),
                 ready: vec![candidate_with_type(
-                    "runtime-defect-a",
-                    "Runtime defect A",
-                    true,
-                    false,
-                    "runtime_defect",
+                    "defect-a", "Defect A", true, false, "defect",
                 )],
                 blocked: Vec::new(),
                 parallel_candidates_after_current: Vec::new(),
@@ -10378,7 +10432,7 @@ mod tests {
                 "tester"
             ]
         );
-        assert_eq!(preview.selected_lanes[4].task_id, "runtime-defect-a");
+        assert_eq!(preview.selected_lanes[4].task_id, "defect-a");
         assert_eq!(preview.selected_lanes[4].task_class, "verification");
         assert_eq!(preview.fanout_guard["effective_max_parallel_agents"], 4);
         assert_eq!(preview.fanout_guard["lanes_selected"], 5);

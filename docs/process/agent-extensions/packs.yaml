@@ -30,7 +30,7 @@ packs:
         dispatch_alias: development_implementer
         command_ref: agent-init-worker
       - role_id: refactorer
-        task_class: refactor
+        task_class: implementation
         dispatch_alias: development_refactorer
         command_ref: agent-init-worker
       - role_id: architect
@@ -96,32 +96,24 @@ packs:
     flow_id: runtime_defect_remediation
     enabled: true
     default: false
-    description: Runtime-defect remediation pack with specification, test authoring, implementation, validation, hardening, QA, and proof.
+    description: Runtime-defect remediation pack with specification, implementation, structural cleanup, and architecture review.
     work_item_bindings: [runtime_defect]
     ordered_steps:
       - role_id: specifier
         task_class: specification
         command_ref: agent-init-business-analyst
-      - role_id: test_author
-        task_class: test_authoring
-        command_ref: agent-init-worker
       - role_id: coder
         task_class: implementation
         command_ref: agent-init-worker
-      - role_id: reviewer_validator
-        task_class: validation
-        command_ref: agent-init-coach
-      - role_id: hardender
-        task_class: quality_gate
-        command_ref: agent-init-verifier
-        receive_mode: batch
-      - role_id: qa_tester
-        task_class: verification
-        command_ref: agent-init-verifier
-      - role_id: prover
-        task_class: release_readiness
-        command_ref: agent-init-prover
-        proof_target: agent:runtime-defect-pack:prover
+      - role_id: refactorer
+        task_class: implementation
+        dispatch_alias: development_refactorer
+        command_ref: agent-init-worker
+      - role_id: architect
+        task_class: architecture
+        dispatch_alias: development_execution_preparation
+        command_ref: agent-init-solution-architect
+        proof_target: agent:runtime-defect-pack:architect
 
 # -----
 # artifact_path: process/agent-extensions/packs

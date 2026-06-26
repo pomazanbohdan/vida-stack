@@ -268,9 +268,9 @@ flow_sets:
   - flow_id: runtime_defect_remediation
     schema_version: 1
     flow_class: development
-    description: Runtime-defect remediation flow for VIDA/TaskFlow blockers, with surface matrix analysis, regression proof, implementation, recovery validation, and closure proof.
+    description: "Runtime-defect remediation flow for VIDA/TaskFlow blockers using the clean four-pack sequence: specification, implementation, structural cleanup, and architecture review."
     work_item_bindings: runtime_defect
-    role_chain: business_analyst,worker,worker,verifier,prover
+    role_chain: business_analyst,worker,worker,solution_architect
     lifecycle_hook_templates: command_timing_summary
     adapter_projection:
       host_agent_bridge_contract: required
