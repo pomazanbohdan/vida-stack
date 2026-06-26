@@ -198,13 +198,27 @@ fn task_progress_json_command(command: &str) -> String {
 }
 
 fn work_item_can_parent_execution_step(issue_type: &str) -> bool {
-    let canonical_issue_type = canonical_work_item_issue_type(issue_type);
-    canonical_issue_type == "epic"
-        || work_item_is_active_bounded_unit_candidate(issue_type)
-        || work_item_is_execution_step(issue_type)
+    work_item_is_active_bounded_unit_candidate(issue_type)
 }
 
-fn validate_work_item_kind_parent_rules(snapshot: &TaskGraphSnapshot) -> Vec<TaskGraphIssue> {
+#[derive(Clone, Copy)]
+enum WorkItemParentRuleMode {
+    ExistingGraph,
+    MutationStrict,
+}
+
+fn work_item_can_parent_existing_execution_step(issue_type: &str) -> bool {
+    work_item_can_parent_execution_step(issue_type)
+        || matches!(
+            canonical_work_item_issue_type(issue_type).as_str(),
+            "epic" | "step"
+        )
+}
+
+fn validate_work_item_kind_parent_rules(
+    snapshot: &TaskGraphSnapshot,
+    mode: WorkItemParentRuleMode,
+) -> Vec<TaskGraphIssue> {
     let mut issues = Vec::new();
     for task in snapshot.rows() {
         let canonical_issue_type = canonical_work_item_issue_type(&task.issue_type);
@@ -222,7 +236,14 @@ fn validate_work_item_kind_parent_rules(snapshot: &TaskGraphSnapshot) -> Vec<Tas
         let parent_canonical = canonical_work_item_issue_type(&parent.issue_type);
         let valid_parent = match canonical_issue_type.as_str() {
             "subtask" => parent_canonical == "task",
-            "step" => work_item_can_parent_execution_step(&parent.issue_type),
+            "step" => match mode {
+                WorkItemParentRuleMode::ExistingGraph => {
+                    work_item_can_parent_existing_execution_step(&parent.issue_type)
+                }
+                WorkItemParentRuleMode::MutationStrict => {
+                    work_item_can_parent_execution_step(&parent.issue_type)
+                }
+            },
             _ => true,
         };
         if valid_parent {
@@ -857,13 +878,31 @@ impl StateStore {
     pub(crate) fn validate_task_graph_snapshot(
         snapshot: &TaskGraphSnapshot,
     ) -> Vec<TaskGraphIssue> {
+        Self::validate_task_graph_snapshot_with_parent_rule_mode(
+            snapshot,
+            WorkItemParentRuleMode::ExistingGraph,
+        )
+    }
+
+    fn validate_task_graph_rows_strict(tasks: &[TaskRecord]) -> Vec<TaskGraphIssue> {
+        let snapshot = TaskGraphSnapshot::from_rows(tasks);
+        Self::validate_task_graph_snapshot_with_parent_rule_mode(
+            &snapshot,
+            WorkItemParentRuleMode::MutationStrict,
+        )
+    }
+
+    fn validate_task_graph_snapshot_with_parent_rule_mode(
+        snapshot: &TaskGraphSnapshot,
+        mode: WorkItemParentRuleMode,
+    ) -> Vec<TaskGraphIssue> {
         let mut issues =
             CoreTaskGraphView::from_rows(snapshot.rows().iter().map(task_graph_row_from_record))
                 .validate()
                 .into_iter()
                 .map(task_graph_issue_from_core)
                 .collect::<Vec<_>>();
-        issues.extend(validate_work_item_kind_parent_rules(snapshot));
+        issues.extend(validate_work_item_kind_parent_rules(snapshot, mode));
         issues.sort_by(|left, right| {
             left.issue_type
                 .cmp(&right.issue_type)
@@ -885,7 +924,7 @@ impl StateStore {
         after: &[TaskRecord],
         touched_task_ids: &BTreeSet<String>,
     ) -> Vec<TaskGraphIssue> {
-        let existing_issues = Self::validate_task_graph_rows(before)
+        let existing_issues = Self::validate_task_graph_rows_strict(before)
             .into_iter()
             .map(|issue| {
                 (
@@ -897,20 +936,26 @@ impl StateStore {
             })
             .collect::<BTreeSet<_>>();
 
-        Self::validate_task_graph_rows(after)
+        Self::validate_task_graph_rows_strict(after)
             .into_iter()
             .filter(|issue| {
-                touched_task_ids.contains(&issue.issue_id)
-                    || issue
-                        .depends_on_id
-                        .as_ref()
-                        .is_some_and(|id| touched_task_ids.contains(id))
-                    || !existing_issues.contains(&(
-                        issue.issue_type.clone(),
-                        issue.issue_id.clone(),
-                        issue.depends_on_id.clone(),
-                        issue.edge_type.clone(),
-                    ))
+                let issue_key = (
+                    issue.issue_type.clone(),
+                    issue.issue_id.clone(),
+                    issue.depends_on_id.clone(),
+                    issue.edge_type.clone(),
+                );
+                let issue_existed = existing_issues.contains(&issue_key);
+                let issue_id_touched = touched_task_ids.contains(&issue.issue_id);
+                let dependency_touched = issue
+                    .depends_on_id
+                    .as_ref()
+                    .is_some_and(|id| touched_task_ids.contains(id));
+                if issue.issue_type == "invalid_parent_child_kind" && issue_existed {
+                    issue_id_touched
+                } else {
+                    issue_id_touched || dependency_touched || !issue_existed
+                }
             })
             .collect()
     }
@@ -1393,7 +1438,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_task_graph_allows_step_parent_migration_shapes_for_todo_alias() {
+    fn validate_task_graph_limits_step_parent_to_active_bounded_work_items() {
         let mut epic = task_record("parent-epic", "open");
         epic.issue_type = "epic".to_string();
         let mut task = task_record("parent-task", "open");
@@ -1437,7 +1482,7 @@ mod tests {
                 "legacy-todo-parent",
             ));
 
-        let issues = StateStore::validate_task_graph_rows(&[
+        let rows = vec![
             epic,
             task,
             subtask,
@@ -1446,13 +1491,113 @@ mod tests {
             step_under_task,
             step_under_subtask,
             step_under_legacy_todo,
-        ]);
+        ];
+        let graph_issues = StateStore::validate_task_graph_rows(&rows);
 
         assert!(
-            !issues
+            graph_issues.iter().all(|issue| {
+                issue.issue_id != "legacy-todo-parent"
+                    && issue.issue_id != "todo-under-epic"
+                    && issue.issue_id != "step-under-legacy-todo"
+            }),
+            "{graph_issues:?}"
+        );
+        assert!(!graph_issues
+            .iter()
+            .any(|issue| issue.issue_id == "step-under-task"));
+        assert!(!graph_issues
+            .iter()
+            .any(|issue| issue.issue_id == "step-under-subtask"));
+
+        let mut new_step_under_epic = task_record("new-step-under-epic", "open");
+        new_step_under_epic.issue_type = "step".to_string();
+        new_step_under_epic
+            .dependencies
+            .push(parent_child_dependency(
+                "new-step-under-epic",
+                "parent-epic",
+            ));
+        let mut new_step_under_step = task_record("new-step-under-step", "open");
+        new_step_under_step.issue_type = "step".to_string();
+        new_step_under_step
+            .dependencies
+            .push(parent_child_dependency(
+                "new-step-under-step",
+                "step-under-task",
+            ));
+        let mut after = rows.clone();
+        after.push(new_step_under_epic);
+        after.push(new_step_under_step);
+        let touched_task_ids = BTreeSet::from([
+            "new-step-under-epic".to_string(),
+            "new-step-under-step".to_string(),
+        ]);
+        let mutation_issues =
+            StateStore::validate_task_graph_rows_for_mutation(&rows, &after, &touched_task_ids);
+
+        assert!(mutation_issues.iter().any(|issue| {
+            issue.issue_type == "invalid_parent_child_kind"
+                && issue.issue_id == "new-step-under-epic"
+        }));
+        assert!(mutation_issues.iter().any(|issue| {
+            issue.issue_type == "invalid_parent_child_kind"
+                && issue.issue_id == "new-step-under-step"
+        }));
+        assert!(
+            mutation_issues.iter().all(|issue| {
+                issue.issue_id != "legacy-todo-parent"
+                    && issue.issue_id != "todo-under-epic"
+                    && issue.issue_id != "step-under-legacy-todo"
+            }),
+            "{mutation_issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_task_graph_allows_legacy_step_parent_edges_without_admitting_new_epic_parent_steps()
+    {
+        let mut epic = task_record("parent-epic", "open");
+        epic.issue_type = "epic".to_string();
+        let mut legacy_todo_parent = task_record("legacy-todo-parent", "open");
+        legacy_todo_parent.issue_type = "todo".to_string();
+        legacy_todo_parent
+            .dependencies
+            .push(parent_child_dependency("legacy-todo-parent", "parent-epic"));
+        let mut legacy_child_step = task_record("legacy-child-step", "open");
+        legacy_child_step.issue_type = "step".to_string();
+        legacy_child_step.dependencies.push(parent_child_dependency(
+            "legacy-child-step",
+            "legacy-todo-parent",
+        ));
+        let rows = vec![epic, legacy_todo_parent, legacy_child_step];
+
+        let graph_issues = StateStore::validate_task_graph_rows(&rows);
+        assert!(
+            graph_issues
                 .iter()
-                .any(|issue| issue.issue_type == "invalid_parent_child_kind"),
-            "{issues:?}"
+                .all(|issue| issue.issue_type != "invalid_parent_child_kind"),
+            "{graph_issues:?}"
+        );
+
+        let mut new_step = task_record("new-step", "open");
+        new_step.issue_type = "step".to_string();
+        new_step
+            .dependencies
+            .push(parent_child_dependency("new-step", "parent-epic"));
+        let mut after = rows.clone();
+        after.push(new_step);
+        let touched_task_ids = BTreeSet::from(["new-step".to_string()]);
+        let mutation_issues =
+            StateStore::validate_task_graph_rows_for_mutation(&rows, &after, &touched_task_ids);
+
+        assert!(mutation_issues.iter().any(|issue| {
+            issue.issue_type == "invalid_parent_child_kind" && issue.issue_id == "new-step"
+        }));
+        assert!(
+            mutation_issues.iter().all(|issue| {
+                issue.issue_id != "legacy-todo-parent" && issue.issue_id != "legacy-child-step"
+            }),
+            "{mutation_issues:?}"
         );
     }
 
@@ -1571,7 +1716,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_task_graph_enforces_subtask_parent_kinds_and_allows_step_migration_parents() {
+    fn validate_task_graph_enforces_subtask_parent_kinds_and_bounded_step_parents() {
         let mut epic = task_record("epic-parent", "open");
         epic.issue_type = "epic".to_string();
         let parent_task = task_record("task-parent", "open");
@@ -1605,13 +1750,7 @@ mod tests {
         legacy_todo
             .dependencies
             .push(parent_child_dependency("legacy-todo", "epic-parent"));
-        let mut epic_step = task_record("epic-step", "open");
-        epic_step.issue_type = "step".to_string();
-        epic_step
-            .dependencies
-            .push(parent_child_dependency("epic-step", "epic-parent"));
-
-        let issues = StateStore::validate_task_graph_rows(&[
+        let rows = vec![
             epic,
             parent_task,
             runtime_defect,
@@ -1620,8 +1759,8 @@ mod tests {
             valid_step,
             valid_runtime_defect_step,
             legacy_todo,
-            epic_step,
-        ]);
+        ];
+        let issues = StateStore::validate_task_graph_rows(&rows);
 
         assert!(issues.iter().any(|issue| {
             issue.issue_type == "invalid_parent_child_kind"
@@ -1633,8 +1772,27 @@ mod tests {
         assert!(!issues
             .iter()
             .any(|issue| issue.issue_id == "valid-runtime-defect-step"));
-        assert!(!issues.iter().any(|issue| issue.issue_id == "legacy-todo"));
-        assert!(!issues.iter().any(|issue| issue.issue_id == "epic-step"));
+        assert!(!issues.iter().any(|issue| {
+            issue.issue_type == "invalid_parent_child_kind"
+                && issue.issue_id == "legacy-todo"
+                && issue.depends_on_id.as_deref() == Some("epic-parent")
+        }));
+
+        let mut epic_step = task_record("epic-step", "open");
+        epic_step.issue_type = "step".to_string();
+        epic_step
+            .dependencies
+            .push(parent_child_dependency("epic-step", "epic-parent"));
+        let mut after = rows.clone();
+        after.push(epic_step);
+        let touched_task_ids = BTreeSet::from(["epic-step".to_string()]);
+        let mutation_issues =
+            StateStore::validate_task_graph_rows_for_mutation(&rows, &after, &touched_task_ids);
+        assert!(mutation_issues.iter().any(|issue| {
+            issue.issue_type == "invalid_parent_child_kind"
+                && issue.issue_id == "epic-step"
+                && issue.depends_on_id.as_deref() == Some("epic-parent")
+        }));
     }
 
     #[test]

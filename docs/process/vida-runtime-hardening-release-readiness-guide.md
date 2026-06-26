@@ -90,10 +90,10 @@ Use this sequence for remaining hardening work:
 
 1. Run `vida orchestrator-init --json` and record `active_bounded_unit`, `why_this_unit`, and `sequential_vs_parallel_posture`.
 2. If there is no active unit, use `vida task ready --scope VIDA-RUNTIME-HARDENING --json` plus blockers to select the next highest-priority ready descendant.
-3. Create a bounded TODO under that task before writes.
+3. Create a bounded step under that task before writes.
 4. Run the focused implementation or documentation proof for the owned paths.
-5. Attach structured proof evidence to the TODO and parent task.
-6. Close the TODO, then close the parent only when `vida task proof status <task-id> --json` has no missing target.
+5. Attach structured proof evidence to the step and parent task.
+6. Close the step, then close the parent only when `vida task proof status <task-id> --json` has no missing target.
 7. Run `vida task validate-graph --json`.
 8. Commit and push the scoped repository changes.
 9. Run canonical release-install when the closed slice changes runtime code, tests, proof gates, or release-facing docs.

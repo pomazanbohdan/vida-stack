@@ -14,7 +14,7 @@ Purpose: provide one canonical reconciliation layer that determines whether a tr
 TSRP must read only canonical artifacts:
 
 1. `vida taskflow task show <task_id> --json`
-2. `vida taskflow todo ui-json <task_id>`
+2. `vida task show <task_id> --json`
 3. `boot-profile.sh verify-receipt <task_id>`
 4. `beads-verify-log.sh --task <task_id>`
 5. `run-graph.py status_payload(<task_id>)`

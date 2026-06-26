@@ -48,16 +48,27 @@ fn task_work_item_kind_value(issue_type: &str) -> serde_json::Value {
         .expect("work item kind should serialize")
 }
 
+fn public_task_issue_type(issue_type: &str) -> String {
+    let canonical = crate::state_store::canonical_work_item_issue_type(issue_type);
+    if matches!(canonical.as_str(), "step" | "subtask") {
+        canonical
+    } else {
+        issue_type.trim().to_string()
+    }
+}
+
 fn user_facing_issue_type(issue_type: &str) -> String {
     match crate::state_store::canonical_work_item_issue_type(issue_type).as_str() {
         "defect" => "bug".to_string(),
         "runtime_defect" => "runtime_bug".to_string(),
+        "step" | "subtask" => public_task_issue_type(issue_type),
         _ => issue_type.trim().to_string(),
     }
 }
 
 fn task_record_value(task: &TaskRecord) -> serde_json::Value {
     let mut value = serde_json::to_value(task).expect("task record should serialize");
+    value["issue_type"] = serde_json::Value::String(public_task_issue_type(&task.issue_type));
     value["work_item_kind"] = task_work_item_kind_value(&task.issue_type);
     value
 }
@@ -269,7 +280,7 @@ fn task_list_row_value(task: &TaskRecord, full: bool) -> serde_json::Value {
         "status": task.status,
         "title": task.title,
         "priority": task.priority,
-        "issue_type": task.issue_type,
+        "issue_type": public_task_issue_type(&task.issue_type),
         "work_item_kind": task_work_item_kind_value(&task.issue_type),
         "parent_id": parent_id,
         "parent_edge": parent_edge,
@@ -565,7 +576,7 @@ pub(crate) fn task_progress_value(summary: &TaskProgressSummary) -> serde_json::
             "id": summary.root_task.id,
             "title": summary.root_task.title,
             "status": summary.root_task.status,
-            "issue_type": summary.root_task.issue_type,
+            "issue_type": public_task_issue_type(&summary.root_task.issue_type),
             "priority": summary.root_task.priority,
         },
         "progress_basis": summary.progress_basis,
@@ -2465,6 +2476,29 @@ mod tests {
         assert_eq!(row["work_item_kind"]["original_issue_type"], "bug");
         assert_eq!(row["work_item_kind"]["provider_issue_type"], "bug");
         assert_eq!(row["work_item_kind"]["schema_version"], 1);
+    }
+
+    #[test]
+    fn task_list_row_canonicalizes_step_and_subtask_alias_public_issue_type() {
+        let mut todo = sample_task("todo-1");
+        todo.issue_type = "todo".to_string();
+        let todo_row = super::task_list_row_value(&todo, false);
+        assert_eq!(todo_row["issue_type"], "step");
+        assert_eq!(todo_row["work_item_kind"]["canonical_issue_type"], "step");
+        assert_eq!(todo_row["work_item_kind"]["original_issue_type"], "todo");
+
+        let mut sub_task = sample_task("sub-task-1");
+        sub_task.issue_type = "sub_task".to_string();
+        let subtask_row = super::task_list_row_value(&sub_task, false);
+        assert_eq!(subtask_row["issue_type"], "subtask");
+        assert_eq!(
+            subtask_row["work_item_kind"]["canonical_issue_type"],
+            "subtask"
+        );
+        assert_eq!(
+            subtask_row["work_item_kind"]["original_issue_type"],
+            "sub_task"
+        );
     }
 
     #[test]

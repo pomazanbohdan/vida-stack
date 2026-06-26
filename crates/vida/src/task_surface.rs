@@ -2598,6 +2598,18 @@ fn task_query_filter_matches(task: &state_store::TaskRecord, query: Option<&str>
     .any(|value| value.to_ascii_lowercase().contains(&query))
 }
 
+fn task_issue_type_filter_matches(
+    task: &state_store::TaskRecord,
+    issue_type: Option<&str>,
+) -> bool {
+    issue_type
+        .map(|wanted| {
+            state_store::canonical_work_item_issue_type(&task.issue_type)
+                == state_store::canonical_work_item_issue_type(wanted)
+        })
+        .unwrap_or(true)
+}
+
 fn filter_task_rows_for_operator(
     rows: Vec<state_store::TaskRecord>,
     status: Option<&str>,
@@ -2610,11 +2622,7 @@ fn filter_task_rows_for_operator(
     rows.into_iter()
         .filter(|task| task_row_visible_by_closed_policy(task, status, include_all))
         .filter(|task| task_status_filter_matches(task, status))
-        .filter(|task| {
-            issue_type
-                .map(|wanted| task.issue_type == wanted)
-                .unwrap_or(true)
-        })
+        .filter(|task| task_issue_type_filter_matches(task, issue_type))
         .filter(|task| task_parent_filter_matches(task, parent_id))
         .filter(|task| task_query_filter_matches(task, query))
         .take(limit.unwrap_or(usize::MAX))
@@ -13155,6 +13163,58 @@ mod tests {
             assert!(rows.iter().any(|task| task.id == "live-epic"));
             assert!(rows.iter().any(|task| task.id == "snapshot-only-task"));
         });
+    }
+
+    #[test]
+    fn task_operator_filter_matches_issue_type_aliases_canonically() {
+        let rows = vec![
+            task_record_for_progress("legacy-todo", "open", "todo", Some("task-parent")),
+            task_record_for_progress("canonical-step", "open", "step", Some("task-parent")),
+            task_record_for_progress("sub-task", "open", "sub_task", Some("task-parent")),
+            task_record_for_progress("plain-task", "open", "task", None),
+        ];
+
+        let step_rows = super::filter_task_rows_for_operator(
+            rows.clone(),
+            None,
+            true,
+            None,
+            Some("step"),
+            None,
+            None,
+        );
+        let step_ids = step_rows
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(step_ids, vec!["legacy-todo", "canonical-step"]);
+
+        let todo_rows = super::filter_task_rows_for_operator(
+            rows.clone(),
+            None,
+            true,
+            None,
+            Some("todo"),
+            None,
+            None,
+        );
+        let todo_ids = todo_rows
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(todo_ids, vec!["legacy-todo", "canonical-step"]);
+
+        let subtask_rows = super::filter_task_rows_for_operator(
+            rows,
+            None,
+            true,
+            None,
+            Some("subtask"),
+            None,
+            None,
+        );
+        assert_eq!(subtask_rows.len(), 1);
+        assert_eq!(subtask_rows[0].id, "sub-task");
     }
 
     fn run_cli_on_runtime_stack_for_test(args: Vec<String>) -> ExitCode {

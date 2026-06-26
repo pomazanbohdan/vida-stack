@@ -71,7 +71,7 @@ Mixed feature-delivery rule:
 1. if one request asks for research, specifications, planning, and implementation/code together, route it through `scope_discussion` first even when it is phrased as a direct build request,
 2. that route must hand off to `spec-pack` before any development-team execution posture is activated,
 3. the lawful order is:
-   - bounded todo/design checklist,
+   - bounded step/design checklist,
    - one feature epic and one spec-pack task in `vida taskflow`,
    - bounded design/spec document through `vida docflow`,
    - close the spec-pack task only after the bounded design/spec document is finalized and validated,

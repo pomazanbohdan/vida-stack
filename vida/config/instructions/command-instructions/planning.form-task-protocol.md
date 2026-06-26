@@ -160,7 +160,7 @@ Routing policy:
 Before execution handoff, run:
 
 ```bash
-bash todo-plan-validate.sh <task_id> [--diff-aware]
+bash todo-plan-validate.sh <task_id> [--diff-aware]  # legacy script name
 ```
 
 `--strict` should be used when queue is ready for immediate autonomous execution.

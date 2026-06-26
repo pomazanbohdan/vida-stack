@@ -317,7 +317,7 @@ Before reporting a runtime environment/docs/skill update as complete:
 2. run DocFlow check for changed docs,
 3. run `vida task validate-graph --json`,
 4. run `git status --short`,
-5. close the bounded TODO only after the above pass.
+5. close the bounded step only after the above pass.
 
 -----
 artifact_path: process/vida-runtime-development-environment

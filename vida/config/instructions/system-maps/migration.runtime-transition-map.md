@@ -11,7 +11,7 @@ Use `vida taskflow` as the canonical runtime surface for these domains:
 3. route snapshot/receipt helpers -> `vida taskflow route ...`
 4. kernel config introspection -> `vida taskflow kernel ...`
 5. task store and import/export -> `vida taskflow task ...`
-6. TaskFlow/readiness views -> `vida taskflow todo ...`
+6. TaskFlow/readiness views -> `vida task ready ...`, `vida task next ...`, and `vida task progress ...`
 7. run-graph -> `vida taskflow run-graph ...`
 8. execution auth / coach / verification prompt -> `vida taskflow auth ...`, `vida taskflow coach ...`, `vida taskflow coach-decision ...`, `vida taskflow verification-prompt ...`
 9. worker runtime inventory and leases -> `vida taskflow system ...`, `vida taskflow registry ...`, `vida taskflow lease ...`, `vida taskflow pool ...`

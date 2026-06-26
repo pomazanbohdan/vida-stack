@@ -4,7 +4,7 @@ Purpose: one operational contract for task-state SSOT, workflow telemetry, and e
 
 Transition note:
 
-1. `vida taskflow task`, `vida taskflow todo`, and `vida taskflow run-graph` are the active transitioned read surfaces.
+1. `vida task`, `vida taskflow graph-summary`, and `vida taskflow run-graph` are the active transitioned read surfaces.
 2. Legacy `beads-workflow.sh` and companion wrappers remain migration-source operator helpers only until their sequencing behavior is reimplemented or retired.
 
 ## 1) SSOT Rule

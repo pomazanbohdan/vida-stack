@@ -91,7 +91,7 @@ This algorithm is mandatory for non-trivial work (3+ steps).
    - `parallel` allowed only when there is no output dependency, no shared writable scope, and no contract coupling;
    - otherwise force `sequential` on `track_id=main`.
 6. Pre-register planned steps via `block-plan`.
-7. Validate plan integrity before execution (`todo-plan-validate.sh`; use `--diff-aware` when the worktree already contains target-scope changes). Diff-aware validation must accept coverage from the full task plan, not only remaining non-done blocks, so completed blocks do not create false drift failures.
+7. Validate plan integrity before execution (legacy compatibility script name: `todo-plan-validate.sh`; use `--diff-aware` when the worktree already contains target-scope changes). Diff-aware validation must accept coverage from the full task plan, not only remaining non-done blocks, so completed blocks do not create false drift failures.
 8. Execute with evidence + verification at each step.
 9. After each step that closes a bounded leaf but not the task line, run a post-leaf rebuild before reporting or route suspension.
 10. After each step that establishes dispatch-ready state for a write-producing packet, either dispatch the packet or record an explicit blocker/override receipt before any progress-only report.
@@ -178,7 +178,7 @@ Required fields:
 1. `step_id` (`S01`, `S02`, ...)
 2. `task_id` (DB-backed task id)
 3. `goal`
-4. `status` (`todo|doing|done|blocked`)
+4. `status` (`planned|doing|done|blocked`)
 5. `acceptance_check`
 6. `evidence_ref`
 7. `next_step`
@@ -201,7 +201,7 @@ Optional parallel fields:
 Transition note:
 
 1. the block-lifecycle command examples below are legacy wrapper examples,
-2. transitioned runtime reads now live under `vida taskflow task`, `vida taskflow todo`, and `vida taskflow run-graph`,
+2. transitioned runtime reads now live under `vida task`, `vida taskflow graph-summary`, and `vida taskflow run-graph`,
 3. wrapper retirement is tracked by `system-maps/migration.runtime-transition-map`.
 
 Transition verification baseline:
@@ -257,7 +257,7 @@ bash taskflow-sync-plan.sh <task_id> --mode compact --max-items 3
 bash taskflow-sync-plan.sh <task_id> --mode delta
 bash taskflow-sync-plan.sh <task_id> --mode json-only --quiet
 bash taskflow-overhead-report.sh <task_id>
-bash todo-plan-validate.sh <task_id> [--strict] [--quiet] [--diff-aware] [--base REF]
+bash todo-plan-validate.sh <task_id> [--strict] [--quiet] [--diff-aware] [--base REF]  # legacy script name
 bash vida-command-audit.sh report <task_id>
 bash vida-command-audit.sh plan <task_id> [--limit N]
 bash vida-command-audit.sh repair-next <task_id>
@@ -282,7 +282,7 @@ Command audit mode:
 2. Run `bash vida-command-audit.sh plan <task_id>` to pre-register missing protocol-unit analysis blocks.
 3. Execute protocol-unit analyses sequentially (`block-start` -> `block-end`) to keep pending list accurate.
 4. Before reporting to user, confirm `board` and `report` snapshots are up to date.
-5. Sequential automation: after `block-end ... done <next_block_id> ...`, workflow auto-starts `<next_block_id>` if it exists and is `todo`.
+5. Sequential automation: after `block-end ... done <next_block_id> ...`, workflow auto-starts `<next_block_id>` if it exists and is `planned`.
 6. Auto-start is track-safe: it runs only when source and target blocks are in the same `track_id`.
 7. If old plans have broken `next_step`, run `repair-next` to rebuild canonical `CMDxx` chain.
 8. `block-start` may reopen a previously ended block (clears previous end marker in TaskFlow view and sets status back to `doing`).
@@ -310,7 +310,7 @@ UI sync rule:
 6. For user-visible progress updates, prefer compact/delta snapshots over full snapshot.
 7. Completion report order is mandatory: `sync -> confirm board/compact -> report done`.
 8. Pack coverage: each non-trivial flow should have balanced `pack-start` and `pack-end` events; lawful pack completion claims are owned by `runtime-instructions/work.pack-completion-gate-protocol`.
-9. Response visibility rule: when reporting task/todo state to user, include IDs and concise descriptions (not IDs only).
+9. Response visibility rule: when reporting task/step state to user, include IDs and concise descriptions (not IDs only).
 10. `quality-health-check` cadence: run on checkpoint boundaries, pre-handoff, and finish (not after every micro-step).
 11. Runtime scripts should be quiet-by-default for progress chatter; keep human-facing status output in `taskflow-tool current|list` and `quality-health-check`.
 12. Use `vida taskflow reconcile status <task_id>` when a task looks done-but-open, stale-in-progress, or otherwise drifted between the task store and TaskFlow.
@@ -349,7 +349,7 @@ Silent diagnosis execution persistence:
 4.1. Drift gate: run `bash context-drift-sentinel.sh check <task_id>` after capsule write checkpoints (`block-finish`, compact restore).
 4.2. If silent framework diagnosis is active and a framework gap was detected, compact-safe evidence must include the capture artifact path or follow-up framework task id.
 5. Execution gate: if no active block exists, execution must not proceed.
-6. Plan integrity gate: run `bash todo-plan-validate.sh <task_id>` after `block-plan` batch and before execution start. Use `--diff-aware` when the worktree already contains target-scope changes; coverage is evaluated against the whole task plan so already-completed blocks still count.
+6. Plan integrity gate: run the legacy compatibility script `bash todo-plan-validate.sh <task_id>` after `block-plan` batch and before execution start. Use `--diff-aware` when the worktree already contains target-scope changes; coverage is evaluated against the whole task plan so already-completed blocks still count.
 6.1. For framework-only tasks, compact evidence is valid when work is confined to migration-only helper surfaces and the block records concrete actions plus canonical artifacts or task IDs. Runtime verification may downgrade missing artifact warnings to informational severity for these tasks in non-strict mode.
 6.2. Silent diagnosis gate: when active, task closure is invalid if a detected framework gap was only discussed in chat and not captured in canonical execution evidence, context capsule, or framework task state.
 6.3. No-progress gate: after a block records two consecutive no-progress iterations, the next substantive step must be re-plan, redirect, or escalation rather than another same-shape attempt.
@@ -424,7 +424,7 @@ Operational contract:
 Before non-trivial execution or post-compact recovery, select boot profile explicitly:
 
 1. `lean` (default): minimal required reads + hydrate-minimal gate.
-2. `standard`: `lean` + execution protocols (`todo/implement/use-case`).
+2. `standard`: `lean` + execution protocols (`step/implement/use-case`).
 3. `full`: `standard` + orchestration/pipeline deep context.
 
 Validation command:

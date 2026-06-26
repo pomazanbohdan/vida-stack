@@ -76,7 +76,7 @@ This command also absorbs epic-planning responsibilities (scope boundary, depend
    - create/update tasks in the DB-backed task runtime with clear descriptions.
 8. `FT-05 Dependency Graph + Track Routing`:
    - set dependencies, detect cycles, build sequential/parallel-safe routing.
-   - materialize `next_step` chain and validate with `todo-plan-validate.sh`.
+   - materialize `next_step` chain and validate with the legacy compatibility script `todo-plan-validate.sh`.
 9. `FT-06 Readiness Verdict`:
    - classify tasks as `ready|blocked|deferred`.
 10. `FT-07 Launch Gate`:

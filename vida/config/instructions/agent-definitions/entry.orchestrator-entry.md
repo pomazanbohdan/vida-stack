@@ -155,7 +155,7 @@ Feature-delivery entry rule:
 2. create or update one bounded design document first through the active project documentation/docflow path,
 3. open one feature epic and one spec-pack task in `vida taskflow` before any implementation packet or delegated coding lane is activated,
 4. keep the specification and plan in that bounded design artifact,
-5. build the bounded todo/design checklist before execution shaping,
+5. build the bounded step/design checklist before execution shaping,
 6. after the design artifact is explicit and canonically validated, close the spec-pack task and hand off through the canonical TaskFlow/task-formation path to shape the execution packet,
 7. only after the bounded file set, proof target, rollout, and tracked execution packet are explicit may the orchestrator delegate normal write-producing work.
 8. when the launcher/runtime exposes `vida taskflow consume final <request> --json`, use that surface first to materialize the design-first route, tracked-flow bootstrap, and bounded next-command sequence instead of improvising the sequencing from chat alone.
