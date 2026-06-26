@@ -64,6 +64,8 @@ Companion rule:
     - proposed LDRK `ldr-040` Tower-based canonical command pipeline phase design
 25. [multi-agent-stage-ensemble-contract.md](multi-agent-stage-ensemble-contract.md)
     - multi-agent stage attempt ledger and consolidation contract
+26. [runworkflow-aggregate-hierarchical-statig-machin-design.md](runworkflow-aggregate-hierarchical-statig-machin-design.md)
+    - proposed LDRK `ldr-020` RunWorkflow aggregate and hierarchical Statig machine design packet
 
 ## Detailed Catalog Companions
 
