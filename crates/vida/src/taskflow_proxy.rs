@@ -2838,10 +2838,15 @@ fn taskflow_scheduler_dispatch_operator_payload(
         "dispatch_receipt_status": plan.dispatch_receipt.receipt_status,
         "dispatch_receipt_path": plan.dispatch_receipt.receipt_path,
     });
+    let operator_next_actions = if plan.blocker_codes.is_empty() {
+        Vec::new()
+    } else {
+        plan.next_actions.clone()
+    };
     crate::release1_operator_output::build_release1_operator_output_payload(
         "vida taskflow scheduler dispatch",
         plan.blocker_codes.clone(),
-        plan.next_actions.clone(),
+        operator_next_actions,
         artifact_refs,
         plan_payload,
     )
@@ -9919,6 +9924,50 @@ mod tests {
                     .iter()
                     .any(|reason| reason == "blocked_by:depends-on:dep-1:open")
         }));
+    }
+
+    #[test]
+    fn scheduler_dispatch_operator_payload_allows_pass_plan_advisory_next_actions() {
+        let mut primary = task("ready-head", "task", "open", 1, &[], Vec::new());
+        primary.execution_semantics.execution_mode = Some("parallel_safe".to_string());
+        primary.execution_semantics.order_bucket = Some("wave-a".to_string());
+        primary.execution_semantics.parallel_group = Some("runtime".to_string());
+        primary.execution_semantics.conflict_domain = Some("ready-head".to_string());
+
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("ready-head".to_string()),
+            ready: vec![scheduling_candidate(
+                primary,
+                true,
+                false,
+                true,
+                Vec::new(),
+                Vec::new(),
+            )],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let state_dir = std::path::Path::new("/tmp/vida-scheduler-state");
+        let plan = build_taskflow_scheduler_dispatch_plan(
+            projection, 1, None, None, None, None, state_dir, true, false,
+        );
+
+        assert_eq!(plan.status, "pass");
+        assert!(plan.blocker_codes.is_empty());
+        assert!(!plan.next_actions.is_empty());
+
+        let payload = super::taskflow_scheduler_dispatch_operator_payload(&plan, state_dir);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["next_actions"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            payload["raw_next_actions"],
+            serde_json::json!(plan.next_actions)
+        );
+        assert_eq!(
+            payload["selected_task_ids"],
+            serde_json::json!(["ready-head"])
+        );
     }
 
     #[test]
