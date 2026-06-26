@@ -32,11 +32,6 @@ host_environment:
     process_carrier_requires_explicit_backend: true
     supported_adapter_kinds:
       - codex_host_tools
-      - codex_cli_subagents
-      - claude_code_subagents
-      - pi_sub_agent_plugin
-      - vibe_kanban_agents
-      - custom_host_agent_adapter
   codex:
     agents: &codex_agent_catalog
       junior:
@@ -267,10 +262,6 @@ host_environment:
               3. If `LOCALAPPDATA` is missing but `USERPROFILE` is present, resolve `$env:USERPROFILE\AppData\Local\vida-stack\current\bin\vida.exe`.
               4. When the installed production binary exists, prepend its parent directory to `$env:PATH` for the current process and invoke that binary or the refreshed `vida` command.
               5. Treat `target\debug\vida.exe` and `target\release\vida.exe` as repository diagnostics only; do not use them as the production VIDA runtime unless the parent packet explicitly asks for diagnostic fallback.
-      legacy_cli:
-        enabled: true
-        template_path: .codex/templates/codex-cli.config.toml
-        multi_agent_feature_required: true
       host_tool_bridge:
         adapter_kind: codex_host_tools
         adapter_capability_id: codex.multi_agent_v1
@@ -284,82 +275,10 @@ host_environment:
         adapter_required: true
         no_adapter_policy: fail_closed_emit_request
         process_carrier_requires_explicit_backend: true
-        fallback_process_carrier: codex_cli_exec
         request_dir: .vida/data/state/host-tool-bridge/requests
         result_dir: .vida/data/state/host-tool-bridge/results
         receipt_dir: .vida/data/state/host-tool-bridge/receipts
       carriers: *codex_agent_catalog
-    hermes:
-      enabled: false
-      execution_class: external
-      materialization_mode: copy_tree_only
-      template_root: .hermes
-      runtime_root: .hermes
-      carriers:
-        hermes-primary:
-          tier: hermes
-          description: Placeholder carrier for the Hermes CLI.
-          rate: 4
-          reasoning_band: medium
-          default_runtime_role: worker
-          runtime_roles:
-            - worker
-          task_classes:
-            - specification
-            - planning
-    pi:
-      enabled: false
-      execution_class: external
-      materialization_mode: pi_agent_projection_render
-      template_root: .pi
-      runtime_root: .pi
-      authority: config_projection_only
-      source_of_truth: vida.config.yaml
-      app:
-        enabled: false
-        settings_path: .pi/settings.json
-        agents_dir: .pi/agents
-        chains_dir: .pi/chains
-        internal_agent_projection: true
-        projection_owner: vida
-        local_files_are_authority: false
-      dispatch:
-        command: vida-pi-agent
-        adapter_command: vida-pi-agent
-        provider_command: pi
-        static_args:
-          - --mode
-          - rpc
-        model_flag: --model
-        thinking_level_flag: --thinking-level
-        workdir_flag: --workdir
-        output_mode: vida_result_json
-        prompt_mode: stdin
-        one_process_per_dispatch: true
-        session_policy: no_long_lived_session
-      carriers:
-        pi-primary:
-          tier: pi
-          description: Pi host-environment carrier projection; execution receipts are produced through the separate `pi_cli` external carrier and `vida-pi-agent` adapter.
-          rate: 4
-          reasoning_band: medium
-          default_runtime_role: worker
-          runtime_roles:
-            - worker
-            - business_analyst
-            - coach
-            - verifier
-          task_classes:
-            - implementation
-            - delivery_task
-            - execution_block
-            - specification
-            - planning
-            - analysis
-            - review
-            - coach
-            - verification
-          authority: config_projection_only
 
 protocol_activation:
   agent_system: true
@@ -1438,10 +1357,6 @@ agent_system:
     weekly_limit_pressure_mode: true
     root_orchestrator_default_posture: synthesize_not_research
     default_readonly_prefetch: true
-    prefer_external_free_readonly_carriers:
-      - jcode_nim_cli
-    prefer_external_advisory_readonly_carriers:
-      - jcode_nim_cli
     prefer_internal_low_medium_for_write_carriers:
       - internal_subagents:codex_gpt55_low_write
       - internal_subagents:codex_gpt55_medium_write
@@ -1451,70 +1366,28 @@ agent_system:
       - release_readiness_or_mainline_admission
       - repeated_rework_after_low_medium_failure
     root_call_reduction_rules:
-      - ask_jcode_nim_for_readonly_pre_analysis_when_independent_second_opinion_is_useful
-      - choose_external_readonly_complete_or_external_patch_proposal_during_research_stage_before_root_implementation
+      - ask_internal_low_or_medium_for_readonly_pre_analysis_when_scope_is_known_and_no_write_authority_is_needed
+      - choose_internal_readonly_complete_or_internal_patch_proposal_during_research_stage_before_root_implementation
       - ask_internal_low_or_medium_for_bounded_implementation_or_test_authoring
       - keep_root_session_to_binding_synthesis_task_updates_and_final_validation
       - prefer_compact_runtime_surfaces_and_snapshot_reads_before_large_json_bundles
       - batch_related_report_intake_into_one_taskflow_mutation_window
-    research_stage_external_delegation_modes:
-      external_readonly_complete:
-        authority: advisory_readonly
-        allowed_task_classes:
-          - research
-          - analysis
-          - specification
-          - planning
-          - review
-          - proof_diagnosis
-        required_output:
-          - structured_report
-          - evidence_refs
-          - risks
-          - recommended_next_step
-        root_responsibility:
-          - validate_report_against_source_and_runtime
-          - mutate_taskflow_only_after_validation
-          - decide_closure_or_followup
-      external_patch_proposal:
-        authority: patch_proposal_only
-        allowed_task_classes:
-          - implementation_diagnosis
-          - refactor_proposal
-          - test_proposal
-          - proof_runner_proposal
-        required_output:
-          - patch_summary
-          - proposed_diff_or_file_plan
-          - verification_commands
-          - rollback_notes
-        root_responsibility:
-          - apply_or_reject_diff
-          - run_tests
-          - commit_push_and_close_taskflow
     task_class_carrier_preferences:
       research:
-        primary: internal_subagents:codex_gpt55_medium_write
-        fallback: jcode_nim_cli
-        delegation_modes:
-          - external_readonly_complete
-          - external_patch_proposal
+        primary: internal_subagents:codex_gpt55_low_write
+        fallback: internal_subagents:codex_gpt55_medium_write
       analysis:
         primary: internal_subagents:codex_gpt55_medium_write
-        fallback: jcode_nim_cli
-        escalation: internal_subagents:codex_gpt55_low_write
+        fallback: internal_subagents:codex_gpt55_low_write
       specification:
         primary: internal_subagents:codex_gpt55_medium_write
-        fallback: jcode_nim_cli
-        escalation: internal_subagents:codex_gpt55_medium_write
+        fallback: internal_subagents:codex_gpt55_high_readonly
       planning:
         primary: internal_subagents:codex_gpt55_medium_write
-        fallback: jcode_nim_cli
-        escalation: internal_subagents:codex_gpt55_medium_write
+        fallback: internal_subagents:codex_gpt55_high_readonly
       review:
-        primary: internal_subagents:codex_gpt55_medium_write
-        fallback: jcode_nim_cli
-        escalation: internal_subagents:codex_gpt55_medium_write
+        primary: internal_subagents:codex_gpt55_high_readonly
+        fallback: internal_subagents:codex_gpt55_medium_write
       coach:
         primary: internal_subagents:codex_gpt55_medium_write
         fallback: internal_subagents:codex_gpt55_medium_write
@@ -1526,8 +1399,7 @@ agent_system:
         fallback: internal_subagents:codex_gpt55_low_write
       verification:
         primary: internal_subagents:codex_gpt55_medium_write
-        fallback: internal_subagents:codex_gpt55_low_write
-        advisory_alternate: jcode_nim_cli
+        fallback: internal_subagents:codex_gpt55_high_readonly
     escalation_after:
       consecutive_low_medium_failures: 2
       repeated_runtime_blocker_count: 2
@@ -1556,10 +1428,6 @@ agent_system:
       anthropic: structured prompt templates, explicit sections, and evaluation-backed refinement loops
       microsoft: record one bounded decision/design artifact per change and route on explicit cost-quality tradeoffs instead of ad hoc escalation
       internal: project-maintained normalized reference units for internal executor profiles
-      hermes: provider-configured external CLI posture with project-normalized review units
-      kilo: provider-configured external CLI posture with project-normalized review units
-      vibe: provider-configured external CLI posture with project-normalized review units
-      pi: Pi provider/model catalog selected through VIDA profiles and executed through the vida-pi-agent adapter; normalized units are diagnostic until vendor/provider pricing is wired
     providers:
       openai-codex:
         price_basis: vendor_schedule_snapshot
@@ -1600,50 +1468,6 @@ agent_system:
           - docs/process/codex-agent-configuration-guide.md
         freshness:
           required: false
-          stale_price_policy: diagnostic_only_use_normalized_cost_units
-          missing_price_policy: diagnostic_only_use_normalized_cost_units
-          diagnostic_only: true
-          enforced: false
-      hermes:
-        price_basis: provider_configured_external_cli
-        source_paths:
-          - docs/process/codex-agent-configuration-guide.md
-        freshness:
-          required: false
-          max_age_days: 30
-          stale_price_policy: diagnostic_only_use_normalized_cost_units
-          missing_price_policy: diagnostic_only_use_normalized_cost_units
-          diagnostic_only: true
-          enforced: false
-      kilo:
-        price_basis: provider_configured_external_cli
-        source_paths:
-          - docs/process/codex-agent-configuration-guide.md
-        freshness:
-          required: false
-          max_age_days: 30
-          stale_price_policy: diagnostic_only_use_normalized_cost_units
-          missing_price_policy: diagnostic_only_use_normalized_cost_units
-          diagnostic_only: true
-          enforced: false
-      vibe:
-        price_basis: provider_configured_external_cli
-        source_paths:
-          - docs/process/codex-agent-configuration-guide.md
-        freshness:
-          required: false
-          max_age_days: 30
-          stale_price_policy: diagnostic_only_use_normalized_cost_units
-          missing_price_policy: diagnostic_only_use_normalized_cost_units
-          diagnostic_only: true
-          enforced: false
-      pi:
-        price_basis: provider_configured_external_cli
-        source_paths:
-          - docs/product/spec/pi-primary-environment-agent-carrier-spec.md
-        freshness:
-          required: false
-          max_age_days: 30
           stale_price_policy: diagnostic_only_use_normalized_cost_units
           missing_price_policy: diagnostic_only_use_normalized_cost_units
           diagnostic_only: true
@@ -1700,23 +1524,16 @@ agent_system:
   stage_attempt_policies:
     analysis:
       fanout:
-        mode: parallel
-        max_attempts: 2
+        mode: single
+        max_attempts: 1
       attempts:
-        - attempt_id: analysis-internal-medium
+        - attempt_id: analysis-internal-medium-readonly
           carrier_id: internal_subagents
           model_profile_id: codex_gpt55_medium_write
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: analysis
           isolation: internal_readonly_complete
-        - attempt_id: analysis-jcode-readonly
-          carrier_id: jcode_nim_cli
-          model_profile_id: jcode_nim_mistral_medium35_review
-          conversation_role: analyst
-          runtime_role: business_analyst
-          task_class: analysis
-          isolation: external_readonly_complete
       consolidator:
         attempt_id: analysis-root-consolidator
         carrier_id: internal_subagents
@@ -1727,23 +1544,16 @@ agent_system:
         isolation: root_validate_only
     specification:
       fanout:
-        mode: parallel
-        max_attempts: 2
+        mode: single
+        max_attempts: 1
       attempts:
-        - attempt_id: specification-internal-medium
+        - attempt_id: specification-internal-medium-readonly
           carrier_id: internal_subagents
           model_profile_id: codex_gpt55_medium_write
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: specification
           isolation: internal_readonly_complete
-        - attempt_id: specification-jcode-readonly
-          carrier_id: jcode_nim_cli
-          model_profile_id: jcode_nim_mistral_medium35_review
-          conversation_role: analyst
-          runtime_role: business_analyst
-          task_class: specification
-          isolation: external_readonly_complete
       consolidator:
         attempt_id: specification-coach-consolidator
         carrier_id: internal_subagents
@@ -1794,16 +1604,16 @@ agent_system:
         isolation: root_validate_only
     review:
       fanout:
-        mode: parallel
-        max_attempts: 2
+        mode: single
+        max_attempts: 1
       attempts:
         - attempt_id: review-internal-high
           carrier_id: internal_subagents
           model_profile_id: codex_gpt55_high_readonly
-          conversation_role: reviewer
+          conversation_role: coach
           runtime_role: verifier
           task_class: verification
-          isolation: external_readonly_complete
+          isolation: internal_readonly_complete
       consolidator:
         attempt_id: review-root-consolidator
         carrier_id: internal_subagents
@@ -1955,592 +1765,6 @@ agent_system:
             mode: codex_profile
             required: true
       specialties: implementation,architecture,integration,review,verification
-    codex_cli_exec:
-      enabled: false
-      subagent_backend_class: external_cli
-      execution_boundary: child_process
-      dispatch_transport: codex_cli_exec
-      receipt_mode: cli_json_result
-      detect_command: codex
-      role: codex_cli_process_bridge
-      orchestration_tier: external_process
-      cost_priority: fallback_only
-      budget_cost_units: 10
-      models_hint: openai-codex/gpt-5.5
-      default_model: openai-codex/gpt-5.5
-      default_model_profile: codex_cli_gpt55_low_write
-      capability_band: implementation_safe,review_safe
-      default_runtime_role: worker
-      write_scope: workspace-write
-      max_runtime_seconds: 420
-      billing_tier: provider_account
-      speed_tier: medium
-      quality_tier: high
-      runtime_roles:
-        - worker
-        - business_analyst
-        - coach
-        - verifier
-      task_classes:
-        - implementation
-        - delivery_task
-        - execution_block
-        - specification
-        - planning
-        - analysis
-        - review
-        - coach
-        - verification
-      model_profiles:
-        codex_cli_gpt55_low_write:
-          provider: openai-codex
-          model_ref: openai-codex/gpt-5.5
-          reasoning_effort: low
-          normalized_cost_units: 10
-          speed_tier: medium
-          quality_tier: high
-          write_scope: workspace-write
-          runtime_roles:
-            - worker
-          task_classes:
-            - implementation
-            - delivery_task
-            - execution_block
-          readiness:
-            mode: external_cli_profile
-            required: true
-      specialties: implementation,review,verification
-      dispatch:
-        command: codex
-        receipt_backed_completion_supported: true
-        windows_sandbox_spawn_supported: true
-        no_output_timeout_seconds: 2
-        static_args:
-          - exec
-          - --json
-        feature_args:
-          - --enable
-          - multi_agent
-        workdir_flag: -C
-        sandbox_flag: -s
-        model_flag: -m
-        model_arg_transform: provider_local_name
-        reasoning_effort_flag: -c
-        reasoning_effort_value_template: 'model_reasoning_effort="{value}"'
-        prompt_mode: stdin
-    hermes_cli:
-      enabled: false
-      subagent_backend_class: external_cli
-      detect_command: hermes
-      role: free_primary
-      orchestration_tier: external_free
-      cost_priority: highest
-      budget_cost_units: 0
-      models_hint: hermes/provider-configured
-      default_model: hermes/provider-configured
-      default_model_profile: hermes_provider_configured_review
-      capability_band: read_only,review_safe
-      default_runtime_role: coach
-      write_scope: none
-      max_runtime_seconds: 180
-      min_output_bytes: 260
-      billing_tier: free
-      speed_tier: medium
-      quality_tier: medium
-      runtime_roles:
-        - business_analyst
-        - coach
-        - verifier
-      task_classes:
-        - analysis
-        - specification
-        - planning
-        - review
-        - coach
-      model_profiles:
-        hermes_provider_configured_review:
-          provider: hermes
-          model_ref: hermes/provider-configured
-          reasoning_effort: provider_default
-          normalized_cost_units: 0
-          speed_tier: medium
-          quality_tier: medium
-          write_scope: none
-          runtime_roles:
-            - business_analyst
-            - coach
-            - verifier
-          task_classes:
-            - analysis
-            - specification
-            - planning
-            - review
-            - coach
-          reasoning_control:
-            mode: provider_default
-          readiness:
-            mode: external_cli_profile
-            required: true
-      specialties: planning,spec,review
-      dispatch:
-        command: hermes
-        static_args:
-          - chat
-          - -Q
-          - -q
-        model_flag: --model
-        provider_flag: --provider
-        env:
-          OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS: "600000"
-        output_mode: stdout
-        prompt_mode: positional
-        startup_timeout_seconds: 60
-        no_output_timeout_seconds: 180
-        progress_idle_timeout_seconds: 105
-        max_runtime_extension_seconds: 75
-    kilo_cli:
-      enabled: false
-      subagent_backend_class: external_cli
-      detect_command: kilo
-      role: free_primary
-      orchestration_tier: external_free
-      cost_priority: highest
-      budget_cost_units: 0
-      models_hint: kilo/x-ai/grok-code-fast-1:optimized:free
-      default_model: kilo/x-ai/grok-code-fast-1:optimized:free
-      default_model_profile: kilo_grok_code_fast_free
-      capability_band: read_only,review_safe
-      default_runtime_role: coach
-      write_scope: none
-      max_runtime_seconds: 180
-      min_output_bytes: 260
-      billing_tier: free
-      speed_tier: fast
-      quality_tier: medium
-      runtime_roles:
-        - business_analyst
-        - coach
-        - verifier
-      task_classes:
-        - research
-        - analysis
-        - review
-      model_profiles:
-        kilo_grok_code_fast_free:
-          provider: kilo
-          model_ref: kilo/x-ai/grok-code-fast-1:optimized:free
-          reasoning_effort: provider_default
-          normalized_cost_units: 0
-          speed_tier: fast
-          quality_tier: medium
-          write_scope: none
-          runtime_roles:
-            - business_analyst
-            - coach
-            - verifier
-          task_classes:
-            - research
-            - analysis
-            - review
-          reasoning_control:
-            mode: provider_default
-          readiness:
-            mode: external_cli_profile
-            required: true
-      specialties: planning,spec,review
-      dispatch:
-        command: kilo
-        static_args:
-          - run
-          - --auto
-        model_flag: --model
-        workdir_flag: --dir
-        output_mode: stdout
-        prompt_mode: positional
-        startup_timeout_seconds: 60
-        no_output_timeout_seconds: 180
-        progress_idle_timeout_seconds: 105
-        max_runtime_extension_seconds: 75
-      readiness:
-        auth:
-          mode: file_present
-          path: ~/.local/share/kilo/auth.json
-        model:
-          mode: json_code_ref
-          path: ~/.local/state/kilo/model.json
-          expected_ref: kilo/x-ai/grok-code-fast-1:optimized:free
-    vibe_cli:
-      enabled: true
-      subagent_backend_class: external_cli
-      detect_command: vibe
-      role: free_primary
-      orchestration_tier: external_free
-      cost_priority: highest
-      budget_cost_units: 0
-      models_hint: vibe/mistral-medium-3.5
-      default_model: vibe/mistral-medium-3.5
-      default_model_profile: vibe_mistral_medium35_review
-      capability_band: read_only,review_safe
-      default_runtime_role: coach
-      write_scope: none
-      max_runtime_seconds: 180
-      min_output_bytes: 260
-      billing_tier: free
-      speed_tier: medium
-      quality_tier: medium
-      runtime_roles:
-        - business_analyst
-        - coach
-        - verifier
-      task_classes:
-        - research
-        - specification
-        - planning
-        - ui_review
-        - review
-        - analysis
-        - coach
-        - verification
-      model_profiles:
-        vibe_mistral_medium35_review:
-          provider: vibe
-          model_ref: vibe/mistral-medium-3.5
-          reasoning_effort: provider_default
-          normalized_cost_units: 0
-          speed_tier: medium
-          quality_tier: medium
-          write_scope: none
-          runtime_roles:
-            - business_analyst
-            - coach
-            - verifier
-          task_classes:
-            - research
-            - specification
-            - planning
-            - ui_review
-            - review
-            - analysis
-            - coach
-            - verification
-          reasoning_control:
-            mode: config_file
-            path: ~/.vibe/config.toml
-            expected_substring: 'active_model = "mistral-medium-3.5"'
-          readiness:
-            mode: external_cli_profile
-            required: true
-      specialties: planning,spec,review
-      dispatch:
-        command: vibe
-        static_args:
-          - --output
-          - text
-        env:
-          PYTHONIOENCODING: utf-8
-          PYTHONUTF8: "1"
-        workdir_flag: --workdir
-        output_mode: stdout
-        prompt_mode: flag_value
-        prompt_flag: -p
-        startup_timeout_seconds: 60
-        no_output_timeout_seconds: 180
-        progress_idle_timeout_seconds: 105
-        max_runtime_extension_seconds: 75
-      readiness:
-        auth:
-          mode: file_present
-          path: ~/.vibe/.env
-        model:
-          mode: text_contains
-          path: ~/.vibe/config.toml
-          expected_ref: vibe/mistral-medium-3.5
-          expected_substring: 'active_model = "mistral-medium-3.5"'
-        provider_failure:
-          mode: file_contains
-          path: ~/.vibe/logs/vibe.log
-          substring: Invalid API key
-    jcode_nim_cli:
-      enabled: true
-      subagent_backend_class: external_cli
-      detect_command: jcode
-      role: advisory_secondary
-      orchestration_tier: external_advisory
-      cost_priority: preferred_when_root_token_pressure
-      budget_cost_units: 1
-      models_hint: jcode/nvidia-nim/mistralai/mistral-medium-3.5-128b
-      default_model: mistralai/mistral-medium-3.5-128b
-      default_model_profile: jcode_nim_mistral_medium35_review
-      capability_band: read_only,review_safe,independent_diagnosis
-      default_runtime_role: coach
-      write_scope: none
-      max_runtime_seconds: 180
-      min_output_bytes: 160
-      billing_tier: external_nim_api_key
-      speed_tier: medium
-      quality_tier: medium
-      runtime_roles:
-        - business_analyst
-        - coach
-        - verifier
-      task_classes:
-        - research
-        - specification
-        - planning
-        - review
-        - analysis
-        - coach
-        - verification
-      model_profiles:
-        jcode_nim_mistral_medium35_review:
-          provider: nvidia-nim
-          model_ref: mistralai/mistral-medium-3.5-128b
-          reasoning_effort: provider_default
-          normalized_cost_units: 1
-          speed_tier: medium
-          quality_tier: medium
-          write_scope: none
-          runtime_roles:
-            - business_analyst
-            - coach
-            - verifier
-          task_classes:
-            - research
-            - specification
-            - planning
-            - review
-            - analysis
-            - coach
-            - verification
-          reasoning_control:
-            mode: command_args
-            expected_args:
-              - --provider
-              - nvidia-nim
-              - --model
-              - mistralai/mistral-medium-3.5-128b
-              - --tool-profile
-              - none
-          readiness:
-            mode: external_cli_profile
-            required: true
-      specialties: planning,spec,review,diagnosis
-      dispatch:
-        command: jcode
-        static_args:
-          - run
-          - --no-update
-          - --provider
-          - nvidia-nim
-          - --model
-          - mistralai/mistral-medium-3.5-128b
-          - --tool-profile
-          - none
-          - --json
-        workdir_flag: -C
-        output_mode: json_text
-        prompt_mode: positional
-        startup_timeout_seconds: 60
-        no_output_timeout_seconds: 180
-        progress_idle_timeout_seconds: 105
-        max_runtime_extension_seconds: 75
-      readiness:
-        auth:
-          mode: command_json_field
-          command: jcode auth status --json
-          provider_id: nvidia-nim
-          expected_status: available
-        model:
-          mode: command_text_contains
-          command: jcode model list --provider nvidia-nim --no-update
-          expected_ref: mistralai/mistral-medium-3.5-128b
-          expected_substring: mistralai/mistral-medium-3.5-128b
-        provider_label_caveat:
-          mode: observed_runtime_caveat
-          observed_command: jcode run --no-update --provider nvidia-nim --model mistralai/mistral-medium-3.5-128b --tool-profile none --json
-          observed_issue: run_json_provider_field_reported_openrouter_while_provider_current_resolved_nvidia_nim
-          routing_status: experimental_until_provider_label_is_stable
-    pi_cli:
-      enabled: false
-      subagent_backend_class: external_cli
-      detect_command: vida-pi-agent
-      provider_command: pi
-      role: primary_external_implementation
-      orchestration_tier: external_write_guarded
-      cost_priority: preferred_when_admissible
-      budget_cost_units: 4
-      models_hint: openai-codex/gpt-5.5
-      default_model: openai-codex/gpt-5.5
-      default_model_profile: pi_gpt55_medium_guarded
-      default_runtime_role: worker
-      capability_band: implementation_guarded,specification_safe,review_safe
-      write_scope: guard_required_owned_paths
-      write_readiness: guard_required_fail_closed_until_adapter_guard
-      max_runtime_seconds: 420
-      min_output_bytes: 260
-      billing_tier: external_paid_or_provider_account
-      speed_tier: fast
-      quality_tier: high
-      runtime_roles:
-        - worker
-        - business_analyst
-        - coach
-        - verifier
-      task_classes:
-        - implementation
-        - delivery_task
-        - execution_block
-        - implementation_medium
-        - specification
-        - planning
-        - analysis
-        - review
-        - coach
-        - verification
-      model_profiles:
-        pi_gpt55_low_guarded:
-          provider: pi
-          model_ref: openai-codex/gpt-5.5
-          reasoning_effort: low
-          thinking_level: low
-          normalized_cost_units: 1
-          pricing:
-            price_source_kind: provider_catalog
-            source_paths:
-              - docs/product/spec/pi-primary-environment-agent-carrier-spec.md
-            freshness:
-              required: false
-              max_age_days: 30
-              stale_price_policy: diagnostic_only_use_normalized_cost_units
-              missing_price_policy: diagnostic_only_use_normalized_cost_units
-              diagnostic_only: true
-              enforced: false
-          speed_tier: fast
-          quality_tier: medium_high
-          write_scope: guard_required_owned_paths
-          write_readiness: guard_required_fail_closed_until_adapter_guard
-          runtime_roles:
-            - worker
-          task_classes:
-            - implementation
-            - delivery_task
-            - execution_block
-          reasoning_control:
-            mode: pi_rpc_set_thinking_level
-            thinking_level: low
-          readiness:
-            mode: external_cli_profile
-            required: true
-            adapter_command_required: vida-pi-agent
-            provider_command_required: pi
-            model_catalog_required: true
-            write_scope_guard_required: true
-            fail_closed_until_write_guard: true
-        pi_gpt55_medium_guarded:
-          provider: pi
-          model_ref: openai-codex/gpt-5.5
-          reasoning_effort: medium
-          thinking_level: medium
-          normalized_cost_units: 4
-          pricing:
-            price_source_kind: provider_catalog
-            source_paths:
-              - docs/product/spec/pi-primary-environment-agent-carrier-spec.md
-            freshness:
-              required: false
-              max_age_days: 30
-              stale_price_policy: diagnostic_only_use_normalized_cost_units
-              missing_price_policy: diagnostic_only_use_normalized_cost_units
-              diagnostic_only: true
-              enforced: false
-          speed_tier: fast
-          quality_tier: high
-          write_scope: guard_required_owned_paths
-          write_readiness: guard_required_fail_closed_until_adapter_guard
-          runtime_roles:
-            - worker
-            - business_analyst
-            - coach
-          task_classes:
-            - implementation
-            - delivery_task
-            - execution_block
-            - implementation_medium
-            - specification
-            - planning
-            - analysis
-            - coach
-          reasoning_control:
-            mode: pi_rpc_set_thinking_level
-            thinking_level: medium
-          readiness:
-            mode: external_cli_profile
-            required: true
-            adapter_command_required: vida-pi-agent
-            provider_command_required: pi
-            model_catalog_required: true
-            write_scope_guard_required: true
-            fail_closed_until_write_guard: true
-        pi_gpt55_high_readonly:
-          provider: pi
-          model_ref: openai-codex/gpt-5.5
-          reasoning_effort: high
-          thinking_level: high
-          normalized_cost_units: 8
-          speed_tier: medium
-          quality_tier: high
-          write_scope: none
-          runtime_roles:
-            - coach
-            - verifier
-          task_classes:
-            - review
-            - verification
-            - coach
-          reasoning_control:
-            mode: pi_rpc_set_thinking_level
-            thinking_level: high
-          readiness:
-            mode: external_cli_profile
-            required: true
-            adapter_command_required: vida-pi-agent
-            provider_command_required: pi
-            model_catalog_required: true
-            write_scope_guard_required: false
-      specialties: implementation,spec,review,verification
-      dispatch:
-        command: vida-pi-agent
-        static_args:
-          - --mode
-          - rpc
-          - --no-session
-        model_flag: --model
-        reasoning_effort_flag: --thinking-level
-        scope_guard_mode_flag: --scope-guard-mode
-        scope_guard_mode_value_for_write_profiles: guarded-write
-        workdir_flag: --workdir
-        output_mode: vida_result_json
-        prompt_mode: stdin
-        startup_timeout_seconds: 60
-        no_output_timeout_seconds: 180
-        progress_idle_timeout_seconds: 105
-        max_runtime_extension_seconds: 120
-        one_process_per_dispatch: true
-        raw_provider_dispatch_forbidden: true
-      readiness:
-        adapter:
-          mode: command_found
-          command: vida-pi-agent
-        provider:
-          mode: command_found
-          command: pi
-        model_catalog:
-          mode: pi_rpc_get_available_models
-          required: true
-        write_scope_guard:
-          mode: adapter_feature_required
-          required_for_write_profiles: true
-          fail_closed_until_available: true
     vida_coder:
       enabled: false
       subagent_backend_class: service_executor

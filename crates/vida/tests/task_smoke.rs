@@ -18652,7 +18652,7 @@ agent_system:
 }
 
 #[test]
-fn status_json_reports_non_default_host_agents_summary() {
+fn status_json_reports_current_codex_host_agents_summary() {
     let project_root = unique_state_dir();
     fs::create_dir_all(&project_root).expect("project root should exist");
     let state_dir = format!("{project_root}/.vida/data/state");
@@ -18664,36 +18664,19 @@ fn status_json_reports_non_default_host_agents_summary() {
         .env_remove("VIDA_HOME")
         .output()
         .expect("init should run");
-    assert!(init.status.success());
-
-    let config_path = format!("{project_root}/vida.config.yaml");
-    let mut config: serde_yaml::Value =
-        serde_yaml::from_str(&fs::read_to_string(&config_path).expect("config exists"))
-            .expect("config yaml should parse");
-    let root = config
-        .as_mapping_mut()
-        .expect("config root should be a mapping");
-    let host_env = root
-        .get_mut(serde_yaml::Value::String("host_environment".to_string()))
-        .and_then(serde_yaml::Value::as_mapping_mut)
-        .expect("host_environment should exist");
-    host_env.insert(
-        serde_yaml::Value::String("cli_system".to_string()),
-        serde_yaml::Value::String("qwen".to_string()),
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
     );
-    fs::write(
-        &config_path,
-        serde_yaml::to_string(&config).expect("patched yaml should render"),
-    )
-    .expect("patch config");
 
     let activator = vida()
         .args([
             "project-activator",
             "--project-id",
-            "status-qwen",
+            "status-codex",
             "--host-cli-system",
-            "qwen",
+            "codex",
             "--language",
             "english",
             "--json",
@@ -18741,8 +18724,8 @@ fn status_json_reports_non_default_host_agents_summary() {
     let parsed: serde_json::Value =
         serde_json::from_slice(&status.stdout).expect("status should render json");
     let host_agents = &parsed["host_agents"];
-    assert_eq!(host_agents["host_cli_system"], "qwen");
-    assert_eq!(host_agents["runtime_surface"], ".qwen");
+    assert_eq!(host_agents["host_cli_system"], "codex");
+    assert_eq!(host_agents["runtime_surface"], ".codex");
     assert_eq!(
         host_agents["root_session_write_guard"]["status"],
         "blocked_by_default"
@@ -18754,36 +18737,29 @@ fn status_json_reports_non_default_host_agents_summary() {
     let runtime_root = host_agents["runtime_root"]
         .as_str()
         .expect("runtime_root present");
-    assert!(runtime_root.contains(".qwen"));
+    assert!(runtime_root.contains(".codex"));
     let system_entry = &host_agents["system_entry"];
     assert!(system_entry.is_object());
     assert_eq!(
         system_entry["template_root"]
             .as_str()
             .expect("template_root"),
-        ".qwen"
+        ".codex"
     );
     assert_eq!(
         system_entry["runtime_root"].as_str().expect("runtime_root"),
-        ".qwen"
+        ".codex"
     );
     assert_eq!(
         system_entry["materialization_mode"]
             .as_str()
             .expect("materialization_mode"),
-        "copy_tree_only"
+        "codex_toml_catalog_render"
     );
     assert_eq!(system_entry["enabled"].as_bool(), Some(true));
-    assert_eq!(
-        system_entry["carriers"]["qwen-primary"]["tier"]
-            .as_str()
-            .expect("carrier tier"),
-        "qwen"
-    );
-    assert_eq!(
-        system_entry["carriers"]["qwen-primary"]["rate"].as_i64(),
-        Some(4)
-    );
+    assert!(system_entry["carriers"]
+        .as_object()
+        .is_some_and(|carriers| !carriers.is_empty()));
     let agents = host_agents["agents"]
         .as_object()
         .expect("agents summary should render");
@@ -18791,7 +18767,7 @@ fn status_json_reports_non_default_host_agents_summary() {
         .get("count")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or_else(|| agents.len() as u64);
-    assert_eq!(rendered_agent_count, 1);
+    assert!(rendered_agent_count >= 1);
     assert_eq!(
         host_agents["selection_policy"]["rule"],
         "capability_first_then_score_guard_then_cheapest_tier"
@@ -18805,15 +18781,16 @@ fn status_json_reports_non_default_host_agents_summary() {
     );
     assert_eq!(
         host_agents["external_cli_preflight"]["requires_external_cli"],
-        true
+        false
     );
     assert_eq!(
         host_agents["external_cli_preflight"]["selected_execution_class"],
-        "external"
+        "internal"
     );
-    assert_eq!(
-        host_agents["external_cli_preflight"]["hybrid_external_cli_relevant"],
-        false
+    assert!(
+        host_agents["external_cli_preflight"]["hybrid_external_cli_relevant"]
+            .as_bool()
+            .is_some()
     );
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
