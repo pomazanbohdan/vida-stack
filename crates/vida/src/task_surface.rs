@@ -11096,6 +11096,35 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         };
+                        if existing.status == "closed" {
+                            if command.json {
+                                crate::print_json_pretty(&serde_json::json!({
+                                    "surface": "vida task proof attach-evidence",
+                                    "status": "blocked",
+                                    "task_id": command.task_id,
+                                    "blocker_codes": ["task_proof_evidence_closed_task"],
+                                    "next_actions": [
+                                        "Reopen the task before attaching new proof evidence, or use a dedicated repair command when one is available.",
+                                        "Inspect existing proof with `vida task proof status <task-id>`."
+                                    ],
+                                    "artifact_refs": {"surface": "vida task proof attach-evidence"}
+                                }));
+                            } else {
+                                print_surface_header(command.render, "vida task proof attach-evidence");
+                                print_surface_line(command.render, "status", "blocked");
+                                print_surface_line(
+                                    command.render,
+                                    "blocker",
+                                    "task_proof_evidence_closed_task",
+                                );
+                                print_surface_line(
+                                    command.render,
+                                    "next",
+                                    "Reopen the task before attaching new proof evidence, or use a dedicated repair command when one is available.",
+                                );
+                            }
+                            return ExitCode::from(2);
+                        }
                         let mut notes = existing.notes.clone().unwrap_or_default();
                         let mut planner_metadata = existing.planner_metadata.clone();
                         for proof_target in &proof_targets {

@@ -7334,6 +7334,95 @@ fn task_proof_attach_evidence_satisfies_status_and_progress() {
 }
 
 #[test]
+fn task_proof_attach_evidence_rejects_closed_task_mutation() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("proof-closed-parent");
+    let task_id = unique_test_id("proof-closed-task");
+    let proof_target = "cargo test -p vida --test task_smoke proof_closed_guard";
+    create_epic_parent(&state_dir, &parent_id, "Proof closed parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Proof closed task",
+            "--type",
+            "task",
+            "--parent-id",
+            &parent_id,
+            "--proof-target",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            &task_id,
+            "--proof-target",
+            proof_target,
+            "--result",
+            "pass",
+            "--artifact-ref",
+            "artifacts/proof-closed-guard.json",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Structured proof evidence recorded",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let before = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    let (blocked, succeeded) = run_command_json_allow_failure(
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            &task_id,
+            "--proof-target",
+            "post-close mutation",
+            "--result",
+            "pass",
+            "--artifact-ref",
+            "artifacts/should-not-append.json",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!succeeded);
+    assert_eq!(blocked["surface"], "vida task proof attach-evidence");
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(
+        blocked["blocker_codes"],
+        serde_json::json!(["task_proof_evidence_closed_task"])
+    );
+    assert!(blocked["next_actions"].as_array().is_some_and(|actions| {
+        actions
+            .iter()
+            .any(|action| action.as_str().is_some_and(|text| text.contains("Reopen")))
+    }));
+
+    let after = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    assert_eq!(after["task"]["status"], "closed");
+    assert_eq!(after["task"]["notes"], before["task"]["notes"]);
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_browser_proof_progress_close_golden_workflow_satisfies_schema() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
