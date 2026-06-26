@@ -3440,7 +3440,6 @@ fn trusted_host_bridge_completion_request_context(
     if retryable_completion_context
         && !adapter_gate_context
         && !receipt_target_matches_request
-        && !packet_confirms_active_request
     {
         return Err(
             "Retryable host bridge request dispatch target does not match persisted dispatch receipt evidence."
@@ -4342,16 +4341,38 @@ fn materialize_host_bridge_completion_evidence(
     blocker_codes.dedup();
     let blocker_code = blocker_codes.first().cloned();
     let verdict = host_bridge_completion_verdict(&blocker_codes);
-    let effective_allowed_next_node = allowed_next_node
+    let requested_allowed_next_node = allowed_next_node
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            persisted_receipt
-                .downstream_dispatch_target
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        });
+        .filter(|value| !value.is_empty());
+    if requested_allowed_next_node == Some("next") {
+        return Err(
+            "Host bridge completion allowed_next_node `next` is not a concrete runtime route."
+                .to_string(),
+        );
+    }
+    let persisted_allowed_next_node = persisted_receipt
+        .downstream_dispatch_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let (Some(requested), Some(persisted)) =
+        (requested_allowed_next_node, persisted_allowed_next_node)
+    {
+        if requested != persisted {
+            return Err(format!(
+                "Host bridge completion allowed_next_node `{requested}` does not match persisted downstream route `{persisted}`."
+            ));
+        }
+    }
+    let effective_allowed_next_node = requested_allowed_next_node.or(persisted_allowed_next_node);
+    if blocker_codes.is_empty()
+        && effective_allowed_next_node.is_none()
+        && !matches!(dispatch_target.trim(), "closure" | "closure_lane")
+    {
+        return Err(format!(
+            "Host bridge completion for `{dispatch_target}` is missing a concrete downstream route."
+        ));
+    }
     let pass_allowed_next_node = if blocker_codes.is_empty() {
         effective_allowed_next_node
     } else {
@@ -5340,6 +5361,27 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         .filter(|value| !value.is_empty())
                         .map(str::to_string)
                 });
+            if effective_allowed_next_node.as_deref() == Some("next") {
+                eprintln!(
+                    "Lane completion allowed_next_node `next` is not a concrete runtime route."
+                );
+                return ExitCode::from(1);
+            }
+            if let (Some(effective), Some(persisted)) = (
+                effective_allowed_next_node.as_deref(),
+                receipt
+                    .downstream_dispatch_target
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+            ) {
+                if effective != persisted {
+                    eprintln!(
+                        "Lane completion allowed_next_node `{effective}` does not match persisted downstream route `{persisted}`."
+                    );
+                    return ExitCode::from(1);
+                }
+            }
             let completion_result_path =
                 match crate::runtime_dispatch_lane_completion::write_runtime_lane_completion_result_with_summary_and_next(
                     store.root(),
@@ -12604,7 +12646,7 @@ mod tests {
                 "verdict": "pass",
                 "blocker_codes": [],
                 "rework_target": "none",
-                "allowed_next_node": "next"
+                "allowed_next_node": "closure"
             })
             .to_string(),
         )
@@ -12643,7 +12685,7 @@ mod tests {
         )
         .expect("request-owned result path should be accepted")
         .expect("result should be present");
-        assert_eq!(result["allowed_next_node"], "next");
+        assert_eq!(result["allowed_next_node"], "closure");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -14867,6 +14909,98 @@ mod tests {
         );
         assert_eq!(result["allowed_next_node"], serde_json::Value::Null);
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_completion_rejects_supplied_next_node_that_conflicts_with_persisted_route() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-route-mismatch-{}-{nanos}",
+            std::process::id()
+        ));
+        let request_path = root.join("host-tool-bridge/requests/run-route.json");
+        let result_path = root.join("host-tool-bridge/results/run-route.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/run-route.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        let packet_path = root.join("runtime-consumption/dispatch-packets/run-route.json");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "run-route",
+                "run_id": "run-route",
+                "dispatch_target": "analyst",
+                "task_class": "specification",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/run-route-activation.json");
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation parent");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = "run-route".to_string();
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+        receipt.downstream_dispatch_target = Some("architect".to_string());
+
+        let error = materialize_host_bridge_completion_evidence(
+            &root,
+            request_path.to_str().expect("utf8 request path"),
+            "run-route",
+            "analyst",
+            &receipt,
+            "receipt-route",
+            Some("agent-1"),
+            Some("analyst completed"),
+            Some("designer"),
+            Some("approve"),
+            Some("pass"),
+            None,
+            &[],
+            false,
+            false,
+            HostBridgeTaskflowImplementationEvidence::default(),
+            &[],
+            false,
+            false,
+        )
+        .expect_err("supplied route must not override persisted route");
+
+        assert!(
+            error.contains("does not match persisted downstream route `architect`"),
+            "unexpected error: {error}"
+        );
+        assert!(!result_path.exists());
+        assert!(!receipt_path.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

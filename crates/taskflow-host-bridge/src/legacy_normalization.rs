@@ -191,7 +191,19 @@ fn normalize_legacy_completion(
     let source_contract_version = legacy_source_contract_version(result, surface);
     let next_step = string_field(result, "allowed_next_node")
         .or_else(|| string_field(result, "next_node"))
-        .map(|value| FlowStepRef(value.to_string()));
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            if value == "next" {
+                Err(normalization_error(
+                    "legacy_abstract_next_node",
+                    "legacy result uses abstract allowed_next_node `next` instead of a concrete route",
+                ))
+            } else {
+                Ok(FlowStepRef(value.to_string()))
+            }
+        })
+        .transpose()?;
     let outcome = if pass_signal {
         if !blocker_evidence_present || !blocker_codes.is_empty() {
             return Err(normalization_error(
@@ -280,7 +292,7 @@ fn result_contract_for(source_contract_version: &str, outcome: &CompletionOutcom
             "verdict": "pass",
             "blocker_codes": [],
             "rework_target": null,
-            "allowed_next_node": reported_next_step.as_ref().map(|step| step.0.as_str()).unwrap_or("next")
+            "allowed_next_node": reported_next_step.as_ref().map(|step| step.0.as_str()).unwrap_or("closure")
         }),
         CompletionOutcome::Blocked {
             blockers,
@@ -533,6 +545,20 @@ mod tests {
         let error = normalize_legacy_host_bridge_completion_result(&legacy).unwrap_err();
 
         assert_eq!(error.blocker_code, LEGACY_OUTCOME_CONTRADICTION);
+    }
+
+    #[test]
+    fn legacy_explicit_abstract_next_node_is_rejected() {
+        let legacy = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "blocker_codes": [],
+            "allowed_next_node": "next"
+        });
+
+        let error = normalize_legacy_host_bridge_completion_result(&legacy).unwrap_err();
+
+        assert_eq!(error.blocker_code, "legacy_abstract_next_node");
     }
 
     #[test]

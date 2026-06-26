@@ -492,7 +492,7 @@ pub fn host_bridge_result_verdict_fields_for_gate(
         let allowed_next_node = rework_target
             .map(str::trim)
             .filter(|target| !target.is_empty())
-            .unwrap_or("next");
+            .unwrap_or("closure");
         HostBridgeResultVerdictFields {
             decision: "approve".to_string(),
             verdict: Release1ContractStatus::Pass.as_str().to_string(),
@@ -578,6 +578,14 @@ pub fn host_bridge_result_verdict_contract_blockers(
             .any(|code| code.as_str().map(str::trim).is_none_or(str::is_empty))
     }) {
         push_unique_blocker(&mut blockers, "host_bridge_result_invalid_blocker_codes");
+    }
+    if result
+        .get("allowed_next_node")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        == Some("next")
+    {
+        push_unique_blocker(&mut blockers, "host_bridge_result_abstract_next_node");
     }
 
     let status = result.get("status").and_then(Value::as_str).map(str::trim);
@@ -824,13 +832,34 @@ mod tests {
         let result = serde_json::json!({
             "status": "pass",
             "execution_state": "executed",
-            "allowed_next_node": "next"
+            "allowed_next_node": "closure"
         });
         let downgraded_required_fields = vec!["allowed_next_node".to_string()];
 
         assert_eq!(
             host_bridge_result_verdict_contract_blockers(&result, &downgraded_required_fields),
             vec!["host_bridge_result_missing_verdict_field".to_string()]
+        );
+    }
+
+    #[test]
+    fn result_verdict_contract_rejects_abstract_next_node() {
+        let result = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "decision": "approve",
+            "verdict": "pass",
+            "blocker_codes": [],
+            "rework_target": null,
+            "allowed_next_node": "next"
+        });
+
+        assert_eq!(
+            host_bridge_result_verdict_contract_blockers(
+                &result,
+                &crate::request::default_host_bridge_required_result_fields(),
+            ),
+            vec!["host_bridge_result_abstract_next_node".to_string()]
         );
     }
 
@@ -950,7 +979,7 @@ mod tests {
             assert_eq!(pass_fields.verdict, "pass", "{gate}");
             assert_eq!(pass_fields.blocker_codes, Vec::<String>::new(), "{gate}");
             assert_eq!(pass_fields.rework_target, None, "{gate}");
-            assert_eq!(pass_fields.allowed_next_node, "next", "{gate}");
+            assert_eq!(pass_fields.allowed_next_node, "closure", "{gate}");
             let targeted_pass_fields =
                 host_bridge_result_verdict_fields_for_gate(gate, &[], Some(allowed_next_node));
             assert_eq!(
@@ -996,7 +1025,7 @@ mod tests {
                     "verdict": "pass",
                     "blocker_codes": [],
                     "rework_target": null,
-                    "allowed_next_node": "next"
+                    "allowed_next_node": "closure"
                 }),
                 "host_bridge_result_decision_verdict_mismatch",
             ),
@@ -1008,7 +1037,7 @@ mod tests {
                     "verdict": "pass",
                     "blocker_codes": [],
                     "rework_target": null,
-                    "allowed_next_node": "next"
+                    "allowed_next_node": "closure"
                 }),
                 "host_bridge_result_decision_verdict_mismatch",
             ),
@@ -1020,7 +1049,7 @@ mod tests {
                     "verdict": "defer",
                     "blocker_codes": [],
                     "rework_target": null,
-                    "allowed_next_node": "next"
+                    "allowed_next_node": "closure"
                 }),
                 "host_bridge_result_decision_verdict_mismatch",
             ),
@@ -1032,7 +1061,7 @@ mod tests {
                     "verdict": "pass",
                     "blocker_codes": [],
                     "rework_target": null,
-                    "allowed_next_node": "next"
+                    "allowed_next_node": "closure"
                 }),
                 "host_bridge_result_decision_verdict_mismatch",
             ),
@@ -1044,7 +1073,7 @@ mod tests {
                     "verdict": "pass",
                     "blocker_codes": ["coach_rework_required"],
                     "rework_target": null,
-                    "allowed_next_node": "next"
+                    "allowed_next_node": "closure"
                 }),
                 "host_bridge_result_blocker_codes_mismatch",
             ),
