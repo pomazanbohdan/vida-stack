@@ -1838,6 +1838,152 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
+    async fn bulk_dependency_add_uses_aggregate_plan_before_persistence() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-bulk-dependency-aggregate-plan-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, title, issue_type, parent_id) in [
+            ("root", "Root", "epic", None),
+            ("task-a", "Task A", "task", Some("root")),
+            ("task-b", "Task B", "task", Some("root")),
+            ("blocker-a", "Blocker A", "task", Some("root")),
+            ("blocker-b", "Blocker B", "task", Some("root")),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id: None,
+                    description: "",
+                    issue_type,
+                    status: "open",
+                    priority: 1,
+                    parent_id,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: TaskPlannerMetadata::default(),
+                    created_by: "tester",
+                    source_repo: ".",
+                })
+                .await
+                .expect("create task");
+        }
+
+        let edges = vec![
+            TaskDependencyBulkAddInput {
+                issue_id: "task-a".to_string(),
+                depends_on_id: "blocker-a".to_string(),
+                edge_type: "blocks".to_string(),
+            },
+            TaskDependencyBulkAddInput {
+                issue_id: "task-b".to_string(),
+                depends_on_id: "blocker-b".to_string(),
+                edge_type: "blocks".to_string(),
+            },
+        ];
+
+        let dry_run = store
+            .add_task_dependencies_bulk(&edges, "tester", true)
+            .await
+            .expect("dry-run bulk dependency add");
+        assert_eq!(dry_run.created_count, 2);
+        assert!(
+            store
+                .show_task("task-a")
+                .await
+                .expect("show task-a")
+                .dependencies
+                .iter()
+                .all(|dependency| dependency.depends_on_id != "blocker-a")
+        );
+
+        let persisted = store
+            .add_task_dependencies_bulk(&edges, "tester", false)
+            .await
+            .expect("persist bulk dependency add through aggregate plan");
+        assert_eq!(persisted.created_count, 2);
+        for (task_id, blocker_id) in [("task-a", "blocker-a"), ("task-b", "blocker-b")] {
+            let task = store.show_task(task_id).await.expect("show task");
+            assert!(task.dependencies.iter().any(|dependency| {
+                dependency.edge_type == "blocks" && dependency.depends_on_id == blocker_id
+            }));
+        }
+
+        store.close().await;
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn metadata_update_uses_aggregate_plan_before_preserving_latest_notes() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-metadata-update-aggregate-plan-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "root",
+                title: "Root",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create root");
+
+        let updated = store
+            .update_task(UpdateTaskRequest {
+                task_id: "root",
+                title: Some("Root renamed"),
+                status: None,
+                priority: Some(2),
+                notes: None,
+                description: Some("metadata-only update"),
+                parent_id: None,
+                add_labels: &["aggregate-plan".to_string()],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect("metadata update through aggregate plan");
+
+        assert_eq!(updated.title, "Root renamed");
+        assert_eq!(updated.priority, 2);
+        assert_eq!(updated.description, "metadata-only update");
+        assert!(updated.labels.iter().any(|label| label == "aggregate-plan"));
+
+        store.close().await;
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn reparent_children_moves_selected_children_and_preserves_store_on_dry_run() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)

@@ -11,9 +11,11 @@ use taskflow_authority::task_transition::{
     TaskLifecycleRuntimeEvidence,
 };
 use taskflow_core::task::aggregate::{
+    ensure_task_mutation_plan_covers_persistence,
     plan_add_task_dependency, plan_close_task, plan_create_task, plan_remove_task_dependency,
-    plan_reparent_tasks, plan_update_task_status, TaskAggregateTaskSnapshot, TaskCloseCommand,
-    TaskCreateCommand, TaskDependencyMutationCommand, TaskReparentCommand, TaskStatusUpdateCommand,
+    plan_reparent_tasks, plan_update_task_metadata, plan_update_task_status,
+    TaskAggregateTaskSnapshot, TaskCloseCommand, TaskCreateCommand, TaskDependencyMutationCommand,
+    TaskMetadataUpdateCommand, TaskMutationPlan, TaskReparentCommand, TaskStatusUpdateCommand,
 };
 use taskflow_core::task::lifecycle::{TaskLifecycleEvent, TaskLifecycleInput, TaskLifecycleStatus};
 
@@ -186,6 +188,23 @@ impl StateStore {
                 "task `{task_id}` lifecycle mutation rejected by authority: {}",
                 admission.blocker_codes.join(", ")
             ),
+        })
+    }
+
+    fn ensure_task_mutation_plan_covers_persistence(
+        operation: &str,
+        plan: &TaskMutationPlan,
+        persisted_task_ids: &BTreeSet<String>,
+    ) -> Result<(), StateStoreError> {
+        ensure_task_mutation_plan_covers_persistence(plan, persisted_task_ids).map_err(|error| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "{operation} aggregate plan does not cover persistence: {} expected=[{}] actual=[{}]",
+                    error.blocker_code,
+                    error.expected_task_ids.join(","),
+                    error.actual_task_ids.join(",")
+                ),
+            }
         })
     }
 
@@ -2444,14 +2463,11 @@ impl StateStore {
             edge_type: edge_type.to_string(),
             occurred_at: now,
         });
-        debug_assert_eq!(
-            dependency_plan
-                .touched_task_ids
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>(),
-            touched_task_ids
-        );
+        Self::ensure_task_mutation_plan_covers_persistence(
+            "add_task_dependency",
+            &dependency_plan,
+            &touched_task_ids,
+        )?;
 
         self.persist_task_record(tasks[task_index].clone()).await?;
         Ok(dependency)
@@ -2612,6 +2628,42 @@ impl StateStore {
                 })
                 .cloned()
                 .collect::<BTreeSet<_>>();
+            let dependency_plans = created
+                .iter()
+                .map(|dependency| {
+                    plan_add_task_dependency(TaskDependencyMutationCommand {
+                        task_id: dependency.issue_id.clone(),
+                        depends_on_id: dependency.depends_on_id.clone(),
+                        edge_type: dependency.edge_type.clone(),
+                        occurred_at: dependency.created_at.clone(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let planned_touched_task_ids = dependency_plans
+                .iter()
+                .flat_map(|plan| plan.touched_task_ids.iter().cloned())
+                .collect::<BTreeSet<_>>();
+            if planned_touched_task_ids != touched_task_ids {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "add_task_dependencies_bulk aggregate plan does not cover operation touched set: expected=[{}] actual=[{}]",
+                        touched_task_ids.iter().cloned().collect::<Vec<_>>().join(","),
+                        planned_touched_task_ids.into_iter().collect::<Vec<_>>().join(",")
+                    ),
+                });
+            }
+            for plan in &dependency_plans {
+                let plan_touched_task_ids = plan
+                    .touched_task_ids
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                Self::ensure_task_mutation_plan_covers_persistence(
+                    "add_task_dependencies_bulk",
+                    plan,
+                    &plan_touched_task_ids,
+                )?;
+            }
             for task_id in changed_task_ids {
                 let task = tasks
                     .iter()
@@ -2670,14 +2722,11 @@ impl StateStore {
             edge_type: edge_type.to_string(),
             occurred_at: now,
         });
-        debug_assert_eq!(
-            dependency_plan
-                .touched_task_ids
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>(),
-            touched_task_ids
-        );
+        Self::ensure_task_mutation_plan_covers_persistence(
+            "remove_task_dependency",
+            &dependency_plan,
+            &touched_task_ids,
+        )?;
 
         self.persist_task_record(updated).await?;
         Ok(removed)
@@ -2867,14 +2916,11 @@ impl StateStore {
             .map(|parent| parent.id.clone())
             .chain(std::iter::once(task.id.clone()))
             .collect::<BTreeSet<_>>();
-        debug_assert_eq!(
-            create_plan
-                .touched_task_ids
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>(),
-            persisted_task_ids
-        );
+        Self::ensure_task_mutation_plan_covers_persistence(
+            "create_task",
+            &create_plan,
+            &persisted_task_ids,
+        )?;
 
         for parent in &reopened_parents {
             self.persist_task_record(parent.clone()).await?;
@@ -2968,6 +3014,8 @@ impl StateStore {
         let base_task_for_update = task.clone();
         let base_updated_at = task.updated_at.clone();
         let explicit_notes_replacement = notes.is_some();
+        let mut metadata_update_requested = false;
+        let mut parent_update_requested = false;
         let mut status_update_requested = false;
         if let Some(title) = title {
             let trimmed = title.trim();
@@ -2977,6 +3025,7 @@ impl StateStore {
                 });
             }
             task.title = trimmed.to_string();
+            metadata_update_requested = true;
         }
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
             status_update_requested = true;
@@ -3027,14 +3076,18 @@ impl StateStore {
         }
         if let Some(priority) = priority {
             task.priority = priority;
+            metadata_update_requested = true;
         }
         if let Some(notes) = notes {
             task.notes = Some(notes.to_string());
+            metadata_update_requested = true;
         }
         if let Some(description) = description {
             task.description = description.to_string();
+            metadata_update_requested = true;
         }
         if let Some(parent_id) = parent_id {
+            parent_update_requested = true;
             let normalized_parent_id = parent_id.and_then(|value| {
                 let trimmed = value.trim();
                 if trimmed.is_empty() {
@@ -3087,6 +3140,7 @@ impl StateStore {
                 .map(|label| label.trim().to_string())
                 .filter(|label| !label.is_empty())
                 .collect::<Vec<_>>();
+            metadata_update_requested = true;
         }
         for label in add_labels {
             let label = label.trim();
@@ -3094,29 +3148,36 @@ impl StateStore {
                 continue;
             }
             task.labels.push(label.to_string());
+            metadata_update_requested = true;
         }
         if !remove_labels.is_empty() {
             task.labels
                 .retain(|label| !remove_labels.iter().any(|remove| remove == label));
+            metadata_update_requested = true;
         }
         if let Some(execution_mode) = execution_mode {
             task.execution_semantics.execution_mode =
                 Self::validate_execution_mode(task_id, execution_mode)?;
+            metadata_update_requested = true;
         }
         if let Some(order_bucket) = order_bucket {
             task.execution_semantics.order_bucket =
                 Self::normalize_execution_semantics_value(order_bucket);
+            metadata_update_requested = true;
         }
         if let Some(parallel_group) = parallel_group {
             task.execution_semantics.parallel_group =
                 Self::normalize_execution_semantics_value(parallel_group);
+            metadata_update_requested = true;
         }
         if let Some(conflict_domain) = conflict_domain {
             task.execution_semantics.conflict_domain =
                 Self::normalize_execution_semantics_value(conflict_domain);
+            metadata_update_requested = true;
         }
         if let Some(planner_metadata) = planner_metadata {
             task.planner_metadata = planner_metadata;
+            metadata_update_requested = true;
         }
         let (execution_semantics, planner_metadata) = Self::normalize_task_record_defaults(
             task_id,
@@ -3159,12 +3220,23 @@ impl StateStore {
                 Vec::new(),
             )
         };
-        let touched_task_ids = reopened_parents
+        let closed_parents = self
+            .filter_auto_closed_parents_ready_for_close(closed_parents)
+            .await?;
+        let mut touched_task_ids = reopened_parents
             .iter()
             .map(|parent| parent.id.clone())
             .chain(closed_parents.iter().map(|parent| parent.id.clone()))
             .chain(std::iter::once(task.id.clone()))
             .collect::<BTreeSet<_>>();
+        if parent_update_requested {
+            if let Some(parent_id) = Self::parent_id_for_task(&base_task_for_update) {
+                touched_task_ids.insert(parent_id);
+            }
+            if let Some(parent_id) = Self::parent_id_for_task(&task) {
+                touched_task_ids.insert(parent_id);
+            }
+        }
         let issues =
             Self::validate_task_graph_rows_for_mutation(&original_tasks, &tasks, &touched_task_ids);
         if let Some(first) = issues.first() {
@@ -3175,9 +3247,7 @@ impl StateStore {
                 ),
             });
         }
-        let closed_parents = self
-            .filter_auto_closed_parents_ready_for_close(closed_parents)
-            .await?;
+        let mut update_plans = Vec::new();
         if status_update_requested {
             let status_plan = plan_update_task_status(TaskStatusUpdateCommand {
                 task: TaskAggregateTaskSnapshot {
@@ -3212,20 +3282,78 @@ impl StateStore {
                     })
                     .collect(),
             });
-            let persisted_task_ids = reopened_parents
+            let plan_touched_task_ids = status_plan
+                .touched_task_ids
                 .iter()
-                .map(|parent| parent.id.clone())
-                .chain(closed_parents.iter().map(|parent| parent.id.clone()))
-                .chain(std::iter::once(task.id.clone()))
+                .cloned()
                 .collect::<BTreeSet<_>>();
-            debug_assert_eq!(
-                status_plan
+            Self::ensure_task_mutation_plan_covers_persistence(
+                "update_task_status",
+                &status_plan,
+                &plan_touched_task_ids,
+            )?;
+            update_plans.push(status_plan);
+        }
+        if parent_update_requested {
+            let old_parent_id = Self::parent_id_for_task(&base_task_for_update);
+            let new_parent_id = Self::parent_id_for_task(&task);
+            if old_parent_id != new_parent_id {
+                let reparent_plan = plan_reparent_tasks(TaskReparentCommand {
+                    moved_tasks: vec![TaskAggregateTaskSnapshot {
+                        id: task.id.clone(),
+                        status: task.status.clone(),
+                        updated_at: task.updated_at.clone(),
+                        closed_at: task.closed_at.clone(),
+                        close_reason: task.close_reason.clone(),
+                        parent_id: new_parent_id.clone(),
+                    }],
+                    from_parent_id: old_parent_id.unwrap_or_default(),
+                    to_parent_id: new_parent_id.unwrap_or_default(),
+                    occurred_at: task.updated_at.clone(),
+                    auto_closed_parents: Vec::new(),
+                });
+                let plan_touched_task_ids = reparent_plan
                     .touched_task_ids
                     .iter()
                     .cloned()
-                    .collect::<BTreeSet<_>>(),
-                persisted_task_ids
-            );
+                    .collect::<BTreeSet<_>>();
+                Self::ensure_task_mutation_plan_covers_persistence(
+                    "update_task_parent",
+                    &reparent_plan,
+                    &plan_touched_task_ids,
+                )?;
+                update_plans.push(reparent_plan);
+            }
+        }
+        if (metadata_update_requested || update_plans.is_empty()) && !status_update_requested {
+            let metadata_plan = plan_update_task_metadata(TaskMetadataUpdateCommand {
+                task_id: task.id.clone(),
+                occurred_at: task.updated_at.clone(),
+            });
+            let plan_touched_task_ids = metadata_plan
+                .touched_task_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            Self::ensure_task_mutation_plan_covers_persistence(
+                "update_task_metadata",
+                &metadata_plan,
+                &plan_touched_task_ids,
+            )?;
+            update_plans.push(metadata_plan);
+        }
+        let planned_touched_task_ids = update_plans
+            .iter()
+            .flat_map(|plan| plan.touched_task_ids.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        if planned_touched_task_ids != touched_task_ids {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "update_task aggregate plan does not cover operation touched set: expected=[{}] actual=[{}]",
+                    touched_task_ids.iter().cloned().collect::<Vec<_>>().join(","),
+                    planned_touched_task_ids.into_iter().collect::<Vec<_>>().join(",")
+                ),
+            });
         }
         for parent in &reopened_parents {
             self.persist_task_record(parent.clone()).await?;
@@ -3502,14 +3630,11 @@ impl StateStore {
                 })
                 .collect(),
         });
-        debug_assert_eq!(
-            reparent_plan
-                .touched_task_ids
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>(),
-            touched_task_ids
-        );
+        Self::ensure_task_mutation_plan_covers_persistence(
+            "reparent_children",
+            &reparent_plan,
+            &touched_task_ids,
+        )?;
 
         if !dry_run {
             for task in &moved_tasks {
@@ -3639,6 +3764,19 @@ impl StateStore {
         for task in &mut tasks {
             let mut changed = false;
             if moved_set.contains(&task.id) {
+                let current_status =
+                    Self::task_lifecycle_status_for_authority(&task.id, &task.status).ok();
+                Self::ensure_task_lifecycle_admitted(
+                    &task.id,
+                    Self::admit_task_lifecycle_for_store(
+                        &task.id,
+                        TaskLifecycleEvent::Reparent,
+                        current_status,
+                        None,
+                        0,
+                    ),
+                    &[],
+                )?;
                 let created_at = task
                     .dependencies
                     .iter()
@@ -3676,11 +3814,37 @@ impl StateStore {
                 changed = true;
             }
             if pause_set.contains(&task.id) {
+                let current_status =
+                    Self::task_lifecycle_status_for_authority(&task.id, &task.status).ok();
+                Self::ensure_task_lifecycle_admitted(
+                    &task.id,
+                    Self::admit_task_lifecycle_for_store(
+                        &task.id,
+                        TaskLifecycleEvent::UpdateStatus,
+                        current_status,
+                        Some(TaskLifecycleStatus::Paused),
+                        0,
+                    ),
+                    &[],
+                )?;
                 task.status = "paused".to_string();
                 task.closed_at = None;
                 task.close_reason = None;
                 changed = true;
             } else if start_set.contains(&task.id) {
+                let current_status =
+                    Self::task_lifecycle_status_for_authority(&task.id, &task.status).ok();
+                Self::ensure_task_lifecycle_admitted(
+                    &task.id,
+                    Self::admit_task_lifecycle_for_store(
+                        &task.id,
+                        TaskLifecycleEvent::UpdateStatus,
+                        current_status,
+                        Some(TaskLifecycleStatus::InProgress),
+                        0,
+                    ),
+                    &[],
+                )?;
                 task.status = "in_progress".to_string();
                 task.closed_at = None;
                 task.close_reason = None;
@@ -3704,6 +3868,91 @@ impl StateStore {
                 reason: format!(
                     "defect batch rehome would create invalid graph: {} on {}",
                     first.issue_type, first.issue_id
+                ),
+            });
+        }
+
+        let reparent_plan = if moved_set.is_empty() {
+            None
+        } else {
+            Some(plan_reparent_tasks(TaskReparentCommand {
+                moved_tasks: changed_tasks
+                    .iter()
+                    .filter(|task| moved_set.contains(&task.id))
+                    .map(|task| TaskAggregateTaskSnapshot {
+                        id: task.id.clone(),
+                        status: task.status.clone(),
+                        updated_at: task.updated_at.clone(),
+                        closed_at: task.closed_at.clone(),
+                        close_reason: task.close_reason.clone(),
+                        parent_id: Self::parent_id_for_task(task),
+                    })
+                    .collect(),
+                from_parent_id: from_parent_id.to_string(),
+                to_parent_id: to_parent_id.to_string(),
+                occurred_at: now.clone(),
+                auto_closed_parents: Vec::new(),
+            }))
+        };
+        if let Some(reparent_plan) = &reparent_plan {
+            let plan_touched_task_ids = reparent_plan
+                .touched_task_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            Self::ensure_task_mutation_plan_covers_persistence(
+                "defect_batch_rehome_reparent",
+                reparent_plan,
+                &plan_touched_task_ids,
+            )?;
+        }
+
+        let status_plans = changed_tasks
+            .iter()
+            .filter(|task| pause_set.contains(&task.id) || start_set.contains(&task.id))
+            .map(|task| {
+                plan_update_task_status(TaskStatusUpdateCommand {
+                    task: TaskAggregateTaskSnapshot {
+                        id: task.id.clone(),
+                        status: task.status.clone(),
+                        updated_at: task.updated_at.clone(),
+                        closed_at: task.closed_at.clone(),
+                        close_reason: task.close_reason.clone(),
+                        parent_id: Self::parent_id_for_task(task),
+                    },
+                    occurred_at: task.updated_at.clone(),
+                    auto_closed_parents: Vec::new(),
+                    auto_reopened_parents: Vec::new(),
+                })
+            })
+            .collect::<Vec<_>>();
+        for plan in &status_plans {
+            let plan_touched_task_ids = plan
+                .touched_task_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            Self::ensure_task_mutation_plan_covers_persistence(
+                "defect_batch_rehome_status",
+                plan,
+                &plan_touched_task_ids,
+            )?;
+        }
+        let planned_touched_task_ids = reparent_plan
+            .iter()
+            .flat_map(|plan| plan.touched_task_ids.iter().cloned())
+            .chain(
+                status_plans
+                    .iter()
+                    .flat_map(|plan| plan.touched_task_ids.iter().cloned()),
+            )
+            .collect::<BTreeSet<_>>();
+        if planned_touched_task_ids != touched_task_ids {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "defect_batch_rehome aggregate plan does not cover operation touched set: expected=[{}] actual=[{}]",
+                    touched_task_ids.iter().cloned().collect::<Vec<_>>().join(","),
+                    planned_touched_task_ids.into_iter().collect::<Vec<_>>().join(",")
                 ),
             });
         }
@@ -3822,14 +4071,11 @@ impl StateStore {
             .map(|parent| parent.id.clone())
             .chain(std::iter::once(task.id.clone()))
             .collect::<BTreeSet<_>>();
-        debug_assert_eq!(
-            close_plan
-                .touched_task_ids
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>(),
-            persisted_task_ids
-        );
+        Self::ensure_task_mutation_plan_covers_persistence(
+            "close_task",
+            &close_plan,
+            &persisted_task_ids,
+        )?;
         self.persist_task_record(task.clone()).await?;
         for parent in &closed_parents {
             self.persist_task_record(parent.clone()).await?;

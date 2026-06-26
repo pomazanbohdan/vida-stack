@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskAggregateTaskSnapshot {
@@ -70,6 +70,12 @@ pub struct TaskDependencyMutationCommand {
     pub occurred_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskMetadataUpdateCommand {
+    pub task_id: String,
+    pub occurred_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum TaskAggregateEvent {
@@ -116,6 +122,10 @@ pub enum TaskAggregateEvent {
         task_id: String,
         depends_on_id: String,
         edge_type: String,
+        occurred_at: String,
+    },
+    TaskMetadataUpdated {
+        task_id: String,
         occurred_at: String,
     },
 }
@@ -171,6 +181,10 @@ pub enum TaskAggregateMutation {
         edge_type: String,
         updated_at: String,
     },
+    UpdateTaskMetadata {
+        task_id: String,
+        updated_at: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +192,58 @@ pub struct TaskMutationPlan {
     pub events: Vec<TaskAggregateEvent>,
     pub mutations: Vec<TaskAggregateMutation>,
     pub touched_task_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskMutationPlanCoverageError {
+    pub blocker_code: &'static str,
+    pub expected_task_ids: Vec<String>,
+    pub actual_task_ids: Vec<String>,
+}
+
+pub const TASK_AGGREGATE_PLAN_BLOCKER_EMPTY_EVENTS: &str = "task_aggregate_plan_empty_events";
+pub const TASK_AGGREGATE_PLAN_BLOCKER_EMPTY_MUTATIONS: &str = "task_aggregate_plan_empty_mutations";
+pub const TASK_AGGREGATE_PLAN_BLOCKER_TOUCH_MISMATCH: &str = "task_aggregate_plan_touch_mismatch";
+
+#[must_use]
+pub fn task_mutation_plan_persisted_task_ids(plan: &TaskMutationPlan) -> BTreeSet<String> {
+    plan.touched_task_ids
+        .iter()
+        .map(|task_id| task_id.trim())
+        .filter(|task_id| !task_id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+pub fn ensure_task_mutation_plan_covers_persistence(
+    plan: &TaskMutationPlan,
+    persisted_task_ids: &BTreeSet<String>,
+) -> Result<(), TaskMutationPlanCoverageError> {
+    if plan.events.is_empty() {
+        return Err(TaskMutationPlanCoverageError {
+            blocker_code: TASK_AGGREGATE_PLAN_BLOCKER_EMPTY_EVENTS,
+            expected_task_ids: persisted_task_ids.iter().cloned().collect(),
+            actual_task_ids: Vec::new(),
+        });
+    }
+    if plan.mutations.is_empty() {
+        return Err(TaskMutationPlanCoverageError {
+            blocker_code: TASK_AGGREGATE_PLAN_BLOCKER_EMPTY_MUTATIONS,
+            expected_task_ids: persisted_task_ids.iter().cloned().collect(),
+            actual_task_ids: Vec::new(),
+        });
+    }
+
+    let actual_task_ids = task_mutation_plan_persisted_task_ids(plan);
+    if &actual_task_ids != persisted_task_ids {
+        return Err(TaskMutationPlanCoverageError {
+            blocker_code: TASK_AGGREGATE_PLAN_BLOCKER_TOUCH_MISMATCH,
+            expected_task_ids: persisted_task_ids.iter().cloned().collect(),
+            actual_task_ids: actual_task_ids.into_iter().collect(),
+        });
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -402,9 +468,25 @@ pub fn replay_task_events(events: &[TaskAggregateEvent]) -> TaskAggregateProject
                     });
                 }
             }
+            TaskAggregateEvent::TaskMetadataUpdated { .. } => {}
         }
     }
     projection
+}
+
+#[must_use]
+pub fn plan_update_task_metadata(command: TaskMetadataUpdateCommand) -> TaskMutationPlan {
+    TaskMutationPlan {
+        events: vec![TaskAggregateEvent::TaskMetadataUpdated {
+            task_id: command.task_id.clone(),
+            occurred_at: command.occurred_at.clone(),
+        }],
+        mutations: vec![TaskAggregateMutation::UpdateTaskMetadata {
+            task_id: command.task_id.clone(),
+            updated_at: command.occurred_at,
+        }],
+        touched_task_ids: vec![command.task_id],
+    }
 }
 
 #[must_use]
@@ -807,5 +889,65 @@ mod tests {
             removed_projection.dependencies.get("task-a"),
             Some(&Vec::new())
         );
+    }
+
+    #[test]
+    fn task_aggregate_plans_metadata_update_event() {
+        let plan = plan_update_task_metadata(TaskMetadataUpdateCommand {
+            task_id: "task-a".to_string(),
+            occurred_at: "106".to_string(),
+        });
+
+        assert_eq!(
+            plan.events,
+            vec![TaskAggregateEvent::TaskMetadataUpdated {
+                task_id: "task-a".to_string(),
+                occurred_at: "106".to_string(),
+            }]
+        );
+        assert_eq!(plan.touched_task_ids, vec!["task-a"]);
+    }
+
+    #[test]
+    fn task_aggregate_plan_coverage_blocks_persistence_without_events() {
+        let persisted_task_ids = BTreeSet::from(["task-a".to_string()]);
+        let error = ensure_task_mutation_plan_covers_persistence(
+            &TaskMutationPlan {
+                events: Vec::new(),
+                mutations: vec![TaskAggregateMutation::SetTaskStatus {
+                    task_id: "task-a".to_string(),
+                    status: "closed".to_string(),
+                    updated_at: "100".to_string(),
+                    closed_at: Some("100".to_string()),
+                    close_reason: Some("done".to_string()),
+                }],
+                touched_task_ids: vec!["task-a".to_string()],
+            },
+            &persisted_task_ids,
+        )
+        .expect_err("empty event plan must not cover persistence");
+
+        assert_eq!(error.blocker_code, TASK_AGGREGATE_PLAN_BLOCKER_EMPTY_EVENTS);
+    }
+
+    #[test]
+    fn task_aggregate_plan_coverage_blocks_persistence_touch_mismatch() {
+        let plan = plan_add_task_dependency(TaskDependencyMutationCommand {
+            task_id: "task-a".to_string(),
+            depends_on_id: "task-b".to_string(),
+            edge_type: "blocks".to_string(),
+            occurred_at: "104".to_string(),
+        });
+        let error = ensure_task_mutation_plan_covers_persistence(
+            &plan,
+            &BTreeSet::from(["task-a".to_string()]),
+        )
+        .expect_err("dependency plan must include both touched task ids");
+
+        assert_eq!(
+            error.blocker_code,
+            TASK_AGGREGATE_PLAN_BLOCKER_TOUCH_MISMATCH
+        );
+        assert_eq!(error.actual_task_ids, vec!["task-a", "task-b"]);
     }
 }
