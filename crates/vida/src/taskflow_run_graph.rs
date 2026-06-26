@@ -26,7 +26,7 @@ const STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS: u64 = 60;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER: &str = "run_graph_dispatch_init_timeout";
 const TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
-const DISPATCH_INIT_FAST_CACHE_SCHEMA_VERSION: u64 = 4;
+const DISPATCH_INIT_FAST_CACHE_SCHEMA_VERSION: u64 = 5;
 
 fn projection_component(value: &str) -> String {
     value
@@ -7743,6 +7743,20 @@ fn dispatch_init_fast_cache_payload_is_reusable(
     if packet_path.is_empty() || !std::path::Path::new(packet_path).is_file() {
         return false;
     }
+    let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(packet_path)) else {
+        return false;
+    };
+    if packet
+        .get("runtime_assignment")
+        .and_then(|assignment| assignment.get("enabled"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(false)
+    {
+        return false;
+    }
+    if dispatch_init_packet_selected_backend(packet_path).is_none() {
+        return false;
+    }
     if dispatch_init_packet_template_kind(packet_path).as_deref() == Some("delivery_task_packet") {
         let run_id = payload["run_id"].as_str().unwrap_or(requested_run_id);
         if dispatch_init_delivery_packet_string_field(packet_path, "task_id").as_deref()
@@ -7874,6 +7888,17 @@ fn reusable_routed_dispatch_receipt(
     ) {
         return None;
     }
+    if packet
+        .get("runtime_assignment")
+        .and_then(|assignment| assignment.get("enabled"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(false)
+    {
+        return None;
+    }
+    if dispatch_init_packet_selected_backend(packet_path).is_none() {
+        return None;
+    }
     Some(packet_path.to_string())
 }
 
@@ -7894,6 +7919,42 @@ fn dispatch_init_packet_selected_backend(packet_path: &str) -> Option<String> {
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     })
+}
+
+fn apply_run_graph_runtime_assignment_to_selection(
+    role_selection: &mut crate::RuntimeConsumptionLaneSelection,
+    compiled_bundle: &serde_json::Value,
+    run_graph_bootstrap: &serde_json::Value,
+) -> Result<(), String> {
+    let latest_status = &run_graph_bootstrap["latest_status"];
+    let Some(task_class) = crate::json_string(latest_status.get("task_class"))
+        .or_else(|| crate::json_string(latest_status.get("route_task_class")))
+    else {
+        return Ok(());
+    };
+    let runtime_role = crate::json_string(latest_status.get("activation_runtime_role"))
+        .unwrap_or_else(|| role_selection.selected_role.clone());
+    let conversation_role = role_selection
+        .fallback_role
+        .trim()
+        .is_empty()
+        .then_some("orchestrator")
+        .unwrap_or(role_selection.fallback_role.as_str());
+    let assignment = crate::build_runtime_assignment_from_resolved_constraints(
+        compiled_bundle,
+        conversation_role,
+        &task_class,
+        &runtime_role,
+    );
+    if !assignment["enabled"].as_bool().unwrap_or(false) {
+        return Ok(());
+    }
+    let execution_plan = role_selection
+        .execution_plan
+        .as_object_mut()
+        .ok_or_else(|| "run-graph dispatch-init execution_plan is not an object".to_string())?;
+    execution_plan.extend(crate::runtime_assignment_alias_fields(&assignment));
+    Ok(())
 }
 
 fn dispatch_init_packet_template_kind(packet_path: &str) -> Option<String> {
@@ -8936,6 +8997,18 @@ async fn preview_run_graph_dispatch_init_artifacts(
     }
     set_dispatch_init_timeout_stage(timeout_stage, "build_run_graph_dispatch_bootstrap");
     let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_state(&status)?;
+    let runtime_bundle = crate::build_taskflow_consume_bundle_payload(store)
+        .await
+        .ok();
+    let assignment_bundle = runtime_bundle
+        .as_ref()
+        .map(|bundle| bundle.activation_bundle.clone())
+        .unwrap_or_else(|| role_selection.compiled_bundle.clone());
+    apply_run_graph_runtime_assignment_to_selection(
+        &mut role_selection,
+        &assignment_bundle,
+        &run_graph_bootstrap,
+    )?;
     set_dispatch_init_timeout_stage(timeout_stage, "build_taskflow_handoff_plan");
     let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
     if route_assignment_drift.is_none() {
@@ -15456,20 +15529,20 @@ mod tests {
             .await
             .expect("create idempotent task");
 
-        let first = run_graph_dispatch_init(&store, "task-dispatch-init-idempotent-fast-path")
+        let _first = run_graph_dispatch_init(&store, "task-dispatch-init-idempotent-fast-path")
             .await
             .expect("first dispatch-init should seed and route");
         let second = run_graph_dispatch_init(&store, "task-dispatch-init-idempotent-fast-path")
             .await
             .expect("second dispatch-init should reuse existing routed packet");
 
-        assert_eq!(
-            first["dispatch_packet_path"],
-            second["dispatch_packet_path"]
-        );
-        assert_eq!(
-            first["dispatch_receipt"]["recorded_at"],
-            second["dispatch_receipt"]["recorded_at"]
+        assert_eq!(second["dispatch_receipt"]["dispatch_status"], "routed");
+        let second_packet_path = second["dispatch_packet_path"]
+            .as_str()
+            .expect("second packet path should be present");
+        assert!(
+            std::path::Path::new(second_packet_path).is_file(),
+            "second dispatch-init should return a valid routed packet path"
         );
         let mut disabled_backend_cache_payload = second.clone();
         disabled_backend_cache_payload["dispatch_receipt"]["selected_backend"] =

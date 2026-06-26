@@ -611,74 +611,80 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         let mut docflow_verdict = super::build_docflow_runtime_verdict(
                             &registry, &check, &readiness, &proof,
                         );
-                        let role_selection = match super::build_runtime_lane_selection_with_store(
-                            &store,
-                            &request_text,
-                        )
-                        .await
-                        {
-                            Ok(selection) => selection,
-                            Err(error) => {
-                                if as_json {
-                                    let blocking_role_selection =
-                                        super::blocking_lane_selection(&request_text, &error);
-                                    let blocked_run_id =
-                                        super::runtime_consumption_run_id(&blocking_role_selection);
-                                    let blocked_status = crate::runtime_dispatch_status::blocking_runtime_consumption_run_graph_status(
+                        let mut role_selection =
+                            match super::build_runtime_lane_selection_with_store(
+                                &store,
+                                &request_text,
+                            )
+                            .await
+                            {
+                                Ok(selection) => selection,
+                                Err(error) => {
+                                    if as_json {
+                                        let blocking_role_selection =
+                                            super::blocking_lane_selection(&request_text, &error);
+                                        let blocked_run_id = super::runtime_consumption_run_id(
+                                            &blocking_role_selection,
+                                        );
+                                        let blocked_status = crate::runtime_dispatch_status::blocking_runtime_consumption_run_graph_status(
                                         &blocking_role_selection,
                                         &blocked_run_id,
                                     );
-                                    let blocked_status_json = serde_json::to_value(&blocked_status)
-                                        .unwrap_or(serde_json::Value::Null);
-                                    let run_graph_bootstrap = serde_json::json!({
-                                        "status": "blocked",
-                                        "handoff_ready": false,
-                                        "reason": "unresolved_lane_selection",
-                                        "run_id": blocked_run_id,
-                                        "latest_status": blocked_status_json,
-                                    });
-                                    let dispatch_receipt = blocked_dispatch_receipt(
-                                        "unresolved_lane_selection",
-                                        &bundle_check,
-                                        &runtime_bundle,
-                                        Some(blocked_run_id.as_str()),
-                                    );
-                                    let mut closure_admission =
-                                        super::RuntimeConsumptionClosureAdmission {
-                                            status: "blocked".to_string(),
-                                            admitted: false,
-                                            blockers: vec!["unresolved_lane_selection".to_string()],
-                                            proof_surfaces: vec![
-                                                "vida taskflow consume bundle check".to_string(),
-                                            ],
-                                            evidence_table: vec![
-                                                RuntimeConsumptionClosureAdmissionEvidence {
-                                                    requirement: "lane_selection".to_string(),
-                                                    status: "blocked".to_string(),
-                                                    evidence_refs: vec![
-                                                        "vida taskflow consume bundle check"
-                                                            .to_string(),
-                                                    ],
-                                                    blockers: vec![
-                                                        "unresolved_lane_selection".to_string()
-                                                    ],
-                                                },
-                                            ],
-                                        };
-                                    normalize_runtime_consumption_statuses(
-                                        &mut docflow_verdict,
-                                        &mut closure_admission,
-                                    );
-                                    let generated_at = time::OffsetDateTime::now_utc()
-                                        .format(&super::Rfc3339)
-                                        .expect("rfc3339 timestamp should render");
-                                    let requested_owned_paths =
-                                        consume_final_requested_owned_paths(
-                                            &store,
-                                            &consume_final_args,
-                                        )
-                                        .await;
-                                    let mut payload = super::TaskflowDirectConsumptionPayload {
+                                        let blocked_status_json =
+                                            serde_json::to_value(&blocked_status)
+                                                .unwrap_or(serde_json::Value::Null);
+                                        let run_graph_bootstrap = serde_json::json!({
+                                            "status": "blocked",
+                                            "handoff_ready": false,
+                                            "reason": "unresolved_lane_selection",
+                                            "run_id": blocked_run_id,
+                                            "latest_status": blocked_status_json,
+                                        });
+                                        let dispatch_receipt = blocked_dispatch_receipt(
+                                            "unresolved_lane_selection",
+                                            &bundle_check,
+                                            &runtime_bundle,
+                                            Some(blocked_run_id.as_str()),
+                                        );
+                                        let mut closure_admission =
+                                            super::RuntimeConsumptionClosureAdmission {
+                                                status: "blocked".to_string(),
+                                                admitted: false,
+                                                blockers: vec![
+                                                    "unresolved_lane_selection".to_string()
+                                                ],
+                                                proof_surfaces: vec![
+                                                    "vida taskflow consume bundle check"
+                                                        .to_string(),
+                                                ],
+                                                evidence_table: vec![
+                                                    RuntimeConsumptionClosureAdmissionEvidence {
+                                                        requirement: "lane_selection".to_string(),
+                                                        status: "blocked".to_string(),
+                                                        evidence_refs: vec![
+                                                            "vida taskflow consume bundle check"
+                                                                .to_string(),
+                                                        ],
+                                                        blockers: vec![
+                                                            "unresolved_lane_selection".to_string()
+                                                        ],
+                                                    },
+                                                ],
+                                            };
+                                        normalize_runtime_consumption_statuses(
+                                            &mut docflow_verdict,
+                                            &mut closure_admission,
+                                        );
+                                        let generated_at = time::OffsetDateTime::now_utc()
+                                            .format(&super::Rfc3339)
+                                            .expect("rfc3339 timestamp should render");
+                                        let requested_owned_paths =
+                                            consume_final_requested_owned_paths(
+                                                &store,
+                                                &consume_final_args,
+                                            )
+                                            .await;
+                                        let mut payload = super::TaskflowDirectConsumptionPayload {
                                         artifact_name: "taskflow_direct_runtime_consumption"
                                             .to_string(),
                                         artifact_type: "runtime_consumption".to_string(),
@@ -723,44 +729,56 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                         dispatch_receipt,
                                         dispatch_packet_preview: None,
                                     };
-                                    if should_record_blocked_dispatch_receipt(consume_final_mode) {
-                                        if let Err(error) =
-                                            persist_blocked_consume_final_resume_evidence(
-                                                &store,
-                                                &payload.role_selection,
-                                                &blocked_status,
-                                                &request_text,
-                                                &payload.taskflow_handoff_plan,
-                                                &payload.run_graph_bootstrap,
-                                                &mut payload.dispatch_receipt,
-                                            )
-                                            .await
-                                        {
-                                            eprintln!(
+                                        if should_record_blocked_dispatch_receipt(
+                                            consume_final_mode,
+                                        ) {
+                                            if let Err(error) =
+                                                persist_blocked_consume_final_resume_evidence(
+                                                    &store,
+                                                    &payload.role_selection,
+                                                    &blocked_status,
+                                                    &request_text,
+                                                    &payload.taskflow_handoff_plan,
+                                                    &payload.run_graph_bootstrap,
+                                                    &mut payload.dispatch_receipt,
+                                                )
+                                                .await
+                                            {
+                                                eprintln!(
                                                 "Failed to record blocked consume-final resume evidence: {error}"
                                             );
+                                            }
                                         }
-                                    }
-                                    if let Err(snapshot_error) =
-                                        super::emit_taskflow_consume_final_json(&store, &payload)
+                                        if let Err(snapshot_error) =
+                                            super::emit_taskflow_consume_final_json(
+                                                &store, &payload,
+                                            )
                                             .map(|_| ())
-                                    {
-                                        eprintln!("{snapshot_error}");
+                                        {
+                                            eprintln!("{snapshot_error}");
+                                        }
+                                        return ExitCode::from(1);
                                     }
+                                    eprintln!("{error}");
                                     return ExitCode::from(1);
                                 }
-                                eprintln!("{error}");
-                                return ExitCode::from(1);
-                            }
-                        };
-                        let taskflow_handoff_plan =
-                            super::build_taskflow_handoff_plan(&role_selection);
+                            };
                         let run_graph_bootstrap =
                             crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap(
                                 &store,
                                 &role_selection,
                             )
                             .await;
+                        if let Err(error) = apply_run_graph_runtime_assignment_to_selection(
+                            &mut role_selection,
+                            &runtime_bundle.activation_bundle,
+                            &run_graph_bootstrap,
+                        ) {
+                            eprintln!("{error}");
+                            return ExitCode::from(1);
+                        }
+                        let taskflow_handoff_plan =
+                            super::build_taskflow_handoff_plan(&role_selection);
                         let mut closure_admission = super::build_runtime_closure_admission(
                             &bundle_check,
                             &docflow_verdict,
@@ -1801,6 +1819,42 @@ fn build_retrieval_policy_decision_gate(
 
 fn should_record_blocked_dispatch_receipt(consume_final_mode: ConsumeFinalMode) -> bool {
     !consume_final_mode.is_read_only()
+}
+
+fn apply_run_graph_runtime_assignment_to_selection(
+    role_selection: &mut super::RuntimeConsumptionLaneSelection,
+    compiled_bundle: &serde_json::Value,
+    run_graph_bootstrap: &serde_json::Value,
+) -> Result<(), String> {
+    let latest_status = &run_graph_bootstrap["latest_status"];
+    let Some(task_class) = super::json_string(latest_status.get("task_class"))
+        .or_else(|| super::json_string(latest_status.get("route_task_class")))
+    else {
+        return Ok(());
+    };
+    let runtime_role = super::json_string(latest_status.get("activation_runtime_role"))
+        .unwrap_or_else(|| role_selection.selected_role.clone());
+    let conversation_role = role_selection
+        .fallback_role
+        .trim()
+        .is_empty()
+        .then_some("orchestrator")
+        .unwrap_or(role_selection.fallback_role.as_str());
+    let assignment = crate::build_runtime_assignment_from_resolved_constraints(
+        compiled_bundle,
+        conversation_role,
+        &task_class,
+        &runtime_role,
+    );
+    if !assignment["enabled"].as_bool().unwrap_or(false) {
+        return Ok(());
+    }
+    let execution_plan = role_selection
+        .execution_plan
+        .as_object_mut()
+        .ok_or_else(|| "run-graph role selection execution_plan is not an object".to_string())?;
+    execution_plan.extend(crate::runtime_assignment_alias_fields(&assignment));
+    Ok(())
 }
 
 async fn persist_blocked_consume_final_resume_evidence(

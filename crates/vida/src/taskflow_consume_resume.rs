@@ -9149,7 +9149,7 @@ mod tests {
         .expect("config digest");
         let cache_payload = serde_json::json!({
             "surface": "vida taskflow run-graph dispatch-init",
-            "dispatch_init_fast_cache_schema_version": 4,
+            "dispatch_init_fast_cache_schema_version": 5,
             "requested_run_id": "run-cache-parity",
             "run_id": "run-cache-parity",
             "source_config_digest": source_config_digest,

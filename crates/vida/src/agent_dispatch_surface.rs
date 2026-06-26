@@ -3358,6 +3358,40 @@ fn validate_materialized_agent_dispatch_packet(
     Ok(packet)
 }
 
+fn apply_configured_lane_runtime_assignment(
+    role_selection: &mut crate::RuntimeConsumptionLaneSelection,
+    activation_bundle: &serde_json::Value,
+    lane: &AgentDispatchLanePreview,
+) -> Result<(), String> {
+    let conversation_role = role_selection
+        .fallback_role
+        .trim()
+        .is_empty()
+        .then_some("orchestrator")
+        .unwrap_or(role_selection.fallback_role.as_str());
+    let assignment = crate::build_runtime_assignment_from_resolved_constraints(
+        activation_bundle,
+        conversation_role,
+        &lane.task_class,
+        &lane.runtime_role,
+    );
+    if !assignment["enabled"].as_bool().unwrap_or(false) {
+        let reason = assignment["reason"]
+            .as_str()
+            .unwrap_or("runtime_assignment_disabled");
+        return Err(format!(
+            "configured lane `{}` assignment disabled for runtime_role `{}` task_class `{}`: {reason}",
+            lane.role_label, lane.runtime_role, lane.task_class
+        ));
+    }
+    let execution_plan = role_selection
+        .execution_plan
+        .as_object_mut()
+        .ok_or_else(|| "configured lane execution_plan is not an object".to_string())?;
+    execution_plan.extend(crate::runtime_assignment_alias_fields(&assignment));
+    Ok(())
+}
+
 async fn materialize_configured_agent_dispatch_lane(
     lane: &AgentDispatchLanePreview,
     state_dir: &Path,
@@ -3389,6 +3423,7 @@ async fn materialize_configured_agent_dispatch_lane(
             activation_bundle,
             &role_selection,
         );
+    apply_configured_lane_runtime_assignment(&mut role_selection, activation_bundle, lane)?;
     let run_graph_bootstrap = serde_json::json!({
         "status": "dispatch_init_ready",
         "handoff_ready": true,
@@ -5233,8 +5268,9 @@ mod tests {
         agent_dispatch_next_bound_current_task_id, agent_dispatch_next_compact_payload,
         agent_dispatch_next_effective_materialize_packets,
         agent_dispatch_next_preserve_current_task_id, agent_dispatch_next_projection_name,
-        agent_status_runtime_task_stale_code, apply_continuation_dispatch_gate_to_preview,
-        build_agent_dispatch_next_preview, canonical_host_bridge_request_path,
+        agent_status_runtime_task_stale_code, apply_configured_lane_runtime_assignment,
+        apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
+        canonical_host_bridge_request_path,
         completed_host_bridge_completion_request_for_state_root,
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
         dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
@@ -5373,6 +5409,88 @@ mod tests {
         }
     }
 
+    fn analyst_dispatch_lane_preview(task_id: &str) -> AgentDispatchLanePreview {
+        let mut lane = coach_dispatch_lane_preview("analyst", task_id);
+        lane.runtime_role = "business_analyst".to_string();
+        lane.task_class = "specification".to_string();
+        lane.dispatch_command = format!("vida agent-init --role business_analyst {task_id}");
+        lane.selection_truth.runtime_role = "business_analyst".to_string();
+        lane.selection_truth.task_class = "specification".to_string();
+        lane.selection_truth.selected_carrier = "middle".to_string();
+        lane
+    }
+
+    fn analyst_assignment_bundle() -> serde_json::Value {
+        serde_json::json!({
+            "agent_system": {
+                "mode": "local",
+                "state_owner": "taskflow",
+                "max_parallel_agents": 4,
+                "routing": {
+                    "default": {
+                        "executor_backend": "internal_subagents",
+                        "max_budget_units": 32
+                    }
+                }
+            },
+            "carrier_runtime": {
+                "roles": [{
+                    "role_id": "middle",
+                    "tier": "middle",
+                    "rate": 4,
+                    "normalized_cost_units": 4,
+                    "default_runtime_role": "business_analyst",
+                    "runtime_roles": ["business_analyst"],
+                    "task_classes": ["specification"],
+                    "reasoning_band": "medium",
+                    "default_model_profile": "codex_gpt55_medium_write",
+                    "model_profiles": {
+                        "codex_gpt55_medium_write": {
+                            "profile_id": "codex_gpt55_medium_write",
+                            "model_ref": "gpt-5.5",
+                            "provider": "openai-codex",
+                            "reasoning_effort": "medium",
+                            "normalized_cost_units": 4,
+                            "speed_tier": "fast",
+                            "quality_tier": "medium",
+                            "write_scope": "workspace-write",
+                            "runtime_roles": ["business_analyst"],
+                            "task_classes": ["specification"],
+                            "readiness": { "required": false, "ready": true }
+                        }
+                    }
+                }],
+                "dispatch_aliases": [],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier",
+                        "demotion_score": 45
+                    },
+                    "agents": {
+                        "middle": {
+                            "effective_score": 91,
+                            "lifecycle_state": "promoted"
+                        }
+                    }
+                },
+                "model_selection": {
+                    "enabled": true,
+                    "default_strategy": "balanced_cost_quality",
+                    "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
+                    "candidate_scope": "unified_carrier_model_profiles",
+                    "free_profiles_allowed": false,
+                    "quality_floor_by_runtime_role": {
+                        "business_analyst": "medium"
+                    },
+                    "reasoning_floor_by_task_class": {
+                        "specification": "medium",
+                        "implementation": "low"
+                    }
+                }
+            }
+        })
+    }
+
     #[test]
     fn configured_dev_team_materialization_targets_keep_distinct_coach_gate_labels() {
         let coach_test_gate = coach_dispatch_lane_preview("coach_test_gate", "routing-proof-a");
@@ -5393,6 +5511,49 @@ mod tests {
         );
         assert_eq!(coach_test_gate.task_class, "coach");
         assert_eq!(coach_implementation_gate.task_class, "coach");
+    }
+
+    #[test]
+    fn configured_dev_team_materialization_preserves_lane_runtime_assignment() {
+        let activation_bundle = analyst_assignment_bundle();
+        let lane = analyst_dispatch_lane_preview("ldr-020");
+        let mut role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "vida.config.yaml".to_string(),
+            selection_mode: "configured_dev_team_dispatch_next".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request:
+                "Implement RunWorkflow aggregate and hierarchical Statig machine. Architecture law applies."
+                    .to_string(),
+            selected_role: lane.runtime_role.clone(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "explicit_configured_dev_team_lane".to_string(),
+            matched_terms: vec![lane.role_label.clone(), lane.task_class.clone()],
+            compiled_bundle: activation_bundle.clone(),
+            execution_plan: serde_json::Value::Null,
+            reason: "materialize configured dev-team lane `analyst` as `analyst`".to_string(),
+        };
+
+        role_selection.execution_plan =
+            crate::development_flow_orchestration::build_runtime_execution_plan_from_snapshot(
+                &activation_bundle,
+                &role_selection,
+            );
+        apply_configured_lane_runtime_assignment(&mut role_selection, &activation_bundle, &lane)
+            .expect("configured lane assignment should resolve from lane task class");
+
+        let assignment = &role_selection.execution_plan["runtime_assignment"];
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["task_class"], "specification");
+        assert_eq!(assignment["runtime_role"], "business_analyst");
+        assert_eq!(assignment["selected_backend_id"], "internal_subagents");
+        assert_eq!(
+            role_selection.execution_plan["carrier_runtime_assignment"]["selected_backend_id"],
+            "internal_subagents"
+        );
     }
 
     fn sample_agent_dispatch_next_preview() -> AgentDispatchNextPreview {
