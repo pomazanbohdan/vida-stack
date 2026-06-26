@@ -154,6 +154,8 @@ pub(crate) fn authorized_dispatch_rework_route_from_receipt_fields(
     None
 }
 
+const MAX_DISPATCH_EVIDENCE_JSON_BYTES: u64 = 1024 * 1024;
+
 pub(crate) fn dispatch_result_path_candidates_from_receipt_fields(
     downstream_dispatch_result_path: Option<&str>,
     dispatch_result_path: Option<&str>,
@@ -166,26 +168,22 @@ pub(crate) fn dispatch_result_path_candidates_from_receipt_fields(
     if let Some(packet_path) = dispatch_packet_path {
         let packet_path = packet_path.trim();
         if !packet_path.is_empty() {
-            let packet_path =
-                crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
-            if let Ok(raw) = std::fs::read_to_string(packet_path) {
-                if let Ok(packet) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(packet) = read_bounded_dispatch_evidence_json(packet_path) {
+                push_json_string_path(
+                    &mut paths,
+                    &packet,
+                    &[
+                        "downstream_dispatch_result_path",
+                        "dispatch_result_path",
+                        "result_path",
+                    ],
+                );
+                if let Some(host_bridge_request) = packet.get("host_tool_bridge_request") {
                     push_json_string_path(
                         &mut paths,
-                        &packet,
-                        &[
-                            "downstream_dispatch_result_path",
-                            "dispatch_result_path",
-                            "result_path",
-                        ],
+                        host_bridge_request,
+                        &["result_path", "dispatch_result_path"],
                     );
-                    if let Some(host_bridge_request) = packet.get("host_tool_bridge_request") {
-                        push_json_string_path(
-                            &mut paths,
-                            host_bridge_request,
-                            &["result_path", "dispatch_result_path"],
-                        );
-                    }
                 }
             }
         }
@@ -195,12 +193,30 @@ pub(crate) fn dispatch_result_path_candidates_from_receipt_fields(
 }
 
 fn read_dispatch_packet_json(path: &str) -> Option<serde_json::Value> {
+    read_bounded_dispatch_evidence_json(path)
+}
+
+fn read_bounded_dispatch_evidence_json(path: &str) -> Option<serde_json::Value> {
+    use std::io::Read;
+
     let path = path.trim();
     if path.is_empty() {
         return None;
     }
     let path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(path);
-    let raw = std::fs::read_to_string(path).ok()?;
+    let metadata = std::fs::metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_DISPATCH_EVIDENCE_JSON_BYTES {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+
+    let mut raw = String::new();
+    file.take(MAX_DISPATCH_EVIDENCE_JSON_BYTES + 1)
+        .read_to_string(&mut raw)
+        .ok()?;
+    if raw.len() as u64 > MAX_DISPATCH_EVIDENCE_JSON_BYTES {
+        return None;
+    }
     serde_json::from_str(&raw).ok()
 }
 
@@ -287,9 +303,7 @@ fn push_non_empty_path(paths: &mut Vec<String>, path: Option<&str>) {
 pub(crate) fn dispatch_rework_route_from_result_path(
     result_path: &str,
 ) -> Option<DispatchReworkRoute> {
-    let result_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(result_path);
-    let raw = std::fs::read_to_string(result_path).ok()?;
-    let result: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let result = read_bounded_dispatch_evidence_json(result_path)?;
     dispatch_rework_route_from_result(&result)
 }
 
@@ -500,6 +514,83 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[test]
+    fn dispatch_rework_route_from_result_path_reads_regular_bounded_json() {
+        let root = unique_test_dir("dispatch-result-regular");
+        std::fs::create_dir_all(&root).expect("test dir should be created");
+        let result_path = root.join("result.json");
+        std::fs::write(
+            &result_path,
+            serde_json::json!({
+                "status": "blocked",
+                "completion_verdict": "rework_required",
+                "rework_target": "developer",
+                "allowed_next_node": "developer-rework",
+                "blocker_code": "verification_rework_required"
+            })
+            .to_string(),
+        )
+        .expect("result should write");
+
+        let route = dispatch_rework_route_from_result_path(&result_path.display().to_string())
+            .expect("bounded regular result json should parse");
+        assert_eq!(route.rework_target, "developer");
+        assert_eq!(route.allowed_next_node, "developer_rework");
+        assert_eq!(
+            route.blocker_code.as_deref(),
+            Some("verification_rework_required")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dispatch_evidence_reader_rejects_oversized_json_file() {
+        let root = unique_test_dir("dispatch-result-oversized");
+        std::fs::create_dir_all(&root).expect("test dir should be created");
+        let result_path = root.join("oversized.json");
+        let oversized = format!(
+            "{{{} }}",
+            " ".repeat(MAX_DISPATCH_EVIDENCE_JSON_BYTES as usize)
+        );
+        std::fs::write(&result_path, oversized).expect("oversized result should write");
+
+        assert!(
+            dispatch_rework_route_from_result_path(&result_path.display().to_string()).is_none()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_evidence_reader_rejects_fifo_without_blocking() {
+        let root = unique_test_dir("dispatch-result-fifo");
+        std::fs::create_dir_all(&root).expect("test dir should be created");
+        let fifo_path = root.join("result.fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .status()
+            .expect("mkfifo should run");
+        assert!(status.success(), "mkfifo should create fifo");
+
+        assert!(dispatch_rework_route_from_result_path(&fifo_path.display().to_string()).is_none());
+        assert!(read_dispatch_packet_json(&fifo_path.display().to_string()).is_none());
+        let candidates = dispatch_result_path_candidates_from_receipt_fields(
+            None,
+            None,
+            Some(&fifo_path.display().to_string()),
+        );
+        assert!(candidates.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn unique_test_dir(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("vida-{name}-{}-{nanos}", std::process::id()))
     }
 
     #[test]
