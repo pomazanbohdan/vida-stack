@@ -164,14 +164,27 @@ fn registry_projection_parity(
                 spec.label, configured_source_path
             )
         })?;
-    let runtime_registry =
-        crate::project_activator_surface::read_yaml_file_checked(&runtime_projection_path)
-            .map_err(|error| {
+    let (runtime_registry, runtime_raw) = match std::fs::read_to_string(&runtime_projection_path) {
+        Ok(raw) => {
+            let registry = serde_yaml::from_str(&raw).map_err(|error| {
                 format!(
-                    "failed to load runtime {} projection `{}`: {error}",
+                    "failed to parse runtime {} projection `{}`: {error}",
                     spec.label, spec.runtime_projection_path
                 )
             })?;
+            (registry, raw)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (serde_yaml::Value::Null, String::new())
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to read runtime {} projection `{}`: {error}",
+                spec.label,
+                runtime_projection_path.display()
+            ));
+        }
+    };
     let source_aliases = registry_ids(&source_registry, spec.registry_key, spec.id_field);
     let runtime_aliases = registry_ids(&runtime_registry, spec.registry_key, spec.id_field);
     let source_raw = std::fs::read_to_string(&source_path).map_err(|error| {
@@ -179,13 +192,6 @@ fn registry_projection_parity(
             "failed to read configured {} source `{}`: {error}",
             spec.label,
             source_path.display()
-        )
-    })?;
-    let runtime_raw = std::fs::read_to_string(&runtime_projection_path).map_err(|error| {
-        format!(
-            "failed to read runtime {} projection `{}`: {error}",
-            spec.label,
-            runtime_projection_path.display()
         )
     })?;
     let missing_runtime_aliases = source_aliases
@@ -634,6 +640,31 @@ agent_extensions:
         .expect("config should parse")
     }
 
+    fn write_missing_command_projection_fixture(root: &std::path::Path) -> serde_yaml::Value {
+        fs::create_dir_all(root.join("docs/process/agent-extensions"))
+            .expect("docs agent extensions dir should exist");
+        fs::create_dir_all(root.join(".vida/project/agent-extensions"))
+            .expect("runtime agent extensions dir should exist");
+        fs::write(
+            root.join("docs/process/agent-extensions/commands.yaml"),
+            concat!(
+                "version: 1\n",
+                "commands:\n",
+                "  - command_id: agent-init-worker\n",
+                "    command: vida agent-init --role worker --json\n",
+            ),
+        )
+        .expect("source commands should be written");
+        serde_yaml::from_str(
+            r#"
+agent_extensions:
+  registries:
+    commands: docs/process/agent-extensions/commands.yaml
+"#,
+        )
+        .expect("config should parse")
+    }
+
     #[test]
     fn agent_extension_projection_detects_stale_dispatch_alias_source_runtime_mismatch() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -673,6 +704,35 @@ agent_extensions:
         )
         .expect("runtime projection should be readable");
         assert!(refreshed.contains("alias_id: development_test_author"));
+    }
+
+    #[test]
+    fn agent_extension_projection_refresh_creates_missing_runtime_command_projection() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let config = write_missing_command_projection_fixture(harness.path());
+        let runtime_projection = harness
+            .path()
+            .join(".vida/project/agent-extensions/commands.yaml");
+
+        assert!(!runtime_projection.exists());
+
+        let parities = refresh_runtime_agent_extension_projections_from_configured_sources(
+            &config,
+            harness.path(),
+        )
+        .expect("missing runtime command projection should be repairable");
+        let command_parity = parities
+            .iter()
+            .find(|parity| parity.config_key == "commands")
+            .expect("command projection parity should be reported");
+
+        assert!(command_parity.in_sync);
+        assert_eq!(command_parity.source_alias_count, 1);
+        assert_eq!(command_parity.runtime_alias_count, 1);
+        assert!(runtime_projection.is_file());
+        assert!(fs::read_to_string(runtime_projection)
+            .expect("runtime command projection should be readable")
+            .contains("command_id: agent-init-worker"));
     }
 
     #[cfg(unix)]

@@ -908,16 +908,25 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let runtime_agent_extension_skills = runtime_agent_extensions.join("skills.yaml");
     let runtime_agent_extension_profiles = runtime_agent_extensions.join("profiles.yaml");
     let runtime_agent_extension_flows = runtime_agent_extensions.join("flows.yaml");
+    let runtime_agent_extension_packs = runtime_agent_extensions.join("packs.yaml");
+    let runtime_agent_extension_commands = runtime_agent_extensions.join("commands.yaml");
     let runtime_agent_extension_dispatch_aliases =
         runtime_agent_extensions.join("dispatch-aliases.yaml");
+    let runtime_agent_extension_hook_templates =
+        runtime_agent_extensions.join("hook-templates.yaml");
     let runtime_agent_extension_role_sidecar = runtime_agent_extensions.join("roles.sidecar.yaml");
     let runtime_agent_extension_skill_sidecar =
         runtime_agent_extensions.join("skills.sidecar.yaml");
     let runtime_agent_extension_profile_sidecar =
         runtime_agent_extensions.join("profiles.sidecar.yaml");
     let runtime_agent_extension_flow_sidecar = runtime_agent_extensions.join("flows.sidecar.yaml");
+    let runtime_agent_extension_pack_sidecar = runtime_agent_extensions.join("packs.sidecar.yaml");
+    let runtime_agent_extension_command_sidecar =
+        runtime_agent_extensions.join("commands.sidecar.yaml");
     let runtime_agent_extension_dispatch_alias_sidecar =
         runtime_agent_extensions.join("dispatch-aliases.sidecar.yaml");
+    let runtime_agent_extension_hook_template_sidecar =
+        runtime_agent_extensions.join("hook-templates.sidecar.yaml");
 
     let sidecar_missing = !agents_sidecar.is_file();
     let sidecar_has_placeholders =
@@ -1068,12 +1077,18 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         &runtime_agent_extension_skills,
         &runtime_agent_extension_profiles,
         &runtime_agent_extension_flows,
+        &runtime_agent_extension_packs,
+        &runtime_agent_extension_commands,
         &runtime_agent_extension_dispatch_aliases,
+        &runtime_agent_extension_hook_templates,
         &runtime_agent_extension_role_sidecar,
         &runtime_agent_extension_skill_sidecar,
         &runtime_agent_extension_profile_sidecar,
         &runtime_agent_extension_flow_sidecar,
+        &runtime_agent_extension_pack_sidecar,
+        &runtime_agent_extension_command_sidecar,
         &runtime_agent_extension_dispatch_alias_sidecar,
+        &runtime_agent_extension_hook_template_sidecar,
     ]
     .iter()
     .any(|path| !path.exists());
@@ -1164,12 +1179,18 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "skills_registry": runtime_agent_extension_skills.is_file(),
             "profiles_registry": runtime_agent_extension_profiles.is_file(),
             "flows_registry": runtime_agent_extension_flows.is_file(),
+            "packs_registry": runtime_agent_extension_packs.is_file(),
+            "commands_registry": runtime_agent_extension_commands.is_file(),
             "dispatch_aliases_registry": runtime_agent_extension_dispatch_aliases.is_file(),
+            "hook_templates_registry": runtime_agent_extension_hook_templates.is_file(),
             "roles_sidecar": runtime_agent_extension_role_sidecar.is_file(),
             "skills_sidecar": runtime_agent_extension_skill_sidecar.is_file(),
             "profiles_sidecar": runtime_agent_extension_profile_sidecar.is_file(),
             "flows_sidecar": runtime_agent_extension_flow_sidecar.is_file(),
+            "packs_sidecar": runtime_agent_extension_pack_sidecar.is_file(),
+            "commands_sidecar": runtime_agent_extension_command_sidecar.is_file(),
             "dispatch_aliases_sidecar": runtime_agent_extension_dispatch_alias_sidecar.is_file(),
+            "hook_templates_sidecar": runtime_agent_extension_hook_template_sidecar.is_file(),
             "registry_projections": registry_projections,
             "dispatch_alias_projection": dispatch_alias_projection,
             "bundle_ready": agent_extensions_ready,
@@ -2849,6 +2870,25 @@ mod tests {
         fs::write(&config_path, updated).expect("config should be rewritten");
     }
 
+    fn point_command_config_at_docs_source(root: &std::path::Path) {
+        let source_dir = root.join("docs/process/agent-extensions");
+        fs::create_dir_all(&source_dir).expect("docs agent extension source dir should exist");
+        fs::write(
+            source_dir.join("commands.yaml"),
+            crate::DEFAULT_AGENT_EXTENSION_COMMANDS_YAML,
+        )
+        .expect("docs command source should be written");
+        let config_path = root.join("vida.config.yaml");
+        let config_body = fs::read_to_string(&config_path).expect("config should be readable");
+        let updated = config_body
+            .replace("enabled: false", "enabled: true")
+            .replace(
+                "commands: .vida/project/agent-extensions/commands.yaml",
+                "commands: docs/process/agent-extensions/commands.yaml",
+            );
+        fs::write(&config_path, updated).expect("config should be rewritten");
+    }
+
     fn remove_test_author_from_runtime_dispatch_alias_projection(root: &std::path::Path) {
         let projection_path = root.join(".vida/project/agent-extensions/dispatch-aliases.yaml");
         let projection = fs::read_to_string(&projection_path)
@@ -2951,6 +2991,50 @@ mod tests {
             view["agent_extensions"]["dispatch_alias_projection"]["source_alias_count"],
             view["agent_extensions"]["dispatch_alias_projection"]["runtime_alias_count"]
         );
+    }
+
+    #[test]
+    fn project_activator_repair_creates_missing_command_runtime_projection() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        point_command_config_at_docs_source(harness.path());
+        let projection_path = harness
+            .path()
+            .join(".vida/project/agent-extensions/commands.yaml");
+        if projection_path.exists() {
+            fs::remove_file(&projection_path)
+                .expect("runtime command projection should be removable for repair proof");
+        }
+
+        let view_before = super::build_project_activator_view(harness.path());
+        assert_eq!(view_before["triggers"]["agent_extensions_invalid"], true);
+        assert!(view_before["agent_extensions"]["registry_projections"]
+            .as_array()
+            .expect("registry projections should render")
+            .iter()
+            .any(|projection| projection["config_key"] == "commands"
+                && projection["status"] == "stale"));
+
+        super::repair_project_activation_assets(harness.path())
+            .expect("repair should create missing runtime command projection");
+
+        let projection = fs::read_to_string(&projection_path)
+            .expect("runtime command projection should be readable after repair");
+        assert!(projection.contains("command_id: agent-init-worker"));
+        let view_after = super::build_project_activator_view(harness.path());
+        assert!(view_after["agent_extensions"]["registry_projections"]
+            .as_array()
+            .expect("registry projections should render")
+            .iter()
+            .any(|projection| projection["config_key"] == "commands"
+                && projection["status"] == "in_sync"));
+        let validation_error = view_after["agent_extensions"]["validation_error"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(!validation_error.contains("runtime command projection"));
     }
 
     #[test]

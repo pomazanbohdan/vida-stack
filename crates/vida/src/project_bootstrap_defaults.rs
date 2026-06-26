@@ -6,6 +6,10 @@ pub(crate) const DEFAULT_AGENT_EXTENSION_PROFILES_YAML: &str =
     include_str!("../../../docs/process/agent-extensions/profiles.yaml");
 pub(crate) const DEFAULT_AGENT_EXTENSION_FLOWS_YAML: &str =
     include_str!("../../../docs/process/agent-extensions/flows.yaml");
+pub(crate) const DEFAULT_AGENT_EXTENSION_PACKS_YAML: &str =
+    include_str!("../../../docs/process/agent-extensions/packs.yaml");
+pub(crate) const DEFAULT_AGENT_EXTENSION_COMMANDS_YAML: &str =
+    include_str!("../../../docs/process/agent-extensions/commands.yaml");
 pub(crate) const DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_YAML: &str =
     include_str!("../../../docs/process/agent-extensions/dispatch-aliases.yaml");
 pub(crate) const DEFAULT_AGENT_EXTENSION_HOOK_TEMPLATES_YAML: &str =
@@ -26,6 +30,8 @@ pub(crate) const DEFAULT_AGENT_EXTENSION_ROLES_SIDECAR_YAML: &str = "version: 1\
 pub(crate) const DEFAULT_AGENT_EXTENSION_SKILLS_SIDECAR_YAML: &str = "version: 1\nskills: []\n";
 pub(crate) const DEFAULT_AGENT_EXTENSION_PROFILES_SIDECAR_YAML: &str = "version: 1\nprofiles: []\n";
 pub(crate) const DEFAULT_AGENT_EXTENSION_FLOWS_SIDECAR_YAML: &str = "version: 1\nflow_sets: []\n";
+pub(crate) const DEFAULT_AGENT_EXTENSION_PACKS_SIDECAR_YAML: &str = "version: 1\npacks: []\n";
+pub(crate) const DEFAULT_AGENT_EXTENSION_COMMANDS_SIDECAR_YAML: &str = "version: 1\ncommands: []\n";
 pub(crate) const DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_SIDECAR_YAML: &str =
     "version: 1\ndispatch_aliases: []\n";
 pub(crate) const DEFAULT_AGENT_EXTENSION_HOOK_TEMPLATES_SIDECAR_YAML: &str =

@@ -387,6 +387,7 @@ agent_extensions:
     - business_analyst
     - pm
     - coach
+    - solution_architect
     - verifier
     - prover
   enabled_standard_flow_sets:

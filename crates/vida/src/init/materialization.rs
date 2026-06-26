@@ -13,6 +13,22 @@ pub(crate) fn copy_tree_replace(source_root: &Path, target_root: &Path) -> Resul
             source_root.display()
         ));
     }
+    let source_canonical = source_root
+        .canonicalize()
+        .map_err(|error| format!("Failed to canonicalize {}: {error}", source_root.display()))?;
+    let target_canonical = match target_root.canonicalize() {
+        Ok(path) => Some(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "Failed to canonicalize {}: {error}",
+                target_root.display()
+            ));
+        }
+    };
+    if target_canonical.as_ref() == Some(&source_canonical) {
+        return Ok(());
+    }
     if target_root.exists() {
         remove_tree_for_replacement(target_root)
             .map_err(|error| format!("Failed to replace {}: {error}", target_root.display()))?;
@@ -139,6 +155,22 @@ mod tests {
 
         assert!(target.join("config").join("fresh.yaml").is_file());
         assert!(!target.join("stale").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn copy_tree_replace_noops_when_source_and_target_are_same_directory() {
+        let root = unique_temp_root("self-target");
+        let source = root.join("source");
+        fs::create_dir_all(&source).expect("source");
+        fs::write(source.join("framework.yaml"), "keep").expect("source file");
+
+        copy_tree_replace(&source, &source).expect("same source and target should be a no-op");
+
+        assert_eq!(
+            fs::read_to_string(source.join("framework.yaml")).expect("source file remains"),
+            "keep"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

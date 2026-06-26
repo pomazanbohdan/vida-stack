@@ -4452,6 +4452,14 @@ pub(crate) fn write_runtime_agent_extension_projections(project_root: &Path) -> 
         super::DEFAULT_AGENT_EXTENSION_FLOWS_YAML,
     )?;
     write_file_if_missing(
+        &root.join("packs.yaml"),
+        super::DEFAULT_AGENT_EXTENSION_PACKS_YAML,
+    )?;
+    write_file_if_missing(
+        &root.join("commands.yaml"),
+        super::DEFAULT_AGENT_EXTENSION_COMMANDS_YAML,
+    )?;
+    write_file_if_missing(
         &root.join("dispatch-aliases.yaml"),
         super::DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_YAML,
     )?;
@@ -4474,6 +4482,14 @@ pub(crate) fn write_runtime_agent_extension_projections(project_root: &Path) -> 
     write_file_if_missing(
         &root.join("flows.sidecar.yaml"),
         super::DEFAULT_AGENT_EXTENSION_FLOWS_SIDECAR_YAML,
+    )?;
+    write_file_if_missing(
+        &root.join("packs.sidecar.yaml"),
+        super::DEFAULT_AGENT_EXTENSION_PACKS_SIDECAR_YAML,
+    )?;
+    write_file_if_missing(
+        &root.join("commands.sidecar.yaml"),
+        super::DEFAULT_AGENT_EXTENSION_COMMANDS_SIDECAR_YAML,
     )?;
     write_file_if_missing(
         &root.join("dispatch-aliases.sidecar.yaml"),
