@@ -223,7 +223,7 @@ pub(crate) use bootstrap_value_utils::{
     normalize_root_arg, slugify_project_id, trimmed_non_empty,
 };
 use carrier_runtime_projection::build_carrier_runtime_projection;
-use clap::Parser;
+use clap::{error::ErrorKind, Parser};
 pub(crate) use cli::*;
 pub(crate) use compiled_agent_extension_bundle::build_compiled_agent_extension_bundle_for_root;
 pub(crate) use config_value_utils::{
@@ -370,7 +370,11 @@ fn main() -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            runtime.block_on(run_root_command(Cli::parse_from(args)))
+            let cli = match parse_cli_or_emit_error(args) {
+                Ok(cli) => cli,
+                Err(exit_code) => return exit_code,
+            };
+            runtime.block_on(run_root_command(cli))
         }) {
         Ok(handle) => match handle.join() {
             Ok(code) => code,
@@ -384,6 +388,76 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn parse_cli_or_emit_error(args: Vec<OsString>) -> Result<Cli, ExitCode> {
+    match Cli::try_parse_from(args.clone()) {
+        Ok(cli) => Ok(cli),
+        Err(error) => {
+            let exit_code = clap_error_exit_code(&error);
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) {
+                let _ = error.print();
+                return Err(exit_code);
+            }
+            if cli_args_request_json(&args) {
+                print_json_pretty(&cli_parse_error_payload(&args, &error));
+                return Err(exit_code);
+            }
+            let _ = error.print();
+            Err(exit_code)
+        }
+    }
+}
+
+fn clap_error_exit_code(error: &clap::Error) -> ExitCode {
+    u8::try_from(error.exit_code())
+        .map(ExitCode::from)
+        .unwrap_or_else(|_| ExitCode::from(1))
+}
+
+fn cli_args_request_json(args: &[OsString]) -> bool {
+    args.iter()
+        .filter_map(|arg| arg.to_str())
+        .any(|arg| arg == "--json")
+}
+
+fn cli_parse_error_surface(args: &[OsString]) -> String {
+    let command_tokens = args
+        .iter()
+        .skip(1)
+        .filter_map(|arg| arg.to_str())
+        .filter(|arg| !arg.starts_with('-'))
+        .collect::<Vec<_>>();
+    match command_tokens.as_slice() {
+        [] => "vida".to_string(),
+        ["agent", subcommand, ..] => format!("vida agent {subcommand}"),
+        ["lane", subcommand, ..] => format!("vida lane {subcommand}"),
+        ["task", subcommand, ..] => format!("vida task {subcommand}"),
+        ["taskflow", "run-graph", subcommand, ..] => {
+            format!("vida taskflow run-graph {subcommand}")
+        }
+        ["taskflow", subcommand, ..] => format!("vida taskflow {subcommand}"),
+        [command, ..] => format!("vida {command}"),
+    }
+}
+
+fn cli_parse_error_payload(args: &[OsString], error: &clap::Error) -> serde_json::Value {
+    let surface = cli_parse_error_surface(args);
+    let help_command = format!("{surface} --help");
+    serde_json::json!({
+        "surface": surface,
+        "status": "blocked",
+        "blocker_codes": ["cli_parse_error"],
+        "error_kind": format!("{:?}", error.kind()),
+        "error": error.to_string().trim(),
+        "next_actions": [
+            format!("Run `{help_command}` for the required arguments."),
+            "Retry the command with the missing required arguments and `--json`."
+        ]
+    })
 }
 
 fn bootstrap_windows_host_environment() {

@@ -235,6 +235,8 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "blocker detail",
             "blocker fields",
             "blocker field",
+            "blocker payloads",
+            "blocker payload",
             "blocker flags",
             "blocker flag",
             "blocked flag",
@@ -371,6 +373,8 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "blocker detail",
             "blocker fields",
             "blocker field",
+            "blocker payloads",
+            "blocker payload",
             "blocker flags",
             "blocker flag",
             "blocked flag",
@@ -2019,6 +2023,10 @@ mod tests {
             (
                 "Stale compile blocker cleared by current mainline proof; proof passed.",
                 "stale compile blocker cleared by current mainline proof",
+            ),
+            (
+                "Implementation proof passed: global JSON parse errors emit JSON blocker payloads; focused tests passed.",
+                "blocker payloads",
             ),
         ] {
             assert_eq!(super::canonical_close_status_from_reason(reason), None);

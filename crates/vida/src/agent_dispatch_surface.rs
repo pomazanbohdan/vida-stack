@@ -799,7 +799,7 @@ fn host_bridge_adapter_payload(
             let dispatch_target = request.dispatch_target.as_str();
             format!("{run_id}-{dispatch_target}-host-bridge-receipt")
         };
-        let command = format!(
+        let mut command = format!(
             "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --host-bridge-result-file {}",
             crate::shell_quote(&request.run_id),
             crate::shell_quote(&receipt_id),
@@ -807,6 +807,12 @@ fn host_bridge_adapter_payload(
             crate::shell_quote("<host-agent-id>"),
             crate::shell_quote(&request.result_path.display().to_string())
         );
+        if let Some(allowed_next_node) =
+            host_bridge_completion_allowed_next_node(&effective_request, state_root)
+        {
+            command.push_str(" --allowed-next-node ");
+            command.push_str(&crate::shell_quote(&allowed_next_node));
+        }
         command
     } else {
         "repair host bridge request run_id before completion".to_string()
@@ -5856,7 +5862,7 @@ mod tests {
         assert!(completion_command.contains("--host-agent-id '<host-agent-id>'"));
         assert!(completion_command.contains("--host-bridge-result-file"));
         assert!(!completion_command.contains("--host-bridge-summary"));
-        assert!(!completion_command.contains("--allowed-next-node"));
+        assert!(completion_command.contains("--allowed-next-node designer"));
         assert!(!completion_command.contains("--blocker-codes"));
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -2,6 +2,73 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn host_bridge_missing_request_json_parse_error_is_machine_readable() {
+    let output = Command::new(env!("CARGO_BIN_EXE_vida"))
+        .arg("agent")
+        .arg("host-bridge")
+        .arg("--complete")
+        .arg("--decision")
+        .arg("pass")
+        .arg("--verdict")
+        .arg("pass")
+        .arg("--allowed-next-node")
+        .arg("designer")
+        .arg("--json")
+        .output()
+        .expect("vida agent host-bridge should launch");
+
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "json parse errors should not emit stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse error stdout should be JSON");
+    assert_eq!(payload["surface"].as_str(), Some("vida agent host-bridge"));
+    assert!(payload["blocker_codes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|code| code.as_str() == Some("cli_parse_error")));
+    assert!(payload["error"]
+        .as_str()
+        .is_some_and(|error| { error.contains("--request <REQUEST>") }));
+}
+
+#[test]
+fn lane_exception_takeover_json_parse_error_is_machine_readable() {
+    let output = Command::new(env!("CARGO_BIN_EXE_vida"))
+        .arg("lane")
+        .arg("exception-takeover")
+        .arg("ldr-032")
+        .arg("--json")
+        .output()
+        .expect("vida lane exception-takeover should launch");
+
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "lane json parse errors should not emit stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("lane parse error stdout should be JSON");
+    assert_eq!(
+        payload["surface"].as_str(),
+        Some("vida lane exception-takeover")
+    );
+    assert!(payload["blocker_codes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|code| code.as_str() == Some("lane_parse_error")));
+    assert!(payload["reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("Invalid or incomplete arguments")));
+}
+
+#[test]
 fn host_bridge_completion_command_resolves_packet_next_target() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

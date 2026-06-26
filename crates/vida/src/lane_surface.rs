@@ -369,6 +369,70 @@ fn lane_help_requested(args: &[String]) -> bool {
         .any(|arg| matches!(arg.as_str(), "-h" | "--help" | "help"))
 }
 
+fn lane_args_request_json(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--json")
+}
+
+fn lane_parse_error_surface(args: &[String]) -> &'static str {
+    match args.first().map(String::as_str) {
+        Some("show") => "vida lane show",
+        Some("takeover-ready") => "vida lane takeover-ready",
+        Some("complete") => "vida lane complete",
+        Some("retire") => "vida lane retire",
+        Some("exception-takeover") => "vida lane exception-takeover",
+        Some("supersede") => "vida lane supersede",
+        Some("reclaim") => "vida lane reclaim",
+        _ => "vida lane",
+    }
+}
+
+fn emit_lane_parse_error_envelope(args: &[String], usage: &str, as_json: bool) -> ExitCode {
+    if !as_json {
+        eprintln!("{usage}");
+        return ExitCode::from(2);
+    }
+
+    let surface = lane_parse_error_surface(args);
+    let next_actions = vec![
+        format!("Run `{surface} --help` for the required arguments."),
+        "Retry the lane command with the missing required arguments and `--json`.".to_string(),
+    ];
+    let artifact_refs = serde_json::json!({
+        "surface": surface,
+        "usage": usage,
+    });
+    let operator_contracts = render_operator_contract_envelope(
+        "blocked",
+        vec!["lane_parse_error".to_string()],
+        next_actions.clone(),
+        artifact_refs,
+    );
+    let envelope = BlockedLaneEnvelope {
+        surface,
+        status: "blocked",
+        trace_id: operator_contracts["trace_id"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        workflow_class: operator_contracts["workflow_class"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        risk_tier: operator_contracts["risk_tier"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        artifact_refs: operator_contracts["artifact_refs"].clone(),
+        next_actions,
+        blocker_codes: vec!["lane_parse_error".to_string()],
+        reason: format!("Invalid or incomplete arguments for `{surface}`."),
+    };
+
+    crate::surface_render::print_surface_json(
+        &envelope,
+        true,
+        "lane parse error surface should serialize",
+    );
+    ExitCode::from(2)
+}
+
 fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
     match args {
         [] => Err(lane_usage().to_string()),
@@ -4434,8 +4498,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
     let command = match parse_lane_args(&args.args) {
         Ok(command) => command,
         Err(usage) => {
-            eprintln!("{usage}");
-            return ExitCode::from(2);
+            return emit_lane_parse_error_envelope(
+                &args.args,
+                &usage,
+                lane_args_request_json(&args.args),
+            );
         }
     };
     let state_dir = match &command {
