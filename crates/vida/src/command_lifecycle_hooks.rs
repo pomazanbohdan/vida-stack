@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -133,6 +134,91 @@ impl CommandTimingRecord {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CargoTimingContext {
+    target_dir_policy: &'static str,
+    effective_cargo_target_dir: String,
+    artifact_lock_wait_ms: Option<u128>,
+    compile_ms: Option<u128>,
+    wait_classification: &'static str,
+}
+
+impl CargoTimingContext {
+    fn as_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "target_dir_policy": self.target_dir_policy,
+            "effective_cargo_target_dir": self.effective_cargo_target_dir,
+            "artifact_lock_wait_ms": self.artifact_lock_wait_ms,
+            "compile_ms": self.compile_ms,
+            "wait_classification": self.wait_classification,
+        })
+    }
+}
+
+fn cargo_timing_context_for_command(
+    command: &str,
+    over_budget: bool,
+) -> Option<CargoTimingContext> {
+    if !command_can_invoke_cargo(command) {
+        return None;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let env_target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from);
+    Some(cargo_timing_context_from_parts(
+        env_target_dir.as_deref(),
+        &cwd,
+        over_budget,
+    ))
+}
+
+fn command_can_invoke_cargo(command: &str) -> bool {
+    let normalized = command.trim().to_ascii_lowercase();
+    normalized == "cargo"
+        || normalized.starts_with("cargo ")
+        || normalized.contains(" cargo ")
+        || normalized.contains("cargo-nextest")
+        || normalized.contains("nextest")
+        || normalized.contains("vida-dev-gate")
+}
+
+fn cargo_timing_context_from_parts(
+    env_target_dir: Option<&Path>,
+    cwd: &Path,
+    over_budget: bool,
+) -> CargoTimingContext {
+    let (target_dir_policy, effective_target_dir) = match env_target_dir {
+        Some(path) => ("caller_provided", path.to_path_buf()),
+        None => match shared_cargo_target_dir_for_linked_worktree(cwd) {
+            Some(path) => ("repo_local_worktree_shared", path),
+            None => ("repo_local_default", cwd.join(".vida").join("cargo-target")),
+        },
+    };
+    CargoTimingContext {
+        target_dir_policy,
+        effective_cargo_target_dir: effective_target_dir.display().to_string(),
+        artifact_lock_wait_ms: None,
+        compile_ms: None,
+        wait_classification: if over_budget {
+            "cargo_wait_unclassified_without_cargo_phase_data"
+        } else {
+            "not_over_budget"
+        },
+    }
+}
+
+fn shared_cargo_target_dir_for_linked_worktree(cwd: &Path) -> Option<PathBuf> {
+    for ancestor in cwd.ancestors() {
+        if ancestor.file_name().is_some_and(|name| name == "worktrees") {
+            let vida_dir = ancestor.parent()?;
+            if vida_dir.file_name().is_some_and(|name| name == ".vida") {
+                let owner_root = vida_dir.parent()?;
+                return Some(owner_root.join(".vida").join("cargo-target"));
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct CommandTimingRegistry {
     records: Mutex<Vec<CommandTimingRecord>>,
@@ -189,7 +275,8 @@ fn emit_timing_summary(record: &CommandTimingRecord, config: &TimingHookConfig) 
     let budget_ms = config.latency_budget.map(|budget| budget.as_millis());
     let over_budget = budget_ms.is_some_and(|budget| total_ms >= budget);
     let slowest_phase = record.slowest_phase();
-    let next_actions = timing_next_actions(over_budget, slowest_phase);
+    let cargo_timing = cargo_timing_context_for_command(&record.command, over_budget);
+    let next_actions = timing_next_actions(over_budget, slowest_phase, cargo_timing.as_ref());
     match config.output_mode {
         OutputMode::Json => {
             let payload = serde_json::json!({
@@ -206,21 +293,34 @@ fn emit_timing_summary(record: &CommandTimingRecord, config: &TimingHookConfig) 
                     "next_actions": next_actions,
                     "exit_code": record.exit_code,
                     "phases_ms": record.phase_millis(),
+                    "cargo": cargo_timing.as_ref().map(CargoTimingContext::as_json),
                 }
             });
             eprintln!("{payload}");
         }
         OutputMode::Quiet => {}
         OutputMode::Verbose | OutputMode::Standard => {
+            let cargo_suffix = cargo_timing
+                .as_ref()
+                .map(|cargo| {
+                    format!(
+                        " cargo_target_dir_policy={} effective_cargo_target_dir={} cargo_wait_classification={}",
+                        cargo.target_dir_policy,
+                        cargo.effective_cargo_target_dir,
+                        cargo.wait_classification
+                    )
+                })
+                .unwrap_or_default();
             eprintln!(
-                "vida_timing command={} total_ms={} budget_ms={:?} over_budget={} exit_code={} phases_ms={:?} next_actions={:?}",
+                "vida_timing command={} total_ms={} budget_ms={:?} over_budget={} exit_code={} phases_ms={:?} next_actions={:?}{}",
                 record.command,
                 total_ms,
                 budget_ms,
                 over_budget,
                 record.exit_code.unwrap_or_default(),
                 record.phase_millis(),
-                next_actions
+                next_actions,
+                cargo_suffix
             );
         }
     }
@@ -229,6 +329,7 @@ fn emit_timing_summary(record: &CommandTimingRecord, config: &TimingHookConfig) 
 fn timing_next_actions(
     over_budget: bool,
     slowest_phase: Option<(&'static str, u128)>,
+    cargo_timing: Option<&CargoTimingContext>,
 ) -> Vec<String> {
     if !over_budget {
         return Vec::new();
@@ -247,6 +348,20 @@ fn timing_next_actions(
         "Re-run with `VIDA_COMMAND_TIMING_ENABLED=true` and a command-specific budget to verify the fix."
             .to_string(),
     );
+    if let Some(cargo_timing) = cargo_timing {
+        actions.push(format!(
+            "Cargo timing target_dir_policy={} effective_cargo_target_dir={}; lock wait and compile time are unclassified unless the caller also records Cargo phase output.",
+            cargo_timing.target_dir_policy, cargo_timing.effective_cargo_target_dir
+        ));
+        actions.push(
+            "Group related focused proof filters in one Cargo/nextest invocation or use `scripts/vida-dev-gate.ps1 -Mode focused-nextest` to avoid repeated artifact-dir lock waits when safe."
+                .to_string(),
+        );
+        actions.push(
+            "If parallel proof shards still contend on the artifact directory, serialize the Cargo shard or set an isolated `CARGO_TARGET_DIR` for that shard and record it in timing evidence."
+                .to_string(),
+        );
+    }
     actions
 }
 
@@ -279,5 +394,75 @@ fn exit_code_to_i32(code: ExitCode) -> i32 {
         0
     } else {
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cargo_timing_context_uses_caller_target_dir() {
+        let context = cargo_timing_context_from_parts(
+            Some(Path::new("caller-target")),
+            Path::new("repo-root"),
+            true,
+        );
+
+        assert_eq!(context.target_dir_policy, "caller_provided");
+        assert_eq!(context.effective_cargo_target_dir, "caller-target");
+        assert_eq!(
+            context.wait_classification,
+            "cargo_wait_unclassified_without_cargo_phase_data"
+        );
+    }
+
+    #[test]
+    fn cargo_timing_context_uses_worktree_shared_target_dir() {
+        let context = cargo_timing_context_from_parts(
+            None,
+            Path::new("repo-root/.vida/worktrees/slice-a"),
+            false,
+        );
+
+        assert_eq!(context.target_dir_policy, "repo_local_worktree_shared");
+        assert!(context
+            .effective_cargo_target_dir
+            .replace('\\', "/")
+            .ends_with("repo-root/.vida/cargo-target"));
+        assert_eq!(context.wait_classification, "not_over_budget");
+    }
+
+    #[test]
+    fn cargo_timing_next_actions_recommend_grouped_proof_and_target_dir_policy() {
+        let cargo_timing = cargo_timing_context_from_parts(
+            Some(Path::new("caller-target")),
+            Path::new("repo-root"),
+            true,
+        );
+
+        let actions = timing_next_actions(true, Some(("execution", 45_000)), Some(&cargo_timing));
+
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("target_dir_policy=caller_provided")));
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("Group related focused proof filters")));
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("CARGO_TARGET_DIR")));
+    }
+
+    #[test]
+    fn non_cargo_timing_next_actions_keep_generic_guidance() {
+        let actions = timing_next_actions(true, Some(("execution", 2_500)), None);
+
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("cached projection or read-model")));
+        assert!(!actions
+            .iter()
+            .any(|action| action.contains("CARGO_TARGET_DIR")));
     }
 }
