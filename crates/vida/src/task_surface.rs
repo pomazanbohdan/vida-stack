@@ -8431,25 +8431,6 @@ fn task_next_lawful_receipt(
                     );
                 };
                 if task.status == "closed" {
-                    if let [candidate] = ready_task_candidates.as_slice() {
-                        return pass_task_next_lawful_receipt(
-                            serde_json::json!({
-                                "task_id": candidate.task_id,
-                                "title": candidate.title,
-                                "status": candidate.status,
-                                "issue_type": candidate.issue_type,
-                            }),
-                            None,
-                            "single ready TaskFlow candidate after stale closed runtime binding",
-                            if candidate.ready_parallel_safe {
-                                "parallel_safe_single_candidate"
-                            } else {
-                                "sequential_only_single_candidate"
-                            },
-                            ready_task_candidates.clone(),
-                            format!("Continue ready task `{}`.", candidate.task_id),
-                        );
-                    }
                     return blocked_task_next_lawful_receipt(
                         binding.active_bounded_unit.clone(),
                         ready_task_candidates,
@@ -17142,6 +17123,35 @@ mod tests {
             action.contains("vida taskflow recovery status current-run")
                 && action.contains("closed-feature-task")
                 && !action.contains("--json")
+        }));
+    }
+
+    #[test]
+    fn task_next_lawful_blocks_closed_run_graph_binding_with_single_ready_candidate() {
+        let mut closed_task = owned_task_record("closed-feature-task", vec![]);
+        closed_task.status = "closed".to_string();
+        let mut ready_task = owned_task_record("ready-only", vec![]);
+        ready_task.status = "open".to_string();
+        let ready = vec![super::task_continuation_candidate(&ready_task, false)];
+        let binding = test_continuation_binding(
+            "current-run",
+            "closed-feature-task",
+            "consume_continue_after_downstream_chain",
+            "run_graph_task",
+        );
+
+        let receipt = task_next_lawful_receipt(&[closed_task, ready_task], ready, Some(&binding));
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.blocker_codes, vec!["runtime_binding_task_closed"]);
+        assert_eq!(
+            receipt.active_bounded_unit["task_id"],
+            "closed-feature-task"
+        );
+        assert!(receipt.next_actions.iter().any(|action| {
+            action.contains("vida taskflow recovery status current-run")
+                && action.contains("closed-feature-task")
+                && !action.contains("Continue ready task `ready-only`")
         }));
     }
 
