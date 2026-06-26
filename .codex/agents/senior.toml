@@ -26,5 +26,5 @@ VIDA command resolution for Windows Codex App:
 5. Treat `target\\debug\\vida.exe` and `target\\release\\vida.exe` as repository diagnostics only; do not use them as the production VIDA runtime unless the parent packet explicitly asks for diagnostic fallback.
 """
 [shell_environment_policy]
-inherit = "all"
+inherit = "none"
 exclude = ["*_KEY", "*_SECRET", "*_TOKEN", "AWS_*", "AZURE_*"]
