@@ -3569,6 +3569,28 @@ fn parse_proof_target_values(values: &[String]) -> Vec<String> {
     taskflow_core::task::update::parse_proof_target_values(values)
 }
 
+fn parse_literal_metadata_values(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn parse_mixed_metadata_values(split_values: &[String], literal_values: &[String]) -> Vec<String> {
+    let mut values = parse_label_values(split_values);
+    values.extend(parse_literal_metadata_values(literal_values));
+    values
+}
+
+fn parse_mixed_proof_target_values(
+    split_values: &[String],
+    literal_values: &[String],
+) -> Vec<String> {
+    normalize_proof_target_commands(parse_mixed_metadata_values(split_values, literal_values))
+}
+
 fn task_update_proof_targets_arg(
     values: &[String],
     clear: bool,
@@ -3586,16 +3608,28 @@ fn parse_optional_label_value(value: Option<&str>) -> Option<Vec<String>> {
 
 fn task_update_planner_metadata_requested(command: &crate::TaskUpdateArgs) -> bool {
     !command.owned_paths.is_empty()
+        || !command.owned_path_literals.is_empty()
         || !command.acceptance_targets.is_empty()
+        || !command.acceptance_target_literals.is_empty()
         || !command.proof_targets.is_empty()
+        || !command.proof_target_literals.is_empty()
         || command.clear_proof_targets
 }
 
 fn task_create_planner_metadata_arg(command: &TaskCreateArgs) -> state_store::TaskPlannerMetadata {
     state_store::TaskPlannerMetadata {
-        owned_paths: parse_label_values(&command.owned_paths),
-        acceptance_targets: parse_label_values(&command.acceptance_targets),
-        proof_targets: parse_proof_target_values(&command.proof_targets),
+        owned_paths: parse_mixed_metadata_values(
+            &command.owned_paths,
+            &command.owned_path_literals,
+        ),
+        acceptance_targets: parse_mixed_metadata_values(
+            &command.acceptance_targets,
+            &command.acceptance_target_literals,
+        ),
+        proof_targets: parse_mixed_proof_target_values(
+            &command.proof_targets,
+            &command.proof_target_literals,
+        ),
         ..state_store::TaskPlannerMetadata::default()
     }
 }
@@ -3608,18 +3642,34 @@ fn task_update_planner_metadata_arg(
         return Ok(None);
     }
     let mut metadata = existing.clone();
-    let owned_paths = parse_label_values(&command.owned_paths);
+    let owned_paths =
+        parse_mixed_metadata_values(&command.owned_paths, &command.owned_path_literals);
     if !owned_paths.is_empty() {
         metadata.owned_paths = owned_paths;
     }
-    let acceptance_targets = parse_label_values(&command.acceptance_targets);
+    let acceptance_targets = parse_mixed_metadata_values(
+        &command.acceptance_targets,
+        &command.acceptance_target_literals,
+    );
     if !acceptance_targets.is_empty() {
         metadata.acceptance_targets = acceptance_targets;
     }
-    if let Some(proof_targets) =
-        task_update_proof_targets_arg(&command.proof_targets, command.clear_proof_targets)?
+    if (!command.proof_targets.is_empty() || !command.proof_target_literals.is_empty())
+        && command.clear_proof_targets
     {
-        metadata.proof_targets = proof_targets;
+        return Err(
+            "Use either --proof-target/--proof-target-literal or --clear-proof-targets, not both."
+                .to_string(),
+        );
+    }
+    if command.clear_proof_targets {
+        metadata.proof_targets = Vec::new();
+    } else {
+        let proof_targets =
+            parse_mixed_proof_target_values(&command.proof_targets, &command.proof_target_literals);
+        if !proof_targets.is_empty() {
+            metadata.proof_targets = proof_targets;
+        }
     }
     Ok(Some(metadata))
 }
@@ -3935,7 +3985,7 @@ fn task_bulk_string_list_from_value(
             for item in values {
                 match item {
                     serde_json::Value::String(text) => {
-                        result.extend(parse_label_values(&[text.to_string()]));
+                        result.extend(parse_literal_metadata_values(&[text.to_string()]));
                     }
                     _ => {
                         return Err(format!(

@@ -311,6 +311,160 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
 }
 
 #[test]
+fn task_runtime_workflows_preserve_literal_metadata_values() {
+    let state_dir = unique_state_dir("literal-metadata-workflow");
+    boot_state(&state_dir);
+
+    run_json_success(
+        &state_dir,
+        &[
+            "task",
+            "create",
+            "literal-epic",
+            "Literal Metadata Epic",
+            "--type",
+            "epic",
+            "--execution-mode",
+            "container_only",
+            "--json",
+        ],
+    );
+    let created = run_json_success(
+        &state_dir,
+        &[
+            "task",
+            "create",
+            "literal-task",
+            "Literal Metadata Task",
+            "--parent-id",
+            "literal-epic",
+            "--owned-path",
+            "src/a,src/b",
+            "--owned-path-literal",
+            "docs/path,with,comma.md",
+            "--acceptance-target",
+            "alpha,beta",
+            "--acceptance-target-literal",
+            "One acceptance target, with commas, preserved",
+            "--proof-target",
+            "proof-a,proof-b",
+            "--proof-target-literal",
+            "Manual proof, with comma, preserved",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        created["task"]["planner_metadata"]["owned_paths"],
+        serde_json::json!(["docs/path,with,comma.md", "src/a", "src/b"])
+    );
+    assert_eq!(
+        created["task"]["planner_metadata"]["acceptance_targets"],
+        serde_json::json!([
+            "One acceptance target, with commas, preserved",
+            "alpha",
+            "beta"
+        ])
+    );
+    assert_eq!(
+        created["task"]["planner_metadata"]["proof_targets"],
+        serde_json::json!(["Manual proof, with comma, preserved", "proof-a", "proof-b"])
+    );
+
+    let updated = run_json_success(
+        &state_dir,
+        &[
+            "task",
+            "update",
+            "literal-task",
+            "--owned-path-literal",
+            "docs/updated,path.md",
+            "--acceptance-target-literal",
+            "Updated acceptance, still one value",
+            "--proof-target-literal",
+            "Updated proof, still one value",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        updated["task"]["planner_metadata"]["owned_paths"],
+        serde_json::json!(["docs/updated,path.md"])
+    );
+    assert_eq!(
+        updated["task"]["planner_metadata"]["acceptance_targets"],
+        serde_json::json!(["Updated acceptance, still one value"])
+    );
+    assert_eq!(
+        updated["task"]["planner_metadata"]["proof_targets"],
+        serde_json::json!(["Updated proof, still one value"])
+    );
+
+    let clear_conflict = run_failure(
+        &state_dir,
+        &[
+            "task",
+            "update",
+            "literal-task",
+            "--proof-target-literal",
+            "conflicting proof, still one value",
+            "--clear-proof-targets",
+            "--json",
+        ],
+    );
+    let clear_conflict_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&clear_conflict.stdout),
+        String::from_utf8_lossy(&clear_conflict.stderr)
+    );
+    assert!(clear_conflict_text.contains("--proof-target-literal"));
+
+    let import_path = std::path::Path::new(&state_dir).join("literal-metadata-import.json");
+    let import_payload = serde_json::json!({
+        "tasks": [{
+            "id": "literal-import-task",
+            "title": "Literal Import Task",
+            "type": "task",
+            "parent_id": "literal-epic",
+            "planner_metadata": {
+                "owned_paths": ["docs/import,path.md"],
+                "acceptance_targets": ["Imported acceptance, still one value"],
+                "proof_targets": ["Imported proof, still one value"]
+            }
+        }]
+    });
+    std::fs::write(
+        &import_path,
+        serde_json::to_string_pretty(&import_payload).expect("serialize import payload"),
+    )
+    .expect("write literal metadata import");
+    run_json_success(
+        &state_dir,
+        &[
+            "task",
+            "import",
+            "--file",
+            import_path.to_str().expect("import path should be utf8"),
+            "--json",
+        ],
+    );
+    let imported = run_json_success(
+        &state_dir,
+        &["task", "show", "literal-import-task", "--json"],
+    );
+    assert_eq!(
+        imported["task"]["planner_metadata"]["owned_paths"],
+        serde_json::json!(["docs/import,path.md"])
+    );
+    assert_eq!(
+        imported["task"]["planner_metadata"]["acceptance_targets"],
+        serde_json::json!(["Imported acceptance, still one value"])
+    );
+    assert_eq!(
+        imported["task"]["planner_metadata"]["proof_targets"],
+        serde_json::json!(["Imported proof, still one value"])
+    );
+}
+
+#[test]
 fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
     let state_dir = unique_state_dir("runtime-workflow");
     boot_state(&state_dir);

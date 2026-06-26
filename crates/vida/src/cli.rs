@@ -34,14 +34,14 @@ const AGENT_INIT_AFTER_HELP: &str = "Agent init operations:\n  vida agent-init\n
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--execution-mode container_only` marks a work-pool/container task as non-executable by the scheduler\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
-const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <title> --parent-id <parent-id>\n  vida task create <subtask-id> <title> --type subtask --parent-id <task-id>\n  vida task create <step-id> <title> --type step --parent-id <task-or-subtask-id>\n  vida task create <task-id> --title <title> --parent-id <parent-id> --description \"...\" --notes \"...\"\n  vida task create <task-id> <title> --parent-id <parent-id> --owned-path crates/vida/src/lib.rs --acceptance-target \"Default output shows the needed field\" --proof-target \"cargo test -p vida focused_test\"\n  vida task create <task-id> <title> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs\n\nOne-shot metadata:\n  When owned paths, acceptance targets, proof targets, labels, notes, or execution semantics are known, pass them on `vida task create` instead of creating the task and immediately updating it.\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n\nNotes:\n  Provide exactly one title source: positional <title> or --title <title>.\n  `step` is the canonical execution-step type; `todo` remains accepted as a deprecated alias without rewriting existing records.\n  Missing execution semantics fail closed for parallel scheduling.\n  Use `vida taskflow graph-summary` to verify parallel-safe admission after mutation; use `--json` only for machine-readable automation.\n  For many task creates or long per-task metadata, write a JSONL/YAML file and use `vida task import --file tasks.jsonl --dry-run` instead of an oversized shell command.";
+const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <title> --parent-id <parent-id>\n  vida task create <subtask-id> <title> --type subtask --parent-id <task-id>\n  vida task create <step-id> <title> --type step --parent-id <task-or-subtask-id>\n  vida task create <task-id> --title <title> --parent-id <parent-id> --description \"...\" --notes \"...\"\n  vida task create <task-id> <title> --parent-id <parent-id> --owned-path crates/vida/src/lib.rs --acceptance-target \"Default output shows the needed field\" --proof-target \"cargo test -p vida focused_test\"\n  vida task create <task-id> <title> --acceptance-target-literal \"One prose target, with commas preserved\" --proof-target-literal \"Manual proof, with punctuation preserved\"\n  vida task create <task-id> <title> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs\n\nOne-shot metadata:\n  When owned paths, acceptance targets, proof targets, labels, notes, or execution semantics are known, pass them on `vida task create` instead of creating the task and immediately updating it.\n  Comma-delimited list flags remain available for compact lists; use the `*-literal` variants or `vida task import --file` JSON/YAML arrays for long prose values that contain commas.\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n\nNotes:\n  Provide exactly one title source: positional <title> or --title <title>.\n  `step` is the canonical execution-step type; `todo` remains accepted as a deprecated alias without rewriting existing records.\n  Missing execution semantics fail closed for parallel scheduling.\n  Use `vida taskflow graph-summary` to verify parallel-safe admission after mutation; use `--json` only for machine-readable automation.\n  For many task creates or long per-task metadata, write a JSONL/YAML file and use `vida task import --file tasks.jsonl --dry-run` instead of an oversized shell command.";
 const TASK_IMPORT_ABOUT: &str = "Create many tracked tasks from a structured file.";
 const TASK_IMPORT_LONG_ABOUT: &str = "Create many tracked tasks from a structured file without oversized shell payloads.\n\nUse this surface when a task batch is too large for a reliable shell command, when per-task descriptions or notes are long, or when operators need a reviewable file before mutating TaskFlow state.\n\nSupported input:\n- JSON or YAML array of task objects\n- JSON or YAML object with a `tasks` array\n- JSONL/NDJSON with one task object per line\n\nEach task object requires `id` (or `task_id`) and `title`. Optional fields include `display_id`, `description`, `type`/`issue_type`, `status`, `priority`, `parent_id`, `notes`, `labels`, execution semantics, and planner metadata. Command flags provide defaults for parent assignment, execution semantics, labels, owned paths, acceptance targets, and proof targets.";
-const TASK_IMPORT_AFTER_HELP: &str = "Examples:\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run --json\n  vida task import --file tasks.yaml --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task create-bulk --file tasks.json --labels operator-dx,taskflow --acceptance-target \"Tasks imported\" --proof-target \"cargo test -p vida task_bulk_import\" --json\n\nInput task object fields:\n  id | task_id, title, display_id, description, type | issue_type, status, priority, parent_id, notes\n  labels: [\"operator-dx\"] or \"operator-dx,taskflow\"\n  execution_semantics: { execution_mode, order_bucket, parallel_group, conflict_domain }\n  planner_metadata: { owned_paths, acceptance_targets, proof_targets, risk, estimate, lane_hint }\n\nLarge-batch transport:\n  Prefer JSONL/NDJSON for large batches because each task is one bounded line in a file.\n  If the shell reports a command line or payload is too large, move the task objects into a file and rerun `vida task import --file <path> --dry-run`.\n  Use `vida task dep add-bulk --edge-file edges.txt --dry-run` for large dependency-edge batches.\n\nNotes:\n  `--dry-run` validates against the current graph and does not mutate TaskFlow state.\n  Per-task fields override command defaults; list defaults are appended and de-duplicated.\n  JSONL lets operators import large batches from a file instead of passing oversized command payloads.";
+const TASK_IMPORT_AFTER_HELP: &str = "Examples:\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run --json\n  vida task import --file tasks.yaml --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task create-bulk --file tasks.json --labels operator-dx,taskflow --acceptance-target \"Tasks imported\" --proof-target \"cargo test -p vida task_bulk_import\" --json\n\nInput task object fields:\n  id | task_id, title, display_id, description, type | issue_type, status, priority, parent_id, notes\n  labels: [\"operator-dx\"] or \"operator-dx,taskflow\"\n  execution_semantics: { execution_mode, order_bucket, parallel_group, conflict_domain }\n  planner_metadata: { owned_paths, acceptance_targets, proof_targets, risk, estimate, lane_hint }\n\nLarge-batch transport:\n  Prefer JSONL/NDJSON for large batches because each task is one bounded line in a file.\n  If the shell reports a command line or payload is too large, move the task objects into a file and rerun `vida task import --file <path> --dry-run`.\n  Use JSON/YAML array entries for literal metadata values that contain commas; string fields and command defaults keep comma-delimited compatibility.\n  Use `vida task dep add-bulk --edge-file edges.txt --dry-run` for large dependency-edge batches.\n\nNotes:\n  `--dry-run` validates against the current graph and does not mutate TaskFlow state.\n  Per-task fields override command defaults; list defaults are appended and de-duplicated.\n  JSONL lets operators import large batches from a file instead of passing oversized command payloads.";
 
 const TASK_UPDATE_ABOUT: &str = "Update one tracked task in the authoritative backlog store.";
 const TASK_UPDATE_LONG_ABOUT: &str = "Update one tracked task in the authoritative backlog store.\n\nUse execution-semantics flags to correct sequencing and parallelism truth without moving ordering back into notes:\n- `--execution-mode sequential|parallel_safe|exclusive|container_only`\n- `--order-bucket <id>`\n- `--parallel-group <id>`\n- `--conflict-domain <id>`\n- matching `--clear-*` flags remove one semantics field\n\nPlanner proof target updates are replacements, not appends. Use `--clear-proof-targets` to remove obsolete proof targets.";
-const TASK_UPDATE_AFTER_HELP: &str = "Examples:\n  vida task update <task-id> --status in_progress --json\n  vida task update <task-id> --title \"Retitled task\" --priority 1 --json\n  vida task update <task-id> --parent-id <parent-id> --json\n  vida task update <task-id> --clear-parent-id --json\n  vida task update <task-id> --proof-target \"cargo test -p vida focused_test\" --json\n  vida task update <task-id> --clear-proof-targets --json\n  vida task update <task-id> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task update <task-id> --clear-parallel-group --clear-conflict-domain --json\n\nNotes:\n  Use either a value flag or the matching clear flag, not both.\n  `--proof-target` replaces the configured planner proof_targets; it does not append to stale targets.\n  Re-check `vida taskflow graph-summary --json` after updates to confirm `ready_parallel_safe` and `parallel_blockers`.\n  For long notes, use `--notes-file <path>`; for many task updates or creates, use `vida task import --file tasks.jsonl --dry-run`.";
+const TASK_UPDATE_AFTER_HELP: &str = "Examples:\n  vida task update <task-id> --status in_progress --json\n  vida task update <task-id> --title \"Retitled task\" --priority 1 --json\n  vida task update <task-id> --parent-id <parent-id> --json\n  vida task update <task-id> --clear-parent-id --json\n  vida task update <task-id> --proof-target \"cargo test -p vida focused_test\" --json\n  vida task update <task-id> --acceptance-target-literal \"One prose target, with commas preserved\" --json\n  vida task update <task-id> --clear-proof-targets --json\n  vida task update <task-id> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task update <task-id> --clear-parallel-group --clear-conflict-domain --json\n\nNotes:\n  Use either a value flag or the matching clear flag, not both.\n  `--proof-target` replaces the configured planner proof_targets; it does not append to stale targets.\n  Comma-delimited list flags remain available for compact lists; use `*-literal` variants for long prose values that contain commas.\n  Re-check `vida taskflow graph-summary --json` after updates to confirm `ready_parallel_safe` and `parallel_blockers`.\n  For long notes, use `--notes-file <path>`; for many task updates or creates, use `vida task import --file tasks.jsonl --dry-run`.";
 const TASK_BLOCK_ABOUT: &str = "record a runtime blocker on one task without closing it";
 const TASK_BLOCK_LONG_ABOUT: &str = "Record a runtime blocker on one task without closing it.\n\nThe command marks the task status as `blocked`, appends a structured blocker note to existing task notes, refreshes the canonical TaskFlow snapshot, and emits a machine-readable receipt when `--json` is set.";
 const TASK_BLOCK_AFTER_HELP: &str = "Examples:\n  vida task block <task-id> --reason \"runtime bridge unavailable\" --evidence \"agent-init returned host_tool_capability_missing\" --json\n  vida task block <task-id> --reason \"browser proof unavailable\" --blocker web_runtime_unhealthy --next-action \"run vida runtime web status --json\" --json\n\nOptions:\n  --reason <text>       Human-readable blocker reason; required\n  --evidence <text>     Evidence command, file, receipt, or observation\n  --blocker <code>      Canonical blocker code; accepts comma-separated values and repeated flags\n  --next-action <text>  Suggested recovery or continuation action; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output";
@@ -1928,6 +1928,12 @@ pub(crate) struct TaskCreateArgs {
     pub(crate) owned_paths: Vec<String>,
 
     #[arg(
+        long = "owned-path-literal",
+        help = "Planner metadata owned path to set without comma splitting. Repeat for multiple literal values."
+    )]
+    pub(crate) owned_path_literals: Vec<String>,
+
+    #[arg(
         long = "acceptance-target",
         visible_alias = "acceptance",
         value_delimiter = ',',
@@ -1936,12 +1942,26 @@ pub(crate) struct TaskCreateArgs {
     pub(crate) acceptance_targets: Vec<String>,
 
     #[arg(
+        long = "acceptance-target-literal",
+        visible_alias = "acceptance-literal",
+        help = "Planner metadata acceptance target to set without comma splitting. Repeat for long prose values."
+    )]
+    pub(crate) acceptance_target_literals: Vec<String>,
+
+    #[arg(
         long = "proof-target",
         visible_alias = "proof",
         value_delimiter = ',',
         help = "Planner metadata proof targets to set. Accepts comma-separated values, repeated flags, and alias --proof."
     )]
     pub(crate) proof_targets: Vec<String>,
+
+    #[arg(
+        long = "proof-target-literal",
+        visible_alias = "proof-literal",
+        help = "Planner metadata proof target to set without comma splitting. Repeat for long prose values."
+    )]
+    pub(crate) proof_target_literals: Vec<String>,
 
     #[arg(
         long = "state-dir",
@@ -2038,6 +2058,12 @@ pub(crate) struct TaskUpdateArgs {
     pub(crate) owned_paths: Vec<String>,
 
     #[arg(
+        long = "owned-path-literal",
+        help = "Planner metadata owned path to set without comma splitting. Repeat for multiple literal values."
+    )]
+    pub(crate) owned_path_literals: Vec<String>,
+
+    #[arg(
         long = "acceptance-target",
         value_delimiter = ',',
         help = "Planner metadata acceptance targets to set. Accepts comma-separated values and repeated flags."
@@ -2045,11 +2071,23 @@ pub(crate) struct TaskUpdateArgs {
     pub(crate) acceptance_targets: Vec<String>,
 
     #[arg(
+        long = "acceptance-target-literal",
+        help = "Planner metadata acceptance target to set without comma splitting. Repeat for long prose values."
+    )]
+    pub(crate) acceptance_target_literals: Vec<String>,
+
+    #[arg(
         long = "proof-target",
         value_delimiter = ',',
         help = "Planner metadata proof targets to replace. Accepts comma-separated values and repeated flags."
     )]
     pub(crate) proof_targets: Vec<String>,
+
+    #[arg(
+        long = "proof-target-literal",
+        help = "Planner metadata proof target to replace without comma splitting. Repeat for long prose values."
+    )]
+    pub(crate) proof_target_literals: Vec<String>,
 
     #[arg(
         long = "clear-proof-targets",
