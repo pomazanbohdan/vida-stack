@@ -1751,6 +1751,18 @@ fn build_dev_team_flow_projection(
     })
 }
 
+fn suppressed_current_task_flow_projection(blocker_codes: &[String]) -> serde_json::Value {
+    serde_json::json!({
+        "status": release1_blocked_status(),
+        "reason": "current_task_not_ready_for_dev_team_dispatch",
+        "flow_id": null,
+        "steps": [],
+        "current_step": null,
+        "diagnostic_only": true,
+        "blocker_codes": blocker_codes,
+    })
+}
+
 fn single_in_progress_task_id_from_rows(rows: &[state_store::TaskRecord]) -> Option<&str> {
     let mut candidates = rows.iter().filter(|task| {
         task.status == "in_progress"
@@ -2508,6 +2520,12 @@ fn build_agent_dispatch_next_preview_dev_team(
         .unwrap_or_default();
     let current_task_missing_from_ready =
         current_task_id.is_some() && current_task_matches.is_empty();
+    let current_task_blocked_candidate = current_task_id.and_then(|current_task_id| {
+        projection
+            .blocked
+            .iter()
+            .find(|candidate| candidate.task.id == current_task_id)
+    });
     let all_ready_flow_ids = projection
         .ready
         .iter()
@@ -2550,7 +2568,15 @@ fn build_agent_dispatch_next_preview_dev_team(
             .map(str::to_string)
         })
         .collect::<std::collections::BTreeSet<_>>();
-    let sequence = if ready_flow_ids.len() == 1 {
+    let current_task_absent_from_scheduler =
+        current_task_missing_from_ready && current_task_blocked_candidate.is_none();
+    let sequence = if current_task_absent_from_scheduler {
+        Vec::new()
+    } else if current_task_missing_from_ready {
+        current_task_blocked_candidate
+            .map(|candidate| dev_team_sequence_for_task(activation_bundle, &candidate.task))
+            .unwrap_or_else(|| dev_team_sequence(activation_bundle))
+    } else if ready_flow_ids.len() == 1 {
         selected_ready_candidates
             .iter()
             .find(|candidate| candidate.ready_now)
@@ -2559,7 +2585,16 @@ fn build_agent_dispatch_next_preview_dev_team(
     } else {
         dev_team_sequence(activation_bundle)
     };
-    let selected_flow_id = if ready_flow_ids.len() == 1 {
+    let selected_flow_id = if current_task_missing_from_ready {
+        current_task_blocked_candidate
+            .and_then(|candidate| {
+                selected_dev_team_flow_for_task(
+                    &activation_bundle["dev_team_readiness"],
+                    &candidate.task,
+                )
+            })
+            .and_then(|flow| flow["flow_id"].as_str())
+    } else if ready_flow_ids.len() == 1 {
         ready_flow_ids.iter().next().map(String::as_str)
     } else {
         activation_bundle["dev_team_readiness"]["default_flow_id"].as_str()
@@ -2578,7 +2613,7 @@ fn build_agent_dispatch_next_preview_dev_team(
         blocker_codes.push("invalid_lanes_requested".to_string());
         next_actions.push("Pass `--lanes <n>` with n >= 1.".to_string());
     }
-    if sequence.is_empty() {
+    if sequence.is_empty() && !current_task_absent_from_scheduler {
         blocker_codes.push("configured_dev_team_sequence_required".to_string());
         next_actions.push(
             "Configure dev_team_readiness roles/sequence or dispatch_contract lanes before previewing dev-team dispatch."
@@ -2613,7 +2648,9 @@ fn build_agent_dispatch_next_preview_dev_team(
                 vec!["graph_blocked".to_string()],
             ));
         }
-        let flow_projection = if include_diagnostics {
+        let flow_projection = if include_diagnostics && current_task_absent_from_scheduler {
+            suppressed_current_task_flow_projection(&blocker_codes)
+        } else if include_diagnostics {
             build_dev_team_flow_projection(
                 activation_bundle,
                 selected_flow_id,
@@ -2821,7 +2858,9 @@ fn build_agent_dispatch_next_preview_dev_team(
     }
 
     let status = release1_contract_status_value(blocker_codes.is_empty());
-    let flow_projection = if include_diagnostics {
+    let flow_projection = if include_diagnostics && current_task_absent_from_scheduler {
+        suppressed_current_task_flow_projection(&blocker_codes)
+    } else if include_diagnostics {
         build_dev_team_flow_projection(
             activation_bundle,
             selected_flow_id,
@@ -9847,8 +9886,44 @@ mod tests {
 
     #[test]
     fn agent_dispatch_next_preview_dev_team_fails_closed_when_current_task_is_not_ready() {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "default_delivery",
+            "work_item_flow_bindings": {
+                "runtime_defect": "runtime_defect_remediation",
+                "task": "default_delivery"
+            },
+            "roles": [
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                {"role_id": "specifier", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                {"role_id": "coder", "runtime_role": "worker", "task_classes": ["implementation"]},
+                {"role_id": "refactorer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                {"role_id": "architect", "runtime_role": "solution_architect", "task_classes": ["architecture"]}
+            ],
+            "sequence": ["developer"],
+            "flows": [
+                {
+                    "flow_id": "default_delivery",
+                    "enabled": true,
+                    "default": true,
+                    "work_item_bindings": ["task"],
+                    "ordered_steps": [{"role_id": "developer"}]
+                },
+                {
+                    "flow_id": "runtime_defect_remediation",
+                    "enabled": true,
+                    "work_item_bindings": ["runtime_defect"],
+                    "ordered_steps": [
+                        {"role_id": "specifier", "runtime_role": "business_analyst", "task_class": "specification"},
+                        {"role_id": "coder", "runtime_role": "worker", "task_class": "implementation"},
+                        {"role_id": "refactorer", "runtime_role": "worker", "task_class": "implementation"},
+                        {"role_id": "architect", "runtime_role": "solution_architect", "task_class": "architecture"}
+                    ]
+                }
+            ]
+        });
         let preview = build_agent_dispatch_next_preview(
-            &activation_bundle_with_dev_team_selection_truth(),
+            &activation_bundle,
             &TaskSchedulingProjection {
                 current_task_id: Some("runtime-defect-active".to_string()),
                 ready: vec![candidate_with_type(
@@ -9885,6 +9960,126 @@ mod tests {
                     .reasons
                     .contains(&"current_task_not_ready_for_dev_team_dispatch".to_string())
         }));
+        assert_eq!(
+            preview.flow_projection["flow_id"],
+            "runtime_defect_remediation"
+        );
+        assert_eq!(preview.flow_projection["status"], "blocked");
+        let roles = preview.flow_projection["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|step| step["role_label"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(roles, vec!["specifier", "coder", "refactorer", "architect"]);
+    }
+
+    #[test]
+    fn agent_dispatch_next_preview_dev_team_suppresses_flow_projection_when_current_task_is_absent()
+    {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "default_delivery",
+            "work_item_flow_bindings": {
+                "task": "default_delivery"
+            },
+            "roles": [
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]}
+            ],
+            "sequence": ["developer"],
+            "flows": [
+                {
+                    "flow_id": "default_delivery",
+                    "enabled": true,
+                    "default": true,
+                    "work_item_bindings": ["task"],
+                    "ordered_steps": [{"role_id": "developer"}]
+                }
+            ]
+        });
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle,
+            &TaskSchedulingProjection {
+                current_task_id: Some("closed-runtime-defect".to_string()),
+                ready: vec![candidate_with_type(
+                    "unrelated-ready",
+                    "Unrelated ready",
+                    true,
+                    true,
+                    "task",
+                )],
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            4,
+            4,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "blocked", "{preview:#?}");
+        assert_eq!(preview.lanes_selected, 0);
+        assert!(preview.blocker_codes.iter().any(|code| {
+            code == "current_task_not_ready_for_dev_team_dispatch:task=closed-runtime-defect"
+        }));
+        assert_eq!(preview.flow_projection["status"], "blocked");
+        assert!(preview.flow_projection["flow_id"].is_null());
+        assert!(preview.flow_projection["current_step"].is_null());
+        assert!(preview.flow_projection["steps"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn agent_dispatch_next_preview_dev_team_suppresses_flow_projection_when_current_task_is_absent_and_no_ready_candidates(
+    ) {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "default_delivery",
+            "work_item_flow_bindings": {
+                "task": "default_delivery"
+            },
+            "roles": [
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]}
+            ],
+            "sequence": ["developer"],
+            "flows": [
+                {
+                    "flow_id": "default_delivery",
+                    "enabled": true,
+                    "default": true,
+                    "work_item_bindings": ["task"],
+                    "ordered_steps": [{"role_id": "developer"}]
+                }
+            ]
+        });
+        let preview = build_agent_dispatch_next_preview(
+            &activation_bundle,
+            &TaskSchedulingProjection {
+                current_task_id: Some("closed-runtime-defect".to_string()),
+                ready: Vec::new(),
+                blocked: Vec::new(),
+                parallel_candidates_after_current: Vec::new(),
+            },
+            4,
+            4,
+            None,
+            true,
+        );
+
+        assert_eq!(preview.status, "blocked", "{preview:#?}");
+        assert_eq!(preview.lanes_selected, 0);
+        assert!(preview.blocker_codes.iter().any(|code| {
+            code == "current_task_not_ready_for_dev_team_dispatch:task=closed-runtime-defect"
+        }));
+        assert_eq!(preview.flow_projection["status"], "blocked");
+        assert!(preview.flow_projection["flow_id"].is_null());
+        assert!(preview.flow_projection["current_step"].is_null());
+        assert!(preview.flow_projection["steps"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
