@@ -182,12 +182,16 @@ pub(crate) fn latest_dispatch_result_health_for_backend(
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| right.0.cmp(&left.0));
 
-    for (_modified, path) in entries.into_iter().take(64) {
-        let text = std::fs::read_to_string(&path).ok()?;
+    for (_modified, path) in entries {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         if !text.contains(backend_id) {
             continue;
         }
-        let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
         if !dispatch_result_matches_backend(&value, backend_id) {
             continue;
         }
@@ -195,24 +199,27 @@ pub(crate) fn latest_dispatch_result_health_for_backend(
             return None;
         }
         let combined_error_text = dispatch_result_error_text(&value);
-        let latest_error_class = value
+        if let Some(latest_error_class) = value
             .pointer("/external_provider_health/latest_error_class")
             .and_then(serde_json::Value::as_str)
             .and_then(|value| normalized_error_class(Some(value)))
-            .or_else(|| classify_external_provider_error(&combined_error_text))?;
-        return Some(evaluate_external_provider_health(
-            ExternalProviderHealthInput {
-                backend_id,
-                provider,
-                last_probe_at: value.get("recorded_at").and_then(serde_json::Value::as_str),
-                latency_ms_avg: None,
-                error_rate_window: 0.0,
-                consecutive_failures: 1,
-                latest_error_class: Some(latest_error_class),
-                cooldown_until: None,
-            },
-            &Default::default(),
-        ));
+            .or_else(|| classify_external_provider_error(&combined_error_text))
+        {
+            return Some(evaluate_external_provider_health(
+                ExternalProviderHealthInput {
+                    backend_id,
+                    provider,
+                    last_probe_at: value.get("recorded_at").and_then(serde_json::Value::as_str),
+                    latency_ms_avg: None,
+                    error_rate_window: 0.0,
+                    consecutive_failures: 1,
+                    latest_error_class: Some(latest_error_class),
+                    cooldown_until: None,
+                },
+                &Default::default(),
+            ));
+        }
+        return None;
     }
     None
 }
@@ -409,6 +416,156 @@ mod tests {
         assert_eq!(health.status, "blocked");
         assert_eq!(health.latest_error_class.as_deref(), Some("auth_error"));
         assert_eq!(health.blocker_codes, vec!["provider_auth_failed"]);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn latest_dispatch_result_health_ignores_unrelated_newer_results_before_backend_match() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-provider-health-dispatch-scan-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let dispatch_dir = root
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join("runtime-consumption")
+            .join("dispatch-results");
+        std::fs::create_dir_all(&dispatch_dir).expect("dispatch dir");
+        std::fs::write(
+            dispatch_dir.join("vibe-result.json"),
+            r#"{
+              "surface": "external_cli:vibe_cli",
+              "status": "blocked",
+              "execution_state": "blocked",
+              "provider_error": "Error: Invalid API key. Please check your API key.",
+              "recorded_at": "2026-06-25T14:00:00Z"
+            }"#,
+        )
+        .expect("vibe dispatch result");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        for index in 0..600 {
+            std::fs::write(
+                dispatch_dir.join(format!("unrelated-{index:03}.json")),
+                format!(
+                    r#"{{
+                      "surface": "internal_subagents",
+                      "selected_backend": "internal_subagents",
+                      "status": "pass",
+                      "execution_state": "executed",
+                      "recorded_at": "2026-06-25T14:00:{index:02}Z"
+                    }}"#
+                ),
+            )
+            .expect("unrelated dispatch result");
+        }
+
+        let health = latest_dispatch_result_health_for_backend(&root, "vibe_cli", "vibe")
+            .expect("health should be derived");
+
+        assert_eq!(health.status, "blocked");
+        assert_eq!(health.latest_error_class.as_deref(), Some("auth_error"));
+        assert_eq!(health.blocker_codes, vec!["provider_auth_failed"]);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn latest_dispatch_result_health_newer_backend_success_clears_older_auth_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-provider-health-dispatch-success-clear-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let dispatch_dir = root
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join("runtime-consumption")
+            .join("dispatch-results");
+        std::fs::create_dir_all(&dispatch_dir).expect("dispatch dir");
+        std::fs::write(
+            dispatch_dir.join("older-vibe-auth.json"),
+            r#"{
+              "surface": "external_cli:vibe_cli",
+              "status": "blocked",
+              "execution_state": "blocked",
+              "provider_error": "Error: Invalid API key. Please check your API key.",
+              "recorded_at": "2026-06-25T14:00:00Z"
+            }"#,
+        )
+        .expect("older vibe dispatch result");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(
+            dispatch_dir.join("newer-vibe-success.json"),
+            r#"{
+              "surface": "external_cli:vibe_cli",
+              "status": "pass",
+              "execution_state": "executed",
+              "recorded_at": "2026-06-25T14:01:00Z"
+            }"#,
+        )
+        .expect("newer vibe dispatch result");
+
+        let health = latest_dispatch_result_health_for_backend(&root, "vibe_cli", "vibe");
+
+        assert_eq!(health, None);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn latest_dispatch_result_health_newer_unknown_backend_result_clears_older_auth_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-provider-health-dispatch-unknown-clear-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let dispatch_dir = root
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join("runtime-consumption")
+            .join("dispatch-results");
+        std::fs::create_dir_all(&dispatch_dir).expect("dispatch dir");
+        std::fs::write(
+            dispatch_dir.join("older-vibe-auth.json"),
+            r#"{
+              "surface": "external_cli:vibe_cli",
+              "status": "blocked",
+              "execution_state": "blocked",
+              "provider_error": "Error: Invalid API key. Please check your API key.",
+              "recorded_at": "2026-06-25T14:00:00Z"
+            }"#,
+        )
+        .expect("older vibe dispatch result");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(
+            dispatch_dir.join("newer-vibe-unknown-blocked.json"),
+            r#"{
+              "surface": "external_cli:vibe_cli",
+              "status": "blocked",
+              "execution_state": "blocked",
+              "blocker_reason": "operator stopped before details were captured",
+              "recorded_at": "2026-06-25T14:01:00Z"
+            }"#,
+        )
+        .expect("newer vibe dispatch result");
+
+        let health = latest_dispatch_result_health_for_backend(&root, "vibe_cli", "vibe");
+
+        assert_eq!(health, None);
 
         let _ = std::fs::remove_dir_all(root);
     }

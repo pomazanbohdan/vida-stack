@@ -4589,6 +4589,137 @@ mod tests {
     }
 
     #[test]
+    fn recent_dispatch_result_auth_failure_rejects_vibe_cli_before_selection() {
+        struct CurrentDirGuard(std::path::PathBuf);
+        impl Drop for CurrentDirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-vibe-dispatch-auth-assignment-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&project_root);
+        let dispatch_dir =
+            project_root.join(".vida/data/state/runtime-consumption/dispatch-results");
+        std::fs::create_dir_all(&dispatch_dir).expect("dispatch dir should exist");
+        std::fs::write(
+            dispatch_dir.join("vibe.json"),
+            r#"{
+              "surface": "external_cli:vibe_cli",
+              "status": "blocked",
+              "execution_state": "blocked",
+              "provider_error": "Invalid API key",
+              "recorded_at": "2026-06-25T14:00:00Z"
+            }"#,
+        )
+        .expect("dispatch result should write");
+        std::fs::write(project_root.join("AGENTS.md"), "project").expect("AGENTS should write");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            "project:\n  id: test\n",
+        )
+        .expect("config should write");
+        for relative in [".vida/config", ".vida/db", ".vida/project"] {
+            std::fs::create_dir_all(project_root.join(relative)).expect("marker dir should exist");
+        }
+        let _cwd_guard = CurrentDirGuard(std::env::current_dir().expect("cwd should resolve"));
+        std::env::set_current_dir(&project_root).expect("cwd should switch");
+
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "middle",
+                "tier": "middle",
+                "rate": 4,
+                "normalized_cost_units": 4,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "internal_review",
+                "model_profiles": {
+                    "internal_review": {
+                        "profile_id": "internal_review",
+                        "model_ref": "gpt-5.5",
+                        "provider": "openai",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 4,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "read_or_review",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "vibe_cli",
+                "tier": "external_free",
+                "rate": 0,
+                "normalized_cost_units": 0,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "backend_class": "external_cli",
+                "default_model_profile": "vibe_review",
+                "model_profiles": {
+                    "vibe_review": {
+                        "profile_id": "vibe_review",
+                        "model_ref": "vibe/provider-configured",
+                        "provider": "vibe",
+                        "reasoning_effort": "provider_default",
+                        "normalized_cost_units": 0,
+                        "speed_tier": "medium",
+                        "quality_tier": "medium",
+                        "write_scope": "none",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "subagents": {
+                "vibe_cli": {
+                    "enabled": true,
+                    "subagent_backend_class": "external_cli",
+                    "default_model_profile": "vibe_review",
+                    "model_profiles": compiled_bundle["carrier_runtime"]["roles"][1]["model_profiles"].clone()
+                }
+            }
+        });
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "coach",
+            "review",
+            "coach",
+        );
+
+        assert_eq!(assignment["selected_carrier_id"], "middle");
+        assert!(assignment["rejected_candidates"]
+            .as_array()
+            .expect("rejected candidates")
+            .iter()
+            .any(|row| {
+                row["carrier_id"] == "vibe_cli"
+                    && row["external_backend_readiness"]["status"] == "provider_auth_failed"
+                    && row["external_backend_readiness"]["blocked"] == true
+                    && row["external_backend_readiness"]["blocker_code"] == "provider_auth_failed"
+            }));
+        let _ = std::fs::remove_dir_all(project_root);
+    }
+
+    #[test]
     fn missing_external_cli_detect_command_is_rejected_before_selection() {
         let mut compiled_bundle = compiled_bundle_with_roles(vec![
             serde_json::json!({

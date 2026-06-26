@@ -677,6 +677,46 @@ fn pi_style_readiness_payload(
     })
 }
 
+fn dispatch_result_provider_health_readiness(
+    project_root: Option<&std::path::Path>,
+    backend_id: &str,
+    profile_projection: &serde_json::Value,
+    selected_profile: &serde_json::Value,
+    current_model_ref: serde_json::Value,
+    expected_model_ref: serde_json::Value,
+) -> Option<serde_json::Value> {
+    let provider = selected_profile["provider"]
+        .as_str()
+        .or_else(|| profile_projection["provider"].as_str())
+        .unwrap_or(backend_id);
+    let health = crate::external_provider_health::latest_dispatch_result_health_for_backend(
+        project_root?,
+        backend_id,
+        provider,
+    )?;
+    if health.latest_error_class.as_deref() != Some("auth_error") || !health.blocks_candidate() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "backend_id": backend_id,
+        "status": "provider_auth_failed",
+        "blocked": true,
+        "blocker_code": crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::ProviderAuthFailed
+        ),
+        "current_model_ref": current_model_ref,
+        "current_reasoning_effort": profile_projection["current_reasoning_effort"].clone(),
+        "expected_model_ref": expected_model_ref,
+        "default_model_profile": profile_projection["default_model_profile"].clone(),
+        "selected_model_profile": selected_profile_id_value(profile_projection, selected_profile),
+        "model_profiles": profile_projection["model_profiles"].clone(),
+        "external_provider_health": health,
+        "next_actions": [
+            "Repair the external provider credentials, then rerun `vida status --json` before dispatch."
+        ],
+    }))
+}
+
 fn command_ready_status(source: &str, command: &str) -> serde_json::Value {
     serde_json::json!({
         "source": source,
@@ -1018,6 +1058,7 @@ fn external_cli_carrier_readiness(
     backend_id: &str,
     backend_entry: &serde_yaml::Value,
     preferred_profile_id: Option<&str>,
+    project_root: Option<&std::path::Path>,
 ) -> serde_json::Value {
     let profile_projection = external_backend_profile_projection(backend_id, backend_entry);
     let readiness = crate::yaml_lookup(backend_entry, &["readiness"]);
@@ -1082,6 +1123,16 @@ fn external_cli_carrier_readiness(
         }
     }
     if readiness.is_none() {
+        if let Some(readiness) = dispatch_result_provider_health_readiness(
+            project_root,
+            backend_id,
+            &profile_projection,
+            &selected_profile,
+            serde_json::Value::Null,
+            profile_projection["model"].clone(),
+        ) {
+            return readiness;
+        }
         return serde_json::json!({
             "backend_id": backend_id,
             "status": "carrier_ready",
@@ -1205,6 +1256,23 @@ fn external_cli_carrier_readiness(
         current_model_ref.as_deref(),
         preferred_profile_id,
     );
+
+    if let Some(readiness) = dispatch_result_provider_health_readiness(
+        project_root,
+        backend_id,
+        &profile_projection,
+        &selected_profile,
+        current_model_ref
+            .clone()
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null),
+        expected_model_ref
+            .clone()
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null),
+    ) {
+        return readiness;
+    }
 
     if let Some(expected_model_ref) = expected_model_ref.clone() {
         if current_model_ref.as_deref() != Some(expected_model_ref.as_str()) {
@@ -1339,7 +1407,8 @@ pub(crate) fn external_cli_backend_readiness_verdict(
     backend_id: &str,
     backend_entry: &serde_yaml::Value,
 ) -> serde_json::Value {
-    external_cli_carrier_readiness(backend_id, backend_entry, None)
+    let project_root = crate::resolve_runtime_project_root().ok();
+    external_cli_carrier_readiness(backend_id, backend_entry, None, project_root.as_deref())
 }
 
 pub(crate) fn external_cli_backend_readiness_verdict_for_profile(
@@ -1347,7 +1416,27 @@ pub(crate) fn external_cli_backend_readiness_verdict_for_profile(
     backend_entry: &serde_yaml::Value,
     preferred_profile_id: Option<&str>,
 ) -> serde_json::Value {
-    external_cli_carrier_readiness(backend_id, backend_entry, preferred_profile_id)
+    let project_root = crate::resolve_runtime_project_root().ok();
+    external_cli_carrier_readiness(
+        backend_id,
+        backend_entry,
+        preferred_profile_id,
+        project_root.as_deref(),
+    )
+}
+
+pub(crate) fn external_cli_backend_readiness_verdict_for_project_root(
+    backend_id: &str,
+    backend_entry: &serde_yaml::Value,
+    preferred_profile_id: Option<&str>,
+    project_root: &std::path::Path,
+) -> serde_json::Value {
+    external_cli_carrier_readiness(
+        backend_id,
+        backend_entry,
+        preferred_profile_id,
+        Some(project_root),
+    )
 }
 
 fn external_cli_readiness_summaries(overlay: &serde_yaml::Value) -> serde_json::Value {
@@ -1934,7 +2023,8 @@ fn external_cli_preflight_summary_with_probe(
 mod tests {
     use super::{
         adapter_prewrite_guard_capabilities, external_cli_backend_readiness_verdict_for_profile,
-        external_cli_preflight_summary, external_cli_preflight_summary_with_probe_override,
+        external_cli_backend_readiness_verdict_for_project_root, external_cli_preflight_summary,
+        external_cli_preflight_summary_with_probe_override,
         external_cli_probe_command_is_config_safe, readiness_command_line_is_config_safe,
     };
     use std::fs;
@@ -3011,6 +3101,67 @@ agent_system:
             summary["carrier_readiness"]["carriers"][0]["status"],
             "provider_auth_failed"
         );
+    }
+
+    #[test]
+    fn external_cli_readiness_blocks_recent_dispatch_result_invalid_api_key() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vida-vibe-dispatch-auth-status-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should support unix epoch")
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&temp_root);
+        let dispatch_dir = temp_root.join(".vida/data/state/runtime-consumption/dispatch-results");
+        fs::create_dir_all(&dispatch_dir).expect("dispatch dir should exist");
+        fs::write(
+            dispatch_dir.join("vibe.json"),
+            r#"{
+              "surface": "external_cli:vibe_cli",
+              "status": "blocked",
+              "execution_state": "blocked",
+              "provider_error": "Invalid API key",
+              "recorded_at": "2026-06-25T14:00:00Z"
+            }"#,
+        )
+        .expect("dispatch result should write");
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+agent_system:
+  subagents:
+    vibe_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      default_model_profile: vibe_review
+      model_profiles:
+        vibe_review:
+          profile_id: vibe_review
+          provider: vibe
+          model_ref: vibe/provider-configured
+"#,
+        )
+        .expect("overlay yaml should parse");
+        let backend_entry =
+            crate::yaml_lookup(&overlay, &["agent_system", "subagents", "vibe_cli"])
+                .expect("backend entry");
+
+        let readiness = external_cli_backend_readiness_verdict_for_project_root(
+            "vibe_cli",
+            backend_entry,
+            Some("vibe_review"),
+            &temp_root,
+        );
+
+        assert_eq!(readiness["status"], "provider_auth_failed");
+        assert_eq!(readiness["blocked"], true);
+        assert_eq!(readiness["blocker_code"], "provider_auth_failed");
+        assert_eq!(
+            readiness["external_provider_health"]["latest_error_class"],
+            "auth_error"
+        );
+        let _ = fs::remove_dir_all(temp_root);
     }
 
     #[test]
