@@ -10,6 +10,9 @@ pub(crate) struct ExternalProviderHealthInput<'a> {
     pub(crate) cooldown_until: Option<&'a str>,
 }
 
+const DISPATCH_RESULT_HEALTH_SCAN_ENTRY_LIMIT: usize = 64;
+const DISPATCH_RESULT_HEALTH_SCAN_FILE_LIMIT_BYTES: u64 = 256 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ExternalHealthCircuitBreakerConfig {
     pub(crate) consecutive_failure_limit: u64,
@@ -168,18 +171,11 @@ pub(crate) fn latest_dispatch_result_health_for_backend(
         .join("state")
         .join("runtime-consumption")
         .join("dispatch-results");
-    let mut entries = std::fs::read_dir(dispatch_results_dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            if !metadata.is_file() {
-                return None;
-            }
-            let modified = metadata.modified().ok()?;
-            Some((modified, entry.path()))
-        })
-        .collect::<Vec<_>>();
+    let mut entries = newest_dispatch_result_entries(
+        &dispatch_results_dir,
+        DISPATCH_RESULT_HEALTH_SCAN_ENTRY_LIMIT,
+        DISPATCH_RESULT_HEALTH_SCAN_FILE_LIMIT_BYTES,
+    )?;
     entries.sort_by(|left, right| right.0.cmp(&left.0));
 
     for (_modified, path) in entries {
@@ -222,6 +218,38 @@ pub(crate) fn latest_dispatch_result_health_for_backend(
         return None;
     }
     None
+}
+
+fn newest_dispatch_result_entries(
+    dispatch_results_dir: &std::path::Path,
+    limit: usize,
+    max_file_size_bytes: u64,
+) -> Option<Vec<(std::time::SystemTime, std::path::PathBuf)>> {
+    let mut newest = std::collections::BinaryHeap::new();
+    for entry in std::fs::read_dir(dispatch_results_dir)
+        .ok()?
+        .filter_map(Result::ok)
+    {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() > max_file_size_bytes {
+            continue;
+        }
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        newest.push(std::cmp::Reverse((modified, entry.path())));
+        if newest.len() > limit {
+            newest.pop();
+        }
+    }
+    Some(
+        newest
+            .into_iter()
+            .map(|std::cmp::Reverse(entry)| entry)
+            .collect(),
+    )
 }
 
 fn normalized_error_class(latest_error_class: Option<&str>) -> Option<&'static str> {
@@ -421,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn latest_dispatch_result_health_ignores_unrelated_newer_results_before_backend_match() {
+    fn latest_dispatch_result_health_caps_unrelated_newer_results_before_backend_match() {
         let root = std::env::temp_dir().join(format!(
             "vida-provider-health-dispatch-scan-{}-{}",
             std::process::id(),
@@ -465,12 +493,49 @@ mod tests {
             .expect("unrelated dispatch result");
         }
 
-        let health = latest_dispatch_result_health_for_backend(&root, "vibe_cli", "vibe")
-            .expect("health should be derived");
+        let health = latest_dispatch_result_health_for_backend(&root, "vibe_cli", "vibe");
 
-        assert_eq!(health.status, "blocked");
-        assert_eq!(health.latest_error_class.as_deref(), Some("auth_error"));
-        assert_eq!(health.blocker_codes, vec!["provider_auth_failed"]);
+        assert_eq!(health, None);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn latest_dispatch_result_health_skips_oversized_backend_results() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-provider-health-dispatch-oversized-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        let dispatch_dir = root
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join("runtime-consumption")
+            .join("dispatch-results");
+        std::fs::create_dir_all(&dispatch_dir).expect("dispatch dir");
+        let oversized_error = format!(
+            r#"{{
+              "surface": "external_cli:vibe_cli",
+              "status": "blocked",
+              "execution_state": "blocked",
+              "provider_error": "Error: Invalid API key. {}",
+              "recorded_at": "2026-06-25T14:00:00Z"
+            }}"#,
+            "x".repeat(DISPATCH_RESULT_HEALTH_SCAN_FILE_LIMIT_BYTES as usize)
+        );
+        std::fs::write(
+            dispatch_dir.join("oversized-vibe-auth.json"),
+            oversized_error,
+        )
+        .expect("oversized vibe dispatch result");
+
+        let health = latest_dispatch_result_health_for_backend(&root, "vibe_cli", "vibe");
+
+        assert_eq!(health, None);
 
         let _ = std::fs::remove_dir_all(root);
     }
