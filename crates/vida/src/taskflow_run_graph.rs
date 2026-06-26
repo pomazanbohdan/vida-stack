@@ -157,6 +157,40 @@ struct RunGraphDiagnosis {
     projection_truth: RunGraphProjectionTruth,
 }
 
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+struct ActiveRunRepairSummary {
+    run_id: String,
+    task_id: String,
+    active_node: String,
+    lifecycle_stage: String,
+    resume_target: String,
+    policy_gate: String,
+    recovery_ready: bool,
+    blocker_codes: Vec<String>,
+    dispatch_target: Option<String>,
+    dispatch_status: Option<String>,
+    lane_status: Option<String>,
+    downstream_dispatch_target: Option<String>,
+    downstream_dispatch_ready: bool,
+    dispatch_packet_path: Option<String>,
+    dispatch_result_path: Option<String>,
+    downstream_dispatch_packet_path: Option<String>,
+    downstream_dispatch_result_path: Option<String>,
+    host_bridge_request_path: Option<String>,
+    result_allowed_next_node: Option<String>,
+    validated_next_command: Option<String>,
+    recommended_surface: Option<String>,
+    stale_state_suspected: bool,
+    projection_vs_receipt_parity: String,
+}
+
+fn compact_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn run_graph_operator_artifact_refs(surface: &str, run_id: &str) -> serde_json::Value {
     serde_json::json!({
         "surface": surface,
@@ -174,13 +208,8 @@ fn insert_string_artifact_ref(
     }
 }
 
-fn host_bridge_artifact_ref_from_result(
-    refs: &mut serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    result: &serde_json::Value,
-    result_key: &str,
-) {
-    let value = result
+fn host_bridge_string_from_result(result: &serde_json::Value, result_key: &str) -> Option<String> {
+    result
         .get("host_tool_bridge_request")
         .and_then(|request| request.get(result_key))
         .and_then(serde_json::Value::as_str)
@@ -189,8 +218,207 @@ fn host_bridge_artifact_ref_from_result(
                 .get("host_bridge")
                 .and_then(|request| request.get(result_key))
                 .and_then(serde_json::Value::as_str)
-        });
-    insert_string_artifact_ref(refs, key, value);
+        })
+        .and_then(|value| compact_optional_string(Some(value)))
+}
+
+fn host_bridge_artifact_ref_from_result(
+    refs: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    result: &serde_json::Value,
+    result_key: &str,
+) {
+    let value = host_bridge_string_from_result(result, result_key);
+    insert_string_artifact_ref(refs, key, value.as_deref());
+}
+
+fn active_repair_summary_result_json(
+    state_root: Option<&std::path::Path>,
+    receipt: Option<&RunGraphDispatchReceipt>,
+) -> Option<serde_json::Value> {
+    let root = state_root?;
+    let receipt = receipt?;
+    receipt
+        .downstream_dispatch_result_path
+        .as_deref()
+        .and_then(|path| safe_read_dispatch_result_json(root, path))
+        .or_else(|| {
+            receipt
+                .dispatch_result_path
+                .as_deref()
+                .and_then(|path| safe_read_dispatch_result_json(root, path))
+        })
+}
+
+fn active_repair_blocker_codes(diagnosis: &RunGraphDiagnosis) -> Vec<String> {
+    let mut values = diagnosis.blocker_codes.clone();
+    if values.is_empty() {
+        if let Some(receipt) = diagnosis.projection_truth.dispatch_receipt.as_ref() {
+            if let Some(blocker_code) = compact_optional_string(receipt.blocker_code.as_deref()) {
+                values.push(blocker_code);
+            }
+            values.extend(receipt.downstream_dispatch_blockers.iter().cloned());
+        }
+    }
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .filter_map(|value| compact_optional_string(Some(&value)))
+        .filter(|value| seen.insert(value.clone()))
+        .collect()
+}
+
+fn active_run_repair_summary(
+    diagnosis: &RunGraphDiagnosis,
+    state_root: Option<&std::path::Path>,
+) -> ActiveRunRepairSummary {
+    let receipt = diagnosis.projection_truth.dispatch_receipt.as_ref();
+    let result = active_repair_summary_result_json(state_root, receipt);
+    let validated_next_command = diagnosis
+        .recommended_command
+        .clone()
+        .or_else(|| {
+            diagnosis
+                .projection_truth
+                .next_lawful_operator_action
+                .clone()
+        })
+        .or_else(|| {
+            diagnosis
+                .next_action
+                .as_ref()
+                .map(|action| action.command.clone())
+        })
+        .or_else(|| receipt.and_then(|receipt| receipt.downstream_dispatch_command.clone()));
+    ActiveRunRepairSummary {
+        run_id: diagnosis.run_id.clone(),
+        task_id: diagnosis.recovery.task_id.clone(),
+        active_node: diagnosis.recovery.active_node.clone(),
+        lifecycle_stage: diagnosis.recovery.lifecycle_stage.clone(),
+        resume_target: diagnosis.recovery.resume_target.clone(),
+        policy_gate: diagnosis.recovery.policy_gate.clone(),
+        recovery_ready: diagnosis.recovery.recovery_ready,
+        blocker_codes: active_repair_blocker_codes(diagnosis),
+        dispatch_target: receipt.map(|receipt| receipt.dispatch_target.clone()),
+        dispatch_status: receipt.map(|receipt| receipt.dispatch_status.clone()),
+        lane_status: receipt.map(|receipt| receipt.lane_status.clone()),
+        downstream_dispatch_target: receipt
+            .and_then(|receipt| receipt.downstream_dispatch_target.clone()),
+        downstream_dispatch_ready: receipt
+            .map(|receipt| receipt.downstream_dispatch_ready)
+            .unwrap_or(false),
+        dispatch_packet_path: receipt.and_then(|receipt| receipt.dispatch_packet_path.clone()),
+        dispatch_result_path: receipt.and_then(|receipt| receipt.dispatch_result_path.clone()),
+        downstream_dispatch_packet_path: receipt
+            .and_then(|receipt| receipt.downstream_dispatch_packet_path.clone()),
+        downstream_dispatch_result_path: receipt
+            .and_then(|receipt| receipt.downstream_dispatch_result_path.clone()),
+        host_bridge_request_path: result
+            .as_ref()
+            .and_then(|result| host_bridge_string_from_result(result, "request_path")),
+        result_allowed_next_node: result
+            .as_ref()
+            .and_then(|result| result.get("allowed_next_node"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| compact_optional_string(Some(value))),
+        validated_next_command,
+        recommended_surface: diagnosis.recommended_surface.clone(),
+        stale_state_suspected: diagnosis.projection_truth.stale_state_suspected,
+        projection_vs_receipt_parity: diagnosis
+            .projection_truth
+            .projection_vs_receipt_parity
+            .clone(),
+    }
+}
+
+fn compact_display_value(value: Option<&str>) -> &str {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("none")
+}
+
+fn active_run_repair_summary_display(summary: &ActiveRunRepairSummary) -> String {
+    let blocker_codes = if summary.blocker_codes.is_empty() {
+        "none".to_string()
+    } else {
+        summary.blocker_codes.join(",")
+    };
+    format!(
+        "run={} task={} active_node={} lifecycle={} blockers={} downstream_ready={} next={}",
+        summary.run_id,
+        summary.task_id,
+        summary.active_node,
+        summary.lifecycle_stage,
+        blocker_codes,
+        summary.downstream_dispatch_ready,
+        compact_display_value(summary.validated_next_command.as_deref())
+    )
+}
+
+fn active_run_repair_artifacts_display(summary: &ActiveRunRepairSummary) -> String {
+    format!(
+        "dispatch_packet={} dispatch_result={} downstream_packet={} downstream_result={} host_bridge_request={} result_allowed_next_node={}",
+        compact_display_value(summary.dispatch_packet_path.as_deref()),
+        compact_display_value(summary.dispatch_result_path.as_deref()),
+        compact_display_value(summary.downstream_dispatch_packet_path.as_deref()),
+        compact_display_value(summary.downstream_dispatch_result_path.as_deref()),
+        compact_display_value(summary.host_bridge_request_path.as_deref()),
+        compact_display_value(summary.result_allowed_next_node.as_deref())
+    )
+}
+
+fn print_run_graph_diagnosis_plain(
+    surface: &'static str,
+    diagnosis: &RunGraphDiagnosis,
+    state_root: Option<&std::path::Path>,
+) {
+    let active_repair_summary = active_run_repair_summary(diagnosis, state_root);
+    print_surface_header(RenderMode::Plain, surface);
+    print_surface_line(RenderMode::Plain, "run", &diagnosis.run_id);
+    print_surface_line(
+        RenderMode::Plain,
+        "active_repair",
+        &active_run_repair_summary_display(&active_repair_summary),
+    );
+    print_surface_line(
+        RenderMode::Plain,
+        "artifacts",
+        &active_run_repair_artifacts_display(&active_repair_summary),
+    );
+    print_surface_line(
+        RenderMode::Plain,
+        "recovery",
+        &diagnosis.recovery.as_display(),
+    );
+    print_surface_line(
+        RenderMode::Plain,
+        "projection",
+        &diagnosis.projection_truth.projection_reason,
+    );
+    if !diagnosis.blocker_codes.is_empty() {
+        print_surface_line(
+            RenderMode::Plain,
+            "blocker_codes",
+            &diagnosis.blocker_codes.join(", "),
+        );
+    }
+    if let Some(summary) = diagnosis
+        .why_not_now
+        .as_ref()
+        .map(|value| value.summary.as_str())
+    {
+        print_surface_line(RenderMode::Plain, "why_not_now", summary);
+    }
+    if let Some(next_action) = diagnosis.next_action.as_ref() {
+        print_surface_line(RenderMode::Plain, "next action", &next_action.reason);
+    }
+    if let Some(command) = diagnosis.recommended_command.as_deref() {
+        print_surface_line(RenderMode::Plain, "recommended_command", command);
+    }
+    if let Some(surface) = diagnosis.recommended_surface.as_deref() {
+        print_surface_line(RenderMode::Plain, "recommended_surface", surface);
+    }
 }
 
 fn run_graph_repair_target(
@@ -897,18 +1125,28 @@ fn build_run_graph_diagnosis_json_payload_for_surface(
     surface: &str,
     diagnosis: &RunGraphDiagnosis,
 ) -> Result<serde_json::Value, String> {
+    build_run_graph_diagnosis_json_payload_for_surface_with_state_root(surface, diagnosis, None)
+}
+
+fn build_run_graph_diagnosis_json_payload_for_surface_with_state_root(
+    surface: &str,
+    diagnosis: &RunGraphDiagnosis,
+    state_root: Option<&std::path::Path>,
+) -> Result<serde_json::Value, String> {
     let next_actions = operator_next_actions_for_operator_surface(
         &diagnosis.blocker_codes,
         diagnosis.next_action.as_ref(),
         diagnosis.why_not_now.as_ref(),
         diagnosis.recommended_command.as_deref(),
     );
+    let active_repair_summary = active_run_repair_summary(diagnosis, state_root);
     build_run_graph_operator_surface_payload(
         surface,
         &diagnosis.run_id,
         diagnosis.blocker_codes.clone(),
         next_actions,
         serde_json::json!({
+            "active_repair_summary": active_repair_summary,
             "why_not_now": diagnosis.why_not_now,
             "next_action": diagnosis.next_action,
             "recommended_command": diagnosis.recommended_command,
@@ -4089,7 +4327,11 @@ async fn run_taskflow_run_graph_diagnose(
         Ok(store) => match build_run_graph_diagnosis(&store, run_id).await {
             Ok(diagnosis) => {
                 if as_json {
-                    match build_run_graph_diagnosis_json_payload_for_surface(surface, &diagnosis) {
+                    match build_run_graph_diagnosis_json_payload_for_surface_with_state_root(
+                        surface,
+                        &diagnosis,
+                        Some(state_dir),
+                    ) {
                         Ok(payload) => {
                             crate::print_json_pretty(&payload);
                             ExitCode::SUCCESS
@@ -4102,41 +4344,7 @@ async fn run_taskflow_run_graph_diagnose(
                         }
                     }
                 } else {
-                    print_surface_header(RenderMode::Plain, surface);
-                    print_surface_line(RenderMode::Plain, "run", &diagnosis.run_id);
-                    print_surface_line(
-                        RenderMode::Plain,
-                        "recovery",
-                        &diagnosis.recovery.as_display(),
-                    );
-                    print_surface_line(
-                        RenderMode::Plain,
-                        "projection",
-                        &diagnosis.projection_truth.projection_reason,
-                    );
-                    if !diagnosis.blocker_codes.is_empty() {
-                        print_surface_line(
-                            RenderMode::Plain,
-                            "blocker_codes",
-                            &diagnosis.blocker_codes.join(", "),
-                        );
-                    }
-                    if let Some(summary) = diagnosis
-                        .why_not_now
-                        .as_ref()
-                        .map(|value| value.summary.as_str())
-                    {
-                        print_surface_line(RenderMode::Plain, "why_not_now", summary);
-                    }
-                    if let Some(next_action) = diagnosis.next_action.as_ref() {
-                        print_surface_line(RenderMode::Plain, "next action", &next_action.reason);
-                    }
-                    if let Some(command) = diagnosis.recommended_command.as_deref() {
-                        print_surface_line(RenderMode::Plain, "recommended_command", command);
-                    }
-                    if let Some(surface) = diagnosis.recommended_surface.as_deref() {
-                        print_surface_line(RenderMode::Plain, "recommended_surface", surface);
-                    }
+                    print_run_graph_diagnosis_plain(surface, &diagnosis, Some(state_dir));
                     ExitCode::SUCCESS
                 }
             }
@@ -5065,56 +5273,11 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                     Ok(Some(status)) => {
                         match build_run_graph_diagnosis(&store, &status.run_id).await {
                             Ok(diagnosis) => {
-                                print_surface_header(
-                                    RenderMode::Plain,
+                                print_run_graph_diagnosis_plain(
                                     "vida taskflow run-graph diagnose-latest",
+                                    &diagnosis,
+                                    Some(&state_dir),
                                 );
-                                print_surface_line(RenderMode::Plain, "run", &diagnosis.run_id);
-                                print_surface_line(
-                                    RenderMode::Plain,
-                                    "recovery",
-                                    &diagnosis.recovery.as_display(),
-                                );
-                                print_surface_line(
-                                    RenderMode::Plain,
-                                    "projection",
-                                    &diagnosis.projection_truth.projection_reason,
-                                );
-                                if !diagnosis.blocker_codes.is_empty() {
-                                    print_surface_line(
-                                        RenderMode::Plain,
-                                        "blocker_codes",
-                                        &diagnosis.blocker_codes.join(", "),
-                                    );
-                                }
-                                if let Some(summary) = diagnosis
-                                    .why_not_now
-                                    .as_ref()
-                                    .map(|value| value.summary.as_str())
-                                {
-                                    print_surface_line(RenderMode::Plain, "why_not_now", summary);
-                                }
-                                if let Some(next_action) = diagnosis.next_action.as_ref() {
-                                    print_surface_line(
-                                        RenderMode::Plain,
-                                        "next action",
-                                        &next_action.reason,
-                                    );
-                                }
-                                if let Some(command) = diagnosis.recommended_command.as_deref() {
-                                    print_surface_line(
-                                        RenderMode::Plain,
-                                        "recommended_command",
-                                        command,
-                                    );
-                                }
-                                if let Some(surface) = diagnosis.recommended_surface.as_deref() {
-                                    print_surface_line(
-                                        RenderMode::Plain,
-                                        "recommended_surface",
-                                        surface,
-                                    );
-                                }
                                 ExitCode::SUCCESS
                             }
                             Err(error) => {
@@ -5266,7 +5429,11 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                     Ok(Some(status)) => {
                         match build_run_graph_diagnosis(&store, &status.run_id).await {
                             Ok(diagnosis) => {
-                                match build_run_graph_diagnosis_json_payload(&diagnosis) {
+                                match build_run_graph_diagnosis_json_payload_for_surface_with_state_root(
+                                    "vida taskflow run-graph diagnose-latest",
+                                    &diagnosis,
+                                    Some(&state_dir),
+                                ) {
                                     Ok(payload) => {
                                         println!(
                                             "{}",
@@ -5411,48 +5578,14 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         }
         [head, subcommand, run_id] if head == "run-graph" && subcommand == "diagnose" => {
             let state_dir = proxy_state_dir();
-            match StateStore::open_existing_read_only(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => match build_run_graph_diagnosis(&store, run_id).await {
                     Ok(diagnosis) => {
-                        print_surface_header(RenderMode::Plain, "vida taskflow run-graph diagnose");
-                        print_surface_line(RenderMode::Plain, "run", &diagnosis.run_id);
-                        print_surface_line(
-                            RenderMode::Plain,
-                            "recovery",
-                            &diagnosis.recovery.as_display(),
+                        print_run_graph_diagnosis_plain(
+                            "vida taskflow run-graph diagnose",
+                            &diagnosis,
+                            Some(&state_dir),
                         );
-                        print_surface_line(
-                            RenderMode::Plain,
-                            "projection",
-                            &diagnosis.projection_truth.projection_reason,
-                        );
-                        if !diagnosis.blocker_codes.is_empty() {
-                            print_surface_line(
-                                RenderMode::Plain,
-                                "blocker_codes",
-                                &diagnosis.blocker_codes.join(", "),
-                            );
-                        }
-                        if let Some(summary) = diagnosis
-                            .why_not_now
-                            .as_ref()
-                            .map(|value| value.summary.as_str())
-                        {
-                            print_surface_line(RenderMode::Plain, "why_not_now", summary);
-                        }
-                        if let Some(next_action) = diagnosis.next_action.as_ref() {
-                            print_surface_line(
-                                RenderMode::Plain,
-                                "next action",
-                                &next_action.reason,
-                            );
-                        }
-                        if let Some(command) = diagnosis.recommended_command.as_deref() {
-                            print_surface_line(RenderMode::Plain, "recommended_command", command);
-                        }
-                        if let Some(surface) = diagnosis.recommended_surface.as_deref() {
-                            print_surface_line(RenderMode::Plain, "recommended_surface", surface);
-                        }
                         ExitCode::SUCCESS
                     }
                     Err(error) => {
@@ -5530,12 +5663,13 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
             if head == "run-graph" && subcommand == "diagnose" && flag == "--json" =>
         {
             let state_dir = proxy_state_dir();
-            match StateStore::open_existing_read_only(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => match build_run_graph_diagnosis(&store, run_id).await {
                     Ok(diagnosis) => {
-                        match build_run_graph_diagnosis_json_payload_for_surface(
+                        match build_run_graph_diagnosis_json_payload_for_surface_with_state_root(
                             "vida taskflow run-graph diagnose",
                             &diagnosis,
+                            Some(&state_dir),
                         ) {
                             Ok(payload) => {
                                 println!(

@@ -11396,8 +11396,19 @@ fn run_graph_diagnose_json_surfaces_are_public_cli_covered() {
         diagnose["recovery"].is_object(),
         "diagnose must expose recovery summary: {diagnose}"
     );
+    assert_run_graph_active_repair_summary(&diagnose, "diagnose-run");
     assert_eq!(diagnose["operator_contracts"]["status"], diagnose["status"]);
     assert_eq!(diagnose["shared_fields"]["status"], diagnose["status"]);
+
+    let diagnose_plain = run_and_assert_success(
+        &["taskflow", "run-graph", "diagnose", "diagnose-run"],
+        &state_dir,
+    );
+    assert_run_graph_diagnose_active_repair_plain(
+        &diagnose_plain,
+        "vida taskflow run-graph diagnose",
+        "diagnose-run",
+    );
 
     let latest = run_command_json(
         &["taskflow", "run-graph", "diagnose-latest", "--json"],
@@ -11410,8 +11421,81 @@ fn run_graph_diagnose_json_surfaces_are_public_cli_covered() {
     assert_eq!(latest["shared_fields"]["status"], latest["status"]);
     assert_eq!(latest["projection_truth"], diagnose["projection_truth"]);
     assert_eq!(latest["recovery"], diagnose["recovery"]);
+    assert_eq!(
+        latest["active_repair_summary"],
+        diagnose["active_repair_summary"]
+    );
+
+    let latest_plain =
+        run_and_assert_success(&["taskflow", "run-graph", "diagnose-latest"], &state_dir);
+    assert_run_graph_diagnose_active_repair_plain(
+        &latest_plain,
+        "vida taskflow run-graph diagnose-latest",
+        "diagnose-run",
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
+}
+
+fn assert_run_graph_active_repair_summary(payload: &Value, run_id: &str) {
+    let summary = &payload["active_repair_summary"];
+    assert!(
+        summary.is_object(),
+        "diagnose must expose active_repair_summary object: {payload}"
+    );
+    assert_eq!(summary["run_id"], run_id);
+    assert_eq!(summary["task_id"], run_id);
+    assert_eq!(summary["active_node"], "implementation");
+    assert_eq!(summary["lifecycle_stage"], "initialized");
+    assert_eq!(summary["resume_target"], "none");
+    assert_eq!(summary["policy_gate"], "not_required");
+    assert_eq!(summary["recovery_ready"], false);
+    assert_eq!(summary["blocker_codes"], serde_json::json!([]));
+    assert_eq!(summary["downstream_dispatch_ready"], false);
+    assert_eq!(
+        summary["validated_next_command"],
+        format!("vida taskflow run-graph status {run_id}")
+    );
+    assert_eq!(
+        summary["recommended_surface"],
+        "vida taskflow run-graph status"
+    );
+    assert_eq!(summary["projection_vs_receipt_parity"], "no_receipt");
+}
+
+fn assert_run_graph_diagnose_active_repair_plain(output: &str, surface: &str, run_id: &str) {
+    assert!(
+        output.starts_with(&format!("{surface}\n")),
+        "default diagnose output must start with compact surface line: {output}"
+    );
+    assert!(
+        output.contains(&format!("run: {run_id}\n")),
+        "default diagnose output must expose run id: {output}"
+    );
+    assert!(
+        output.contains(&format!(
+            "active_repair: run={run_id} task={run_id} active_node=implementation lifecycle=initialized"
+        )),
+        "default diagnose output must expose compact active repair run/task/node evidence: {output}"
+    );
+    assert!(
+        output.contains("blockers=none downstream_ready=false"),
+        "default diagnose output must expose compact blocker/downstream state: {output}"
+    );
+    assert!(
+        output.contains(&format!("next=vida taskflow run-graph status {run_id}")),
+        "default diagnose output must expose validated next command: {output}"
+    );
+    assert!(
+        output.contains(
+            "artifacts: dispatch_packet=none dispatch_result=none downstream_packet=none downstream_result=none host_bridge_request=none result_allowed_next_node=none"
+        ),
+        "default diagnose output must expose compact artifact evidence: {output}"
+    );
+    assert!(
+        !output.trim_start().starts_with('{'),
+        "default diagnose output must stay compact/plain, not JSON: {output}"
+    );
 }
 
 #[test]
