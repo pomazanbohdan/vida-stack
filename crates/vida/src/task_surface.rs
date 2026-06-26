@@ -7747,6 +7747,39 @@ fn continuation_binding_is_closed_downstream_marker(
         && task_status_for_binding(tasks, binding).is_some_and(|status| status == "closed")
 }
 
+fn continuation_binding_is_retired_terminal_closure_marker(
+    tasks: &[state_store::TaskRecord],
+    binding: &state_store::RunGraphContinuationBinding,
+    status: Option<&state_store::RunGraphStatus>,
+) -> bool {
+    continuation_binding_requires_open_task(binding)
+        && binding.binding_source == "consume_continue_after_downstream_chain"
+        && binding
+            .active_bounded_unit
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            == Some("run_graph_task")
+        && task_status_for_binding(tasks, binding).is_some_and(|status| status == "closed")
+        && status.is_some_and(|status| {
+            status.run_id == binding.run_id
+                && status.task_id == binding.task_id
+                && status.active_node == "closure"
+                && status.next_node.is_none()
+                && status.status == "completed"
+                && status.lifecycle_stage == "closure_complete"
+                && matches!(
+                    status.policy_gate.as_str(),
+                    "historical_closed_task_stale_run_retired"
+                        | "closed_task_stale_run_retired"
+                        | "not_required"
+                )
+                && status.handoff_state == "none"
+                && status.context_state == "sealed"
+                && status.resume_target == "none"
+                && !status.recovery_ready
+        })
+}
+
 fn task_exists_for_binding(
     tasks: &[state_store::TaskRecord],
     binding: &state_store::RunGraphContinuationBinding,
@@ -11318,6 +11351,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                    let runtime_binding_status = match runtime_binding {
+                        Some(binding) => store.run_graph_status(&binding.run_id).await.ok(),
+                        None => None,
+                    };
                     let runtime_binding_task_missing_in_explicit_scope = command.scope.is_some()
                         && runtime_binding
                             .map(|binding| !task_exists_for_binding(&tasks, binding))
@@ -11327,8 +11364,18 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             continuation_binding_is_closed_downstream_marker(&tasks, binding)
                         })
                         .unwrap_or(false);
+                    let runtime_binding_is_retired_terminal_closure_marker = runtime_binding
+                        .map(|binding| {
+                            continuation_binding_is_retired_terminal_closure_marker(
+                                &tasks,
+                                binding,
+                                runtime_binding_status.as_ref(),
+                            )
+                        })
+                        .unwrap_or(false);
                     let scoped_runtime_binding = if runtime_binding_task_missing_in_explicit_scope
                         || runtime_binding_is_closed_downstream_marker
+                        || runtime_binding_is_retired_terminal_closure_marker
                     {
                         None
                     } else {
