@@ -2963,6 +2963,9 @@ impl StateStore {
             planner_metadata,
         } = request;
         let mut task = self.show_task(task_id).await?;
+        let base_task_for_update = task.clone();
+        let base_updated_at = task.updated_at.clone();
+        let explicit_notes_replacement = notes.is_some();
         let mut status_update_requested = false;
         if let Some(title) = title {
             let trimmed = title.trim();
@@ -3225,7 +3228,17 @@ impl StateStore {
         for parent in &reopened_parents {
             self.persist_task_record(parent.clone()).await?;
         }
-        self.persist_task_record(task.clone()).await?;
+        let task = if status_update_requested || explicit_notes_replacement {
+            self.persist_task_record(task.clone()).await?;
+            task
+        } else {
+            self.persist_task_update_record_preserving_latest_notes(
+                task,
+                base_updated_at,
+                &base_task_for_update,
+            )
+            .await?
+        };
         for parent in &closed_parents {
             self.persist_task_record(parent.clone()).await?;
             self.refresh_run_graph_continuation_after_task_close(&parent.id)
@@ -3236,6 +3249,93 @@ impl StateStore {
                 .await?;
         }
         Ok(task)
+    }
+
+    fn task_records_match_except_notes_and_updated_at(
+        left: &TaskRecord,
+        right: &TaskRecord,
+    ) -> bool {
+        let mut left = left.clone();
+        let mut right = right.clone();
+        left.notes = None;
+        right.notes = None;
+        left.updated_at.clear();
+        right.updated_at.clear();
+        left == right
+    }
+
+    async fn persist_task_record_if_updated_at_matches(
+        &self,
+        task: &TaskRecord,
+        expected_updated_at: &str,
+    ) -> Result<Option<TaskRecord>, StateStoreError> {
+        let task_id = task.id.clone();
+        let row = TaskStorageRow::from(task.clone());
+        let mut query = self
+            .db
+            .query(
+                "UPDATE task
+                 CONTENT $row
+                 WHERE task_id = $task_id AND updated_at = $expected_updated_at
+                 RETURN AFTER;",
+            )
+            .bind(("row", row))
+            .bind(("task_id", task_id.clone()))
+            .bind(("expected_updated_at", expected_updated_at.to_string()))
+            .await?;
+        let rows: Vec<TaskStorageRowStored> = query.take(0)?;
+        let Some(row) = rows.into_iter().next() else {
+            return Ok(None);
+        };
+        let task = TaskRecord::from(Self::normalize_stored_task_row(row));
+        self.replace_task_dependency_rows(&task_id, &task.dependencies)
+            .await?;
+        Self::touch_task_snapshot_state_marker(self.root());
+        Ok(Some(task))
+    }
+
+    async fn persist_task_update_record_preserving_latest_notes(
+        &self,
+        mut task: TaskRecord,
+        mut expected_updated_at: String,
+        base_task_for_update: &TaskRecord,
+    ) -> Result<TaskRecord, StateStoreError> {
+        for _ in 0..16 {
+            if let Some(persisted) = self
+                .persist_task_record_if_updated_at_matches(&task, &expected_updated_at)
+                .await?
+            {
+                return Ok(persisted);
+            }
+            let latest = self.show_task(&task.id).await?;
+            if !Self::task_records_match_except_notes_and_updated_at(&latest, base_task_for_update)
+            {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "task `{}` changed during update; retry metadata update from latest authoritative row",
+                        task.id
+                    ),
+                });
+            }
+            expected_updated_at = latest.updated_at.clone();
+            task.notes = latest.notes.clone();
+            task.updated_at = unix_timestamp_nanos().to_string();
+            if task.updated_at <= expected_updated_at {
+                task.updated_at = expected_updated_at
+                    .parse::<u128>()
+                    .ok()
+                    .and_then(|value| value.checked_add(1))
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| format!("{expected_updated_at}-update"));
+            }
+        }
+
+        Err(StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "task `{}` metadata update could not commit after concurrent note append retries",
+                task.id
+            ),
+        })
     }
 
     pub async fn reparent_children(
@@ -4243,6 +4343,175 @@ mod tests {
             .expect("normalized epic kind should be parent optional");
 
         assert_eq!(task.issue_type, "Epic");
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn append_task_notes_then_update_metadata_preserves_notes() {
+        let root = unique_task_store_temp_root("vida-note-update-preserves-notes");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "parent-epic",
+                title: "Parent epic",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "metadata-task",
+                title: "Metadata task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("parent-epic"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create child");
+
+        store
+            .append_task_notes("metadata-task", "", "initial note")
+            .await
+            .expect("append initial notes");
+        store
+            .append_task_notes("metadata-task", "\n\n", "appended evidence")
+            .await
+            .expect("append notes");
+        let mut planner_metadata = TaskPlannerMetadata::default();
+        planner_metadata.owned_paths =
+            vec!["crates/vida/src/state_store_task_store.rs".to_string()];
+        let updated = store
+            .update_task(UpdateTaskRequest {
+                task_id: "metadata-task",
+                title: None,
+                status: None,
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: Some(planner_metadata),
+            })
+            .await
+            .expect("metadata update should preserve notes");
+
+        assert_eq!(
+            updated.notes.as_deref(),
+            Some("initial note\n\nappended evidence")
+        );
+        assert_eq!(
+            updated.planner_metadata.owned_paths,
+            vec!["crates/vida/src/state_store_task_store.rs".to_string()]
+        );
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn stale_metadata_update_merges_append_only_notes_before_persist() {
+        let root = unique_task_store_temp_root("vida-stale-note-update-preserves-notes");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "parent-epic",
+                title: "Parent epic",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "stale-metadata-task",
+                title: "Stale metadata task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("parent-epic"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create child");
+
+        store
+            .append_task_notes("stale-metadata-task", "", "initial note")
+            .await
+            .expect("append initial notes");
+        let base_task = store
+            .show_task("stale-metadata-task")
+            .await
+            .expect("read base task");
+        let base_updated_at = base_task.updated_at.clone();
+        let mut stale_update = base_task.clone();
+        stale_update.planner_metadata.owned_paths =
+            vec!["crates/vida/src/state_store_task_store.rs".to_string()];
+        stale_update.updated_at = base_updated_at
+            .parse::<u128>()
+            .ok()
+            .and_then(|value| value.checked_add(1))
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| format!("{base_updated_at}-update"));
+
+        store
+            .append_task_notes("stale-metadata-task", "\n\n", "late appended evidence")
+            .await
+            .expect("append notes after stale update read");
+        let persisted = store
+            .persist_task_update_record_preserving_latest_notes(
+                stale_update,
+                base_updated_at,
+                &base_task,
+            )
+            .await
+            .expect("stale metadata update should merge latest notes");
+
+        assert_eq!(
+            persisted.notes.as_deref(),
+            Some("initial note\n\nlate appended evidence")
+        );
+        assert_eq!(
+            persisted.planner_metadata.owned_paths,
+            vec!["crates/vida/src/state_store_task_store.rs".to_string()]
+        );
         close_store_and_remove_root(store, root).await;
     }
 
