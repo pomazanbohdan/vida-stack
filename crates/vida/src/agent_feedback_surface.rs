@@ -787,12 +787,9 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "committed",
         "pushed",
         "regression",
-        "cleared",
         "proofs:",
         "proof:",
         "proof commands passed",
-        "folded in",
-        "folded into",
         "reported",
         "reports",
         "not a pr-specific blocker",
@@ -822,6 +819,10 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "vida task next",
     ];
 
+    let resolved_meta_keywords = ["cleared", "folded in", "folded into"];
+    let full_reason_normalized = reason.to_ascii_lowercase();
+    let full_reason_has_proof_or_success = has_proof_or_success_context(&full_reason_normalized);
+
     reason
         .split(['.', ';'])
         .filter_map(|segment| {
@@ -838,7 +839,12 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
                 .any(|keyword| normalized.starts_with(&format!("{keyword}:")));
             let has_meta_keyword = meta_keywords
                 .iter()
-                .any(|keyword| normalized.contains(keyword));
+                .any(|keyword| normalized.contains(keyword))
+                || (full_reason_has_proof_or_success
+                    && !has_unresolved_failure_artifact_context(&normalized)
+                    && resolved_meta_keywords
+                        .iter()
+                        .any(|keyword| normalized.contains(keyword)));
             if has_blocker_keyword
                 && has_meta_keyword
                 && !starts_with_blocked_status
@@ -2003,6 +2009,23 @@ mod tests {
         assert!(ignored
             .iter()
             .any(|phrase| phrase == "implemented verifier blocker summary gate with tests"));
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_unproven_resolved_meta_blockers() {
+        for reason in [
+            "Security blocker cleared: missing verifier review",
+            "Current blocker folded into follow-up: missing approval",
+        ] {
+            assert_eq!(
+                super::canonical_close_status_from_reason(reason),
+                Some(("blocked", "blocked"))
+            );
+            assert!(
+                super::ignored_canonical_close_meta_language(reason).is_empty(),
+                "unproven resolved-meta blocker reason must not be ignored: {reason}"
+            );
+        }
     }
 
     #[test]
