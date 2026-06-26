@@ -10,9 +10,6 @@ pub(crate) struct ExternalProviderHealthInput<'a> {
     pub(crate) cooldown_until: Option<&'a str>,
 }
 
-const DISPATCH_RESULT_HEALTH_SCAN_ENTRY_LIMIT: usize = 64;
-const DISPATCH_RESULT_HEALTH_SCAN_FILE_LIMIT_BYTES: u64 = 256 * 1024;
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ExternalHealthCircuitBreakerConfig {
     pub(crate) consecutive_failure_limit: u64,
@@ -171,26 +168,10 @@ pub(crate) fn latest_dispatch_result_health_for_backend(
         .join("state")
         .join("runtime-consumption")
         .join("dispatch-results");
-    let mut entries = newest_dispatch_result_entries(
-        &dispatch_results_dir,
-        DISPATCH_RESULT_HEALTH_SCAN_ENTRY_LIMIT,
-        DISPATCH_RESULT_HEALTH_SCAN_FILE_LIMIT_BYTES,
-    )?;
-    entries.sort_by(|left, right| right.0.cmp(&left.0));
+    let mut matching_results = matching_dispatch_result_entries(&dispatch_results_dir, backend_id)?;
+    matching_results.sort_by(|left, right| right.0.cmp(&left.0));
 
-    for (_modified, path) in entries {
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        if !text.contains(backend_id) {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
-        };
-        if !dispatch_result_matches_backend(&value, backend_id) {
-            continue;
-        }
+    for (_modified, value) in matching_results {
         if dispatch_result_is_success(&value) {
             return None;
         }
@@ -220,12 +201,11 @@ pub(crate) fn latest_dispatch_result_health_for_backend(
     None
 }
 
-fn newest_dispatch_result_entries(
+fn matching_dispatch_result_entries(
     dispatch_results_dir: &std::path::Path,
-    limit: usize,
-    max_file_size_bytes: u64,
-) -> Option<Vec<(std::time::SystemTime, std::path::PathBuf)>> {
-    let mut newest = std::collections::BinaryHeap::new();
+    backend_id: &str,
+) -> Option<Vec<(std::time::SystemTime, serde_json::Value)>> {
+    let mut matching_results = Vec::new();
     for entry in std::fs::read_dir(dispatch_results_dir)
         .ok()?
         .filter_map(Result::ok)
@@ -233,23 +213,27 @@ fn newest_dispatch_result_entries(
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
-        if !metadata.is_file() || metadata.len() > max_file_size_bytes {
+        if !metadata.is_file() {
             continue;
         }
         let Ok(modified) = metadata.modified() else {
             continue;
         };
-        newest.push(std::cmp::Reverse((modified, entry.path())));
-        if newest.len() > limit {
-            newest.pop();
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        if !text.contains(backend_id) {
+            continue;
         }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        if !dispatch_result_matches_backend(&value, backend_id) {
+            continue;
+        }
+        matching_results.push((modified, value));
     }
-    Some(
-        newest
-            .into_iter()
-            .map(|std::cmp::Reverse(entry)| entry)
-            .collect(),
-    )
+    Some(matching_results)
 }
 
 fn normalized_error_class(latest_error_class: Option<&str>) -> Option<&'static str> {
@@ -449,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn latest_dispatch_result_health_caps_unrelated_newer_results_before_backend_match() {
+    fn latest_dispatch_result_health_matches_backend_before_capping_unrelated_newer_results() {
         let root = std::env::temp_dir().join(format!(
             "vida-provider-health-dispatch-scan-{}-{}",
             std::process::id(),
@@ -493,15 +477,18 @@ mod tests {
             .expect("unrelated dispatch result");
         }
 
-        let health = latest_dispatch_result_health_for_backend(&root, "vibe_cli", "vibe");
+        let health = latest_dispatch_result_health_for_backend(&root, "vibe_cli", "vibe")
+            .expect("older matching auth result should remain visible");
 
-        assert_eq!(health, None);
+        assert_eq!(health.status, "blocked");
+        assert_eq!(health.latest_error_class.as_deref(), Some("auth_error"));
+        assert_eq!(health.blocker_codes, vec!["provider_auth_failed"]);
 
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn latest_dispatch_result_health_skips_oversized_backend_results() {
+    fn latest_dispatch_result_health_reads_oversized_backend_results() {
         let root = std::env::temp_dir().join(format!(
             "vida-provider-health-dispatch-oversized-{}-{}",
             std::process::id(),
@@ -525,7 +512,7 @@ mod tests {
               "provider_error": "Error: Invalid API key. {}",
               "recorded_at": "2026-06-25T14:00:00Z"
             }}"#,
-            "x".repeat(DISPATCH_RESULT_HEALTH_SCAN_FILE_LIMIT_BYTES as usize)
+            "x".repeat((256 * 1024) as usize)
         );
         std::fs::write(
             dispatch_dir.join("oversized-vibe-auth.json"),
@@ -533,9 +520,12 @@ mod tests {
         )
         .expect("oversized vibe dispatch result");
 
-        let health = latest_dispatch_result_health_for_backend(&root, "vibe_cli", "vibe");
+        let health = latest_dispatch_result_health_for_backend(&root, "vibe_cli", "vibe")
+            .expect("oversized matching auth result should remain visible");
 
-        assert_eq!(health, None);
+        assert_eq!(health.status, "blocked");
+        assert_eq!(health.latest_error_class.as_deref(), Some("auth_error"));
+        assert_eq!(health.blocker_codes, vec!["provider_auth_failed"]);
 
         let _ = std::fs::remove_dir_all(root);
     }
