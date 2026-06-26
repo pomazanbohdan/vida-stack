@@ -241,6 +241,12 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "blocker flag",
             "blocked flag",
             "blocked field",
+            "blocked evidence",
+            "blocked validator evidence",
+            "blocked wording",
+            "blocked diagnostic wording",
+            "blocker wording",
+            "blocker diagnostic wording",
             "continuation blockers remain separate",
             "continuation blockers remain",
             "continuation blocker remains",
@@ -1510,6 +1516,28 @@ mod tests {
         assert_eq!(outcome, "failure");
         assert_eq!(score, 35);
         assert_eq!(inference["failure_markers"], serde_json::json!(["blocked"]));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_diagnostic_blocked_wording_context() {
+        let reason = "Closed step with prior BLOCKED validator evidence resolved by the final patch; focused task close feedback proof passed.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "architecture");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 90);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert_eq!(
+            inference["success_markers"],
+            serde_json::json!(["proof passed"])
+        );
+        let ignored = inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render");
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocked validator evidence"));
     }
 
     #[test]
