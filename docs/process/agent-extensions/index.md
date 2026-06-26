@@ -21,8 +21,12 @@ Purpose: provide the project-owned bridge/export map for custom roles, custom sk
 3. `docs/process/agent-extensions/profiles.yaml`
    - source/export bridge for project profiles that bind roles and skills
 4. `docs/process/agent-extensions/flows.yaml`
-   - source/export bridge for project custom flow sets, role chains, ordered lane templates, command templates, lifecycle hook templates, proof gates, and host-agent adapter projection hints
-5. `docs/process/agent-extensions/dispatch-aliases.yaml`
+   - source/export bridge for project custom flow sets, role chains, ordered lane templates, lifecycle hook templates, proof gates, and host-agent adapter projection hints
+5. `docs/process/agent-extensions/packs.yaml`
+   - source/export bridge for project role-pack definitions, ordered pack steps, flow refs, command refs, and terminal proof targets
+6. `docs/process/agent-extensions/commands.yaml`
+   - source/export bridge for reusable agent command templates referenced by packs and flows
+7. `docs/process/agent-extensions/dispatch-aliases.yaml`
    - source/export bridge for runtime dispatch aliases that bind flow lanes to runtime roles and carrier preferences without hardcoding them in Rust
 
 ## Active Runtime Projection Family
@@ -32,8 +36,10 @@ Purpose: provide the project-owned bridge/export map for custom roles, custom sk
 3. `.vida/project/agent-extensions/skills.yaml`
 4. `.vida/project/agent-extensions/profiles.yaml`
 5. `.vida/project/agent-extensions/flows.yaml`
-6. `.vida/project/agent-extensions/dispatch-aliases.yaml`
-7. matching `.vida/project/agent-extensions/*.sidecar.yaml`
+6. `.vida/project/agent-extensions/packs.yaml`
+7. `.vida/project/agent-extensions/commands.yaml`
+8. `.vida/project/agent-extensions/dispatch-aliases.yaml`
+9. matching `.vida/project/agent-extensions/*.sidecar.yaml`
 
 Runtime rule:
 

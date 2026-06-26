@@ -28,6 +28,7 @@ const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get --json
 const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route <route> --expect <text> --json\n\nBrowser proof options:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output";
 const SESSION_AFTER_HELP: &str = "Session operations:\n  vida session triage\n  vida session triage --task <task-id>\n  vida session triage --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const QUALITY_AFTER_HELP: &str = "Quality operations:\n  vida quality gate --prepush\n  vida quality gate --prepush --advise\n  vida quality gate --prepush --json --advise\n\nOptions:\n  --prepush                        Evaluate the pre-push quality gate advisor\n  --advise                         Include remediation guidance\n  --coverage-file <path>           Read LCOV coverage evidence from this file\n  --coverage-threshold <percent>   Coverage threshold used for covered-line deficit math\n  --project-root <path>            Repository root used for git dirty/changed file evidence\n  --json                           Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
+const PACK_AFTER_HELP: &str = "Pack operations:\n  vida pack list\n  vida pack list --json\n  vida pack show spec-four-pack\n  vida pack show spec-four-pack --json\n  vida pack validate\n  vida pack validate --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive --reinit\n  vida state reset --archive --reinit --json\n  vida state reset --archive --reinit --state-dir <path> --json\n\nOptions:\n  --archive             Rename the current state root to a timestamped sibling archive before reset\n  --reinit              Recreate the authoritative state spine after archive\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output\n\nOutput:\n  Default output is compact plain text for operators.\n  Use --json for machine-readable automation.";
 const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
 const AGENT_INIT_AFTER_HELP: &str = "Agent init operations:\n  vida agent-init\n  vida agent-init --dispatch-packet <packet-path> --execute-dispatch\n  vida agent-init --auto-dispatch-packet --execute-dispatch\n\nOutput:\n  Default blocked output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload or full blocked evidence is required.";
@@ -205,6 +206,11 @@ pub(crate) enum Command {
         after_help = QUALITY_AFTER_HELP
     )]
     Quality(QualityArgs),
+    #[command(
+        about = "inspect and validate active project role packs",
+        after_help = PACK_AFTER_HELP
+    )]
+    Pack(PackArgs),
     #[command(about = "thin root alias to the TaskFlow consume family")]
     Consume(ProxyArgs),
     #[command(about = "inspect or mutate canonical lane/takeover operator state")]
@@ -342,6 +348,43 @@ pub(crate) struct QualityGateArgs {
         long = "json",
         help = "Emit machine-readable JSON output instead of default compact TOON"
     )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct PackArgs {
+    #[command(subcommand)]
+    pub(crate) command: PackCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum PackCommand {
+    #[command(about = "list active project role packs")]
+    List(PackListArgs),
+    #[command(about = "show one active project role pack")]
+    Show(PackShowArgs),
+    #[command(about = "validate active project role packs")]
+    Validate(PackValidateArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct PackListArgs {
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct PackShowArgs {
+    pub(crate) pack_id: String,
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct PackValidateArgs {
+    pub(crate) pack_id: Option<String>,
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
 

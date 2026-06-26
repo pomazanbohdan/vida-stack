@@ -139,7 +139,13 @@ mod tests {
         let root = TempStateHarness::new().expect("temp state harness");
         std::fs::write(
             root.path().join("vida.config.yaml"),
-            "agent_extensions:\n  registries:\n    packs: packs.yaml\n",
+            concat!(
+                "agent_extensions:\n",
+                "  registries:\n",
+                "    packs: packs.yaml\n",
+                "    flows: flows.yaml\n",
+                "    commands: commands.yaml\n",
+            ),
         )
         .expect("config");
         std::fs::write(
@@ -148,19 +154,30 @@ mod tests {
                 "version: 1\n",
                 "packs:\n",
                 "  - pack_id: quick-two-pack\n",
-                "    aliases: [quick_two_pack]\n",
-                "    flow_id: quick_two_pack_flow\n",
+                "    flow_id: quick-two-pack-flow\n",
                 "    enabled: true\n",
                 "    ordered_steps:\n",
                 "      - role_id: coder\n",
+                "        command_ref: agent-init-worker\n",
                 "      - role_id: cleaner\n",
-                "        proof_target: agent:quick_two_pack:cleaner\n",
+                "        command_ref: agent-init-worker\n",
+                "        proof_target: agent:quick-two-pack:cleaner\n",
             ),
         )
         .expect("packs");
+        std::fs::write(
+            root.path().join("flows.yaml"),
+            "version: 1\nflow_sets:\n  - flow_id: quick-two-pack-flow\n",
+        )
+        .expect("flows");
+        std::fs::write(
+            root.path().join("commands.yaml"),
+            "version: 1\ncommands:\n  - command_id: agent-init-worker\n",
+        )
+        .expect("commands");
         let _cwd = guard_current_dir(root.path());
 
-        let payload = pack_payload(Some("quick_two_pack")).expect("payload");
+        let payload = pack_payload(Some("quick-two-pack")).expect("payload");
 
         assert_eq!(payload["status"], "ready");
         assert_eq!(payload["packs"][0]["pack_id"], "quick-two-pack");
@@ -176,10 +193,26 @@ mod tests {
         let root = TempStateHarness::new().expect("temp state harness");
         std::fs::write(
             root.path().join("vida.config.yaml"),
-            "agent_extensions:\n  registries:\n    packs: packs.yaml\n",
+            concat!(
+                "agent_extensions:\n",
+                "  registries:\n",
+                "    packs: packs.yaml\n",
+                "    flows: flows.yaml\n",
+                "    commands: commands.yaml\n",
+            ),
         )
         .expect("config");
         std::fs::write(root.path().join("packs.yaml"), "version: 1\npacks: []\n").expect("packs");
+        std::fs::write(
+            root.path().join("flows.yaml"),
+            "version: 1\nflow_sets: []\n",
+        )
+        .expect("flows");
+        std::fs::write(
+            root.path().join("commands.yaml"),
+            "version: 1\ncommands: []\n",
+        )
+        .expect("commands");
         let _cwd = guard_current_dir(root.path());
 
         let payload = pack_payload(Some("missing")).expect("payload");

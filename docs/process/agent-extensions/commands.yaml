@@ -1,0 +1,38 @@
+version: 1
+commands:
+  - command_id: agent-init-business-analyst
+    surface: vida agent-init
+    args: --role business_analyst {{task_id}} --json
+    description: Dispatch a bounded business analyst or specification lane.
+  - command_id: agent-init-worker
+    surface: vida agent-init
+    args: --role worker {{task_id}} --json
+    description: Dispatch a bounded worker lane.
+  - command_id: agent-init-coach
+    surface: vida agent-init
+    args: --role coach {{task_id}} --json
+    description: Dispatch a bounded coach review or validation lane.
+  - command_id: agent-init-verifier
+    surface: vida agent-init
+    args: --role verifier {{task_id}} --json
+    description: Dispatch a bounded verifier or quality-gate lane.
+  - command_id: agent-init-prover
+    surface: vida agent-init
+    args: --role prover {{task_id}} --json
+    description: Dispatch a bounded proof or release-readiness lane.
+  - command_id: agent-init-solution-architect
+    surface: vida agent-init
+    args: --role solution_architect {{task_id}} --json
+    description: Dispatch a bounded solution architecture lane.
+
+# -----
+# artifact_path: process/agent-extensions/commands
+# artifact_type: process_registry
+# artifact_version: '1'
+# artifact_revision: '2026-06-26'
+# schema_version: '1'
+# status: canonical
+# source_path: docs/process/agent-extensions/commands.yaml
+# created_at: 2026-06-26T00:00:00+03:00
+# updated_at: 2026-06-26T00:00:00+03:00
+# changelog_ref: commands.changelog.jsonl

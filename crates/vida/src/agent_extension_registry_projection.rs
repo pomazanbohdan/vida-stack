@@ -44,6 +44,20 @@ const REGISTRY_PROJECTION_SPECS: &[RegistryProjectionSpec] = &[
         runtime_projection_path: ".vida/project/agent-extensions/flows.yaml",
     },
     RegistryProjectionSpec {
+        label: "pack",
+        config_key: "packs",
+        registry_key: "packs",
+        id_field: "pack_id",
+        runtime_projection_path: ".vida/project/agent-extensions/packs.yaml",
+    },
+    RegistryProjectionSpec {
+        label: "command",
+        config_key: "commands",
+        registry_key: "commands",
+        id_field: "command_id",
+        runtime_projection_path: ".vida/project/agent-extensions/commands.yaml",
+    },
+    RegistryProjectionSpec {
         label: "dispatch alias",
         config_key: "dispatch_aliases",
         registry_key: "dispatch_aliases",
@@ -364,6 +378,8 @@ pub(crate) struct AgentExtensionRegistryProjection {
     pub(crate) skills_registry: serde_yaml::Value,
     pub(crate) profiles_registry: serde_yaml::Value,
     pub(crate) flows_registry: serde_yaml::Value,
+    pub(crate) packs_registry: serde_yaml::Value,
+    pub(crate) commands_registry: serde_yaml::Value,
     pub(crate) dispatch_aliases_registry: serde_yaml::Value,
     pub(crate) enabled_project_roles: Vec<String>,
     pub(crate) enabled_project_skills: Vec<String>,
@@ -423,6 +439,8 @@ pub(crate) fn build_agent_extension_registry_projection(
     let skills_path = registry_paths.skills;
     let profiles_path = registry_paths.profiles;
     let flows_path = registry_paths.flows;
+    let packs_path = registry_paths.packs;
+    let commands_path = registry_paths.commands;
     let dispatch_aliases_path = registry_paths.dispatch_aliases;
     let validation_flags = overlay.validation;
     let validation = AgentExtensionValidationConfig {
@@ -495,6 +513,26 @@ pub(crate) fn build_agent_extension_registry_projection(
         None,
         &mut validation_errors,
     );
+    let packs_registry = load_optional_registry_projection(
+        root,
+        packs_path.as_deref(),
+        "packs",
+        "pack_id",
+        "packs",
+        validation.require_registry_files,
+        None,
+        &mut validation_errors,
+    );
+    let commands_registry = load_optional_registry_projection(
+        root,
+        commands_path.as_deref(),
+        "commands",
+        "command_id",
+        "commands",
+        validation.require_registry_files,
+        None,
+        &mut validation_errors,
+    );
     let enabled_project_roles = crate::effective_enabled_registry_ids(
         config,
         &["agent_extensions", "enabled_project_roles"],
@@ -534,6 +572,8 @@ pub(crate) fn build_agent_extension_registry_projection(
         skills_registry,
         profiles_registry,
         flows_registry,
+        packs_registry,
+        commands_registry,
         dispatch_aliases_registry,
         enabled_project_roles,
         enabled_project_skills,

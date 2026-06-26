@@ -3,11 +3,11 @@ use std::{ffi::OsString, process::ExitCode};
 use super::{
     agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
     docflow_proxy, docs_surface, doctor_surface, init_surfaces, lane_surface, memory_surface,
-    orchestrator_session_surface, print_root_help, project_activator_surface, proof_surface,
-    protocol_surface, quality_surface, release_surface, run_taskflow_proxy, runtime_web_surface,
-    service_client_cli, session_surface, status_surface, task_surface, AgentArgs, AgentCommand,
-    Cli, CoderCommand, Command, ReleaseCommand, SessionArgs, SessionCommand, StateArgs,
-    StateCommand, StateResetArgs, TaskArgs, TaskCommand,
+    orchestrator_session_surface, pack_surface, print_root_help, project_activator_surface,
+    proof_surface, protocol_surface, quality_surface, release_surface, run_taskflow_proxy,
+    runtime_web_surface, service_client_cli, session_surface, status_surface, task_surface,
+    AgentArgs, AgentCommand, Cli, CoderCommand, Command, ReleaseCommand, SessionArgs,
+    SessionCommand, StateArgs, StateCommand, StateResetArgs, TaskArgs, TaskCommand,
 };
 use crate::root_state_binding::{
     bind_runtime_state_dir_for_project_bound_command,
@@ -78,6 +78,7 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         }
         Some(Command::Session(args)) => session_surface::run_session(args).await,
         Some(Command::Quality(args)) => quality_surface::run_quality(args).await,
+        Some(Command::Pack(args)) => pack_surface::run_pack(args).await,
         Some(Command::Consume(args)) => run_legacy_taskflow_root_alias("consume", args).await,
         Some(Command::Lane(args)) => lane_surface::run_lane(args).await,
         Some(Command::Approval(args)) => approval_surface::run_approval(args).await,
@@ -206,6 +207,7 @@ fn command_label(command: &Option<Command>) -> String {
         Some(Command::OrchestratorSession(_)) => "vida orchestrator-session".to_string(),
         Some(Command::Session(_)) => "vida session".to_string(),
         Some(Command::Quality(_)) => "vida quality".to_string(),
+        Some(Command::Pack(_)) => "vida pack".to_string(),
         Some(Command::Consume(_)) => "vida consume".to_string(),
         Some(Command::Lane(_)) => "vida lane".to_string(),
         Some(Command::Approval(_)) => "vida approval".to_string(),
@@ -446,6 +448,7 @@ pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) ->
         }
         Some(
             Command::AgentFeedback(_)
+            | Command::Pack(_)
             | Command::Runtime(_)
             | Command::Proof(_)
             | Command::Service(_)

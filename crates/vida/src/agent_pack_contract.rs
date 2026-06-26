@@ -11,31 +11,12 @@ pub(crate) struct PackRegistryProjection {
 }
 
 pub(crate) fn canonical_dev_team_role_id(role_id: &str) -> String {
-    let trimmed = role_id.trim();
-    let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
-    match normalized.as_str() {
-        "analyst" | "business_analyst" => "specifier".to_string(),
-        "developer" | "worker" | "implementer" => "coder".to_string(),
-        "coach_test_gate" => "reviewer_test_gate".to_string(),
-        "coach_implementation_gate" => "reviewer_implementation_gate".to_string(),
-        "coach_validator" => "reviewer_validator".to_string(),
-        "reviewer" | "adversarial_reviewer" => "adversarial_reviewer".to_string(),
-        "duplication_reviewer" => "cleaner_review_gate".to_string(),
-        "solution_architect" => "architect".to_string(),
-        "hardener" | "hardender" => "hardender".to_string(),
-        "tester" | "verifier" | "qa" | "qa_tester" => "qa_tester".to_string(),
-        "autotester" => "test_author".to_string(),
-        _ => trimmed.to_string(),
-    }
+    role_id.trim().to_string()
 }
 
 pub(crate) fn canonical_role_alias_source(role_id: &str) -> Option<&'static str> {
-    let trimmed = role_id.trim();
-    if trimmed.is_empty() || canonical_dev_team_role_id(trimmed) == trimmed {
-        None
-    } else {
-        Some("agent_pack_role_alias")
-    }
+    let _ = role_id;
+    None
 }
 
 pub(crate) fn known_pack_role(role_id: &str) -> bool {
@@ -175,6 +156,7 @@ pub(crate) fn load_pack_registry_from_overlay(
         };
     };
     let configured_roles = configured_dev_team_canonical_roles(overlay);
+    let registry_refs = registry_refs(root, overlay);
     let mut seen_pack_ids = BTreeSet::new();
     let packs = rows
         .iter()
@@ -185,6 +167,7 @@ pub(crate) fn load_pack_registry_from_overlay(
                 index,
                 &configured_path,
                 &configured_roles,
+                &registry_refs,
                 &mut blocker_codes,
             )?;
             if let Some(pack_id) = pack["pack_id"].as_str() {
@@ -204,7 +187,7 @@ pub(crate) fn load_pack_registry_from_overlay(
 }
 
 pub(crate) fn normalized_pack_lookup_key(pack_id: &str) -> String {
-    pack_id.trim().to_ascii_lowercase().replace('_', "-")
+    pack_id.trim().to_ascii_lowercase()
 }
 
 pub(crate) fn pack_id_matches(pack: &serde_json::Value, requested_pack_id: &str) -> bool {
@@ -215,12 +198,6 @@ pub(crate) fn pack_id_matches(pack: &serde_json::Value, requested_pack_id: &str)
     pack["pack_id"]
         .as_str()
         .is_some_and(|pack_id| normalized_pack_lookup_key(pack_id) == requested)
-        || pack["aliases"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_str)
-            .any(|alias| normalized_pack_lookup_key(alias) == requested)
 }
 
 pub(crate) fn pack_by_id<'a>(
@@ -250,6 +227,7 @@ fn compile_pack_row(
     index: usize,
     configured_path: &str,
     configured_roles: &BTreeSet<String>,
+    registry_refs: &RegistryRefs,
     registry_blockers: &mut Vec<String>,
 ) -> Option<serde_json::Value> {
     let pack_id = crate::yaml_string(crate::yaml_lookup(row, &["pack_id"]))
@@ -265,8 +243,15 @@ fn compile_pack_row(
         .filter(|value| !value.is_empty());
     if flow_id.is_none() {
         blocker_codes.push(format!("missing_pack_flow_id:{pack_id}"));
+    } else if let Some(flow_id) = flow_id.as_deref() {
+        if !registry_refs.flow_ids.contains(flow_id) {
+            blocker_codes.push(format!("unknown_pack_flow_id:{pack_id}:{flow_id}"));
+        }
     }
     let aliases = pack_aliases(row, &pack_id);
+    if !aliases.is_empty() {
+        blocker_codes.push(format!("pack_aliases_not_supported:{pack_id}"));
+    }
     let enabled = crate::yaml_bool(crate::yaml_lookup(row, &["enabled"]), true);
     let terminal_proof_target =
         crate::yaml_string(crate::yaml_lookup(row, &["terminal_proof_target"])).or_else(|| {
@@ -280,6 +265,7 @@ fn compile_pack_row(
         row,
         terminal_proof_target.as_deref(),
         configured_roles,
+        registry_refs,
         &mut blocker_codes,
     );
     if ordered_steps.is_empty() {
@@ -322,12 +308,7 @@ fn compile_pack_row(
 
 fn pack_aliases(row: &serde_yaml::Value, pack_id: &str) -> Vec<String> {
     let mut aliases = crate::yaml_string_list(crate::yaml_lookup(row, &["aliases"]));
-    if pack_id.contains('-') {
-        aliases.push(pack_id.replace('-', "_"));
-    }
-    if pack_id.contains('_') {
-        aliases.push(pack_id.replace('_', "-"));
-    }
+    let _ = pack_id;
     aliases.sort();
     aliases.dedup();
     aliases
@@ -338,6 +319,7 @@ fn compile_pack_steps(
     pack: &serde_yaml::Value,
     pack_terminal_proof_target: Option<&str>,
     configured_roles: &BTreeSet<String>,
+    registry_refs: &RegistryRefs,
     blocker_codes: &mut Vec<String>,
 ) -> Vec<serde_json::Value> {
     let Some(step_rows) =
@@ -358,6 +340,11 @@ fn compile_pack_steps(
                 blocker_codes.push(format!("missing_pack_step_role:{pack_id}:{index}"));
                 return None;
             };
+            if !is_canonical_role_id(&configured_role_id) {
+                blocker_codes.push(format!(
+                    "non_canonical_pack_step_role:{pack_id}:{configured_role_id}"
+                ));
+            }
             let canonical_role_id = canonical_dev_team_role_id(&configured_role_id);
             if !known_pack_role(&canonical_role_id)
                 && !configured_roles.contains(&canonical_role_id)
@@ -435,6 +422,30 @@ fn compile_pack_steps(
                     "missing_pack_step_terminal_proof_target:{pack_id}:{index}"
                 ));
             }
+            let command_ref = crate::yaml_string(crate::yaml_lookup(step, &["command_ref"]))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            match command_ref.as_deref() {
+                Some(command_ref) if !registry_refs.command_ids.contains(command_ref) => {
+                    blocker_codes.push(format!(
+                        "unknown_pack_step_command_ref:{pack_id}:{index}:{command_ref}"
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    blocker_codes.push(format!("missing_pack_step_command_ref:{pack_id}:{index}"));
+                }
+            }
+            let dispatch_alias = crate::yaml_string(crate::yaml_lookup(step, &["dispatch_alias"]))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            if let Some(dispatch_alias) = dispatch_alias.as_deref() {
+                if !registry_refs.dispatch_alias_ids.contains(dispatch_alias) {
+                    blocker_codes.push(format!(
+                        "unknown_pack_step_dispatch_alias:{pack_id}:{index}:{dispatch_alias}"
+                    ));
+                }
+            }
             let role_contract = role_contract_from_yaml(step);
             Some(serde_json::json!({
                 "step_id": crate::yaml_string(crate::yaml_lookup(step, &["step_id"]))
@@ -449,6 +460,7 @@ fn compile_pack_steps(
                 "receive_mode": receive_mode,
                 "worktree_policy": worktree_policy,
                 "proof_target": proof_target,
+                "command_ref": command_ref,
                 "requires_user_approval": crate::yaml_bool(
                     crate::yaml_lookup(step, &["requires_user_approval"]),
                     false,
@@ -456,6 +468,7 @@ fn compile_pack_steps(
                 "approval_policy": yaml_field_json(step, "approval_policy"),
                 "proof_gates": yaml_field_json(step, "proof_gates"),
                 "adapter_projection": yaml_field_json(step, "adapter_projection"),
+                "dispatch_alias": dispatch_alias,
                 "external_refs": yaml_field_json(step, "external_refs"),
                 "quality_profile": yaml_field_json(step, "quality_profile"),
                 "batch_policy": yaml_field_json(step, "batch_policy"),
@@ -501,6 +514,113 @@ fn configured_dev_team_canonical_roles(overlay: &serde_yaml::Value) -> BTreeSet<
         .collect()
 }
 
+struct RegistryRefs {
+    flow_ids: BTreeSet<String>,
+    command_ids: BTreeSet<String>,
+    dispatch_alias_ids: BTreeSet<String>,
+}
+
+fn registry_refs(root: &Path, overlay: &serde_yaml::Value) -> RegistryRefs {
+    RegistryRefs {
+        flow_ids: configured_flow_ids(root, overlay),
+        command_ids: configured_command_ids(root, overlay),
+        dispatch_alias_ids: configured_dispatch_alias_ids(root, overlay),
+    }
+}
+
+fn configured_flow_ids(root: &Path, overlay: &serde_yaml::Value) -> BTreeSet<String> {
+    let mut flow_ids = BTreeSet::new();
+    if let Some(mapping) =
+        crate::yaml_lookup(overlay, &["dev_team", "flows"]).and_then(serde_yaml::Value::as_mapping)
+    {
+        flow_ids.extend(
+            mapping
+                .keys()
+                .filter_map(serde_yaml::Value::as_str)
+                .map(str::to_string),
+        );
+    }
+    if let Some(configured_path) = crate::yaml_string(crate::yaml_lookup(
+        overlay,
+        &["agent_extensions", "registries", "flows"],
+    )) {
+        let source_path =
+            crate::project_activator_surface::resolve_overlay_path(root, &configured_path);
+        if let Ok(registry) = crate::project_activator_surface::read_yaml_file_checked(&source_path)
+        {
+            if let Some(rows) = crate::yaml_lookup(&registry, &["flow_sets"])
+                .and_then(serde_yaml::Value::as_sequence)
+            {
+                flow_ids.extend(rows.iter().filter_map(|row| {
+                    crate::yaml_string(crate::yaml_lookup(row, &["flow_id"]))
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                }));
+            }
+        }
+    }
+    flow_ids
+}
+
+fn configured_command_ids(root: &Path, overlay: &serde_yaml::Value) -> BTreeSet<String> {
+    let Some(configured_path) = crate::yaml_string(crate::yaml_lookup(
+        overlay,
+        &["agent_extensions", "registries", "commands"],
+    )) else {
+        return BTreeSet::new();
+    };
+    let source_path =
+        crate::project_activator_surface::resolve_overlay_path(root, &configured_path);
+    let Ok(registry) = crate::project_activator_surface::read_yaml_file_checked(&source_path)
+    else {
+        return BTreeSet::new();
+    };
+    crate::yaml_lookup(&registry, &["commands"])
+        .and_then(serde_yaml::Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            crate::yaml_string(crate::yaml_lookup(row, &["command_id"]))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .collect()
+}
+
+fn configured_dispatch_alias_ids(root: &Path, overlay: &serde_yaml::Value) -> BTreeSet<String> {
+    let Some(configured_path) = crate::yaml_string(crate::yaml_lookup(
+        overlay,
+        &["agent_extensions", "registries", "dispatch_aliases"],
+    )) else {
+        return BTreeSet::new();
+    };
+    let source_path =
+        crate::project_activator_surface::resolve_overlay_path(root, &configured_path);
+    let Ok(registry) = crate::project_activator_surface::read_yaml_file_checked(&source_path)
+    else {
+        return BTreeSet::new();
+    };
+    crate::yaml_lookup(&registry, &["dispatch_aliases"])
+        .and_then(serde_yaml::Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            crate::yaml_string(crate::yaml_lookup(row, &["alias_id"]))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .collect()
+}
+
+fn is_canonical_role_id(role_id: &str) -> bool {
+    let trimmed = role_id.trim();
+    !trimmed.is_empty()
+        && trimmed == role_id
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+}
+
 fn yaml_field_json(value: &serde_yaml::Value, key: &str) -> serde_json::Value {
     crate::yaml_lookup(value, &[key])
         .and_then(|entry| serde_json::to_value(entry).ok())
@@ -530,21 +650,12 @@ mod tests {
     use crate::temp_state::TempStateHarness;
 
     #[test]
-    fn role_aliases_normalize_to_new_canonical_ids() {
-        assert_eq!(canonical_dev_team_role_id("analyst"), "specifier");
-        assert_eq!(canonical_dev_team_role_id("developer"), "coder");
-        assert_eq!(
-            canonical_dev_team_role_id("coach_implementation_gate"),
-            "reviewer_implementation_gate"
-        );
-        assert_eq!(canonical_dev_team_role_id("tester"), "qa_tester");
-        assert_eq!(canonical_dev_team_role_id("qa"), "qa_tester");
-        assert_eq!(canonical_dev_team_role_id("hardener"), "hardender");
-        assert_eq!(
-            canonical_dev_team_role_id("reviewer"),
-            "adversarial_reviewer"
-        );
-        assert_eq!(canonical_dev_team_role_id("prover"), "prover");
+    fn dev_team_role_ids_are_strict_and_do_not_alias() {
+        assert_eq!(canonical_dev_team_role_id("specifier"), "specifier");
+        assert_eq!(canonical_dev_team_role_id("coder"), "coder");
+        assert_eq!(canonical_dev_team_role_id("analyst"), "analyst");
+        assert_eq!(canonical_dev_team_role_id("developer"), "developer");
+        assert_eq!(canonical_role_alias_source("developer"), None);
     }
 
     #[test]
@@ -568,11 +679,24 @@ mod tests {
                 "    ordered_steps:\n",
                 "      - role_id: coder\n",
                 "        task_class: implementation\n",
+                "        command_ref: agent-init-worker\n",
             ),
         )
         .expect("pack registry should write");
+        std::fs::write(
+            root.path().join("flows.yaml"),
+            "version: 1\nflow_sets:\n  - flow_id: bad_pack_flow\n",
+        )
+        .expect("flow registry should write");
+        std::fs::write(
+            root.path().join("commands.yaml"),
+            "version: 1\ncommands:\n  - command_id: agent-init-worker\n",
+        )
+        .expect("command registry should write");
         let overlay: serde_yaml::Value =
-            serde_yaml::from_str("agent_extensions:\n  registries:\n    packs: packs.yaml\n")
+            serde_yaml::from_str(
+                "agent_extensions:\n  registries:\n    packs: packs.yaml\n    flows: flows.yaml\n    commands: commands.yaml\n",
+            )
                 .expect("overlay");
 
         let registry = load_pack_registry_from_overlay(root.path(), &overlay);
@@ -600,19 +724,118 @@ mod tests {
     }
 
     #[test]
-    fn pack_lookup_accepts_hyphen_and_underscore_aliases() {
+    fn pack_lookup_rejects_implicit_hyphen_underscore_aliases() {
         let readiness = serde_json::json!({
             "packs": [
                 {
                     "pack_id": "quick-two-pack",
-                    "aliases": ["quick_two_pack"],
-                    "flow_id": "quick_two_pack_flow"
+                    "aliases": [],
+                    "flow_id": "quick-two-pack-flow"
                 }
             ]
         });
 
         assert!(pack_by_id(&readiness, "quick-two-pack").is_some());
-        assert!(pack_by_id(&readiness, "quick_two_pack").is_some());
+        assert!(pack_by_id(&readiness, "quick_two_pack").is_none());
+    }
+
+    #[test]
+    fn pack_validation_rejects_non_canonical_roles_and_missing_command_refs() {
+        let root = TempStateHarness::new().expect("temp state harness");
+        std::fs::write(
+            root.path().join("packs.yaml"),
+            concat!(
+                "version: 1\n",
+                "packs:\n",
+                "  - pack_id: bad-pack\n",
+                "    flow_id: missing-flow\n",
+                "    aliases: [bad_pack]\n",
+                "    ordered_steps:\n",
+                "      - role_id: developer-role\n",
+                "        task_class: implementation\n",
+                "        proof_target: agent:bad-pack:developer-role\n",
+            ),
+        )
+        .expect("pack registry should write");
+        let overlay: serde_yaml::Value =
+            serde_yaml::from_str("agent_extensions:\n  registries:\n    packs: packs.yaml\n")
+                .expect("overlay");
+
+        let registry = load_pack_registry_from_overlay(root.path(), &overlay);
+
+        assert!(registry
+            .blocker_codes
+            .iter()
+            .any(|code| code == "pack_aliases_not_supported:bad-pack"));
+        assert!(registry
+            .blocker_codes
+            .iter()
+            .any(|code| code == "unknown_pack_flow_id:bad-pack:missing-flow"));
+        assert!(registry
+            .blocker_codes
+            .iter()
+            .any(|code| code == "non_canonical_pack_step_role:bad-pack:developer-role"));
+        assert!(registry
+            .blocker_codes
+            .iter()
+            .any(|code| code == "missing_pack_step_command_ref:bad-pack:0"));
+    }
+
+    #[test]
+    fn pack_validation_accepts_known_flow_command_and_dispatch_alias_refs() {
+        let root = TempStateHarness::new().expect("temp state harness");
+        std::fs::write(
+            root.path().join("packs.yaml"),
+            concat!(
+                "version: 1\n",
+                "packs:\n",
+                "  - pack_id: good-pack\n",
+                "    flow_id: good_flow\n",
+                "    ordered_steps:\n",
+                "      - role_id: coder\n",
+                "        task_class: implementation\n",
+                "        command_ref: agent-init-worker\n",
+                "        dispatch_alias: development_refactorer\n",
+                "        proof_target: agent:good-pack:coder\n",
+            ),
+        )
+        .expect("pack registry should write");
+        std::fs::write(
+            root.path().join("flows.yaml"),
+            "version: 1\nflow_sets:\n  - flow_id: good_flow\n",
+        )
+        .expect("flow registry should write");
+        std::fs::write(
+            root.path().join("commands.yaml"),
+            "version: 1\ncommands:\n  - command_id: agent-init-worker\n",
+        )
+        .expect("command registry should write");
+        std::fs::write(
+            root.path().join("dispatch-aliases.yaml"),
+            "version: 1\ndispatch_aliases:\n  - alias_id: development_refactorer\n",
+        )
+        .expect("dispatch alias registry should write");
+        let overlay: serde_yaml::Value =
+            serde_yaml::from_str(
+                "agent_extensions:\n  registries:\n    packs: packs.yaml\n    flows: flows.yaml\n    commands: commands.yaml\n    dispatch_aliases: dispatch-aliases.yaml\n",
+            )
+            .expect("overlay");
+
+        let registry = load_pack_registry_from_overlay(root.path(), &overlay);
+
+        assert!(
+            registry.blocker_codes.is_empty(),
+            "{:?}",
+            registry.blocker_codes
+        );
+        assert_eq!(
+            registry.packs[0]["ordered_steps"][0]["command_ref"],
+            "agent-init-worker"
+        );
+        assert_eq!(
+            registry.packs[0]["ordered_steps"][0]["dispatch_alias"],
+            "development_refactorer"
+        );
     }
 
     #[test]

@@ -64,6 +64,28 @@ dispatch_aliases:
       2. Do not replace coach, verifier, or escalation lanes.
       3. Do not widen from one bounded packet into epic or milestone scope.
       4. If the packet is missing owned paths, definition of done, verification target, or stop rules, fail closed and return the packet for reshaping.
+  - alias_id: development_refactorer
+    carrier_tier: middle
+    description: Internal VIDA Codex refactorer alias for structural cleanup and normalization packets.
+    runtime_role: worker
+    runtime_roles:
+      - worker
+    task_classes:
+      - refactor
+      - architecture_cleanup
+      - normalization
+    developer_instructions: |
+      You are the internal VIDA Codex development_refactorer dispatch alias.
+
+      Carrier:
+      1. Preferred carrier tier: middle.
+      2. Runtime role: worker.
+      3. Mission: execute one bounded structural cleanup or normalization packet without becoming the default implementation lane.
+
+      Boundaries:
+      1. Do not self-approve closure.
+      2. Keep the shared boundary explicit and remove obsolete duplicated behavior inside the bounded scope.
+      3. Return proof evidence and any residual duplicate path that must become a follow-up.
   - alias_id: development_test_author
     carrier_tier: middle
     description: Internal VIDA test-author alias for one bounded write-producing test-first regression packet before implementation.

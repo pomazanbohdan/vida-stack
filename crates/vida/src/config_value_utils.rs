@@ -32,6 +32,10 @@ pub(crate) struct AgentExtensionRegistryPathConfig {
     #[serde(deserialize_with = "deserialize_yaml_string_option")]
     pub(crate) flows: Option<String>,
     #[serde(deserialize_with = "deserialize_yaml_string_option")]
+    pub(crate) packs: Option<String>,
+    #[serde(deserialize_with = "deserialize_yaml_string_option")]
+    pub(crate) commands: Option<String>,
+    #[serde(deserialize_with = "deserialize_yaml_string_option")]
     pub(crate) dispatch_aliases: Option<String>,
 }
 
@@ -83,6 +87,16 @@ pub(crate) fn project_overlay_config(value: &serde_yaml::Value) -> ProjectOverla
             flows: yaml_string(yaml_lookup(
                 value,
                 &["agent_extensions", "registries", "flows"],
+            ))
+            .filter(|value| !value.trim().is_empty()),
+            packs: yaml_string(yaml_lookup(
+                value,
+                &["agent_extensions", "registries", "packs"],
+            ))
+            .filter(|value| !value.trim().is_empty()),
+            commands: yaml_string(yaml_lookup(
+                value,
+                &["agent_extensions", "registries", "commands"],
             ))
             .filter(|value| !value.trim().is_empty()),
             dispatch_aliases: yaml_string(yaml_lookup(

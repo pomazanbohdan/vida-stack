@@ -141,8 +141,8 @@ fn assert_configured_flow_catalog(config: &serde_yaml::Value, context: &str) {
     );
 
     for (work_item, flow_id) in [
-        ("pull_request", "pr_repair_verified"),
-        ("pr_repair", "pr_repair_verified"),
+        ("pull_request", "pr_processing_team"),
+        ("pr_repair", "pr_processing_team"),
         ("runtime_defect", "runtime_defect_remediation"),
         ("architecture", "architecture_design"),
         ("release_readiness", "release_readiness_gate"),
@@ -197,10 +197,8 @@ fn assert_configured_flow(config: &serde_yaml::Value, flow_id: &str, context: &s
             .as_sequence()
             .into_iter()
             .flatten()
-            .any(
-                |step| yaml_string(&step["command_template"]["surface"]) == Some("vida agent-init")
-            ),
-        "{context} {flow_id} should dispatch through vida agent-init templates",
+            .any(|step| yaml_string(&step["command_ref"]).is_some()),
+        "{context} {flow_id} should dispatch through registry-owned command refs",
     );
     assert_contains_all(
         &yaml_string_list(&flow["lifecycle_hook_templates"]),
@@ -287,14 +285,9 @@ fn assert_approval_gated_architecture_flow(config: &serde_yaml::Value, context: 
         "{context} architecture_design execution preparation should dispatch as solution_architect",
     );
     assert_eq!(
-        yaml_string_list(&execution_prep_step["command_template"]["args"]),
-        vec![
-            "--role".to_string(),
-            "solution_architect".to_string(),
-            "{{task_id}}".to_string(),
-            "--json".to_string(),
-        ],
-        "{context} architecture_design execution preparation command should bind solution_architect",
+        yaml_string(&execution_prep_step["command_ref"]),
+        Some("agent-init-solution-architect"),
+        "{context} architecture_design execution preparation command should use the solution architect command ref",
     );
 }
 
@@ -400,7 +393,7 @@ fn project_routing_shape_uses_internal_defaults_and_configured_vibe_coach() {
         );
     }
 
-    assert_route_backend(&config, "coach", "executor_backend", "vibe_cli");
+    assert_route_backend(&config, "coach", "executor_backend", "internal_subagents");
     assert_route_backend(
         &config,
         "coach",
@@ -452,7 +445,7 @@ fn project_routing_shape_keeps_write_routes_internal_fallback_with_diversified_r
         );
         assert_eq!(
             yaml_string(&route["coach_executor_backend"]),
-            Some("vibe_cli"),
+            Some("internal_subagents"),
             "{route_id} should route coach review through the configured coach backend",
         );
     }

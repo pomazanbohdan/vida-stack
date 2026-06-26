@@ -435,6 +435,8 @@ agent_extensions:
     skills: docs/process/agent-extensions/skills.yaml
     profiles: docs/process/agent-extensions/profiles.yaml
     flows: docs/process/agent-extensions/flows.yaml
+    packs: docs/process/agent-extensions/packs.yaml
+    commands: docs/process/agent-extensions/commands.yaml
     dispatch_aliases: docs/process/agent-extensions/dispatch-aliases.yaml
     hook_templates: docs/product/spec/hook-templates.yaml
   enabled_framework_roles:
@@ -890,13 +892,7 @@ dev_team:
           role_id: analyst
           runtime_role: business_analyst
           task_class: specification
-          command_template:
-            surface: vida agent-init
-            args:
-              - --role
-              - business_analyst
-              - "{{task_id}}"
-              - --json
+          command_ref: agent-init-business-analyst
           lifecycle_hook_templates:
             - command_timing_summary
           proof_gates:
@@ -922,45 +918,35 @@ dev_team:
         - role_id: analyst
           runtime_role: business_analyst
           task_class: specification
-          command_template:
-            surface: vida agent-init
-            args: [--role, business_analyst, "{{task_id}}", --json]
+          command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [bounded_problem_statement, acceptance_contract]
         - role_id: test_author
           runtime_role: worker
           task_class: test_authoring
-          command_template:
-            surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+          command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [failing_regression_test, proof_command]
         - role_id: developer
           runtime_role: worker
           task_class: implementation
-          command_template:
-            surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+          command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, verification_notes]
         - role_id: coach_implementation_gate
           runtime_role: coach
           task_class: coach
-          command_template:
-            surface: vida agent-init
-            args: [--role, coach, "{{task_id}}", --json]
+          command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_conformance_review, rework_or_approve_decision]
         - role_id: tester
           runtime_role: verifier
           task_class: verification
-          command_template:
-            surface: vida agent-init
-            args: [--role, verifier, "{{task_id}}", --json]
+          command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [verification_evidence]
@@ -991,9 +977,7 @@ dev_team:
           role_id: analyst
           runtime_role: business_analyst
           task_class: specification
-          command_template:
-            surface: vida agent-init
-            args: [--role, business_analyst, "{{task_id}}", --json]
+          command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [pr_inventory, changed_scope_map, ci_review_snapshot, mergeability_matrix, recommended_disposition, owned_read_scope]
@@ -1001,9 +985,7 @@ dev_team:
           role_id: developer
           runtime_role: worker
           task_class: implementation
-          command_template:
-            surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+          command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files_or_close_plan, conflict_resolution_notes, verification_notes]
@@ -1011,9 +993,7 @@ dev_team:
           role_id: tester
           runtime_role: verifier
           task_class: verification
-          command_template:
-            surface: vida agent-init
-            args: [--role, verifier, "{{task_id}}", --json]
+          command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [source_fidelity_review, duplication_review_report, post_integration_verification_evidence, failing_or_passing_checks, residual_risks]
@@ -1021,9 +1001,7 @@ dev_team:
           role_id: prover
           runtime_role: prover
           task_class: release_readiness
-          command_template:
-            surface: vida agent-init
-            args: [--role, prover, "{{task_id}}", --json]
+          command_ref: agent-init-prover
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [final_pr_disposition, proof_summary, follow_up_actions]
@@ -1046,9 +1024,7 @@ dev_team:
           role_id: analyst
           runtime_role: business_analyst
           task_class: specification
-          command_template:
-            surface: vida agent-init
-            args: [--role, business_analyst, "{{task_id}}", --json]
+          command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [pr_inventory, mergeability_matrix, recommended_disposition]
@@ -1056,9 +1032,7 @@ dev_team:
           role_id: tester
           runtime_role: verifier
           task_class: verification
-          command_template:
-            surface: vida agent-init
-            args: [--role, verifier, "{{task_id}}", --json]
+          command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [ci_status_summary, review_comment_risk_map]
@@ -1066,9 +1040,7 @@ dev_team:
           role_id: developer
           runtime_role: worker
           task_class: implementation
-          command_template:
-            surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+          command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files_or_close_plan, verification_notes]
@@ -1076,9 +1048,7 @@ dev_team:
           role_id: coach_implementation_gate
           runtime_role: coach
           task_class: coach
-          command_template:
-            surface: vida agent-init
-            args: [--role, coach, "{{task_id}}", --json]
+          command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [merge_or_close_decision, rework_or_approve_decision]
@@ -1086,9 +1056,7 @@ dev_team:
           role_id: prover
           runtime_role: prover
           task_class: release_readiness
-          command_template:
-            surface: vida agent-init
-            args: [--role, prover, "{{task_id}}", --json]
+          command_ref: agent-init-prover
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [final_pr_disposition, proof_summary]
@@ -1109,54 +1077,42 @@ dev_team:
         - role_id: analyst
           runtime_role: business_analyst
           task_class: specification
-          command_template:
-            surface: vida agent-init
-            args: [--role, business_analyst, "{{task_id}}", --json]
+          command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [runtime_surface_matrix, blocker_contract]
         - role_id: autotester
           runtime_role: worker
           task_class: regression_test
-          command_template:
-            surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+          command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [failing_runtime_regression, integration_test_matrix, proof_command]
         - role_id: developer
           runtime_role: worker
           task_class: implementation
-          command_template:
-            surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+          command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, runtime_recovery_evidence]
         - role_id: coach_validator
           runtime_role: coach
           task_class: validation
-          command_template:
-            surface: vida agent-init
-            args: [--role, coach, "{{task_id}}", --json]
+          command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [root_cause_validation, false_green_risk_review, rework_or_approve_decision]
         - role_id: tester
           runtime_role: verifier
           task_class: verification
-          command_template:
-            surface: vida agent-init
-            args: [--role, verifier, "{{task_id}}", --json]
+          command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [status_lane_recovery_parity, verification_evidence]
         - role_id: prover
           runtime_role: prover
           task_class: release_readiness
-          command_template:
-            surface: vida agent-init
-            args: [--role, prover, "{{task_id}}", --json]
+          command_ref: agent-init-prover
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [closure_readiness_decision, proof_summary]
@@ -1179,9 +1135,7 @@ dev_team:
         - role_id: analyst
           runtime_role: business_analyst
           task_class: specification
-          command_template:
-            surface: vida agent-init
-            args: [--role, business_analyst, "{{task_id}}", --json]
+          command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary, approval_wait, approval_complete]
           requires_user_approval: true
           proof_gates:
@@ -1189,18 +1143,14 @@ dev_team:
         - role_id: architect
           runtime_role: solution_architect
           task_class: execution_preparation
-          command_template:
-            surface: vida agent-init
-            args: [--role, solution_architect, "{{task_id}}", --json]
+          command_ref: agent-init-solution-architect
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_plan, owned_write_scope]
         - role_id: tester
           runtime_role: verifier
           task_class: verification
-          command_template:
-            surface: vida agent-init
-            args: [--role, verifier, "{{task_id}}", --json]
+          command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [architecture_review_evidence]
@@ -1221,18 +1171,14 @@ dev_team:
         - role_id: tester
           runtime_role: verifier
           task_class: verification
-          command_template:
-            surface: vida agent-init
-            args: [--role, verifier, "{{task_id}}", --json]
+          command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [ci_install_test_summary, residual_risks]
         - role_id: prover
           runtime_role: prover
           task_class: release_readiness
-          command_template:
-            surface: vida agent-init
-            args: [--role, prover, "{{task_id}}", --json]
+          command_ref: agent-init-prover
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [release_or_hold_decision, closure_receipt]
@@ -1253,27 +1199,21 @@ dev_team:
         - role_id: analyst
           runtime_role: business_analyst
           task_class: specification
-          command_template:
-            surface: vida agent-init
-            args: [--role, business_analyst, "{{task_id}}", --json]
+          command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [service_tui_scope, fixture_contract]
         - role_id: developer
           runtime_role: worker
           task_class: implementation
-          command_template:
-            surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+          command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, ui_or_service_smoke]
         - role_id: tester
           runtime_role: verifier
           task_class: verification
-          command_template:
-            surface: vida agent-init
-            args: [--role, verifier, "{{task_id}}", --json]
+          command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [fixture_snapshot_or_smoke_evidence]
@@ -1294,36 +1234,28 @@ dev_team:
         - role_id: analyst
           runtime_role: business_analyst
           task_class: specification
-          command_template:
-            surface: vida agent-init
-            args: [--role, business_analyst, "{{task_id}}", --json]
+          command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [host_bridge_contract, agent_runtime_boundary]
         - role_id: developer
           runtime_role: worker
           task_class: implementation
-          command_template:
-            surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+          command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, host_bridge_receipt_evidence]
         - role_id: coach_implementation_gate
           runtime_role: coach
           task_class: coach
-          command_template:
-            surface: vida agent-init
-            args: [--role, coach, "{{task_id}}", --json]
+          command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_conformance_review]
         - role_id: tester
           runtime_role: verifier
           task_class: verification
-          command_template:
-            surface: vida agent-init
-            args: [--role, verifier, "{{task_id}}", --json]
+          command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [verification_evidence]
@@ -1345,36 +1277,28 @@ dev_team:
         - role_id: analyst
           runtime_role: business_analyst
           task_class: specification
-          command_template:
-            surface: vida agent-init
-            args: [--role, business_analyst, "{{task_id}}", --json]
+          command_ref: agent-init-business-analyst
           proof_gates:
             required_outputs: [bounded_problem_statement, acceptance_contract, owned_write_scope]
           lifecycle_hook_templates: [command_timing_summary]
         - role_id: developer
           runtime_role: worker
           task_class: implementation
-          command_template:
-            surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+          command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, verification_notes]
         - role_id: coach_implementation_gate
           runtime_role: coach
           task_class: coach
-          command_template:
-            surface: vida agent-init
-            args: [--role, coach, "{{task_id}}", --json]
+          command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_conformance_review, rework_or_approve_decision]
         - role_id: tester
           runtime_role: verifier
           task_class: verification
-          command_template:
-            surface: vida agent-init
-            args: [--role, verifier, "{{task_id}}", --json]
+          command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [verification_evidence]
@@ -1396,9 +1320,7 @@ dev_team:
         - role_id: analyst
           runtime_role: business_analyst
           task_class: specification
-          command_template:
-            surface: vida agent-init
-            args: [--role, business_analyst, "{{task_id}}", --json]
+          command_ref: agent-init-business-analyst
           proof_gates:
             required_outputs: [detailed_task_brief, acceptance_contract, owned_write_scope]
           requires_user_approval: true
@@ -1414,72 +1336,56 @@ dev_team:
         - role_id: test_author
           runtime_role: worker
           task_class: test_authoring
-          command_template:
-            surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+          command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [failing_regression_test, proof_command]
         - role_id: coach_test_gate
           runtime_role: coach
           task_class: coach
-          command_template:
-            surface: vida agent-init
-            args: [--role, coach, "{{task_id}}", --json]
+          command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [test_quality_review, approve_or_rework_decision]
         - role_id: developer
           runtime_role: worker
           task_class: implementation
-          command_template:
-            surface: vida agent-init
-            args: [--role, worker, "{{task_id}}", --json]
+          command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [changed_files, verification_notes]
         - role_id: coach_implementation_gate
           runtime_role: coach
           task_class: coach
-          command_template:
-            surface: vida agent-init
-            args: [--role, coach, "{{task_id}}", --json]
+          command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [implementation_conformance_review, rework_or_approve_decision]
         - role_id: duplication_reviewer
           runtime_role: verifier
           task_class: review
-          command_template:
-            surface: vida agent-init
-            args: [--role, verifier, "{{task_id}}", --json]
+          command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [duplication_review_report]
         - role_id: tester
           runtime_role: verifier
           task_class: verification
-          command_template:
-            surface: vida agent-init
-            args: [--role, verifier, "{{task_id}}", --json]
+          command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [verification_evidence]
         - role_id: prover
           runtime_role: prover
           task_class: quality_gate
-          command_template:
-            surface: vida agent-init
-            args: [--role, prover, "{{task_id}}", --json]
+          command_ref: agent-init-prover
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [closure_readiness_decision, proof_summary]
         - role_id: release_closure
           runtime_role: prover
           task_class: release_readiness
-          command_template:
-            surface: vida agent-init
-            args: [--role, prover, "{{task_id}}", --json]
+          command_ref: agent-init-prover
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [release_or_hold_decision, closure_receipt]
@@ -1533,9 +1439,8 @@ agent_system:
     root_orchestrator_default_posture: synthesize_not_research
     default_readonly_prefetch: true
     prefer_external_free_readonly_carriers:
-      - vibe_cli
+      - jcode_nim_cli
     prefer_external_advisory_readonly_carriers:
-      - vibe_cli
       - jcode_nim_cli
     prefer_internal_low_medium_for_write_carriers:
       - internal_subagents:codex_gpt55_low_write
@@ -1546,8 +1451,7 @@ agent_system:
       - release_readiness_or_mainline_admission
       - repeated_rework_after_low_medium_failure
     root_call_reduction_rules:
-      - ask_vibe_for_readonly_pre_analysis_when_scope_is_known_and_no_write_authority_is_needed
-      - ask_jcode_nim_for_readonly_pre_analysis_when_vibe_is_unavailable_or_independent_second_opinion_is_useful
+      - ask_jcode_nim_for_readonly_pre_analysis_when_independent_second_opinion_is_useful
       - choose_external_readonly_complete_or_external_patch_proposal_during_research_stage_before_root_implementation
       - ask_internal_low_or_medium_for_bounded_implementation_or_test_authoring
       - keep_root_session_to_binding_synthesis_task_updates_and_final_validation
@@ -1590,29 +1494,29 @@ agent_system:
           - commit_push_and_close_taskflow
     task_class_carrier_preferences:
       research:
-        primary: vibe_cli
+        primary: internal_subagents:codex_gpt55_medium_write
         fallback: jcode_nim_cli
         delegation_modes:
           - external_readonly_complete
           - external_patch_proposal
       analysis:
-        primary: vibe_cli
+        primary: internal_subagents:codex_gpt55_medium_write
         fallback: jcode_nim_cli
         escalation: internal_subagents:codex_gpt55_low_write
       specification:
-        primary: vibe_cli
+        primary: internal_subagents:codex_gpt55_medium_write
         fallback: jcode_nim_cli
         escalation: internal_subagents:codex_gpt55_medium_write
       planning:
-        primary: vibe_cli
+        primary: internal_subagents:codex_gpt55_medium_write
         fallback: jcode_nim_cli
         escalation: internal_subagents:codex_gpt55_medium_write
       review:
-        primary: vibe_cli
+        primary: internal_subagents:codex_gpt55_medium_write
         fallback: jcode_nim_cli
         escalation: internal_subagents:codex_gpt55_medium_write
       coach:
-        primary: vibe_cli
+        primary: internal_subagents:codex_gpt55_medium_write
         fallback: internal_subagents:codex_gpt55_medium_write
       implementation:
         primary: internal_subagents:codex_gpt55_low_write
@@ -1622,7 +1526,7 @@ agent_system:
         fallback: internal_subagents:codex_gpt55_low_write
       verification:
         primary: internal_subagents:codex_gpt55_medium_write
-        fallback: vibe_cli
+        fallback: internal_subagents:codex_gpt55_low_write
         advisory_alternate: jcode_nim_cli
     escalation_after:
       consecutive_low_medium_failures: 2
@@ -1799,13 +1703,13 @@ agent_system:
         mode: parallel
         max_attempts: 2
       attempts:
-        - attempt_id: analysis-vibe-readonly
-          carrier_id: vibe_cli
-          model_profile_id: vibe_mistral_medium35_review
+        - attempt_id: analysis-internal-medium
+          carrier_id: internal_subagents
+          model_profile_id: codex_gpt55_medium_write
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: analysis
-          isolation: external_readonly_complete
+          isolation: internal_readonly_complete
         - attempt_id: analysis-jcode-readonly
           carrier_id: jcode_nim_cli
           model_profile_id: jcode_nim_mistral_medium35_review
@@ -1826,13 +1730,13 @@ agent_system:
         mode: parallel
         max_attempts: 2
       attempts:
-        - attempt_id: specification-vibe-readonly
-          carrier_id: vibe_cli
-          model_profile_id: vibe_mistral_medium35_review
+        - attempt_id: specification-internal-medium
+          carrier_id: internal_subagents
+          model_profile_id: codex_gpt55_medium_write
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: specification
-          isolation: external_readonly_complete
+          isolation: internal_readonly_complete
         - attempt_id: specification-jcode-readonly
           carrier_id: jcode_nim_cli
           model_profile_id: jcode_nim_mistral_medium35_review
@@ -1893,13 +1797,6 @@ agent_system:
         mode: parallel
         max_attempts: 2
       attempts:
-        - attempt_id: review-vibe-readonly
-          carrier_id: vibe_cli
-          model_profile_id: vibe_mistral_medium35_review
-          conversation_role: coach
-          runtime_role: coach
-          task_class: review
-          isolation: external_readonly_complete
         - attempt_id: review-internal-high
           carrier_id: internal_subagents
           model_profile_id: codex_gpt55_high_readonly
@@ -2940,7 +2837,6 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        vibe_cli: vibe_mistral_medium35_review
         internal_subagents: codex_gpt55_medium_write
       fanout_executor_backends:
         - internal_subagents
@@ -3100,14 +2996,13 @@ agent_system:
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     coach:
-      executor_backend: vibe_cli
-      subagents: vibe_cli
+      executor_backend: internal_subagents
+      subagents: internal_subagents
       profiles:
-        vibe_cli: vibe_mistral_medium35_review
         internal_subagents: codex_gpt55_high_readonly
       fanout_executor_backends:
-        - vibe_cli
-      fanout_subagents: vibe_cli
+        - internal_subagents
+      fanout_subagents: internal_subagents
       fanout_min_results: 1
       merge_policy: unanimous_approve_rework_bias
       write_scope: none
@@ -3139,7 +3034,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: vibe_cli
+      coach_executor_backend: internal_subagents
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
@@ -3177,7 +3072,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: vibe_cli
+      coach_executor_backend: internal_subagents
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
@@ -3208,7 +3103,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: vibe_cli
+      coach_executor_backend: internal_subagents
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
@@ -3240,7 +3135,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: vibe_cli
+      coach_executor_backend: internal_subagents
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification

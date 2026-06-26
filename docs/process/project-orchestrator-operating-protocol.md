@@ -246,8 +246,8 @@ The orchestrator must treat root-session tokens and paid/high-reasoning model ca
 
 Default routing:
 
-1. use `vibe_cli` for bounded read-only pre-analysis, report triage, duplicate-risk review, task-note research, and second-opinion review when no write authority is needed,
-2. use `jcode_nim_cli` with `mistralai/mistral-medium-3.5-128b` as a secondary read-only advisory carrier when `vibe_cli` is unavailable, when an independent second opinion is useful, or when root-session token pressure is active,
+1. use internal read-only or medium lanes for bounded pre-analysis, report triage, duplicate-risk review, task-note research, and second-opinion review by default,
+2. use `jcode_nim_cli` with `mistralai/mistral-medium-3.5-128b` as a secondary read-only advisory carrier when an independent second opinion is useful or when root-session token pressure is active,
 3. use internal low (`codex_gpt55_low_write`) for one-scope implementation packets with clear owned paths and focused proof,
 4. use internal medium (`codex_gpt55_medium_write`) for test authoring, regression shaping, ambiguous but bounded implementation, and coach decisions that require more structure than low,
 5. reserve high/xhigh internal profiles for architecture boundary decisions, security/safety review, release readiness, or repeated low/medium failure evidence,
@@ -255,7 +255,7 @@ Default routing:
 
 Before starting a new bounded task, the orchestrator should decide:
 
-1. whether `vibe_cli` can prefetch read-only context or review likely risks in parallel with local inspection,
+1. whether an internal read-only/medium lane can prefetch read-only context or review likely risks in parallel with local inspection,
 2. whether `jcode_nim_cli` should run the same bounded read-only question as an independent NIM-backed advisory pass,
 3. whether the research stage should use `external_readonly_complete`, `external_patch_proposal`, or both in parallel,
 4. whether the write lane can be delegated to internal low before medium,
