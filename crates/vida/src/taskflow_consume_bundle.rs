@@ -1650,6 +1650,7 @@ fn dev_team_flow_ordered_steps(
                         "completion_blocker",
                         "inclusion_rule",
                         "command_template",
+                        "command_ref",
                         "lifecycle_hook_templates",
                         "carrier_constraints",
                         "model_profile_constraints",
@@ -1707,6 +1708,7 @@ fn dev_team_flow_ordered_steps(
                         crate::yaml_lookup(step, &["inclusion_rule"])
                     ),
                     "command_template": yaml_field_json(step, "command_template"),
+                    "command_ref": yaml_field_json(step, "command_ref"),
                     "lifecycle_hook_templates": lifecycle_hook_templates,
                     "carrier_constraints": yaml_field_json(step, "carrier_constraints"),
                     "model_profile_constraints": yaml_field_json(step, "model_profile_constraints"),
@@ -2143,8 +2145,7 @@ dev_team:
           stage: design_gate
           completion_blocker: pending_specification_evidence
           inclusion_rule: when_design_gate
-          command_template:
-            command: vida agent-init --role business_analyst {{task_id}} --json
+          command_ref: agent-init-business-analyst
           lifecycle_hook_templates: [command_timing_summary]
           carrier_constraints:
             allowed_carriers: [middle]
@@ -2255,6 +2256,10 @@ dev_team:
         assert_eq!(
             flow["ordered_steps"][0]["inclusion_rule"],
             "when_design_gate"
+        );
+        assert_eq!(
+            flow["ordered_steps"][0]["command_ref"],
+            "agent-init-business-analyst"
         );
         assert_eq!(flow["ordered_steps"][0]["requires_user_approval"], true);
         assert_eq!(
