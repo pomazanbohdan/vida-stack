@@ -478,9 +478,12 @@ dev_team:
     root_orchestrator_role: orchestrator
     role_sequence_for_runtime_defect:
       - specifier
+      - autotester
       - coder
       - refactorer
-      - architect
+      - coach_validator
+      - tester
+      - prover
   work_item_flow_bindings:
     epic: default_delivery
     defect: defect_repair_verified
@@ -1051,7 +1054,7 @@ dev_team:
             required_outputs: [final_pr_disposition, proof_summary]
     runtime_defect_remediation:
       enabled: true
-      description: "Runtime-defect remediation flow aligned to the canonical spec-four-pack roles: specification, coding, structural cleanup, and architecture review."
+      description: "Runtime-defect remediation flow with specification, regression proof design, implementation, structural cleanup, independent coach validation, verifier evidence, and prover closure."
       flow_class: development
       work_item_bindings:
         - runtime_defect
@@ -1071,6 +1074,14 @@ dev_team:
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [runtime_surface_matrix, blocker_contract]
+        - role_id: autotester
+          runtime_role: worker
+          task_class: regression_test
+          dispatch_alias: development_autotester
+          command_ref: agent-init-worker
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [failing_regression_test, proof_command, expected_behavior_reference]
         - role_id: coder
           runtime_role: worker
           task_class: implementation
@@ -1087,14 +1098,30 @@ dev_team:
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
             required_outputs: [structural_cleanup_summary, duplicate_risk_reduction, verification_notes]
-        - role_id: architect
-          runtime_role: solution_architect
-          task_class: architecture
-          dispatch_alias: development_execution_preparation
-          command_ref: agent-init-solution-architect
+        - role_id: coach_validator
+          runtime_role: coach
+          task_class: validation
+          dispatch_alias: development_coach_validator
+          command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           proof_gates:
-            required_outputs: [architecture_decisions, implementation_plan, explicit_blockers]
+            required_outputs: [root_cause_validation, false_green_risk_review, receipt_backed_execution_review, rework_or_approve_decision]
+        - role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          dispatch_alias: development_verifier
+          command_ref: agent-init-verifier
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [verification_evidence, failing_or_passing_checks, residual_risks]
+        - role_id: prover
+          runtime_role: prover
+          task_class: release_readiness
+          dispatch_alias: development_prover
+          command_ref: agent-init-prover
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [closure_readiness_decision, proof_summary, release_risks]
     architecture_design:
       enabled: true
       description: Architecture design flow with xhigh execution preparation before implementation, user approval gate, and verifier/prover closure.
