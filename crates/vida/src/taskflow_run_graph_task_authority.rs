@@ -49,6 +49,13 @@ pub(crate) fn run_graph_status_is_terminal_closure(status: &RunGraphStatus) -> b
     status.is_terminal_closure()
 }
 
+pub(crate) fn terminal_task_active_status_matches_current_run(
+    latest_status: Option<&RunGraphStatus>,
+    terminal_status: &RunGraphStatus,
+) -> bool {
+    latest_status.is_some_and(|current| current.run_id == terminal_status.run_id)
+}
+
 fn identity_authority_candidate_ids(
     identity: Option<&crate::state_store::RunGraphDispatchTaskIdentity>,
 ) -> Vec<String> {
@@ -192,6 +199,41 @@ mod tests {
             };
             assert!(verdict.task_closed(), "{alias} should be closed-like");
         }
+    }
+
+    #[test]
+    fn terminal_task_active_status_requires_matching_current_run() {
+        let current = crate::taskflow_run_graph::default_run_graph_status(
+            "current-run",
+            "implementation",
+            "implementation",
+        );
+        let mut terminal = crate::taskflow_run_graph::default_run_graph_status(
+            "current-run",
+            "implementation",
+            "implementation",
+        );
+        terminal.active_node = "closure".to_string();
+        terminal.status = "completed".to_string();
+        terminal.lifecycle_stage = "closure_complete".to_string();
+
+        assert!(terminal_task_active_status_matches_current_run(
+            Some(&current),
+            &terminal
+        ));
+        assert!(!terminal_task_active_status_matches_current_run(
+            None, &terminal
+        ));
+
+        let other = crate::taskflow_run_graph::default_run_graph_status(
+            "other-run",
+            "implementation",
+            "implementation",
+        );
+        assert!(!terminal_task_active_status_matches_current_run(
+            Some(&other),
+            &terminal
+        ));
     }
 
     #[tokio::test]

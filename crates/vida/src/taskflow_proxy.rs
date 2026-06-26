@@ -5528,10 +5528,10 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     let terminal_closed_run_is_current = match latest_terminal_task_active_run_graph_status.as_ref()
     {
         Some(terminal)
-            if latest_run_graph
-                .as_ref()
-                .map(|current| current.run_id == terminal.run_id)
-                .unwrap_or(true) =>
+            if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                latest_run_graph.as_ref(),
+                terminal,
+            ) =>
         {
             if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
                 terminal,

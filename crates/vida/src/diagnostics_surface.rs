@@ -592,7 +592,12 @@ async fn build_post_commit_diagnostics(
         });
     let latest_terminal_task_active_run_graph_task_stale =
         match latest_terminal_task_active_run_graph_status.as_ref() {
-            Some(status) => {
+            Some(status)
+                if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                    latest_run_graph_status.as_ref(),
+                    status,
+                ) =>
+            {
                 let verdict =
                     crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
                         &store, status,
@@ -603,6 +608,7 @@ async fn build_post_commit_diagnostics(
                     })?;
                 verdict.task_missing() || verdict.task_closed_stale_run()
             }
+            Some(_) => false,
             None => false,
         };
     let closed_task_active_run_projection_mismatch =

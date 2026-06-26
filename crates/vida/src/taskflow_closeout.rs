@@ -291,10 +291,10 @@ pub(crate) async fn build_taskflow_closeout_summary(
     let terminal_task_active_status_is_current = latest_terminal_task_active_status
         .as_ref()
         .is_some_and(|terminal| {
-            latest_status
-                .as_ref()
-                .map(|status| status.run_id == terminal.run_id)
-                .unwrap_or(true)
+            crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                latest_status.as_ref(),
+                terminal,
+            )
         });
     let terminal_task_active_run_graph_task_missing = if terminal_task_active_status_is_current {
         match latest_terminal_task_active_status.as_ref() {

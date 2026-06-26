@@ -155,7 +155,6 @@ pub(crate) fn non_empty_str(value: &str) -> Option<&str> {
 fn effective_latest_run_graph_status(
     current_session_status: Option<crate::state_store::RunGraphStatus>,
     global_status: Option<&crate::state_store::RunGraphStatus>,
-    terminal_task_active_status: Option<&crate::state_store::RunGraphStatus>,
 ) -> Option<crate::state_store::RunGraphStatus> {
     if current_session_status.is_some() {
         return current_session_status;
@@ -168,9 +167,7 @@ fn effective_latest_run_graph_status(
     {
         return None;
     }
-    global_status
-        .cloned()
-        .or_else(|| terminal_task_active_status.cloned())
+    global_status.cloned()
 }
 
 pub(crate) fn first_non_empty_artifact_ref<'a>(
@@ -580,7 +577,6 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let latest_run_graph_status = effective_latest_run_graph_status(
                     latest_run_graph_status,
                     latest_global_run_graph_status.as_ref(),
-                    latest_terminal_task_active_run_graph_status.as_ref(),
                 );
                 let latest_run_graph_run_id = latest_run_graph_status
                     .as_ref()
@@ -856,10 +852,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     .as_ref()
                 {
                     Some(terminal)
-                        if latest_run_graph_status
-                            .as_ref()
-                            .map(|current| current.run_id == terminal.run_id)
-                            .unwrap_or(true) =>
+                        if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                            latest_run_graph_status.as_ref(),
+                            terminal,
+                        ) =>
                     {
                         if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
                             terminal,
@@ -885,10 +881,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let terminal_task_active_run_graph_task_missing =
                     match latest_terminal_task_active_run_graph_status.as_ref() {
                         Some(terminal)
-                            if latest_run_graph_status
-                                .as_ref()
-                                .map(|current| current.run_id == terminal.run_id)
-                                .unwrap_or(true) =>
+                            if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                                latest_run_graph_status.as_ref(),
+                                terminal,
+                            ) =>
                         {
                             match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, terminal).await {
                                 Ok(verdict) => verdict.task_missing(),
@@ -1914,7 +1910,6 @@ async fn refresh_cached_status_projection_runtime_fields(
     let latest_run_graph_status = effective_latest_run_graph_status(
         latest_run_graph_status,
         latest_global_run_graph_status.as_ref(),
-        latest_terminal_task_active_run_graph_status.as_ref(),
     );
     let latest_run_graph_run_id = latest_run_graph_status
         .as_ref()
@@ -2124,10 +2119,10 @@ async fn refresh_cached_status_projection_runtime_fields(
     let terminal_closed_run_is_current = match latest_terminal_task_active_run_graph_status.as_ref()
     {
         Some(terminal)
-            if latest_run_graph_status
-                .as_ref()
-                .map(|current| current.run_id == terminal.run_id)
-                .unwrap_or(true) =>
+            if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                latest_run_graph_status.as_ref(),
+                terminal,
+            ) =>
         {
             if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
                 terminal,
@@ -2161,12 +2156,12 @@ async fn refresh_cached_status_projection_runtime_fields(
     };
     let terminal_task_active_run_graph_task_missing =
         match latest_terminal_task_active_run_graph_status.as_ref() {
-            Some(terminal)
-                if latest_run_graph_status
-                    .as_ref()
-                    .map(|current| current.run_id == terminal.run_id)
-                    .unwrap_or(true) =>
-            {
+        Some(terminal)
+            if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                latest_run_graph_status.as_ref(),
+                terminal,
+            ) =>
+        {
                 crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
                     &store, terminal,
                 )
@@ -2586,6 +2581,41 @@ mod tests {
             .expect("current dir")
             .join("target")
             .join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[test]
+    fn effective_latest_run_graph_status_does_not_synthesize_terminal_task_active_row() {
+        let terminal = crate::taskflow_run_graph::default_run_graph_status(
+            "terminal-run",
+            "implementation",
+            "implementation",
+        );
+
+        assert!(super::effective_latest_run_graph_status(None, None).is_none());
+
+        let global = crate::taskflow_run_graph::default_run_graph_status(
+            "global-run",
+            "implementation",
+            "implementation",
+        );
+        assert_eq!(
+            super::effective_latest_run_graph_status(None, Some(&global))
+                .expect("global status should be used")
+                .run_id,
+            "global-run"
+        );
+
+        let current = crate::taskflow_run_graph::default_run_graph_status(
+            "current-run",
+            "implementation",
+            "implementation",
+        );
+        assert_eq!(
+            super::effective_latest_run_graph_status(Some(current), Some(&terminal))
+                .expect("current status should win")
+                .run_id,
+            "current-run"
+        );
     }
 
     #[test]

@@ -131,9 +131,13 @@ fn terminal_task_active_run_matches_effective_run(
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
 ) -> bool {
     current_session_run_graph_status
-        .map(|current| current.run_id == terminal.run_id)
-        .or_else(|| latest_run_graph_status.map(|latest| latest.run_id == terminal.run_id))
-        .unwrap_or(true)
+        .or(latest_run_graph_status)
+        .is_some_and(|status| {
+            crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                Some(status),
+                terminal,
+            )
+        })
 }
 
 fn trace_evidence_blocker_codes(
@@ -999,10 +1003,10 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             let terminal_task_active_run_graph_task_stale =
                 match latest_terminal_task_active_run_graph_status.as_ref() {
                     Some(terminal)
-                        if latest_run_graph_status
-                            .as_ref()
-                            .map(|status| status.run_id == terminal.run_id)
-                            .unwrap_or(true) =>
+                        if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                            latest_run_graph_status.as_ref(),
+                            terminal,
+                        ) =>
                     {
                         match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, terminal).await {
                             Ok(verdict) => {
