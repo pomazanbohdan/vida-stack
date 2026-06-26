@@ -132,13 +132,7 @@ async fn run_state_reset(command: StateResetArgs) -> ExitCode {
     match result {
         Ok(summary) => {
             if command.json {
-                match serde_json::to_string_pretty(&summary) {
-                    Ok(rendered) => println!("{rendered}"),
-                    Err(error) => {
-                        eprintln!("failed to render state reset summary as JSON: {error}");
-                        return ExitCode::from(1);
-                    }
-                }
+                crate::print_json_pretty(&state_reset_operator_payload(&summary));
             } else {
                 println!("status: pass");
                 println!("state_dir: {}", summary.state_dir.display());
@@ -157,25 +151,54 @@ async fn run_state_reset(command: StateResetArgs) -> ExitCode {
         }
         Err(error) => {
             if command.json {
-                let payload = serde_json::json!({
-                    "surface": "vida state reset",
-                    "status": "blocked",
-                    "blocker_codes": ["state_reset_failed"],
-                    "error": error.to_string(),
-                    "next_actions": [
-                        "retry with `vida state reset --archive --reinit` after the state root is no longer in use"
-                    ],
-                });
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string())
-                );
+                crate::print_json_pretty(&state_reset_error_operator_payload(&error));
             } else {
                 eprintln!("state reset failed: {error}");
             }
             ExitCode::from(1)
         }
     }
+}
+
+fn state_reset_operator_payload(
+    summary: &crate::state_store::StateResetSummary,
+) -> serde_json::Value {
+    let summary_payload =
+        serde_json::to_value(summary).expect("state reset summary should serialize");
+    let artifact_refs = serde_json::json!({
+        "surface": "vida state reset",
+        "state_dir": summary.state_dir.display().to_string(),
+        "archive_path": summary.archive_path.as_ref().map(|path| path.display().to_string()),
+    });
+    crate::release1_operator_output::build_release1_operator_output_payload(
+        "vida state reset",
+        Vec::new(),
+        Vec::new(),
+        artifact_refs,
+        summary_payload,
+    )
+    .expect("state reset operator payload should keep release-1 shape")
+}
+
+fn state_reset_error_operator_payload(
+    error: &crate::state_store::StateStoreError,
+) -> serde_json::Value {
+    let artifact_refs = serde_json::json!({
+        "surface": "vida state reset",
+    });
+    crate::release1_operator_output::build_release1_operator_output_payload(
+        "vida state reset",
+        vec!["state_reset_failed".to_string()],
+        vec![
+            "retry with `vida state reset --archive --reinit` after the state root is no longer in use"
+                .to_string(),
+        ],
+        artifact_refs,
+        serde_json::json!({
+            "error": error.to_string(),
+        }),
+    )
+    .expect("state reset error operator payload should keep release-1 shape")
 }
 
 fn command_label(command: &Option<Command>) -> String {

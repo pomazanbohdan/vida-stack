@@ -27,6 +27,7 @@ const DOCUMENTED_LOCAL_OPERATOR_BLOCKER_CODES: &[&str] = &[
     "invalid_task_title_input",
     "missing_structured_proof_evidence",
     "proof_blocked_by_runtime",
+    "state_reset_failed",
     "task_tree_traversal_failed",
     "untrusted_create_notes_file",
 ];

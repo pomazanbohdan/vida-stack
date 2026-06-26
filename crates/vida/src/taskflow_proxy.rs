@@ -2825,6 +2825,29 @@ fn build_taskflow_scheduler_dispatch_plan(
     }
 }
 
+fn taskflow_scheduler_dispatch_operator_payload(
+    plan: &TaskflowSchedulerDispatchPlan,
+    state_dir: &std::path::Path,
+) -> serde_json::Value {
+    let mut plan_payload =
+        serde_json::to_value(plan).expect("scheduler dispatch plan should serialize");
+    plan_payload["raw_next_actions"] = serde_json::json!(plan.next_actions);
+    let artifact_refs = serde_json::json!({
+        "surface": "vida taskflow scheduler dispatch",
+        "state_dir": state_dir.display().to_string(),
+        "dispatch_receipt_status": plan.dispatch_receipt.receipt_status,
+        "dispatch_receipt_path": plan.dispatch_receipt.receipt_path,
+    });
+    crate::release1_operator_output::build_release1_operator_output_payload(
+        "vida taskflow scheduler dispatch",
+        plan.blocker_codes.clone(),
+        plan.next_actions.clone(),
+        artifact_refs,
+        plan_payload,
+    )
+    .expect("scheduler dispatch operator payload should keep release-1 shape")
+}
+
 pub(crate) async fn build_taskflow_scheduler_dispatch_plan_from_store(
     store: &crate::state_store::StateStore,
     state_dir: &Path,
@@ -6689,10 +6712,9 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
                     }
                 };
                 if as_json {
-                    crate::print_json_pretty(
-                        &serde_json::to_value(&plan)
-                            .expect("scheduler dispatch plan should serialize"),
-                    );
+                    crate::print_json_pretty(&taskflow_scheduler_dispatch_operator_payload(
+                        &plan, &state_dir,
+                    ));
                 } else {
                     print_surface_header(RenderMode::Plain, "vida taskflow scheduler dispatch");
                     print_surface_line(RenderMode::Plain, "status", &plan.status);
@@ -6843,9 +6865,9 @@ async fn run_taskflow_scheduler_surface(args: &[String]) -> ExitCode {
     }
 
     if as_json {
-        crate::print_json_pretty(
-            &serde_json::to_value(&plan).expect("scheduler dispatch plan should serialize"),
-        );
+        crate::print_json_pretty(&taskflow_scheduler_dispatch_operator_payload(
+            &plan, &state_dir,
+        ));
     } else {
         print_surface_header(RenderMode::Plain, "vida taskflow scheduler dispatch");
         print_surface_line(RenderMode::Plain, "status", &plan.status);
