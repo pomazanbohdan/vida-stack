@@ -1784,6 +1784,7 @@ impl StateStore {
                     reason: format!("line {} provider mapping blocked: {reason}", index + 1),
                 }
             })?;
+            record.issue_type = canonical_work_item_issue_type(&record.issue_type);
             if let Some(mapping) = record.provider_mapping.as_ref() {
                 let key = provider_external_key(mapping).map_err(|reason| {
                     StateStoreError::InvalidTaskRecord {
@@ -2714,7 +2715,8 @@ impl StateStore {
                 reason: format!("task `{task_id}` title is empty"),
             });
         }
-        if work_item_requires_parent(issue_type) && parent_id.is_none() {
+        let stored_issue_type = canonical_work_item_issue_type(issue_type);
+        if work_item_requires_parent(&stored_issue_type) && parent_id.is_none() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
                     "task `{task_id}` of type `{}` cannot be created without parent_id. Only parent-optional work item kinds can have no parent.",
@@ -2791,7 +2793,7 @@ impl StateStore {
             description: description.to_string(),
             status: status.to_string(),
             priority,
-            issue_type: issue_type.to_string(),
+            issue_type: stored_issue_type,
             created_at: now.clone(),
             created_by: created_by.to_string(),
             updated_at: now.clone(),

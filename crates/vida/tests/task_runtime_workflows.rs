@@ -184,7 +184,7 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
             "--json",
         ],
     );
-    assert_eq!(todo_alias["task"]["issue_type"], "todo");
+    assert_eq!(todo_alias["task"]["issue_type"], "step");
     assert_eq!(
         todo_alias["task"]["work_item_kind"]["canonical_issue_type"],
         "step"
@@ -235,6 +235,76 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
     assert_eq!(status["taskflow_counts"]["total_count"], 3);
     assert_eq!(status["taskflow_counts"]["open_count"], 3);
     assert_eq!(status["taskflow_counts"]["ready_count"], 2);
+
+    let import_path = std::path::Path::new(&state_dir).join("taxonomy-alias-import.jsonl");
+    let imported_todo = serde_json::json!({
+        "id": "workflow-import-todo-alias",
+        "title": "Workflow Imported Todo Alias",
+        "status": "closed",
+        "issue_type": "todo",
+        "created_at": "1",
+        "created_by": "test",
+        "updated_at": "1",
+        "source_repo": ".",
+        "dependencies": [{
+            "issue_id": "workflow-import-todo-alias",
+            "depends_on_id": "workflow-task",
+            "edge_type": "parent-child",
+            "created_at": "1",
+            "created_by": "test",
+            "metadata": "{}",
+            "thread_id": ""
+        }]
+    });
+    let imported_subtask = serde_json::json!({
+        "id": "workflow-import-subtask-alias",
+        "title": "Workflow Imported Subtask Alias",
+        "status": "closed",
+        "issue_type": "sub_task",
+        "created_at": "1",
+        "created_by": "test",
+        "updated_at": "1",
+        "source_repo": ".",
+        "dependencies": [{
+            "issue_id": "workflow-import-subtask-alias",
+            "depends_on_id": "workflow-task",
+            "edge_type": "parent-child",
+            "created_at": "1",
+            "created_by": "test",
+            "metadata": "{}",
+            "thread_id": ""
+        }]
+    });
+    std::fs::write(
+        &import_path,
+        format!("{}\n{}\n", imported_todo, imported_subtask),
+    )
+    .expect("write taxonomy alias import");
+    run_json_success(
+        &state_dir,
+        &[
+            "task",
+            "import-jsonl",
+            import_path.to_str().expect("import path should be utf8"),
+            "--json",
+        ],
+    );
+    let imported_todo_show = run_json_success(
+        &state_dir,
+        &["task", "show", "workflow-import-todo-alias", "--json"],
+    );
+    assert_eq!(imported_todo_show["task"]["issue_type"], "step");
+    let imported_subtask_show = run_json_success(
+        &state_dir,
+        &["task", "show", "workflow-import-subtask-alias", "--json"],
+    );
+    assert_eq!(imported_subtask_show["task"]["issue_type"], "subtask");
+
+    let progress_after_import =
+        run_json_success(&state_dir, &["task", "progress", "workflow-task", "--json"]);
+    assert_eq!(progress_after_import["progress"]["descendant_count"], 2);
+    assert_eq!(progress_after_import["progress"]["open_count"], 1);
+    assert_eq!(progress_after_import["progress"]["closed_count"], 1);
 
     let graph = run_json_success(&state_dir, &["task", "validate-graph", "--json"]);
     assert_eq!(graph["status"], "pass");

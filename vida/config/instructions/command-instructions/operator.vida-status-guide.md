@@ -19,7 +19,7 @@ Canonical source: `command-layer-protocol.md`
 1. This command is informational only.
 2. It MUST NOT change task statuses, dependencies, or content.
 3. It reads data only from the DB-backed task runtime JSON commands.
-4. It shows both top-level tasks and subtasks with concise descriptions.
+4. It shows top-level task-equivalent delivery work and `subtask` children with concise descriptions; execution `step` rows are preserved in task detail/history surfaces but excluded from dashboard statistics.
 5. It must end without changing runtime mode, queue order, or task content.
 
 ## Runtime Command
@@ -39,11 +39,11 @@ python3 vida-boot-snapshot.py
 1. `Summary`:
    - top-level TaskFlow (`open`)
    - top-level IN PROGRESS (`in_progress`)
-   - subtasks TaskFlow (`open` + `parent!=null`)
-   - subtasks IN PROGRESS (`in_progress` + `parent!=null`)
+   - subtask TaskFlow (`open` + `parent!=null`)
+   - subtask IN PROGRESS (`in_progress` + `parent!=null`)
 2. `Top-level Tasks (open + in_progress)` with `ready=yes/no` flag.
-3. `Subtasks TaskFlow (open)`.
-4. `Subtasks IN PROGRESS`.
+3. `Subtask TaskFlow (open)`.
+4. `Subtask IN PROGRESS`.
 
 ## Data Sources
 
