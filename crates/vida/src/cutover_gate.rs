@@ -27,10 +27,17 @@ pub(crate) struct CutoverHealthReport {
 
 pub(crate) fn planned_cutover_slices() -> Vec<OperationCutoverSlice> {
     vec![
+        slice(operations::WIZARD_SESSION_START),
+        slice(operations::WIZARD_SESSION_UPDATE_INPUT),
+        slice(operations::WIZARD_SESSION_APPLY),
         slice(operations::TASK_APPLY),
         slice(operations::RUN_ADVANCE),
         slice(operations::COMPLETION_RECORD),
+        slice(operations::PACKET_DISPATCH),
         slice(operations::CLAIM_ACQUIRE),
+        slice(operations::PROJECTION_REBUILD),
+        slice(operations::REPAIR_APPLY),
+        slice(operations::SERVICE_LIFECYCLE_APPLY),
     ]
 }
 
@@ -95,9 +102,16 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(operations.contains(&operations::TASK_APPLY));
+        assert!(operations.contains(&operations::WIZARD_SESSION_START));
+        assert!(operations.contains(&operations::WIZARD_SESSION_UPDATE_INPUT));
         assert!(operations.contains(&operations::RUN_ADVANCE));
         assert!(operations.contains(&operations::COMPLETION_RECORD));
+        assert!(operations.contains(&operations::PACKET_DISPATCH));
         assert!(operations.contains(&operations::CLAIM_ACQUIRE));
+        assert!(operations.contains(&operations::PROJECTION_REBUILD));
+        assert!(operations.contains(&operations::REPAIR_APPLY));
+        assert!(operations.contains(&operations::SERVICE_LIFECYCLE_APPLY));
+        assert!(operations.contains(&operations::WIZARD_SESSION_APPLY));
         assert!(report
             .receipts
             .iter()

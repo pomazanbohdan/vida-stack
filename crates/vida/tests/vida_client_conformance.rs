@@ -126,7 +126,10 @@ fn command_pipeline_blocks_apply_operation_without_idempotency_and_apply_token()
     command.apply_token = None;
     let response = InProcessVidaClient::new_ready().execute(command);
     assert_eq!(response.status, VidaResponseStatus::Blocked);
-    assert_eq!(response.blockers[0].code, "idempotency_key_required");
+    assert_eq!(
+        response.blockers[0].code,
+        "operation_idempotency_key_required"
+    );
 }
 
 #[test]
@@ -136,7 +139,7 @@ fn command_pipeline_blocks_apply_operation_without_apply_token_after_idempotency
     command.apply_token = None;
     let response = InProcessVidaClient::new_ready().execute(command);
     assert_eq!(response.status, VidaResponseStatus::Blocked);
-    assert_eq!(response.blockers[0].code, "apply_token_required");
+    assert_eq!(response.blockers[0].code, "operation_apply_token_required");
 }
 
 #[test]
@@ -144,9 +147,84 @@ fn command_pipeline_reaches_handler_when_apply_token_is_present() {
     let mut command = envelope(operations::SERVICE_LIFECYCLE_APPLY);
     command.client_kind = VidaClientKind::Service;
     command.apply_token = Some(VidaApplyToken("test-apply-token".to_string()));
+    command.payload = json!({
+        "owned_path": "vida/config/policies",
+        "owned_write_scopes": ["vida/config/policies"]
+    });
     let response = InProcessVidaClient::new_ready().execute(command);
     assert_eq!(response.status, VidaResponseStatus::Blocked);
     assert_eq!(response.blockers[0].code, "operation_not_registered");
+}
+
+#[test]
+fn command_pipeline_uses_cedar_for_client_kind_denial() {
+    let mut command = authorized_task_apply_envelope();
+    command.client_kind = VidaClientKind::Cli;
+
+    let response = InProcessVidaClient::new_ready().execute(command);
+
+    assert_eq!(response.status, VidaResponseStatus::Blocked);
+    assert_eq!(response.blockers[0].code, "operation_client_kind_denied");
+}
+
+#[test]
+fn command_pipeline_uses_cedar_for_claim_denial() {
+    let mut command = authorized_task_apply_envelope();
+    command.claim_kind = Some(vida_contracts::VidaClaimKind::SharedRead);
+
+    let response = InProcessVidaClient::new_ready().execute(command);
+
+    assert_eq!(response.status, VidaResponseStatus::Blocked);
+    assert_eq!(response.blockers[0].code, "operation_policy_denied");
+}
+
+#[test]
+fn command_pipeline_uses_cedar_for_cross_project_denial() {
+    let mut command = authorized_task_apply_envelope();
+    command.payload["resource_project_id"] = json!("foreign-project");
+
+    let response = InProcessVidaClient::new_ready().execute(command);
+
+    assert_eq!(response.status, VidaResponseStatus::Blocked);
+    assert_eq!(response.blockers[0].code, "operation_policy_denied");
+}
+
+#[test]
+fn command_pipeline_uses_cedar_for_out_of_scope_write_denial() {
+    let mut command = authorized_task_apply_envelope();
+    command.payload["owned_path"] = json!("crates/vida/src/main.rs");
+    command.payload["owned_write_scopes"] = json!(["crates/taskflow-authority"]);
+
+    let response = InProcessVidaClient::new_ready().execute(command);
+
+    assert_eq!(response.status, VidaResponseStatus::Blocked);
+    assert_eq!(
+        response.blockers[0].code,
+        "operation_owned_write_scope_denied"
+    );
+}
+
+fn authorized_task_apply_envelope() -> VidaCommandEnvelope {
+    let mut command = envelope(operations::TASK_APPLY);
+    command.client_kind = VidaClientKind::HostAgent;
+    command.project_ref = Some(local_project_ref());
+    command.idempotency_key = Some(VidaIdempotencyKey("task-apply-idem".to_string()));
+    command.apply_token = Some(VidaApplyToken("task-apply-token".to_string()));
+    command.payload = json!({
+        "owned_path": "crates/taskflow-authority",
+        "owned_write_scopes": ["crates/taskflow-authority"]
+    });
+    command
+}
+
+fn authorized_wizard_plan_envelope(operation: &str) -> VidaCommandEnvelope {
+    let mut command = envelope(operation);
+    command.project_ref = Some(local_project_ref());
+    command.payload = json!({
+        "owned_path": "crates/vida-contracts",
+        "owned_write_scopes": ["crates/vida-contracts"]
+    });
+    command
 }
 
 #[test]
@@ -250,7 +328,10 @@ fn local_runtime_project_scoped_reads_require_matching_project_ref() {
             VidaResponseStatus::Blocked,
             "{operation}"
         );
-        assert_eq!(missing_ref.blockers[0].code, "project_ref_required");
+        assert_eq!(
+            missing_ref.blockers[0].code,
+            "operation_project_ref_required"
+        );
         assert!(missing_ref.result.is_none(), "{operation}");
 
         let mut unknown_project = envelope(operation);
@@ -276,7 +357,10 @@ fn local_runtime_wizard_jobs_and_receipts_are_read_projection_routes() {
     assert_eq!(schema["schema_id"], "vida.project_init.local_runtime.v1");
     assert_eq!(schema["apply_supported"], false);
 
-    let session = execute(operations::WIZARD_SESSION_START)
+    let session = InProcessVidaClient::new_ready()
+        .execute(authorized_wizard_plan_envelope(
+            operations::WIZARD_SESSION_START,
+        ))
         .result
         .expect("wizard session");
     assert_eq!(session["wizard_session"]["step"], "draft");

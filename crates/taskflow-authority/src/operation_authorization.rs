@@ -230,7 +230,10 @@ fn writes_owned_path(operation: &VidaOperationSpec) -> bool {
     matches!(
         operation.posture,
         VidaOperationPosture::Apply | VidaOperationPosture::Admin
-    )
+    ) || matches!(
+        operation.required_claim,
+        VidaClaimKind::ExclusiveWrite | VidaClaimKind::Admin
+    ) || operation.requires_idempotency_key
 }
 
 fn owned_write_scope_contains(input: &OperationAuthorizationInput) -> bool {
@@ -535,5 +538,38 @@ mod tests {
             decision.blocker_codes,
             vec!["operation_apply_token_required"]
         );
+    }
+
+    #[test]
+    fn plan_mutations_require_owned_write_scope() {
+        let operation = operation_spec(operations::WIZARD_SESSION_START)
+            .expect("wizard session start operation should exist");
+        let input = OperationAuthorizationInput {
+            session_id: "session-ldr-012".to_string(),
+            project_id: Some(VidaProjectId("project-ldr-012".to_string())),
+            client_kind: VidaClientKind::HostAgent,
+            claim_kind: operation.required_claim.clone(),
+            capability: VidaCapabilityScope::WizardPlan,
+            operation,
+            resource_project_id: Some(VidaProjectId("project-ldr-012".to_string())),
+            owned_path: None,
+            owned_write_scopes: Vec::new(),
+            idempotency_key_present: true,
+            apply_token_present: false,
+        };
+
+        let denied = authorize_operation(&input);
+        assert!(!denied.allowed);
+        assert_eq!(
+            denied.blocker_codes,
+            vec!["operation_owned_write_scope_denied"]
+        );
+
+        let permitted = authorize_operation(&OperationAuthorizationInput {
+            owned_path: Some("crates/vida-contracts".to_string()),
+            owned_write_scopes: vec!["crates/vida-contracts".to_string()],
+            ..input
+        });
+        assert!(permitted.allowed, "{permitted:?}");
     }
 }

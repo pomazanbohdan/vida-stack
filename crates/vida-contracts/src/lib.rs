@@ -357,9 +357,16 @@ pub struct VidaOperationCatalogEntry {
     pub operation: VidaOperation,
     pub scope: VidaOperationScope,
     pub posture: VidaOperationPosture,
+    pub risk_tier: VidaRiskTier,
+    pub allowed_client_kinds: Vec<VidaClientKind>,
+    pub required_claim: VidaClaimKind,
     pub requires_project_ref: bool,
+    pub requires_idempotency_key: bool,
     pub requires_apply_token: bool,
     pub required_capabilities: Vec<VidaCapabilityScope>,
+    pub required_consistency: VidaConsistencyRequirement,
+    pub automation_posture: VidaAutomationPosture,
+    pub result_schema: VidaSchemaRef,
     pub input_schema: VidaOperationInputSchema,
 }
 
@@ -371,9 +378,16 @@ impl VidaOperationCatalogEntry {
             operation: spec.operation,
             scope: spec.scope,
             posture: spec.posture,
+            risk_tier: spec.risk_tier,
+            allowed_client_kinds: spec.allowed_client_kinds,
+            required_claim: spec.required_claim,
             requires_project_ref: spec.requires_project_ref,
+            requires_idempotency_key: spec.requires_idempotency_key,
             requires_apply_token: spec.requires_apply_token,
             required_capabilities: spec.required_capabilities,
+            required_consistency: spec.required_consistency,
+            automation_posture: spec.automation_posture,
+            result_schema: spec.result_schema,
             input_schema,
         }
     }
@@ -746,6 +760,9 @@ fn input_schema_for_spec(spec: &VidaOperationSpec) -> VidaOperationInputSchema {
     if spec.requires_project_ref {
         fields.push(project_ref_field());
     }
+    if operation_requires_owned_write_evidence(spec) {
+        fields.extend(owned_write_evidence_fields());
+    }
     fields.extend(input_fields_for_operation(&spec.operation.0));
     VidaOperationInputSchema {
         operation: spec.operation.clone(),
@@ -863,6 +880,43 @@ fn project_ref_field() -> VidaOperationInputField {
         "Project id or registry entry to resolve.",
         VidaOperationTuiControl::TextInput,
     )
+}
+
+fn owned_write_evidence_fields() -> Vec<VidaOperationInputField> {
+    vec![
+        field(
+            "owned_path",
+            "owned_path",
+            "Owned path",
+            VidaOperationInputValueKind::Path,
+            true,
+            Some("--owned-path"),
+            None,
+            "Path being written; must be inside an owned write scope.",
+            VidaOperationTuiControl::PathInput,
+        ),
+        field(
+            "owned_write_scopes",
+            "owned_write_scopes",
+            "Owned write scopes",
+            VidaOperationInputValueKind::JsonObject,
+            true,
+            Some("--owned-write-scopes"),
+            None,
+            "JSON array of write scopes from the active lane or takeover receipt.",
+            VidaOperationTuiControl::JsonEditor,
+        ),
+    ]
+}
+
+fn operation_requires_owned_write_evidence(spec: &VidaOperationSpec) -> bool {
+    matches!(
+        spec.posture,
+        VidaOperationPosture::Apply | VidaOperationPosture::Admin
+    ) || matches!(
+        spec.required_claim,
+        VidaClaimKind::ExclusiveWrite | VidaClaimKind::Admin
+    ) || spec.requires_idempotency_key
 }
 
 fn field(
@@ -3045,6 +3099,58 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(field_ids.contains(&"project"));
         assert!(field_ids.contains(&"wizard_kind"));
+    }
+
+    #[test]
+    fn operation_catalog_exposes_authorization_metadata_for_external_clients() {
+        for (spec, catalog) in mvp_operation_registry()
+            .into_iter()
+            .zip(mvp_operation_catalog().into_iter())
+        {
+            assert_eq!(catalog.operation, spec.operation);
+            assert_eq!(catalog.scope, spec.scope);
+            assert_eq!(catalog.posture, spec.posture);
+            assert_eq!(catalog.risk_tier, spec.risk_tier);
+            assert_eq!(catalog.allowed_client_kinds, spec.allowed_client_kinds);
+            assert_eq!(catalog.required_claim, spec.required_claim);
+            assert_eq!(catalog.requires_project_ref, spec.requires_project_ref);
+            assert_eq!(
+                catalog.requires_idempotency_key,
+                spec.requires_idempotency_key
+            );
+            assert_eq!(catalog.requires_apply_token, spec.requires_apply_token);
+            assert_eq!(catalog.required_capabilities, spec.required_capabilities);
+            assert_eq!(catalog.required_consistency, spec.required_consistency);
+            assert_eq!(catalog.automation_posture, spec.automation_posture);
+            assert_eq!(catalog.result_schema, spec.result_schema);
+        }
+    }
+
+    #[test]
+    fn mutation_operation_input_schemas_expose_owned_write_evidence() {
+        for entry in mvp_operation_catalog()
+            .into_iter()
+            .filter(|entry| entry.required_claim == VidaClaimKind::ExclusiveWrite)
+        {
+            let owned_path = entry
+                .input_schema
+                .field("owned_path")
+                .expect("mutation schema should declare owned path");
+            assert_eq!(owned_path.payload_key, "owned_path");
+            assert_eq!(owned_path.value_kind, VidaOperationInputValueKind::Path);
+            assert!(owned_path.required);
+
+            let owned_write_scopes = entry
+                .input_schema
+                .field("owned_write_scopes")
+                .expect("mutation schema should declare owned write scopes");
+            assert_eq!(owned_write_scopes.payload_key, "owned_write_scopes");
+            assert_eq!(
+                owned_write_scopes.value_kind,
+                VidaOperationInputValueKind::JsonObject
+            );
+            assert!(owned_write_scopes.required);
+        }
     }
 
     #[test]

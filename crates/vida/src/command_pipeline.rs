@@ -3,10 +3,14 @@ use std::{
     task::{Context, Poll},
 };
 
+use taskflow_authority::operation_authorization::{
+    authorize_operation, OperationAuthorizationDecision, OperationAuthorizationInput,
+};
 use tower::Service;
 use vida_contracts::{
-    operation_spec, VidaBlocker, VidaCommandEnvelope, VidaCommandResponse, VidaOperationSpec,
-    VidaProblem, VidaProblemSeverity, VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
+    operation_spec, VidaBlocker, VidaClaimKind, VidaCommandEnvelope, VidaCommandResponse,
+    VidaOperationSpec, VidaProblem, VidaProblemSeverity, VidaProjectId, VidaProjectRef,
+    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
 };
 
 use crate::vida_client::VidaClient;
@@ -111,25 +115,6 @@ impl<H: VidaClient> VidaCommandPipeline<H> {
         }
 
         trace.push(CommandPipelineLayer::Idempotency);
-        if spec.requires_idempotency_key && envelope.idempotency_key.is_none() {
-            return blocked_response(
-                envelope,
-                "idempotency_key_required",
-                "Idempotency key required",
-                "idempotency_key",
-                "Provide an idempotency key for mutation operations.",
-            );
-        }
-        if spec.requires_apply_token && envelope.apply_token.is_none() {
-            return blocked_response(
-                envelope,
-                "apply_token_required",
-                "Apply token required",
-                "apply_token",
-                "Provide an apply token for apply or admin operations.",
-            );
-        }
-
         trace.push(CommandPipelineLayer::Concurrency);
         trace.push(CommandPipelineLayer::Handler);
         let response = self.handler.execute(envelope);
@@ -158,25 +143,75 @@ fn authorization_blocker(
     envelope: &VidaCommandEnvelope,
     spec: &VidaOperationSpec,
 ) -> Option<VidaCommandResponse> {
-    if !spec.allowed_client_kinds.contains(&envelope.client_kind) {
-        return Some(blocked_response(
-            envelope.clone(),
-            "client_kind_not_allowed",
-            "Client kind is not allowed",
-            "client_kind",
-            "Use an allowed client kind for this operation.",
-        ));
+    let decision = authorize_operation(&OperationAuthorizationInput {
+        session_id: envelope.session_id.0.clone(),
+        project_id: project_id_from_ref(envelope.project_ref.as_ref()),
+        client_kind: envelope.client_kind.clone(),
+        claim_kind: envelope
+            .claim_kind
+            .clone()
+            .unwrap_or(VidaClaimKind::Observe),
+        capability: spec
+            .required_capabilities
+            .first()
+            .cloned()
+            .expect("registered operation should declare at least one capability"),
+        operation: spec.clone(),
+        resource_project_id: string_payload_field(&envelope.payload, "resource_project_id")
+            .map(VidaProjectId)
+            .or_else(|| project_id_from_ref(envelope.project_ref.as_ref())),
+        owned_path: string_payload_field(&envelope.payload, "owned_path"),
+        owned_write_scopes: string_array_payload_field(&envelope.payload, "owned_write_scopes"),
+        idempotency_key_present: envelope.idempotency_key.is_some(),
+        apply_token_present: envelope.apply_token.is_some(),
+    });
+    (!decision.allowed).then(|| authorization_problem_response(envelope.clone(), decision))
+}
+
+fn authorization_problem_response(
+    envelope: VidaCommandEnvelope,
+    decision: OperationAuthorizationDecision,
+) -> VidaCommandResponse {
+    let code = decision
+        .blocker_codes
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "operation_policy_denied".to_string());
+    let next_action =
+        decision.remediation.first().cloned().unwrap_or_else(|| {
+            "Check operation authorization evidence before retrying.".to_string()
+        });
+    blocked_response(
+        envelope,
+        &code,
+        "Operation authorization denied",
+        "operation_authorization",
+        &next_action,
+    )
+}
+
+fn project_id_from_ref(project_ref: Option<&VidaProjectRef>) -> Option<VidaProjectId> {
+    match project_ref {
+        Some(VidaProjectRef::ProjectId { project_id }) => Some(project_id.clone()),
+        _ => None,
     }
-    if envelope.claim_kind.as_ref() != Some(&spec.required_claim) {
-        return Some(blocked_response(
-            envelope.clone(),
-            "claim_kind_required",
-            "Required claim kind missing",
-            "claim_kind",
-            "Use the claim kind required by operation metadata.",
-        ));
-    }
-    None
+}
+
+fn string_payload_field(payload: &serde_json::Value, field: &str) -> Option<String> {
+    payload
+        .get(field)
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+}
+
+fn string_array_payload_field(payload: &serde_json::Value, field: &str) -> Vec<String> {
+    payload
+        .get(field)
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect()
 }
 
 fn blocked_response(
