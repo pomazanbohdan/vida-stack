@@ -346,7 +346,7 @@ impl ExceptionTakeoverMetadata {
 }
 
 fn lane_usage() -> &'static str {
-    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--host-bridge-result-file <path>] [--state-dir <path>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--activate] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]\n\nOptions:\n  --receipt-id <id>              Receipt id that proves the lane mutation source\n  --reason <text>                Human-readable retire reason\n  --host-bridge-request <path>   Host bridge request artifact to complete\n  --host-agent-id <id>           Parent host agent id that executed the bridge request\n  --host-bridge-summary <text>   Optional completion summary from the parent host adapter\n  --host-bridge-result-file <path> Completion result file from the parent host adapter\n  --state-dir <path>             Override the TaskFlow state directory for this lane mutation\n  --reason-class <class>         Exception takeover reason class\n  --active-bounded-unit <unit>   Bounded unit authorized by the exception path\n  --owned-write-scope <path>     Receipt-bound write scope; may be repeated\n  --verification-step <text>     Verification step for exception takeover; may be repeated\n  --activate                     Activate the exception takeover immediately\n  --completed                    Reclaim completed lanes\n  --host-agents                  Include host-agent lane handles during reclaim\n  --json                         Emit machine-readable JSON output\n  -h, --help                     Print help"
+    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--host-bridge-result-file <path>] [--decision <decision>] [--verdict <verdict>] [--allowed-next-node <node>] [--blocker-code <code>] [--blocker-codes <json-or-list>] [--rework-target <target>] [--state-dir <path>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--activate] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]\n\nOptions:\n  --receipt-id <id>              Receipt id that proves the lane mutation source\n  --reason <text>                Human-readable retire reason\n  --host-bridge-request <path>   Host bridge request artifact to complete\n  --host-agent-id <id>           Parent host agent id that executed the bridge request\n  --host-bridge-summary <text>   Optional completion summary from the parent host adapter\n  --host-bridge-result-file <path> Completion result file from the parent host adapter\n  --decision <decision>          Host bridge completion decision\n  --verdict <verdict>            Host bridge completion verdict\n  --allowed-next-node <node>     Next workflow node allowed by completion\n  --blocker-code <code>          Completion blocker code; may be repeated\n  --blocker-codes <json-or-list> Completion blocker codes as JSON array or compact list\n  --rework-target <target>       Workflow target that should receive rework when blocked\n  --state-dir <path>             Override the TaskFlow state directory for this lane mutation\n  --reason-class <class>         Exception takeover reason class\n  --active-bounded-unit <unit>   Bounded unit authorized by the exception path\n  --owned-write-scope <path>     Receipt-bound write scope; may be repeated\n  --verification-step <text>     Verification step for exception takeover; may be repeated\n  --activate                     Activate the exception takeover immediately\n  --completed                    Reclaim completed lanes\n  --host-agents                  Include host-agent lane handles during reclaim\n  --json                         Emit machine-readable JSON output\n  -h, --help                     Print help"
 }
 
 fn lane_retire_help() -> &'static str {
@@ -4141,6 +4141,11 @@ fn materialize_host_bridge_completion_evidence(
     host_agent_id: Option<&str>,
     summary: Option<&str>,
     allowed_next_node: Option<&str>,
+    supplied_decision: Option<&str>,
+    supplied_verdict: Option<&str>,
+    supplied_rework_target: Option<&str>,
+    supplied_blocker_codes: &[String],
+    supplied_completion_blocked: bool,
     derive_summary_blockers: bool,
     taskflow_evidence: HostBridgeTaskflowImplementationEvidence,
     authoritative_owned_paths: &[String],
@@ -4317,6 +4322,10 @@ fn materialize_host_bridge_completion_evidence(
     if let Some(summary_blocker_code) = summary_blocker_code {
         blocker_codes.push(summary_blocker_code);
     }
+    blocker_codes.extend(supplied_blocker_codes.iter().cloned());
+    if supplied_completion_blocked && blocker_codes.is_empty() {
+        blocker_codes.push("host_bridge_completion_result_blocked".to_string());
+    }
     let shared_completion =
         materialize_shared_host_bridge_completion_evidence(&HostBridgeCompletionInput {
             request: typed_request,
@@ -4353,21 +4362,51 @@ fn materialize_host_bridge_completion_evidence(
         &blocker_codes,
         pass_allowed_next_node,
     );
-    let result_allowed_next_node = result_verdict.allowed_next_node.clone();
+    let result_allowed_next_node = if supplied_completion_blocked {
+        None
+    } else {
+        Some(result_verdict.allowed_next_node.clone())
+    };
+    let result_decision = if supplied_completion_blocked {
+        supplied_decision
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("blocked")
+            .to_string()
+    } else {
+        result_verdict.decision.clone()
+    };
+    let result_verdict_value = if supplied_completion_blocked {
+        supplied_verdict
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("blocked")
+            .to_string()
+    } else {
+        result_verdict.verdict.clone()
+    };
+    let result_rework_target = if supplied_completion_blocked {
+        supplied_rework_target
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map_or(serde_json::Value::Null, serde_json::Value::from)
+    } else {
+        serde_json::Value::from(result_verdict.rework_target.clone())
+    };
     let result = serde_json::json!({
         "artifact_kind": "host_tool_bridge_result",
         "schema_version": 1,
         "status": verdict.status.clone(),
         "execution_state": verdict.execution_state.clone(),
-        "decision": result_verdict.decision,
-        "verdict": result_verdict.verdict,
+        "decision": result_decision,
+        "verdict": result_verdict_value,
         "request_id": request_id,
         "run_id": run_id,
         "dispatch_target": dispatch_target,
         "completion_receipt_id": receipt_id,
         "blocker_code": blocker_code.clone(),
         "blocker_codes": blocker_codes.clone(),
-        "rework_target": result_verdict.rework_target,
+        "rework_target": result_rework_target,
         "allowed_next_node": result_allowed_next_node.clone(),
         "host_agent_id": host_agent_id,
         "summary": summary,
@@ -5227,6 +5266,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     host_agent_id,
                     host_bridge_summary,
                     allowed_next_node,
+                    decision,
+                    verdict,
+                    rework_target,
+                    &supplied_completion_blocker_codes,
+                    supplied_completion_blocked,
                     derive_summary_blockers,
                     taskflow_artifacts,
                     &authoritative_owned_paths,
@@ -14572,6 +14616,11 @@ mod tests {
             Some("verifier-1"),
             Some("internal agent completed"),
             None,
+            None,
+            None,
+            None,
+            &[],
+            false,
             true,
             HostBridgeTaskflowImplementationEvidence::default(),
             &[],
@@ -14694,6 +14743,11 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            &[],
+            false,
             true,
             HostBridgeTaskflowImplementationEvidence::default(),
             &[],
@@ -14706,6 +14760,113 @@ mod tests {
         assert_eq!(evidence.receipt_path, receipt_path.display().to_string());
         assert!(result_path.exists());
         assert!(receipt_path.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_completion_result_preserves_explicit_blocked_contract() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-explicit-blocked-{}-{nanos}",
+            std::process::id()
+        ));
+        let request_path = root.join("host-tool-bridge/requests/run-blocked.json");
+        let result_path = root.join("host-tool-bridge/results/run-blocked.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/run-blocked.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        let packet_path = root.join("runtime-consumption/dispatch-packets/run-blocked.json");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "run-blocked",
+                "run_id": "run-blocked",
+                "dispatch_target": "analyst",
+                "task_class": "analyst",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/run-blocked-activation.json");
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation parent");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = "run-blocked".to_string();
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+
+        let supplied_blockers = vec!["docflow_missing_project_doc_map_registration".to_string()];
+        let evidence = materialize_host_bridge_completion_evidence(
+            &root,
+            request_path.to_str().expect("utf8 request path"),
+            "run-blocked",
+            "analyst",
+            &receipt,
+            "receipt-blocked",
+            Some("agent-1"),
+            Some("analyst blocked on DocFlow map registration"),
+            Some("designer"),
+            Some("block"),
+            Some("blocked"),
+            Some("docs_product_spec_map_registration"),
+            &supplied_blockers,
+            true,
+            false,
+            HostBridgeTaskflowImplementationEvidence::default(),
+            &[],
+            false,
+            false,
+        )
+        .expect("blocked completion evidence should materialize");
+
+        assert_eq!(evidence.execution_state, "blocked");
+        assert_eq!(evidence.allowed_next_node, None);
+        assert_eq!(
+            evidence.blocker_code.as_deref(),
+            Some(supplied_blockers[0].as_str())
+        );
+        assert_eq!(evidence.blocker_codes, supplied_blockers);
+        let result: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&result_path).expect("result should be readable"),
+        )
+        .expect("result should decode");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["decision"], "block");
+        assert_eq!(result["verdict"], "blocked");
+        assert_eq!(
+            result["rework_target"],
+            "docs_product_spec_map_registration"
+        );
+        assert_eq!(result["allowed_next_node"], serde_json::Value::Null);
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -14779,6 +14940,11 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            &[],
+            false,
             true,
             HostBridgeTaskflowImplementationEvidence::default(),
             &[],
