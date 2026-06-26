@@ -7094,7 +7094,7 @@ fn stage_ensemble_operator_summary() {
     assert_eq!(stage_ensemble["stale_count"], 1);
     assert_eq!(
         stage_ensemble["latest_consolidation_receipt_id"],
-        serde_json::Value::Null
+        "receipt-implementation-accepted"
     );
     assert_eq!(
         progress["progress"]["stage_ensemble"],
@@ -7102,7 +7102,7 @@ fn stage_ensemble_operator_summary() {
     );
     assert_eq!(
         stage_ensemble["next_command"],
-        format!("vida task attempt consolidate {task_id} --stage implementation")
+        format!("vida task stage status {task_id} --stage implementation")
     );
 
     let default_output = run_and_assert_success(&["task", "progress", &task_id], &state_dir);
@@ -7114,9 +7114,9 @@ fn stage_ensemble_operator_summary() {
     assert!(default_output.contains("accepted=1"));
     assert!(default_output.contains("rejected=1"));
     assert!(default_output.contains("stale=1"));
-    assert!(default_output.contains("latest_stage_receipt: none"));
+    assert!(default_output.contains("latest_stage_receipt: receipt-implementation-accepted"));
     assert!(default_output.contains(&format!(
-        "stage_next: vida task attempt consolidate {task_id} --stage implementation"
+        "stage_next: vida task stage status {task_id} --stage implementation"
     )));
     assert!(!default_output.trim_start().starts_with('{'));
     assert!(!default_output.contains("--json"));
@@ -7133,18 +7133,18 @@ fn stage_ensemble_operator_summary() {
     assert_eq!(graph_stage_ensemble["configured_attempt_count"], 5);
     assert_eq!(
         graph_stage_ensemble["latest_consolidation_receipt_id"],
-        serde_json::Value::Null
+        "receipt-implementation-accepted"
     );
     assert_eq!(
         graph_stage_ensemble["next_command"],
-        format!("vida task attempt consolidate {task_id} --stage implementation")
+        format!("vida task stage status {task_id} --stage implementation")
     );
 
     let graph_plain =
         run_and_assert_success(&["taskflow", "graph-summary", "--operator"], &state_dir);
     assert!(graph_plain.contains("stage_ensemble: active_stage=implementation attempts=5"));
     assert!(graph_plain.contains(&format!(
-        "stage_ensemble_next_command: vida task attempt consolidate {task_id} --stage implementation"
+        "stage_ensemble_next_command: vida task stage status {task_id} --stage implementation"
     )));
     assert!(!graph_plain.contains("--json"));
 }

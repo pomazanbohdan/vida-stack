@@ -18368,6 +18368,7 @@ host_environment:
             let store = crate::StateStore::open(state_root.clone())
                 .await
                 .expect("state store should open");
+            let owned_paths = vec!["crates/vida/src/runtime_dispatch_state.rs".to_string()];
             let mut role_selection =
                 configured_first_step_role_selection(Some("autotester"), Some("autotester"));
             role_selection.execution_plan["development_flow"]["dispatch_contract"]
@@ -18425,7 +18426,7 @@ host_environment:
                 &role_selection,
                 &run_graph_bootstrap,
                 &mut receipt,
-                &[],
+                &owned_paths,
             )
             .await
             .expect("preview should use result-backed allowed_next target");
@@ -18439,6 +18440,15 @@ host_environment:
             assert_eq!(
                 receipt.downstream_dispatch_status.as_deref(),
                 Some("packet_ready")
+            );
+            let packet_path = receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .expect("downstream packet should be written");
+            let packet = read_json(harness.path(), packet_path);
+            assert_eq!(
+                packet["delivery_task_packet"]["owned_paths"],
+                serde_json::json!(owned_paths)
             );
         });
     }
