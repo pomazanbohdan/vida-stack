@@ -1,5 +1,6 @@
 use taskflow_core::role_step::{
-    RoleStepFlowDefinition, RoleStepStateError, TaskRoleStepState, TaskRoleStepStatus,
+    RoleStepFlowDefinition, RoleStepStateError, RoleStepTransitionBlocker, TaskRoleStepState,
+    TaskRoleStepStatus,
 };
 use thiserror::Error;
 
@@ -9,6 +10,7 @@ pub const MODULE: &str = "role_step";
 pub struct RoleStepTransitionVerdict {
     pub allowed: bool,
     pub blocker_codes: Vec<String>,
+    pub state: TaskRoleStepState,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -23,44 +25,60 @@ pub fn authorize_allowed_next_node(
     allowed_next_node: &str,
     current_flow_hash: &str,
 ) -> Result<RoleStepTransitionVerdict, RoleStepAuthorityError> {
-    match state.accept_next(flow, allowed_next_node, current_flow_hash) {
-        Ok(_) => Ok(RoleStepTransitionVerdict {
+    let transition = state.evaluate_next(flow, allowed_next_node, current_flow_hash);
+    match transition.blocker {
+        None => Ok(RoleStepTransitionVerdict {
             allowed: true,
             blocker_codes: Vec::new(),
+            state: transition.state,
         }),
-        Err(RoleStepStateError::UnknownAllowedNextNode(_, _)) => Ok(RoleStepTransitionVerdict {
-            allowed: false,
-            blocker_codes: vec!["role_step_allowed_next_node_not_configured".to_string()],
-        }),
-        Err(RoleStepStateError::FlowVersionDrift { .. }) => Ok(RoleStepTransitionVerdict {
+        Some(RoleStepTransitionBlocker::UnknownAllowedNextNode { .. }) => {
+            Ok(RoleStepTransitionVerdict {
+                allowed: false,
+                blocker_codes: vec!["role_step_allowed_next_node_not_configured".to_string()],
+                state: transition.state,
+            })
+        }
+        Some(RoleStepTransitionBlocker::FlowVersionDrift { .. }) => Ok(RoleStepTransitionVerdict {
             allowed: false,
             blocker_codes: vec!["role_step_flow_version_drift".to_string()],
+            state: transition.state,
         }),
-        Err(RoleStepStateError::CurrentStepNotCompleted { .. }) => Ok(RoleStepTransitionVerdict {
-            allowed: false,
-            blocker_codes: vec!["role_step_current_step_not_completed".to_string()],
-        }),
-        Err(RoleStepStateError::UnresolvedBlockers { .. }) => Ok(RoleStepTransitionVerdict {
-            allowed: false,
-            blocker_codes: vec!["role_step_unresolved_blockers".to_string()],
-        }),
-        Err(RoleStepStateError::NonSequentialAllowedNextNode { .. }) => {
+        Some(RoleStepTransitionBlocker::CurrentStepNotCompleted { .. }) => {
+            Ok(RoleStepTransitionVerdict {
+                allowed: false,
+                blocker_codes: vec!["role_step_current_step_not_completed".to_string()],
+                state: transition.state,
+            })
+        }
+        Some(RoleStepTransitionBlocker::UnresolvedBlockers { .. }) => {
+            Ok(RoleStepTransitionVerdict {
+                allowed: false,
+                blocker_codes: vec!["role_step_unresolved_blockers".to_string()],
+                state: transition.state,
+            })
+        }
+        Some(RoleStepTransitionBlocker::NonSequentialAllowedNextNode { .. }) => {
             Ok(RoleStepTransitionVerdict {
                 allowed: false,
                 blocker_codes: vec!["role_step_allowed_next_node_not_sequential".to_string()],
+                state: transition.state,
             })
         }
-        Err(RoleStepStateError::NoNextStep { .. }) => Ok(RoleStepTransitionVerdict {
+        Some(RoleStepTransitionBlocker::NoNextStep { .. }) => Ok(RoleStepTransitionVerdict {
             allowed: false,
             blocker_codes: vec!["role_step_no_next_step".to_string()],
+            state: transition.state,
         }),
-        Err(RoleStepStateError::TerminalState(_)) => Ok(RoleStepTransitionVerdict {
+        Some(RoleStepTransitionBlocker::TerminalState { .. }) => Ok(RoleStepTransitionVerdict {
             allowed: false,
             blocker_codes: vec!["role_step_terminal_state".to_string()],
+            state: transition.state,
         }),
-        Err(RoleStepStateError::EmptyFlow) => Ok(RoleStepTransitionVerdict {
+        Some(RoleStepTransitionBlocker::EmptyFlow) => Ok(RoleStepTransitionVerdict {
             allowed: false,
             blocker_codes: vec!["role_step_empty_flow".to_string()],
+            state: transition.state,
         }),
     }
 }
@@ -110,6 +128,8 @@ mod tests {
 
         assert!(verdict.allowed);
         assert!(verdict.blocker_codes.is_empty());
+        assert_eq!(verdict.state.role_id, "developer");
+        assert_eq!(verdict.state.status, TaskRoleStepStatus::Accepted);
     }
 
     #[test]
@@ -136,6 +156,7 @@ mod tests {
 
         assert!(!verdict.allowed);
         assert_eq!(verdict.blocker_codes, vec!["role_step_flow_version_drift"]);
+        assert_eq!(verdict.state.status, TaskRoleStepStatus::FlowVersionDrift);
     }
 
     #[test]

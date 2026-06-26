@@ -127,7 +127,7 @@ pub struct TaskRoleStepState {
     pub blockers: Vec<String>,
 }
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum RoleStepStateError {
     #[error("flow has no steps")]
     EmptyFlow,
@@ -150,6 +150,78 @@ pub enum RoleStepStateError {
     NonSequentialAllowedNextNode { requested: String, expected: String },
     #[error("role-step `{role_id}` has no next step")]
     NoNextStep { role_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleStepTransition {
+    pub state: TaskRoleStepState,
+    pub blocker: Option<RoleStepTransitionBlocker>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "code")]
+pub enum RoleStepTransitionBlocker {
+    EmptyFlow,
+    UnknownAllowedNextNode {
+        requested: String,
+        flow_id: String,
+    },
+    FlowVersionDrift {
+        expected: String,
+        actual: String,
+    },
+    TerminalState {
+        status: TaskRoleStepStatus,
+    },
+    CurrentStepNotCompleted {
+        role_id: String,
+        status: TaskRoleStepStatus,
+    },
+    UnresolvedBlockers {
+        role_id: String,
+    },
+    NonSequentialAllowedNextNode {
+        requested: String,
+        expected: String,
+    },
+    NoNextStep {
+        role_id: String,
+    },
+}
+
+impl RoleStepTransitionBlocker {
+    fn error(&self) -> RoleStepStateError {
+        match self {
+            Self::EmptyFlow => RoleStepStateError::EmptyFlow,
+            Self::UnknownAllowedNextNode { requested, flow_id } => {
+                RoleStepStateError::UnknownAllowedNextNode(requested.clone(), flow_id.clone())
+            }
+            Self::FlowVersionDrift { expected, actual } => RoleStepStateError::FlowVersionDrift {
+                expected: expected.clone(),
+                actual: actual.clone(),
+            },
+            Self::TerminalState { status } => RoleStepStateError::TerminalState(*status),
+            Self::CurrentStepNotCompleted { role_id, status } => {
+                RoleStepStateError::CurrentStepNotCompleted {
+                    role_id: role_id.clone(),
+                    status: *status,
+                }
+            }
+            Self::UnresolvedBlockers { role_id } => RoleStepStateError::UnresolvedBlockers {
+                role_id: role_id.clone(),
+            },
+            Self::NonSequentialAllowedNextNode {
+                requested,
+                expected,
+            } => RoleStepStateError::NonSequentialAllowedNextNode {
+                requested: requested.clone(),
+                expected: expected.clone(),
+            },
+            Self::NoNextStep { role_id } => RoleStepStateError::NoNextStep {
+                role_id: role_id.clone(),
+            },
+        }
+    }
 }
 
 impl TaskRoleStepState {
@@ -240,54 +312,98 @@ impl TaskRoleStepState {
         allowed_next_node: &str,
         current_flow_hash: &str,
     ) -> Result<Self, RoleStepStateError> {
+        let transition = self.evaluate_next(flow, allowed_next_node, current_flow_hash);
+        if let Some(blocker) = transition.blocker {
+            return Err(blocker.error());
+        }
+        Ok(transition.state)
+    }
+
+    #[must_use]
+    pub fn evaluate_next(
+        &self,
+        flow: &RoleStepFlowDefinition,
+        allowed_next_node: &str,
+        current_flow_hash: &str,
+    ) -> RoleStepTransition {
         if self.flow_schema_hash != current_flow_hash {
             let mut drifted = self.clone();
             drifted.status = TaskRoleStepStatus::FlowVersionDrift;
-            return Err(RoleStepStateError::FlowVersionDrift {
-                expected: self.flow_schema_hash.clone(),
-                actual: current_flow_hash.to_string(),
-            });
+            return RoleStepTransition {
+                state: drifted,
+                blocker: Some(RoleStepTransitionBlocker::FlowVersionDrift {
+                    expected: self.flow_schema_hash.clone(),
+                    actual: current_flow_hash.to_string(),
+                }),
+            };
         }
         if self.status == TaskRoleStepStatus::FlowVersionDrift {
-            return Err(RoleStepStateError::TerminalState(self.status));
+            return RoleStepTransition {
+                state: self.clone(),
+                blocker: Some(RoleStepTransitionBlocker::TerminalState {
+                    status: self.status,
+                }),
+            };
         }
         if self.status != TaskRoleStepStatus::Completed {
-            return Err(RoleStepStateError::CurrentStepNotCompleted {
-                role_id: self.role_id.clone(),
-                status: self.status,
-            });
+            return RoleStepTransition {
+                state: self.clone(),
+                blocker: Some(RoleStepTransitionBlocker::CurrentStepNotCompleted {
+                    role_id: self.role_id.clone(),
+                    status: self.status,
+                }),
+            };
         }
         if !self.blockers.is_empty() {
-            return Err(RoleStepStateError::UnresolvedBlockers {
-                role_id: self.role_id.clone(),
-            });
+            return RoleStepTransition {
+                state: self.clone(),
+                blocker: Some(RoleStepTransitionBlocker::UnresolvedBlockers {
+                    role_id: self.role_id.clone(),
+                }),
+            };
         }
         let next_index = self.step_index + 1;
-        let expected_next =
-            flow.steps
-                .get(next_index)
-                .ok_or_else(|| RoleStepStateError::NoNextStep {
+        let Some(expected_next) = flow.steps.get(next_index) else {
+            return RoleStepTransition {
+                state: self.clone(),
+                blocker: Some(RoleStepTransitionBlocker::NoNextStep {
                     role_id: self.role_id.clone(),
-                })?;
+                }),
+            };
+        };
         if expected_next.role_id != allowed_next_node {
             if flow
                 .steps
                 .iter()
                 .any(|step| step.role_id == allowed_next_node)
             {
-                return Err(RoleStepStateError::NonSequentialAllowedNextNode {
-                    requested: allowed_next_node.to_string(),
-                    expected: expected_next.role_id.clone(),
-                });
+                return RoleStepTransition {
+                    state: self.clone(),
+                    blocker: Some(RoleStepTransitionBlocker::NonSequentialAllowedNextNode {
+                        requested: allowed_next_node.to_string(),
+                        expected: expected_next.role_id.clone(),
+                    }),
+                };
             }
-            return Err(RoleStepStateError::UnknownAllowedNextNode(
-                allowed_next_node.to_string(),
-                flow.flow_id.clone(),
-            ));
+            return RoleStepTransition {
+                state: self.clone(),
+                blocker: Some(RoleStepTransitionBlocker::UnknownAllowedNextNode {
+                    requested: allowed_next_node.to_string(),
+                    flow_id: flow.flow_id.clone(),
+                }),
+            };
         }
-        let mut next = Self::from_step(flow, next_index)?;
+        let Ok(mut next) = Self::from_step(flow, next_index) else {
+            return RoleStepTransition {
+                state: self.clone(),
+                blocker: Some(RoleStepTransitionBlocker::EmptyFlow),
+            };
+        };
         next.status = TaskRoleStepStatus::Accepted;
-        Ok(next)
+        RoleStepTransition {
+            state: next,
+            blocker: None,
+        }
     }
 
     pub fn complete(&mut self) -> Result<(), RoleStepStateError> {
@@ -470,6 +586,20 @@ mod tests {
     fn config_drift_migration_test_reports_explicit_state() {
         let flow = flow("task");
         let state = TaskRoleStepState::from_first_step(&flow).unwrap();
+
+        let transition = state.evaluate_next(&flow, "developer", "task-hash-2");
+        assert_eq!(
+            transition.state.status,
+            TaskRoleStepStatus::FlowVersionDrift
+        );
+        assert_eq!(transition.state.flow_schema_hash, "task-hash-1");
+        assert_eq!(
+            transition.blocker,
+            Some(RoleStepTransitionBlocker::FlowVersionDrift {
+                expected: "task-hash-1".to_string(),
+                actual: "task-hash-2".to_string()
+            })
+        );
 
         let error = state
             .accept_next(&flow, "developer", "task-hash-2")

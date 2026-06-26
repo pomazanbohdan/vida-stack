@@ -42,20 +42,23 @@ pub fn compile_all_dev_team_flows(
     readiness: &serde_json::Value,
 ) -> Result<Vec<CompiledFlowDefinition>, RoleStepConfigError> {
     let roles = role_index(readiness)?;
-    let flows = readiness["flows"].as_array().ok_or_else(|| {
-        RoleStepConfigError::invalid("$.flows", "dev_team flows must be an array")
-    })?;
+    let flows = collection_entries(&readiness["flows"], "$.flows", "dev_team flows")?;
     let mut compiled = Vec::new();
     let mut seen = BTreeSet::new();
-    for (index, flow) in flows.iter().enumerate() {
-        let flow_id = required_string(flow, "flow_id", format!("$.flows[{index}].flow_id"))?;
+    for (path, flow_id_hint, flow) in &flows {
+        let flow_id = required_string_or_hint(
+            flow,
+            "flow_id",
+            format!("{path}.flow_id"),
+            flow_id_hint.as_deref(),
+        )?;
         if !seen.insert(flow_id.clone()) {
             return Err(RoleStepConfigError::invalid(
-                format!("$.flows[{index}].flow_id"),
+                format!("{path}.flow_id"),
                 format!("duplicate flow id `{flow_id}`"),
             ));
         }
-        compiled.push(compile_flow(flow, &roles, index)?);
+        compiled.push(compile_flow(flow, flow_id, &roles, path)?);
     }
     if compiled.is_empty() {
         return Err(RoleStepConfigError::invalid(
@@ -99,26 +102,27 @@ pub fn compile_dev_team_flow_for_work_item(
 
 fn compile_flow(
     flow: &serde_json::Value,
+    flow_id: String,
     roles: &BTreeMap<String, serde_json::Value>,
-    flow_index: usize,
+    flow_path: &str,
 ) -> Result<CompiledFlowDefinition, RoleStepConfigError> {
-    let flow_id = required_string(flow, "flow_id", format!("$.flows[{flow_index}].flow_id"))?;
-    let steps = flow["ordered_steps"].as_array().ok_or_else(|| {
-        RoleStepConfigError::invalid(
-            format!("$.flows[{flow_index}].ordered_steps"),
-            "ordered_steps must be an array",
-        )
+    let steps_value = flow
+        .get("ordered_steps")
+        .or_else(|| flow.get("steps"))
+        .unwrap_or(&serde_json::Value::Null);
+    let steps = steps_value.as_array().ok_or_else(|| {
+        RoleStepConfigError::invalid(format!("{flow_path}.steps"), "steps must be an array")
     })?;
     if steps.is_empty() {
         return Err(RoleStepConfigError::invalid(
-            format!("$.flows[{flow_index}].ordered_steps"),
-            "ordered_steps must not be empty",
+            format!("{flow_path}.steps"),
+            "steps must not be empty",
         ));
     }
     let compiled_steps = steps
         .iter()
         .enumerate()
-        .map(|(step_index, step)| compile_step(step, roles, flow_index, step_index))
+        .map(|(step_index, step)| compile_step(step, roles, flow_path, step_index))
         .collect::<Result<Vec<_>, _>>()?;
     let work_item_bindings = work_item_bindings(&flow["work_item_bindings"]);
     let schema_hash = flow_schema_hash(&flow_id, &work_item_bindings, &compiled_steps);
@@ -138,10 +142,10 @@ fn compile_flow(
 fn compile_step(
     step: &serde_json::Value,
     roles: &BTreeMap<String, serde_json::Value>,
-    flow_index: usize,
+    flow_path: &str,
     step_index: usize,
 ) -> Result<CompiledFlowStep, RoleStepConfigError> {
-    let role_path = format!("$.flows[{flow_index}].ordered_steps[{step_index}].role_id");
+    let role_path = format!("{flow_path}.steps[{step_index}].role_id");
     let role_label = required_string(step, "role_id", &role_path)?;
     let role = roles.get(&role_label).ok_or_else(|| {
         RoleStepConfigError::invalid(role_path, format!("role `{role_label}` is not configured"))
@@ -150,7 +154,7 @@ fn compile_step(
         string_field(step, "runtime_role").or_else(|| string_field(role, "runtime_role"));
     let runtime_role = runtime_role.ok_or_else(|| {
         RoleStepConfigError::invalid(
-            format!("$.flows[{flow_index}].ordered_steps[{step_index}].runtime_role"),
+            format!("{flow_path}.steps[{step_index}].runtime_role"),
             format!("role `{role_label}` has no runtime_role"),
         )
     })?;
@@ -158,7 +162,7 @@ fn compile_step(
         .or_else(|| first_string(&role["task_classes"]))
         .ok_or_else(|| {
             RoleStepConfigError::invalid(
-                format!("$.flows[{flow_index}].ordered_steps[{step_index}].task_class"),
+                format!("{flow_path}.steps[{step_index}].task_class"),
                 format!("role `{role_label}` has no task_class"),
             )
         })?;
@@ -190,20 +194,45 @@ impl CompiledFlowStep {
 fn role_index(
     readiness: &serde_json::Value,
 ) -> Result<BTreeMap<String, serde_json::Value>, RoleStepConfigError> {
-    let roles = readiness["roles"].as_array().ok_or_else(|| {
-        RoleStepConfigError::invalid("$.roles", "dev_team roles must be an array")
-    })?;
+    let roles = collection_entries(&readiness["roles"], "$.roles", "dev_team roles")?;
     let mut index = BTreeMap::new();
-    for (role_index, role) in roles.iter().enumerate() {
-        let role_id = required_string(role, "role_id", format!("$.roles[{role_index}].role_id"))?;
+    for (role_path, role_id_hint, role) in roles {
+        let role_id = required_string_or_hint(
+            role,
+            "role_id",
+            format!("{role_path}.role_id"),
+            role_id_hint.as_deref(),
+        )?;
         if index.insert(role_id.clone(), role.clone()).is_some() {
             return Err(RoleStepConfigError::invalid(
-                format!("$.roles[{role_index}].role_id"),
+                format!("{role_path}.role_id"),
                 format!("duplicate role id `{role_id}`"),
             ));
         }
     }
     Ok(index)
+}
+
+fn collection_entries<'a>(
+    value: &'a serde_json::Value,
+    path: &str,
+    label: &str,
+) -> Result<Vec<(String, Option<String>, &'a serde_json::Value)>, RoleStepConfigError> {
+    match value {
+        serde_json::Value::Array(values) => Ok(values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (format!("{path}[{index}]"), None, value))
+            .collect()),
+        serde_json::Value::Object(values) => Ok(values
+            .iter()
+            .map(|(key, value)| (format!("{path}.{key}"), Some(key.clone()), value))
+            .collect()),
+        _ => Err(RoleStepConfigError::invalid(
+            path,
+            format!("{label} must be an array or mapping"),
+        )),
+    }
 }
 
 fn required_string(
@@ -214,6 +243,19 @@ fn required_string(
     string_field(value, key).ok_or_else(|| {
         RoleStepConfigError::invalid(path, format!("{key} must be a non-empty string"))
     })
+}
+
+fn required_string_or_hint(
+    value: &serde_json::Value,
+    key: &str,
+    path: impl Into<String>,
+    hint: Option<&str>,
+) -> Result<String, RoleStepConfigError> {
+    string_field(value, key)
+        .or_else(|| hint.map(str::to_string))
+        .ok_or_else(|| {
+            RoleStepConfigError::invalid(path, format!("{key} must be a non-empty string"))
+        })
 }
 
 fn string_field(value: &serde_json::Value, key: &str) -> Option<String> {
@@ -280,6 +322,8 @@ fn flow_schema_hash(flow_id: &str, bindings: &[String], steps: &[CompiledFlowSte
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::PathBuf};
+
     use super::*;
 
     fn readiness_fixture() -> serde_json::Value {
@@ -336,6 +380,51 @@ mod tests {
     }
 
     #[test]
+    fn compiles_configured_dev_team_flows_from_project_config() {
+        let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("vida.config.yaml");
+        let config_text = fs::read_to_string(&config_path).expect("project config should exist");
+        let config_yaml: serde_yaml::Value =
+            serde_yaml::from_str(&config_text).expect("project config should parse");
+        let config_json = serde_json::to_value(config_yaml).expect("yaml should convert to json");
+        let readiness = config_json
+            .get("dev_team")
+            .expect("project config should define dev_team");
+
+        let flows = compile_all_dev_team_flows(readiness).expect("configured flows compile");
+        assert!(flows.len() >= 10);
+        for flow_id in [
+            "task_delivery_verified",
+            "defect_repair_verified",
+            "runtime_defect_remediation",
+            "architecture_design",
+        ] {
+            let flow = flows
+                .iter()
+                .find(|flow| flow.flow.flow_id == flow_id)
+                .unwrap_or_else(|| panic!("configured flow `{flow_id}` should compile"));
+            assert!(!flow.flow.schema_hash.is_empty());
+            assert!(!flow.flow.steps.is_empty());
+        }
+        assert_eq!(
+            compile_dev_team_flow_for_work_item(readiness, "task")
+                .unwrap()
+                .flow
+                .flow_id,
+            "task_delivery_verified"
+        );
+        assert_eq!(
+            compile_dev_team_flow_for_work_item(readiness, "runtime-defect")
+                .unwrap()
+                .flow
+                .flow_id,
+            "runtime_defect_remediation"
+        );
+    }
+
+    #[test]
     fn selects_work_item_flow_or_default() {
         let readiness = readiness_fixture();
 
@@ -372,11 +461,7 @@ mod tests {
         readiness["flows"][0]["ordered_steps"][0]["role_id"] = serde_json::json!("missing_role");
 
         let error = compile_all_dev_team_flows(&readiness).expect_err("missing role blocks");
-        assert!(
-            error
-                .to_string()
-                .contains("$.flows[0].ordered_steps[0].role_id")
-        );
+        assert!(error.to_string().contains("$.flows[0].steps[0].role_id"));
         assert!(error.to_string().contains("missing_role"));
     }
 }
