@@ -211,13 +211,22 @@ fn command_label(command: &Option<Command>) -> String {
         Some(Command::Approval(_)) => "vida approval".to_string(),
         Some(Command::Recovery(_)) => "vida recovery".to_string(),
         Some(Command::Route(_)) => "vida route".to_string(),
-        Some(Command::Release(_)) => "vida release".to_string(),
+        Some(Command::Release(args)) => release_command_label(args),
         Some(Command::Taskflow(_)) => "vida taskflow".to_string(),
         Some(Command::Docflow(_)) => "vida docflow".to_string(),
         Some(Command::External(args)) => args
             .first()
             .map(|name| format!("vida {name}"))
             .unwrap_or_else(|| "vida external".to_string()),
+    }
+}
+
+fn release_command_label(args: &super::ReleaseArgs) -> String {
+    match &args.command {
+        ReleaseCommand::Install(args) if args.skip_build => {
+            "vida release install --skip-build".to_string()
+        }
+        ReleaseCommand::Install(_) => "vida release install".to_string(),
     }
 }
 

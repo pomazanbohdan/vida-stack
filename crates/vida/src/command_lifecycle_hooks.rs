@@ -179,6 +179,7 @@ fn command_can_invoke_cargo(command: &str) -> bool {
         || normalized.contains("cargo-nextest")
         || normalized.contains("nextest")
         || normalized.contains("vida-dev-gate")
+        || normalized == "vida release install"
 }
 
 fn cargo_timing_context_from_parts(
@@ -400,6 +401,14 @@ fn exit_code_to_i32(code: ExitCode) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_install_is_cargo_like_for_timing_context() {
+        assert!(command_can_invoke_cargo("vida release install"));
+        assert!(!command_can_invoke_cargo(
+            "vida release install --skip-build"
+        ));
+    }
 
     #[test]
     fn cargo_timing_context_uses_caller_target_dir() {
