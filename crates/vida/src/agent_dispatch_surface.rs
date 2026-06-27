@@ -3533,6 +3533,17 @@ async fn materialize_configured_agent_dispatch_lane(
         &dispatch_packet_path,
         &dispatch_receipt,
     )?;
+    let packet_template_kind = packet
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            crate::runtime_dispatch_state::runtime_dispatch_packet_kind(
+                &role_selection.execution_plan,
+                expected_dispatch_target,
+                &dispatch_receipt.dispatch_kind,
+            )
+        });
     let mut agent_init_execute_command = format!(
         "vida agent-init --dispatch-packet {} --execute-dispatch",
         crate::shell_quote(&dispatch_packet_path)
@@ -3547,7 +3558,7 @@ async fn materialize_configured_agent_dispatch_lane(
         "task_class": lane.task_class,
         "dispatch_packet_path": dispatch_packet_path,
         "dispatch_target": expected_dispatch_target,
-        "packet_template_kind": packet["packet_template_kind"].clone(),
+        "packet_template_kind": packet_template_kind,
         "dispatch_receipt_id": dispatch_receipt.recorded_at,
         "dispatch_receipt": dispatch_receipt,
         "agent_init_execute_command": agent_init_execute_command,
@@ -3588,8 +3599,9 @@ async fn materialize_agent_dispatch_next_packets(
         return preview;
     }
 
+    let materialization_lanes = agent_dispatch_materialization_lanes(&preview);
     let preflight_errors =
-        preflight_agent_dispatch_next_packet_materialization(&preview.selected_lanes, state_dir)
+        preflight_agent_dispatch_next_packet_materialization(&materialization_lanes, state_dir)
             .await;
     if !preflight_errors.is_empty() {
         preview.status = release1_blocked_status().to_string();
@@ -3655,7 +3667,7 @@ async fn materialize_agent_dispatch_next_packets(
 
     let mut artifacts = Vec::new();
     let mut errors = Vec::new();
-    for lane in &preview.selected_lanes {
+    for lane in &materialization_lanes {
         match materialize_configured_agent_dispatch_lane(lane, state_dir, activation_bundle).await {
             Ok(artifact) => artifacts.push(artifact),
             Err(error) => {
@@ -3716,10 +3728,10 @@ async fn materialize_agent_dispatch_next_packets(
                     "artifacts": artifacts.clone(),
                 }),
             );
-            if let Some(current_step) = flow_projection
-                .get_mut("current_step")
-                .and_then(serde_json::Value::as_object_mut)
-            {
+            let current_step_value = flow_projection
+                .entry("current_step".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(current_step) = current_step_value.as_object_mut() {
                 if let Some(first) = artifacts.first() {
                     current_step.insert(
                         "dispatch_command".to_string(),
@@ -3751,6 +3763,9 @@ async fn materialize_agent_dispatch_next_packets(
             "status": release1_pass_status(),
             "requested": true,
             "materializes_packets": true,
+            "selected_lane_count": preview.selected_lanes.len(),
+            "materialized_lane_count": artifacts.len(),
+            "sequential_dev_team_first_packet_only": preview.mode == "materialized-dev-team",
             "artifacts": artifacts,
         });
     } else {
@@ -3764,6 +3779,22 @@ async fn materialize_agent_dispatch_next_packets(
         });
     }
     preview
+}
+
+fn agent_dispatch_materialization_lanes(
+    preview: &AgentDispatchNextPreview,
+) -> Vec<AgentDispatchLanePreview> {
+    let lane_limit = if preview.mode == "preview-dev-team" {
+        1
+    } else {
+        preview.selected_lanes.len()
+    };
+    preview
+        .selected_lanes
+        .iter()
+        .take(lane_limit)
+        .cloned()
+        .collect()
 }
 
 fn safe_agent_dispatch_projection_component(value: &str) -> String {
@@ -3929,8 +3960,10 @@ fn compact_agent_dispatch_packet_materialization(value: &serde_json::Value) -> s
                         "task_id": artifact.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
                         "role_label": artifact.get("role_label").cloned().unwrap_or(serde_json::Value::Null),
                         "dispatch_target": artifact.get("dispatch_target").cloned().unwrap_or(serde_json::Value::Null),
+                        "packet_template_kind": artifact.get("packet_template_kind").cloned().unwrap_or(serde_json::Value::Null),
                         "dispatch_packet_path": artifact.get("dispatch_packet_path").cloned().unwrap_or(serde_json::Value::Null),
                         "agent_init_execute_command": artifact.get("agent_init_execute_command").cloned().unwrap_or(serde_json::Value::Null),
+                        "receipt_backed": artifact.get("receipt_backed").cloned().unwrap_or(serde_json::Value::Null),
                         "status": artifact.get("status").cloned().unwrap_or(serde_json::Value::Null),
                     })
                 })
@@ -4008,6 +4041,16 @@ fn agent_dispatch_next_compact_payload(preview: &AgentDispatchNextPreview) -> se
         "next_actions": &preview.next_actions,
         "execute_supported": preview.execute_supported,
         "execution_attempted": preview.execution_attempted,
+        "flow_projection": {
+            "current_step": preview.flow_projection
+                .get("current_step")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+            "receipt_status": preview.flow_projection
+                .get("receipt_status")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        },
         "packet_materialization": compact_agent_dispatch_packet_materialization(&preview.packet_materialization),
         "source_surfaces": &preview.source_surfaces,
         "output_contract": {
@@ -4042,6 +4085,18 @@ fn agent_dispatch_existing_packet_fast_path_payload(
     if !std::path::Path::new(packet_path).is_file() {
         return None;
     }
+    let packet_template_kind = read_canonical_host_bridge_json_artifact(
+        std::path::Path::new(packet_path),
+        "existing dispatch packet",
+    )
+    .ok()
+    .and_then(|packet| {
+        packet
+            .get("packet_template_kind")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    })
+    .unwrap_or_else(|| "delivery_task_packet".to_string());
     let mut execute_command =
         crate::continuation_binding_summary::routed_dispatch_command_from_parts(
             receipt.dispatch_command.as_deref(),
@@ -4088,6 +4143,26 @@ fn agent_dispatch_existing_packet_fast_path_payload(
         ],
         "execute_supported": true,
         "execution_attempted": false,
+        "flow_projection": {
+            "diagnostic_only": false,
+            "receipt_status": {
+                "receipt_backed": true,
+                "status": "packet_ready",
+            },
+            "current_step": {
+                "dispatch_command": execute_command,
+                "dispatch_command_kind": "receipt_backed_dispatch_packet",
+                "receipt_status": {
+                    "receipt_backed": true,
+                    "receipt_path": packet_path,
+                    "status": "packet_ready",
+                },
+                "proof_state": {
+                    "status": "pending_receipt_backed_execution",
+                    "diagnostic_only": false,
+                },
+            },
+        },
         "packet_materialization": {
             "status": release1_pass_status(),
             "requested": true,
@@ -4098,8 +4173,10 @@ fn agent_dispatch_existing_packet_fast_path_payload(
                     "task_id": receipt.run_id,
                     "role_label": receipt.dispatch_target,
                     "dispatch_target": receipt.dispatch_target,
+                    "packet_template_kind": packet_template_kind,
                     "dispatch_packet_path": packet_path,
                     "agent_init_execute_command": execute_command,
+                    "receipt_backed": true,
                     "status": "packet_ready",
                 }
             ],
@@ -5303,7 +5380,7 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_dispatch_existing_packet_fast_path_payload,
+        agent_dispatch_existing_packet_fast_path_payload, agent_dispatch_materialization_lanes,
         agent_dispatch_next_bound_current_task_id, agent_dispatch_next_compact_payload,
         agent_dispatch_next_effective_materialize_packets,
         agent_dispatch_next_preserve_current_task_id, agent_dispatch_next_projection_name,
@@ -5649,9 +5726,52 @@ mod tests {
             }),
             carrier_selection_api: serde_json::json!({"large_diagnostic": "carrier"}),
             fanout_guard: serde_json::json!({"large_diagnostic": "fanout"}),
-            flow_projection: serde_json::json!({"large_diagnostic": "flow"}),
+            flow_projection: serde_json::json!({
+                "large_diagnostic": "flow",
+                "current_step": {
+                    "dispatch_command_kind": "receipt_backed_dispatch_packet",
+                    "dispatch_command": "vida agent-init --dispatch-packet task-a.json --execute-dispatch"
+                },
+                "receipt_status": {
+                    "status": "packet_ready"
+                }
+            }),
             source_surfaces: vec!["vida agent dispatch-next".to_string()],
         }
+    }
+
+    #[test]
+    fn dev_team_materialization_lanes_are_limited_to_first_sequential_packet() {
+        let mut preview = sample_agent_dispatch_next_preview();
+        preview.mode = "preview-dev-team".to_string();
+        preview.selected_lanes = vec![
+            analyst_dispatch_lane_preview("task-a"),
+            coach_dispatch_lane_preview("developer", "task-a"),
+            coach_dispatch_lane_preview("coach_validator", "task-a"),
+        ];
+        preview.lanes_selected = preview.selected_lanes.len();
+
+        let lanes = agent_dispatch_materialization_lanes(&preview);
+
+        assert_eq!(lanes.len(), 1);
+        assert_eq!(lanes[0].role_label, "analyst");
+    }
+
+    #[test]
+    fn non_dev_team_materialization_keeps_all_selected_lanes() {
+        let mut preview = sample_agent_dispatch_next_preview();
+        preview.mode = "preview".to_string();
+        preview.selected_lanes = vec![
+            coach_dispatch_lane_preview("worker_a", "task-a"),
+            coach_dispatch_lane_preview("worker_b", "task-b"),
+        ];
+        preview.lanes_selected = preview.selected_lanes.len();
+
+        let lanes = agent_dispatch_materialization_lanes(&preview);
+
+        assert_eq!(lanes.len(), 2);
+        assert_eq!(lanes[0].task_id, "task-a");
+        assert_eq!(lanes[1].task_id, "task-b");
     }
 
     #[test]
@@ -5665,7 +5785,15 @@ mod tests {
         assert!(payload.get("parallelization_planner").is_none());
         assert!(payload.get("carrier_selection_api").is_none());
         assert!(payload.get("fanout_guard").is_none());
-        assert!(payload.get("flow_projection").is_none());
+        assert_eq!(
+            payload["flow_projection"]["current_step"]["dispatch_command_kind"],
+            "receipt_backed_dispatch_packet"
+        );
+        assert_eq!(
+            payload["flow_projection"]["receipt_status"]["status"],
+            "packet_ready"
+        );
+        assert!(payload["flow_projection"].get("large_diagnostic").is_none());
         assert_eq!(
             payload["packet_materialization"]["artifacts"][0]["agent_init_execute_command"],
             "vida agent-init --dispatch-packet task-a.json --execute-dispatch"
