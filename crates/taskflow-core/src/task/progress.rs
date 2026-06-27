@@ -318,10 +318,12 @@ fn descendant_progress_summary(
         && non_container_descendants_clear
         && !missing_proof
         && !blocked_by_runtime
-        && matches!(
+        && (matches!(
             root_task.status.as_str(),
             "in_progress" | "review" | "verified" | "ready_for_close"
-        );
+        ) || (descendant_count > 0
+            && all_descendants_closed_like
+            && root_task.proof_satisfied));
     let closure_candidate =
         is_container && !root_closed && descendant_count > 0 && all_descendants_closed_like;
 
@@ -772,6 +774,34 @@ mod tests {
         )
         .unwrap();
 
+        assert!(summary.ready_for_close);
+        assert!(!summary.missing_proof);
+        assert_eq!(summary.closure_candidate_state, "leaf_ready_for_close");
+    }
+
+    #[test]
+    fn descendant_progress_allows_open_parent_task_when_children_and_proof_are_satisfied() {
+        let mut parent = row("parent", "open", "task", None);
+        parent.proof_targets = vec!["vida task progress parent --json".to_string()];
+        parent.proof_satisfied = true;
+        let rows = vec![
+            parent,
+            row("child-a", "closed", "task", Some("parent")),
+            row("child-b", "closed", "task", Some("parent")),
+        ];
+
+        let summary = task_progress_summary_from_rows(
+            &rows,
+            "parent",
+            TaskProgressBasis::DescendantsExcludingRoot,
+            |value| value.to_string(),
+            |value| value.replace(" --json", ""),
+        )
+        .unwrap();
+
+        assert_eq!(summary.descendant_count, 2);
+        assert_eq!(summary.closed_count, 2);
+        assert_eq!(summary.percent_closed, 100.0);
         assert!(summary.ready_for_close);
         assert!(!summary.missing_proof);
         assert_eq!(summary.closure_candidate_state, "leaf_ready_for_close");

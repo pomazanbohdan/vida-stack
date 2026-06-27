@@ -8443,6 +8443,80 @@ fn task_close_requires_structured_proof_evidence_for_configured_targets() {
 }
 
 #[test]
+fn task_closure_ready_parent_with_satisfied_proof_all_children_closed() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let epic_id = unique_test_id("closure-ready-proof-epic");
+    let parent_id = unique_test_id("closure-ready-proof-parent");
+    let child_id = unique_test_id("closure-ready-proof-child");
+    let proof_target = "vida task progress parent --json shows all children closed";
+    create_epic_parent(&state_dir, &epic_id, "Closure ready proof epic", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &parent_id,
+            "Closure ready proof parent",
+            "--type",
+            "task",
+            "--parent-id",
+            &epic_id,
+            "--proof-target",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &child_id,
+            "Closure ready proof child",
+            "--type",
+            "task",
+            "--status",
+            "closed",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            &parent_id,
+            "--proof-target",
+            proof_target,
+            "--result",
+            "pass",
+            "--artifact-ref",
+            "artifacts/closure-ready-proof.json",
+            "--evidence",
+            "all child work closed",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let readiness = run_command_json(&["task", "closure-ready", &parent_id, "--json"], &state_dir);
+
+    assert_eq!(readiness["status"], "pass");
+    assert_eq!(readiness["ready_for_close"], true);
+    assert_eq!(readiness["closure_candidate_state"], "leaf_ready_for_close");
+    assert_eq!(readiness["progress"]["descendant_count"], 1);
+    assert_eq!(readiness["progress"]["closed_count"], 1);
+    assert_eq!(readiness["progress"]["percent_closed"], 100.0);
+    assert_shared_fields_consistency(&readiness, "closure-ready parent proof");
+    assert_operator_contracts_consistency(&readiness, "closure-ready parent proof");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_verify_runtime_proof_blocker_is_golden_close_blocker_workflow() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
