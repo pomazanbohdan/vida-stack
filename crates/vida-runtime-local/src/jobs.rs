@@ -178,6 +178,7 @@ struct EffectumOutboxJobPayload {
     authority: String,
     runner: String,
     next_action: String,
+    claimed_by: Option<String>,
     trace: Vec<DurableJobTraceEntry>,
 }
 
@@ -199,10 +200,12 @@ impl EffectumOutboxWorker {
                 serde_json::json!({ "status": "failed", "reason": reason })
             }
         };
+        let command_id = self.command_id_for(snapshot);
+        let idempotency_key = self.idempotency_key_for(snapshot);
         WorkerCommandSubmission {
             operation: self.command_operation.clone(),
-            command_id: VidaCommandRef(format!("job-ack:{}", snapshot.outbox_id.0)),
-            idempotency_key: VidaIdempotencyKey(format!("job-ack:{}", snapshot.outbox_id.0)),
+            command_id,
+            idempotency_key,
             stream_id: snapshot
                 .source_event_cursor
                 .as_ref()
@@ -213,9 +216,28 @@ impl EffectumOutboxWorker {
                 "effect_id": snapshot.effect_id.0,
                 "runner": "effectum",
                 "authority": "redb_outbox",
+                "operation": self.command_operation.0,
+                "command_id": self.command_id_for(snapshot).0,
+                "idempotency_key": self.idempotency_key_for(snapshot).0,
+                "claimed_by": claimed_consumer_id(snapshot),
                 "outcome": outcome_payload,
             }),
         }
+    }
+
+    fn command_id_for(&self, snapshot: &OutboxJobSnapshot) -> VidaCommandRef {
+        VidaCommandRef(format!("job-ack:{}", snapshot.outbox_id.0))
+    }
+
+    fn idempotency_key_for(&self, snapshot: &OutboxJobSnapshot) -> VidaIdempotencyKey {
+        VidaIdempotencyKey(format!("job-ack:{}", snapshot.outbox_id.0))
+    }
+}
+
+fn claimed_consumer_id(snapshot: &OutboxJobSnapshot) -> Option<&str> {
+    match &snapshot.state {
+        JournalOutboxState::Claimed { consumer_id } => Some(consumer_id.as_str()),
+        _ => None,
     }
 }
 
@@ -234,28 +256,14 @@ impl EffectumWorkerPipeline {
 pub fn effectum_outbox_job_runner() -> effectum::JobRunner<EffectumWorkerPipeline> {
     effectum::JobRunner::builder(
         EFFECTUM_OUTBOX_WORKER,
-        |job: effectum::RunningJob, pipeline: EffectumWorkerPipeline| async move {
+        |job: effectum::RunningJob, _pipeline: EffectumWorkerPipeline| async move {
             let payload: EffectumOutboxJobPayload = job
                 .json_payload()
                 .map_err(|error| format!("decode Effectum outbox job payload: {error}"))?;
-            let snapshot = OutboxJobSnapshot {
-                outbox_id: VidaEventRef(payload.outbox_id),
-                effect_id: VidaEffectRef(payload.effect_id),
-                state: JournalOutboxState::Claimed {
-                    consumer_id: job.id.to_string(),
-                },
-                attempt_count: u64::try_from(job.current_try).unwrap_or_default(),
-                source_event_cursor: None,
-                failure_reason: None,
-            };
-            let command = pipeline
-                .worker
-                .acknowledgement_command(&snapshot, EffectAckOutcome::Succeeded);
-            pipeline
-                .sender
-                .send(command.clone())
-                .map_err(|error| format!("submit Effectum worker command: {error}"))?;
-            Ok::<WorkerCommandSubmission, String>(command)
+            Err::<WorkerCommandSubmission, String>(format!(
+                "refuse to acknowledge redb outbox `{}` effect `{}` from Effectum metadata without executing the persisted VidaEffectIntent",
+                payload.outbox_id, payload.effect_id
+            ))
         },
     )
     .build()
@@ -265,11 +273,14 @@ pub fn apply_worker_command_to_redb(
     journal_path: &Path,
     command: &WorkerCommandSubmission,
 ) -> Result<(), String> {
-    let outbox_id = command
-        .payload
-        .get("outbox_id")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "worker command payload missing `outbox_id`".to_string())?;
+    let outbox_id = required_payload_str(command, "outbox_id")?;
+    let effect_id = required_payload_str(command, "effect_id")?;
+    let authority = required_payload_str(command, "authority")?;
+    let runner = required_payload_str(command, "runner")?;
+    let operation = required_payload_str(command, "operation")?;
+    let command_id = required_payload_str(command, "command_id")?;
+    let idempotency_key = required_payload_str(command, "idempotency_key")?;
+    let claimed_by = required_payload_str(command, "claimed_by")?;
     let outcome = command
         .payload
         .get("outcome")
@@ -283,6 +294,23 @@ pub fn apply_worker_command_to_redb(
         )
     })?;
     let outbox_ref = VidaEventRef(outbox_id.to_string());
+    let persisted = journal
+        .outbox_effect_record(&outbox_ref)
+        .map_err(|error| format!("read redb outbox `{outbox_id}` for worker ack: {error}"))?
+        .ok_or_else(|| format!("redb outbox `{outbox_id}` is missing for worker ack"))?;
+
+    validate_worker_ack_command(
+        command,
+        &persisted,
+        effect_id,
+        authority,
+        runner,
+        operation,
+        command_id,
+        idempotency_key,
+        claimed_by,
+    )?;
+
     match outcome {
         "succeeded" => journal
             .mark_outbox_succeeded(&outbox_ref)
@@ -300,6 +328,72 @@ pub fn apply_worker_command_to_redb(
                 .map_err(|error| format!("mark outbox `{outbox_id}` failed: {error}"))
         }
         other => Err(format!("unsupported worker command outcome `{other}`")),
+    }
+}
+
+fn required_payload_str<'a>(
+    command: &'a WorkerCommandSubmission,
+    field: &str,
+) -> Result<&'a str, String> {
+    command
+        .payload
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("worker command payload missing `{field}`"))
+}
+
+fn validate_worker_ack_command(
+    command: &WorkerCommandSubmission,
+    persisted: &RedbOutboxEffectRecord,
+    effect_id: &str,
+    authority: &str,
+    runner: &str,
+    operation: &str,
+    command_id: &str,
+    idempotency_key: &str,
+    claimed_by: &str,
+) -> Result<(), String> {
+    if authority != "redb_outbox" {
+        return Err(format!(
+            "worker ack authority `{authority}` is not redb_outbox"
+        ));
+    }
+    if runner != "effectum" {
+        return Err(format!("worker ack runner `{runner}` is not effectum"));
+    }
+    if operation != command.operation.0 {
+        return Err(format!(
+            "worker ack payload operation `{operation}` does not match command operation `{}`",
+            command.operation.0
+        ));
+    }
+    if effect_id != persisted.effect.effect_id.0 {
+        return Err(format!(
+            "worker ack effect_id `{effect_id}` does not match persisted effect `{}`",
+            persisted.effect.effect_id.0
+        ));
+    }
+    let expected_ack = format!("job-ack:{}", persisted.outbox_id.0);
+    if command.command_id.0 != expected_ack || command_id != expected_ack {
+        return Err(format!(
+            "worker ack command_id must match persisted outbox `{}`",
+            persisted.outbox_id.0
+        ));
+    }
+    if command.idempotency_key.0 != expected_ack || idempotency_key != expected_ack {
+        return Err(format!(
+            "worker ack idempotency_key must match persisted outbox `{}`",
+            persisted.outbox_id.0
+        ));
+    }
+    match &persisted.state {
+        JournalOutboxState::Claimed { consumer_id } if consumer_id == claimed_by => Ok(()),
+        JournalOutboxState::Claimed { consumer_id } => Err(format!(
+            "worker ack claimed_by `{claimed_by}` does not match persisted claim `{consumer_id}`"
+        )),
+        other => Err(format!(
+            "worker ack requires claimed outbox state, found `{other:?}`"
+        )),
     }
 }
 
@@ -369,6 +463,7 @@ pub struct DurableJobPlan {
     pub effect_id: VidaEffectRef,
     pub lifecycle: DurableJobLifecycle,
     pub next_action: String,
+    pub claimed_by: Option<String>,
     pub retry_after_seconds: Option<u64>,
     pub blocker: Option<DurableJobBlocker>,
     pub trace: Vec<DurableJobTraceEntry>,
@@ -451,6 +546,7 @@ pub fn plan_outbox_job(snapshot: &OutboxJobSnapshot, policy: &RetryPolicy) -> Du
             effect_id: snapshot.effect_id.clone(),
             lifecycle: DurableJobLifecycle::Pending,
             next_action: "enqueue_effectum_job_idempotently".to_string(),
+            claimed_by: None,
             retry_after_seconds: None,
             blocker: None,
             trace,
@@ -461,6 +557,7 @@ pub fn plan_outbox_job(snapshot: &OutboxJobSnapshot, policy: &RetryPolicy) -> Du
             effect_id: snapshot.effect_id.clone(),
             lifecycle: DurableJobLifecycle::Retryable,
             next_action: "recover_claimed_job_after_restart".to_string(),
+            claimed_by: claimed_consumer_id(snapshot).map(str::to_string),
             retry_after_seconds: Some(backoff_seconds(snapshot.attempt_count, policy)),
             blocker: None,
             trace,
@@ -472,6 +569,7 @@ pub fn plan_outbox_job(snapshot: &OutboxJobSnapshot, policy: &RetryPolicy) -> Du
                 effect_id: snapshot.effect_id.clone(),
                 lifecycle: DurableJobLifecycle::DeadLettered,
                 next_action: "expose_dead_letter_blocker".to_string(),
+                claimed_by: None,
                 retry_after_seconds: None,
                 blocker: Some(DurableJobBlocker {
                     code: DEAD_LETTER_BLOCKER_CODE.to_string(),
@@ -489,6 +587,7 @@ pub fn plan_outbox_job(snapshot: &OutboxJobSnapshot, policy: &RetryPolicy) -> Du
             effect_id: snapshot.effect_id.clone(),
             lifecycle: DurableJobLifecycle::Retryable,
             next_action: "schedule_retry_from_redb_outbox".to_string(),
+            claimed_by: None,
             retry_after_seconds: Some(backoff_seconds(snapshot.attempt_count, policy)),
             blocker: None,
             trace,
@@ -499,6 +598,7 @@ pub fn plan_outbox_job(snapshot: &OutboxJobSnapshot, policy: &RetryPolicy) -> Du
             effect_id: snapshot.effect_id.clone(),
             lifecycle: DurableJobLifecycle::Succeeded,
             next_action: "none".to_string(),
+            claimed_by: None,
             retry_after_seconds: None,
             blocker: None,
             trace,
@@ -548,6 +648,7 @@ fn effectum_job_for_plan(
         authority: "redb_outbox".to_string(),
         runner: "effectum".to_string(),
         next_action: plan.next_action.clone(),
+        claimed_by: plan.claimed_by.clone(),
         trace: plan.trace.clone(),
     };
     let mut job = Job::builder(EFFECTUM_OUTBOX_WORKER)
@@ -707,7 +808,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn effectum_worker_execution_submits_command_and_redb_lifecycle_writeback() {
+    async fn effectum_worker_refuses_to_acknowledge_metadata_only_job() {
         let dir = tempdir().unwrap();
         let journal_path = dir.path().join("journal.redb");
         let config = EffectumQueueConfig::new(dir.path().join("jobs.sqlite"));
@@ -736,11 +837,7 @@ mod tests {
             .await
             .unwrap();
 
-        let command = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
-            .await
-            .expect("worker command timeout")
-            .expect("worker command");
-        apply_worker_command_to_redb(&journal_path, &command).expect("apply worker ack");
+        let command = tokio::time::timeout(Duration::from_millis(250), receiver.recv()).await;
         worker
             .unregister(Some(Duration::from_secs(5)))
             .await
@@ -751,16 +848,91 @@ mod tests {
             .outbox_effect_record(&outbox_id)
             .expect("read outbox")
             .expect("outbox record");
-        let status = queue
-            .get_job_status(deterministic_effectum_job_id(&plan.job_id))
-            .await
-            .unwrap();
 
-        assert_eq!(command.operation.0, "vida.completion.record");
-        assert_eq!(command.payload["outbox_id"], outbox_id.0);
-        assert_eq!(command.payload["outcome"]["status"], "succeeded");
+        assert!(command.is_err(), "metadata-only job must not submit ack");
+        assert_eq!(
+            record.state,
+            JournalOutboxState::Claimed {
+                consumer_id: "effectum-worker-1".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn redb_writeback_rejects_forged_ack_that_does_not_match_persisted_outbox() {
+        let dir = tempdir().expect("tempdir");
+        let journal_path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&journal_path).expect("create journal");
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("append effect");
+        let claimed = journal.claim_outbox_batch("effectum-worker-1", 1);
+        let outbox_id = claimed[0].outbox_id.clone();
+        drop(journal);
+
+        let forged = WorkerCommandSubmission {
+            operation: VidaOperation("attacker.operation.not.vida.completion.record".to_string()),
+            command_id: VidaCommandRef(format!("job-ack:{}", outbox_id.0)),
+            idempotency_key: VidaIdempotencyKey(format!("job-ack:{}", outbox_id.0)),
+            stream_id: VidaStreamRef(format!("job-trace:{}", outbox_id.0)),
+            payload: serde_json::json!({
+                "outbox_id": outbox_id.0,
+                "effect_id": "wrong-effect-id",
+                "runner": "effectum",
+                "authority": "redb_outbox",
+                "operation": "attacker.operation.not.vida.completion.record",
+                "command_id": format!("job-ack:{}", outbox_id.0),
+                "idempotency_key": format!("job-ack:{}", outbox_id.0),
+                "claimed_by": "effectum-worker-1",
+                "outcome": { "status": "succeeded" },
+            }),
+        };
+
+        let error = apply_worker_command_to_redb(&journal_path, &forged)
+            .expect_err("forged ack must fail closed");
+
+        assert!(error.contains("does not match persisted effect"));
+        let reopened = RedbOperationalJournal::open(&journal_path).expect("reopen journal");
+        let record = reopened
+            .outbox_effect_record(&outbox_id)
+            .expect("read outbox")
+            .expect("outbox record");
+        assert_eq!(
+            record.state,
+            JournalOutboxState::Claimed {
+                consumer_id: "effectum-worker-1".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn redb_writeback_accepts_ack_matching_persisted_claim_and_effect() {
+        let dir = tempdir().expect("tempdir");
+        let journal_path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&journal_path).expect("create journal");
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("append effect");
+        let claimed = journal.claim_outbox_batch("effectum-worker-1", 1);
+        let outbox_id = claimed[0].outbox_id.clone();
+        let record = journal
+            .outbox_effect_record(&outbox_id)
+            .expect("read outbox")
+            .expect("outbox record");
+        let command = EffectumOutboxWorker::new("vida.completion.record").acknowledgement_command(
+            &OutboxJobSnapshot::from(&record),
+            EffectAckOutcome::Succeeded,
+        );
+        drop(journal);
+
+        apply_worker_command_to_redb(&journal_path, &command).expect("apply matching ack");
+
+        let reopened = RedbOperationalJournal::open(&journal_path).expect("reopen journal");
+        let record = reopened
+            .outbox_effect_record(&outbox_id)
+            .expect("read outbox")
+            .expect("outbox record");
         assert_eq!(record.state, JournalOutboxState::Succeeded);
-        assert_eq!(status.state, effectum::JobState::Succeeded);
     }
 
     #[tokio::test]
