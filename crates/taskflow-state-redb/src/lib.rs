@@ -675,32 +675,26 @@ impl RedbOperationalJournal {
         Ok(records)
     }
 
-    pub fn materialized_artifact_receipt(
+    fn materialized_artifact_receipt_from_reconciled_record(
         &self,
-        artifact_ref: &VidaArtifactRef,
+        record: RedbArtifactIndexRecord,
     ) -> Result<RedbArtifactMaterializationReceipt, TaskflowStateError> {
-        let Some(record) = self.artifact_index_record(artifact_ref)? else {
-            return Err(TaskflowStateError::Storage(format!(
-                "artifact index record not found: {}",
-                artifact_ref.0
-            )));
-        };
         let Some(source_event_cursor) = record.producer_event_cursor.clone() else {
             return Err(TaskflowStateError::Storage(format!(
                 "artifact `{}` is missing source event cursor",
-                artifact_ref.0
+                record.artifact_ref.0
             )));
         };
         if record.schema_version != SCHEMA_VERSION {
             return Err(TaskflowStateError::Storage(format!(
                 "artifact `{}` schema version mismatch: expected={} actual={}",
-                artifact_ref.0, SCHEMA_VERSION, record.schema_version
+                record.artifact_ref.0, SCHEMA_VERSION, record.schema_version
             )));
         }
         if record.reconciliation_status != "sha256_pass" {
             return Err(TaskflowStateError::Storage(format!(
                 "artifact `{}` is not hash-reconciled: {}",
-                artifact_ref.0, record.reconciliation_status
+                record.artifact_ref.0, record.reconciliation_status
             )));
         }
         Ok(RedbArtifactMaterializationReceipt {
@@ -727,7 +721,7 @@ impl RedbOperationalJournal {
         let reconciliation = reconcile_artifact_record(record.clone(), project_root.as_ref())?;
         record.reconciliation_status = format!("sha256_{}", reconciliation.status);
         self.write_record(ARTIFACT_TABLE, &record.artifact_ref.0, &record)?;
-        self.materialized_artifact_receipt(artifact_ref)
+        self.materialized_artifact_receipt_from_reconciled_record(record)
     }
 
     pub fn reconcile_artifact_hashes(
