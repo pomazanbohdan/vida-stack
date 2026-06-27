@@ -86,6 +86,10 @@ COMMAND_PATTERN = re.compile(r"\b(?:Command|ClapCommand)::new\(\s*\"([^\"]+)\"")
 ARG_PATTERN = re.compile(r"\bArg::new\(\s*\"([^\"]+)\"")
 SUBCOMMAND_ATTR_PATTERN = re.compile(r"#\s*\[\s*command\s*\(")
 ARG_ATTR_PATTERN = re.compile(r"#\s*\[\s*arg\s*\(")
+ARG_LONG_PATTERN = re.compile(r"long(?:\s*=\s*\"([^\"]+)\")?")
+ENUM_PATTERN = re.compile(r"\b(?:pub(?:\([^)]*\))?\s+)?enum\s+([A-Za-z0-9_]+)\s*\{")
+ENUM_VARIANT_PATTERN = re.compile(r"^\s*([A-Z][A-Za-z0-9_]*)\s*(?:\(|,|$)")
+STRUCT_FIELD_PATTERN = re.compile(r"^\s*pub(?:\([^)]*\))?\s+([a-zA-Z0-9_]+)\s*:")
 
 EXCLUDED_PARTS = {
     ".git",
@@ -384,12 +388,36 @@ def inventory_literals_and_classifiers(files: Iterable[SourceFile]) -> dict[str,
 def inventory_commands(files: Iterable[SourceFile]) -> dict[str, object]:
     command_records: list[dict[str, object]] = []
     option_records: list[dict[str, object]] = []
+    root_command_variants: list[dict[str, object]] = []
+    semantic_option_records: list[dict[str, object]] = []
     attr_subcommands = 0
     attr_options = 0
     for item in files:
         if "crates/vida" not in item.rel:
             continue
+        current_enum: str | None = None
+        enum_depth = 0
+        pending_arg_attr = False
+        pending_long_name: str | None = None
         for index, line in enumerate(read_text(item.path).splitlines(), start=1):
+            enum_match = ENUM_PATTERN.search(line)
+            if enum_match:
+                current_enum = enum_match.group(1)
+                enum_depth = line.count("{") - line.count("}")
+                continue
+            if current_enum:
+                enum_depth += line.count("{") - line.count("}")
+                variant_match = ENUM_VARIANT_PATTERN.search(line)
+                if current_enum == "Command" and variant_match:
+                    root_command_variants.append(
+                        {
+                            "path": item.rel,
+                            "line": index,
+                            "command": variant_match.group(1),
+                        }
+                    )
+                if enum_depth <= 0:
+                    current_enum = None
             for match in COMMAND_PATTERN.finditer(line):
                 command_records.append({"path": item.rel, "line": index, "command": match.group(1)})
             for match in ARG_PATTERN.finditer(line):
@@ -398,8 +426,31 @@ def inventory_commands(files: Iterable[SourceFile]) -> dict[str, object]:
                 attr_subcommands += 1
             if ARG_ATTR_PATTERN.search(line):
                 attr_options += 1
+                pending_arg_attr = True
+                pending_long_name = None
+            if pending_arg_attr:
+                long_match = ARG_LONG_PATTERN.search(line)
+                if long_match:
+                    pending_long_name = long_match.group(1)
+            if pending_arg_attr:
+                field_match = STRUCT_FIELD_PATTERN.search(line)
+                if field_match:
+                    field_name = field_match.group(1)
+                    semantic_option_records.append(
+                        {
+                            "path": item.rel,
+                            "line": index,
+                            "option": pending_long_name
+                            or field_name.replace("_", "-"),
+                        }
+                    )
+                    pending_arg_attr = False
+                    pending_long_name = None
     option_counts: dict[str, int] = {}
     for row in option_records:
+        option = str(row["option"])
+        option_counts[option] = option_counts.get(option, 0) + 1
+    for row in semantic_option_records:
         option = str(row["option"])
         option_counts[option] = option_counts.get(option, 0) + 1
     repeated_global_flags = [
@@ -408,13 +459,25 @@ def inventory_commands(files: Iterable[SourceFile]) -> dict[str, object]:
         if count > 1
     ]
     return {
-        "parser": "lexical_rust_clap_baseline",
-        "leaf_command_count": len({row["command"] for row in command_records}) + attr_subcommands,
-        "command_specific_option_count": len(option_records) + attr_options,
+        "parser": "semantic_root_plus_explicit_clap_commands_v2",
+        "leaf_command_count": len(root_command_variants),
+        "subprocess_command_name_count": len({row["command"] for row in command_records}),
+        "command_specific_option_count": len(
+            {
+                str(row["option"])
+                for row in [*option_records, *semantic_option_records]
+            }
+        ),
+        "root_command_records": root_command_variants,
         "command_records": sorted(command_records, key=lambda row: (row["command"], row["path"], row["line"])),
+        "semantic_option_records": sorted(
+            semantic_option_records, key=lambda row: (row["option"], row["path"], row["line"])
+        ),
         "option_records": sorted(option_records, key=lambda row: (row["option"], row["path"], row["line"])),
         "derive_command_attribute_count": attr_subcommands,
+        "legacy_derive_attribute_leaf_candidate_count": attr_subcommands,
         "derive_arg_attribute_count": attr_options,
+        "legacy_derive_attribute_option_candidate_count": attr_options,
         "repeated_global_flags": repeated_global_flags,
         "proposed_disposition": "keep canonical generic verbs; globalize repeated flags; convert task-specific knobs to payload fields or aliases during LDRK CLI reduction",
     }
@@ -573,6 +636,9 @@ def render_drift_map(baseline: dict[str, object]) -> str:
                 ["cfg_test_status_helper_candidates", baseline["status_and_classifier_inventory"]["cfg_test_status_helper_function_count"]],  # type: ignore[index]
                 ["canonical_cli_leaf_command_candidates", commands["leaf_command_count"]],  # type: ignore[index]
                 ["command_specific_option_candidates", commands["command_specific_option_count"]],  # type: ignore[index]
+                ["subprocess_command_name_count", commands["subprocess_command_name_count"]],  # type: ignore[index]
+                ["legacy_derive_attribute_leaf_candidate_count", commands["legacy_derive_attribute_leaf_candidate_count"]],  # type: ignore[index]
+                ["legacy_derive_attribute_option_candidate_count", commands["legacy_derive_attribute_option_candidate_count"]],  # type: ignore[index]
             ],
         ),
         "",
@@ -589,6 +655,9 @@ def render_drift_map(baseline: dict[str, object]) -> str:
         ),
         "",
         "All-runtime lexical mutation candidates remain reported separately because the LDR-074 acceptance gate is scoped to CLI/TUI/transport mutation paths.",
+        "Legacy derive command attributes remain reported separately because they count Rust metadata annotations rather than canonical operator command leaves.",
+        "Legacy derive arg attributes remain reported separately because they count Rust metadata annotations rather than unique operator option names.",
+        "Subprocess command names remain reported separately because `Command::new` calls in runtime helpers are not canonical VIDA CLI leaves.",
         "",
         "Next slices:",
         "",

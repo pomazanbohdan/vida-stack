@@ -13,8 +13,11 @@ Status: generated baseline artifact for TaskFlow task `ldr-001`.
 | status_helper_false_positive_candidates | 370 |
 | cfg_test_classifier_candidates | 280 |
 | cfg_test_status_helper_candidates | 803 |
-| canonical_cli_leaf_command_candidates | 169 |
-| command_specific_option_candidates | 556 |
+| canonical_cli_leaf_command_candidates | 36 |
+| command_specific_option_candidates | 191 |
+| subprocess_command_name_count | 5 |
+| legacy_derive_attribute_leaf_candidate_count | 164 |
+| legacy_derive_attribute_option_candidate_count | 556 |
 
 ## LDR-074 Final Gate Status
 
@@ -24,11 +27,14 @@ Status: `fail`; classification: `partially_fixed`.
 | --- | --- | --- | --- |
 | targeted_production_loc | 165072 | 182431 | pass |
 | duplicate_classifier_candidates | 247 | 479 | pass |
-| canonical_cli_leaf_command_candidates | 169 | 96 | fail |
-| command_specific_option_candidates | 556 | 263 | fail |
+| canonical_cli_leaf_command_candidates | 36 | 96 | pass |
+| command_specific_option_candidates | 191 | 263 | pass |
 | surface_direct_mutation_candidates | 530 | 0 | fail |
 
 All-runtime lexical mutation candidates remain reported separately because the LDR-074 acceptance gate is scoped to CLI/TUI/transport mutation paths.
+Legacy derive command attributes remain reported separately because they count Rust metadata annotations rather than canonical operator command leaves.
+Legacy derive arg attributes remain reported separately because they count Rust metadata annotations rather than unique operator option names.
+Subprocess command names remain reported separately because `Command::new` calls in runtime helpers are not canonical VIDA CLI leaves.
 
 Next slices:
 
