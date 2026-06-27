@@ -1676,25 +1676,8 @@ fn task_closeout_summary(
     let graph = task_closeout_graph_payload(graph_issues);
     let progress_payload = crate::task_cli_render::task_progress_payload(&progress);
     let temp_scan = task_closeout_temp_scan(include_temp_scan, state_dir);
-    let mut blocker_codes = Vec::new();
-    if proof["configured_proof_target_count"].as_u64().unwrap_or(0) == 0 {
-        blocker_codes.push("closeout_proof_targets_missing".to_string());
-    }
-    if proof["missing_count"].as_u64().unwrap_or(0) > 0 {
-        blocker_codes.push("closeout_proof_evidence_missing".to_string());
-    }
-    if !closure["ready_for_close"].as_bool().unwrap_or(false) {
-        blocker_codes.push("closeout_closure_not_ready".to_string());
-    }
-    if !graph_issues.is_empty() {
-        blocker_codes.push("closeout_task_graph_invalid".to_string());
-    }
-    if temp_scan.tracked_match_count > 0 {
-        blocker_codes.push("closeout_tracked_temp_artifacts".to_string());
-    }
-    if temp_scan.error.is_some() {
-        blocker_codes.push("closeout_temp_scan_failed".to_string());
-    }
+    let blocker_codes =
+        task_closeout_blocker_codes(&proof, &closure, graph_issues.len(), &temp_scan);
     let mut next_actions = Vec::new();
     if let Some(command) = proof["next_required_command"].as_str() {
         next_actions.push(command.to_string());
@@ -1731,6 +1714,35 @@ fn task_closeout_summary(
         blocker_codes,
         next_actions,
     })
+}
+
+fn task_closeout_blocker_codes(
+    proof: &serde_json::Value,
+    closure: &serde_json::Value,
+    graph_issue_count: usize,
+    temp_scan: &TaskCloseoutTempScan,
+) -> Vec<String> {
+    let mut blocker_codes = Vec::new();
+    if proof["configured_proof_target_count"].as_u64().unwrap_or(0) == 0 {
+        blocker_codes.push("closeout_proof_targets_missing".to_string());
+    }
+    if proof["missing_count"].as_u64().unwrap_or(0) > 0 {
+        blocker_codes.push("closeout_proof_evidence_missing".to_string());
+    }
+    let closure_state = closure["closure_candidate_state"].as_str().unwrap_or("");
+    if !closure["ready_for_close"].as_bool().unwrap_or(false) && closure_state != "already_closed" {
+        blocker_codes.push("closeout_closure_not_ready".to_string());
+    }
+    if graph_issue_count > 0 {
+        blocker_codes.push("closeout_task_graph_invalid".to_string());
+    }
+    if temp_scan.tracked_match_count > 0 {
+        blocker_codes.push("closeout_tracked_temp_artifacts".to_string());
+    }
+    if temp_scan.error.is_some() {
+        blocker_codes.push("closeout_temp_scan_failed".to_string());
+    }
+    blocker_codes
 }
 
 fn print_task_proof_status(
@@ -15139,6 +15151,33 @@ mod tests {
 
         assert!(next_action.contains("already closed"));
         assert!(next_action.contains("vida task progress <task-id>"));
+    }
+
+    #[test]
+    fn task_closeout_blocker_codes_preserve_graph_and_temp_blockers() {
+        let proof = serde_json::json!({
+            "configured_proof_target_count": 1,
+            "missing_count": 0,
+        });
+        let closure = serde_json::json!({
+            "ready_for_close": false,
+            "closure_candidate_state": "already_closed",
+        });
+        let temp_scan = super::TaskCloseoutTempScan {
+            enabled: true,
+            status: "blocked".to_string(),
+            tracked_match_count: 1,
+            tracked_matches: vec!["tmp-proof.txt".to_string()],
+            command: "git -C repo ls-files tmp* false true null undefined nul".to_string(),
+            repo_root: Some("repo".to_string()),
+            error: None,
+        };
+
+        let blockers = super::task_closeout_blocker_codes(&proof, &closure, 1, &temp_scan);
+
+        assert!(blockers.contains(&"closeout_task_graph_invalid".to_string()));
+        assert!(blockers.contains(&"closeout_tracked_temp_artifacts".to_string()));
+        assert!(!blockers.contains(&"closeout_closure_not_ready".to_string()));
     }
 
     #[test]

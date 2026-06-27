@@ -7510,6 +7510,22 @@ fn task_closeout_json_pass_has_empty_next_actions_and_rooted_temp_scan() {
     assert_eq!(closeout["temp_scan"]["status"], "pass");
     assert!(closeout["temp_scan"]["repo_root"].as_str().is_some());
 
+    let _ = run_command_json(
+        &["task", "close", &task_id, "--reason", "done", "--json"],
+        &state_dir,
+    );
+    let closed_closeout = run_command_json(&["task", "closeout", &task_id, "--json"], &state_dir);
+    assert_eq!(closed_closeout["status"], "pass");
+    assert_eq!(closed_closeout["closeout_status"], "pass");
+    assert_eq!(
+        closed_closeout["closure"]["closure_candidate_state"],
+        "already_closed"
+    );
+    assert_eq!(
+        closed_closeout["blocker_codes"].as_array().unwrap().len(),
+        0
+    );
+
     let _ = fs::remove_dir_all(&state_dir);
 }
 
