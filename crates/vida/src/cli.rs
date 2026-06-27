@@ -682,13 +682,13 @@ pub(crate) struct AgentHostBridgeArgs {
 
     #[arg(
         long = "complete",
+        hide = true,
         help = "After parent-host execution, complete the lane through the validated lane completion surface"
     )]
     pub(crate) complete: bool,
 
     #[arg(
         long = "host-agent-id",
-        requires = "complete",
         help = "Host agent id returned by the parent host adapter"
     )]
     pub(crate) host_agent_id: Option<String>,
@@ -696,63 +696,67 @@ pub(crate) struct AgentHostBridgeArgs {
     #[arg(
         long = "summary",
         alias = "host-bridge-summary",
-        requires = "complete",
         help = "Receipt summary from the parent host adapter; --host-bridge-summary is accepted as a lane-completion alias"
     )]
     pub(crate) summary: Option<String>,
 
     #[arg(
         long = "decision",
-        requires = "complete",
+        hide = true,
         help = "Host bridge completion decision passed through to lane completion"
     )]
     pub(crate) decision: Option<String>,
 
     #[arg(
         long = "verdict",
-        requires = "complete",
+        hide = true,
         help = "Host bridge completion verdict passed through to lane completion"
     )]
     pub(crate) verdict: Option<String>,
 
     #[arg(
         long = "allowed-next-node",
-        requires = "complete",
+        hide = true,
         help = "Next workflow node allowed by the host bridge completion result"
     )]
     pub(crate) allowed_next_node: Option<String>,
 
     #[arg(
         long = "blocker-codes",
-        requires = "complete",
+        hide = true,
         help = "Completion blocker codes as a JSON array or compact list"
     )]
     pub(crate) blocker_codes: Option<String>,
 
     #[arg(
         long = "blocker-code",
-        requires = "complete",
+        hide = true,
         help = "Completion blocker code; accepts repeated flags"
     )]
     pub(crate) blocker_code: Vec<String>,
 
     #[arg(
         long = "rework-target",
-        requires = "complete",
+        hide = true,
         help = "Workflow target that should receive rework when completion is blocked"
     )]
     pub(crate) rework_target: Option<String>,
 
     #[arg(
+        long = "submit-result",
+        help = "Submit one parent-host bridge result JSON file and apply the validated lane completion flow"
+    )]
+    pub(crate) submit_result: Option<PathBuf>,
+
+    #[arg(
         long = "host-bridge-result-file",
-        requires = "complete",
+        hide = true,
         help = "Path to the parent host bridge result file used for completion"
     )]
     pub(crate) result_file: Option<PathBuf>,
 
     #[arg(
         long = "receipt-id",
-        requires = "complete",
         help = "Optional completion receipt id; defaults from request run and dispatch target"
     )]
     pub(crate) receipt_id: Option<String>,
@@ -4201,17 +4205,32 @@ mod tests {
             .expect_err("help should render clap display error");
         let host_bridge_help = host_bridge_error.to_string();
         assert!(host_bridge_help.contains("--request"));
-        assert!(host_bridge_help.contains("--complete"));
         assert!(host_bridge_help.contains("--attach-artifact"));
         assert!(host_bridge_help.contains("--artifact-kind"));
         assert!(host_bridge_help.contains("--changed-file"));
         assert!(host_bridge_help.contains("--attempt-id"));
         assert!(host_bridge_help.contains("--consolidation-receipt"));
         assert!(host_bridge_help.contains("--host-agent-id"));
+        assert!(host_bridge_help.contains("--submit-result"));
         assert!(host_bridge_help.contains("--summary"));
         assert!(host_bridge_help.contains("--receipt-id"));
         assert!(host_bridge_help.contains("--state-dir"));
         assert!(host_bridge_help.contains("--json"));
+        for flag in [
+            "--complete",
+            "--decision",
+            "--verdict",
+            "--allowed-next-node",
+            "--blocker-codes",
+            "--blocker-code",
+            "--rework-target",
+            "--host-bridge-result-file",
+        ] {
+            assert!(
+                !host_bridge_help.contains(flag),
+                "canonical host bridge help must not advertise legacy completion verdict flag {flag}"
+            );
+        }
 
         let parsed_host_bridge = Cli::try_parse_from([
             "vida",
@@ -4219,9 +4238,10 @@ mod tests {
             "host-bridge",
             "--request",
             "/tmp/host-bridge-request.json",
-            "--complete",
             "--host-agent-id",
             "agent-1",
+            "--submit-result",
+            "/tmp/host-bridge-result.json",
             "--summary",
             "done",
             "--receipt-id",
@@ -4241,8 +4261,15 @@ mod tests {
             host_bridge.request.display().to_string(),
             "/tmp/host-bridge-request.json"
         );
-        assert!(host_bridge.complete);
+        assert!(!host_bridge.complete);
         assert_eq!(host_bridge.host_agent_id.as_deref(), Some("agent-1"));
+        assert_eq!(
+            host_bridge
+                .submit_result
+                .as_deref()
+                .map(|path| path.display().to_string()),
+            Some("/tmp/host-bridge-result.json".to_string())
+        );
         assert_eq!(host_bridge.summary.as_deref(), Some("done"));
         assert_eq!(host_bridge.receipt_id.as_deref(), Some("receipt-1"));
         assert_eq!(
@@ -4277,6 +4304,63 @@ mod tests {
         assert_eq!(
             host_bridge_alias.summary.as_deref(),
             Some("done through alias")
+        );
+
+        let parsed_host_bridge_legacy_completion = Cli::try_parse_from([
+            "vida",
+            "agent",
+            "host-bridge",
+            "--request",
+            "/tmp/host-bridge-request.json",
+            "--complete",
+            "--host-agent-id",
+            "agent-1",
+            "--decision",
+            "blocked",
+            "--verdict",
+            "rework_required",
+            "--allowed-next-node",
+            "developer",
+            "--blocker-codes",
+            r#"["legacy_blocker"]"#,
+            "--blocker-code",
+            "legacy_blocker_2",
+            "--rework-target",
+            "developer",
+        ])
+        .expect("agent host-bridge legacy completion flags should remain parse-compatible");
+        let Some(super::Command::Agent(agent_args)) = parsed_host_bridge_legacy_completion.command
+        else {
+            panic!("agent command should parse");
+        };
+        let crate::AgentCommand::HostBridge(host_bridge_legacy_completion) = agent_args.command
+        else {
+            panic!("agent host-bridge command should parse");
+        };
+        assert!(host_bridge_legacy_completion.complete);
+        assert_eq!(
+            host_bridge_legacy_completion.decision.as_deref(),
+            Some("blocked")
+        );
+        assert_eq!(
+            host_bridge_legacy_completion.verdict.as_deref(),
+            Some("rework_required")
+        );
+        assert_eq!(
+            host_bridge_legacy_completion.allowed_next_node.as_deref(),
+            Some("developer")
+        );
+        assert_eq!(
+            host_bridge_legacy_completion.blocker_codes.as_deref(),
+            Some(r#"["legacy_blocker"]"#)
+        );
+        assert_eq!(
+            host_bridge_legacy_completion.blocker_code,
+            vec!["legacy_blocker_2".to_string()]
+        );
+        assert_eq!(
+            host_bridge_legacy_completion.rework_target.as_deref(),
+            Some("developer")
         );
 
         let parsed_host_bridge_attach = Cli::try_parse_from([

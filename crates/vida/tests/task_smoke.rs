@@ -15687,7 +15687,7 @@ fn agent_host_bridge_complete_missing_host_agent_id_uses_state_dir_and_json_enve
         ready_payload["host_bridge"]["completion_command"]
             .as_str()
             .expect("completion command should render")
-            .contains("vida lane complete run-host-bridge")
+            .contains("vida agent host-bridge --request")
     );
     assert_eq!(
         ready_payload["shared_fields"]["artifact_refs"]["request_path"],

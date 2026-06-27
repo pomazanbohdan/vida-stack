@@ -767,12 +767,11 @@ fn host_bridge_adapter_payload(
             format!("{run_id}-{dispatch_target}-host-bridge-receipt")
         };
         let command = format!(
-            "vida lane complete {} --receipt-id {} --host-bridge-request {} --host-agent-id {} --host-bridge-result-file {}",
-            crate::shell_quote(&request.run_id),
-            crate::shell_quote(&receipt_id),
+            "vida agent host-bridge --request {} --host-agent-id {} --submit-result {} --receipt-id {}",
             crate::shell_quote(&request_path.display().to_string()),
             crate::shell_quote("<host-agent-id>"),
-            crate::shell_quote(&request.result_path.display().to_string())
+            crate::shell_quote(&request.result_path.display().to_string()),
+            crate::shell_quote(&receipt_id)
         );
         command
     } else {
@@ -1275,7 +1274,7 @@ async fn attach_host_bridge_implementation_artifacts(
         .as_str()
         .map(human_command)
         .unwrap_or_else(|| {
-            "vida lane complete <run-id> --receipt-id <receipt-id> --host-bridge-request <request-path> --host-agent-id <host-agent-id> --host-bridge-result-file <result-path>".to_string()
+            "vida agent host-bridge --request <request-path> --host-agent-id <host-agent-id> --submit-result <result-path> --receipt-id <receipt-id>".to_string()
         });
     let artifact_refs_payload = serde_json::json!({
         "request_path": command.request.display().to_string(),
@@ -4699,6 +4698,10 @@ fn print_agent_status_payload(payload: &serde_json::Value, json: bool) {
 }
 
 async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
+    if command.submit_result.is_some() {
+        command.complete = true;
+        command.result_file = command.submit_result.clone();
+    }
     if command.complete
         && command
             .host_agent_id
@@ -6061,19 +6064,19 @@ mod tests {
             payload["host_bridge"]["completion_command"]
                 .as_str()
                 .unwrap()
-                .starts_with("vida lane complete run-1 ")
+                .starts_with("vida agent host-bridge --request request.json ")
         );
         assert!(
             payload["host_bridge"]["completion_command"]
                 .as_str()
                 .unwrap()
-                .contains("--host-bridge-request request.json")
+                .contains("--submit-result result.json")
         );
         assert!(
             payload["host_bridge"]["completion_command"]
                 .as_str()
                 .unwrap()
-                .contains("--host-bridge-result-file result.json")
+                .contains("--receipt-id run-1-implementer-host-bridge-receipt")
         );
         assert!(
             !payload["host_bridge"]["completion_command"]
@@ -6165,13 +6168,12 @@ mod tests {
         let completion_command = payload["host_bridge"]["completion_command"]
             .as_str()
             .expect("completion command");
-        assert!(completion_command.starts_with("vida lane complete run-analyst "));
+        assert!(completion_command.starts_with("vida agent host-bridge --request "));
         assert!(
             completion_command.contains("--receipt-id run-analyst-analyst-host-bridge-receipt")
         );
-        assert!(completion_command.contains("--host-bridge-request"));
         assert!(completion_command.contains("--host-agent-id '<host-agent-id>'"));
-        assert!(completion_command.contains("--host-bridge-result-file"));
+        assert!(completion_command.contains("--submit-result"));
         assert!(!completion_command.contains("--host-bridge-summary"));
         assert!(
             !completion_command.contains("--allowed-next-node"),
@@ -6548,7 +6550,6 @@ mod tests {
             serde_json::to_vec_pretty(&request).expect("request should serialize"),
         )
         .expect("write request");
-
         let _cwd = guard_current_dir(&root);
         let _env = EnvVarGuard::unset("VIDA_ROOT");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -6568,6 +6569,7 @@ mod tests {
             blocker_codes: None,
             blocker_code: Vec::new(),
             rework_target: None,
+            submit_result: None,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -6724,6 +6726,7 @@ mod tests {
             blocker_codes: None,
             blocker_code: Vec::new(),
             rework_target: None,
+            submit_result: None,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -6762,7 +6765,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_bridge_complete_uses_lane_complete_when_only_dispatch_receipt_preflight_is_missing()
+    async fn host_bridge_submit_result_uses_lane_completion_when_only_dispatch_receipt_preflight_is_missing()
      {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -6842,7 +6845,7 @@ mod tests {
                     "scope_in": ["host bridge wrapper completion"],
                     "read_only_paths": ["crates/vida/src/agent_dispatch_surface.rs"],
                     "definition_of_done": ["host bridge wrapper completion succeeds"],
-                    "verification_command": "vida lane complete",
+                    "verification_command": "vida agent host-bridge --submit-result",
                     "proof_target": "executed dispatch receipt",
                     "stop_rules": ["stop after lane completion"],
                     "blocking_question": "Does wrapper completion reuse lane complete?"
@@ -6879,6 +6882,29 @@ mod tests {
             serde_json::to_vec_pretty(&request).expect("request should serialize"),
         )
         .expect("write request");
+        std::fs::write(
+            &result_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "blocked",
+                "execution_state": "blocked",
+                "request_id": "req-complete-missing-preflight",
+                "run_id": run_id,
+                "dispatch_target": "analyst",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_codes": ["host_bridge_completion_result_blocked"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer",
+                "execution_evidence": {
+                    "receipt_backed": true
+                },
+                "source_dispatch_packet_path": receipt_packet_path.display().to_string()
+            }))
+            .expect("result should serialize"),
+        )
+        .expect("write submitted result");
         store
             .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
                 run_id: run_id.to_string(),
@@ -6927,15 +6953,16 @@ mod tests {
             changed_files: Vec::new(),
             attempt_id: None,
             consolidation_receipt_id: None,
-            complete: true,
+            complete: false,
             host_agent_id: Some("agent-1".to_string()),
             summary: Some("parent host completed analyst bridge".to_string()),
-            decision: Some("rework".to_string()),
-            verdict: Some("rework".to_string()),
-            allowed_next_node: Some("developer".to_string()),
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
             blocker_codes: None,
             blocker_code: Vec::new(),
-            rework_target: Some("designer".to_string()),
+            rework_target: None,
+            submit_result: Some(result_path.clone()),
             result_file: None,
             receipt_id: Some("host-bridge-wrapper-complete-1".to_string()),
             json: true,
@@ -6956,7 +6983,7 @@ mod tests {
         assert_eq!(after.lane_status, crate::LaneStatus::LaneBlocked.as_str());
         assert_eq!(
             after.blocker_code.as_deref(),
-            Some("host_bridge_completion_blocked")
+            Some("host_bridge_completion_result_blocked")
         );
         assert!(after.dispatch_result_path.is_some());
         assert!(after.downstream_dispatch_trace_path.is_some());
@@ -7319,13 +7346,13 @@ mod tests {
             payload["host_bridge"]["completion_command"]
                 .as_str()
                 .expect("completion command")
-                .starts_with("vida lane complete run-retry ")
+                .starts_with("vida agent host-bridge --request ")
         );
         assert!(
             payload["host_bridge"]["completion_command"]
                 .as_str()
                 .expect("completion command")
-                .contains("--host-bridge-result-file")
+                .contains("--submit-result")
         );
         assert!(
             !payload["host_bridge"]["completion_command"]
@@ -7378,8 +7405,8 @@ mod tests {
         let command = payload["host_bridge"]["completion_command"]
             .as_str()
             .expect("completion command");
-        assert!(command.starts_with("vida lane complete run-missing "));
-        assert!(command.contains("--host-bridge-request request.json"));
+        assert!(command.starts_with("vida agent host-bridge --request request.json "));
+        assert!(command.contains("--submit-result result.json"));
         assert!(!command.contains("--json"));
 
         let mixed_blocker_payload = host_bridge_adapter_payload(
@@ -7742,6 +7769,7 @@ mod tests {
             blocker_codes: None,
             blocker_code: Vec::new(),
             rework_target: None,
+            submit_result: None,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -7930,6 +7958,7 @@ mod tests {
             blocker_codes: None,
             blocker_code: Vec::new(),
             rework_target: None,
+            submit_result: None,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -8131,6 +8160,7 @@ mod tests {
             blocker_codes: None,
             blocker_code: Vec::new(),
             rework_target: None,
+            submit_result: None,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -8250,6 +8280,7 @@ mod tests {
             blocker_codes: None,
             blocker_code: Vec::new(),
             rework_target: None,
+            submit_result: None,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -8376,6 +8407,7 @@ mod tests {
             blocker_codes: None,
             blocker_code: Vec::new(),
             rework_target: None,
+            submit_result: None,
             result_file: None,
             receipt_id: None,
             json: true,
