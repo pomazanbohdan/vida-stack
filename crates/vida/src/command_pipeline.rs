@@ -160,8 +160,8 @@ fn authorization_blocker(
         resource_project_id: string_payload_field(&envelope.payload, "resource_project_id")
             .map(VidaProjectId)
             .or_else(|| project_id_from_ref(envelope.project_ref.as_ref())),
-        owned_path: string_payload_field(&envelope.payload, "owned_path"),
-        owned_write_scopes: string_array_payload_field(&envelope.payload, "owned_write_scopes"),
+        owned_path: None,
+        owned_write_scopes: Vec::new(),
         idempotency_key_present: envelope.idempotency_key.is_some(),
         apply_token_present: envelope.apply_token.is_some(),
     });
@@ -202,16 +202,6 @@ fn string_payload_field(payload: &serde_json::Value, field: &str) -> Option<Stri
         .get(field)
         .and_then(|value| value.as_str())
         .map(str::to_string)
-}
-
-fn string_array_payload_field(payload: &serde_json::Value, field: &str) -> Vec<String> {
-    payload
-        .get(field)
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|value| value.as_str().map(str::to_string))
-        .collect()
 }
 
 fn blocked_response(
@@ -262,8 +252,8 @@ mod tests {
     use serde_json::json;
     use vida_contracts::{
         operations, VidaClaimKind, VidaClientKind, VidaCommandEnvelope, VidaCommandResponse,
-        VidaOperation, VidaProjectRef, VidaRequestId, VidaResponseStatus, VidaSessionId,
-        VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
+        VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId, VidaResponseStatus,
+        VidaSessionId, VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
     };
 
     #[derive(Debug, Clone)]
@@ -323,6 +313,33 @@ mod tests {
         assert_eq!(
             alias.result.as_ref().expect("alias result")["alias_receipt"]["alias"],
             "service.status"
+        );
+    }
+
+    #[test]
+    fn pipeline_ignores_payload_supplied_owned_write_evidence() {
+        let pipeline = VidaCommandPipeline::new(EchoOperationClient);
+        let response = pipeline.execute(VidaCommandEnvelope {
+            operation: VidaOperation(operations::TASK_APPLY.to_string()),
+            client_kind: VidaClientKind::HostAgent,
+            project_ref: Some(VidaProjectRef::ProjectId {
+                project_id: VidaProjectId("project-1".to_string()),
+            }),
+            claim_kind: Some(VidaClaimKind::ExclusiveWrite),
+            payload: json!({
+                "resource_project_id": "project-1",
+                "owned_path": "unowned/admin/root.toml",
+                "owned_write_scopes": ["unowned"]
+            }),
+            idempotency_key: Some("idem-1".to_string()),
+            apply_token: Some("apply-1".to_string()),
+            ..service_status_envelope(operations::SERVICE_STATUS)
+        });
+
+        assert_eq!(response.status, VidaResponseStatus::Blocked);
+        assert_eq!(
+            response.blockers[0].code,
+            "operation_owned_write_scope_denied"
         );
     }
 
