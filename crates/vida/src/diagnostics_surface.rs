@@ -200,6 +200,77 @@ fn post_commit_default_clear_command(payload: &serde_json::Value) -> Option<&'st
     blocked_by_closed_task_projection.then_some("vida task reconcile-closed-runs --limit 25")
 }
 
+fn post_commit_default_lines(payload: &serde_json::Value) -> Vec<String> {
+    let mut lines = vec![
+        "VIDA post-commit diagnostics".to_string(),
+        format!(
+            "status: {}",
+            payload["status"].as_str().unwrap_or("blocked")
+        ),
+    ];
+    if let Some(blockers) = payload["blocker_codes"].as_array() {
+        lines.push(format!("blocker_codes: {}", blockers.len()));
+        let blocker_names = blockers
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        if !blocker_names.is_empty() {
+            lines.push(format!("blockers: {}", blocker_names.join(", ")));
+        }
+    }
+    if payload["status"].as_str() != Some("pass") {
+        if let Some(run_id) = payload["canonical_continuation_run_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            lines.push(format!("run_id: {run_id}"));
+        }
+        if let Some(task_id) = payload["taskflow_status"]["latest_run_graph_status"]["task_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            lines.push(format!("task_id: {task_id}"));
+        }
+        if let Some(command) = post_commit_default_clear_command(payload) {
+            lines.push(format!("clear_command: {command}"));
+        }
+        if let Some(owner) = payload["recommended_issue_workflow"]["upstream_issue_owner"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            lines.push(format!("upstream_issue_owner: {owner}"));
+        }
+        if let Some(url) = payload["upstream_vida_publication_context"]["issue_tracker_url"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            lines.push(format!("upstream_issue_tracker: {url}"));
+        }
+    }
+    if let Some(next_actions) = payload["next_actions"].as_array() {
+        let action_names = next_actions
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .take(2)
+            .collect::<Vec<_>>();
+        if !action_names.is_empty() {
+            lines.push("next:".to_string());
+            for action in action_names {
+                lines.push(format!("  - {action}"));
+            }
+        }
+    }
+    lines
+}
+
 fn post_commit_closed_task_active_run_projection_mismatch(
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
     latest_terminal_task_active_run_graph_task_stale: bool,
@@ -718,49 +789,8 @@ async fn run_post_commit(args: DiagnosticsPostCommitArgs) -> ExitCode {
                     &payload,
                 );
             } else {
-                println!("VIDA post-commit diagnostics");
-                println!(
-                    "status: {}",
-                    payload["status"].as_str().unwrap_or("blocked")
-                );
-                if let Some(blockers) = payload["blocker_codes"].as_array() {
-                    println!("blocker_codes: {}", blockers.len());
-                    let blocker_names = blockers
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .collect::<Vec<_>>();
-                    if !blocker_names.is_empty() {
-                        println!("blockers: {}", blocker_names.join(", "));
-                    }
-                }
-                if payload["status"].as_str() != Some("pass") {
-                    if let Some(run_id) = payload["canonical_continuation_run_id"]
-                        .as_str()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                    {
-                        println!("run_id: {run_id}");
-                    }
-                    if let Some(command) = post_commit_default_clear_command(&payload) {
-                        println!("clear_command: {command}");
-                    }
-                }
-                if let Some(next_actions) = payload["next_actions"].as_array() {
-                    let action_names = next_actions
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .take(2)
-                        .collect::<Vec<_>>();
-                    if !action_names.is_empty() {
-                        println!("next:");
-                        for action in action_names {
-                            println!("  - {action}");
-                        }
-                    }
+                for line in post_commit_default_lines(&payload) {
+                    println!("{line}");
                 }
             }
             diagnostic_exit_code(&payload)
@@ -791,7 +821,7 @@ mod tests {
         closed_task_active_run_projection_mismatch_next_action,
         compact_host_dispatch_preflight_for_diagnostics, missing_task_actionability,
         post_commit_closed_task_active_run_projection_mismatch, post_commit_default_clear_command,
-        run_post_commit, POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
+        post_commit_default_lines, run_post_commit, POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
     };
     use crate::test_cli_support::guard_current_dir;
     use crate::{
@@ -909,6 +939,45 @@ mod tests {
         assert!(!post_commit_default_clear_command(&payload)
             .unwrap()
             .contains("--json"));
+    }
+
+    #[test]
+    fn diagnostics_post_commit_default_blocked_output_names_actionable_context() {
+        let payload = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["closed_task_active_run_projection_mismatch"],
+            "canonical_continuation_run_id": "run-1",
+            "taskflow_status": {
+                "latest_run_graph_status": {
+                    "task_id": "task-1"
+                }
+            },
+            "recommended_issue_workflow": {
+                "upstream_issue_owner": "pomazanbohdan/vida-stack"
+            },
+            "upstream_vida_publication_context": {
+                "issue_tracker_url": "https://github.com/pomazanbohdan/vida-stack/issues"
+            },
+            "next_actions": [
+                "Run `vida task reconcile-closed-runs --limit 25`.",
+                "Search upstream issue tracker before creating a duplicate."
+            ]
+        });
+
+        let lines = post_commit_default_lines(&payload);
+
+        assert!(lines.contains(&"blocker_codes: 1".to_string()));
+        assert!(lines.contains(&"blockers: closed_task_active_run_projection_mismatch".to_string()));
+        assert!(lines.contains(&"run_id: run-1".to_string()));
+        assert!(lines.contains(&"task_id: task-1".to_string()));
+        assert!(lines
+            .contains(&"clear_command: vida task reconcile-closed-runs --limit 25".to_string()));
+        assert!(lines.contains(&"upstream_issue_owner: pomazanbohdan/vida-stack".to_string()));
+        assert!(lines.contains(
+            &"upstream_issue_tracker: https://github.com/pomazanbohdan/vida-stack/issues"
+                .to_string()
+        ));
+        assert!(lines.iter().all(|line| !line.contains("--json")));
     }
 
     #[test]
