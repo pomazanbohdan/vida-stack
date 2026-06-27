@@ -14803,6 +14803,19 @@ fn agent_init_execute_dispatch_explicit_materialized_packet_reaches_host_bridge_
         "explicit packet should emit host bridge adapter request: {execute}"
     );
     assert_eq!(
+        execute["blocker_codes"],
+        serde_json::json!(["host_tool_bridge_adapter_required"]),
+        "explicit packet should emit blocker_codes parity: {execute}"
+    );
+    assert_eq!(
+        execute["shared_fields"]["blocker_codes"], execute["blocker_codes"],
+        "shared_fields should mirror blocker_codes: {execute}"
+    );
+    assert_eq!(
+        execute["operator_contracts"]["blocker_codes"], execute["blocker_codes"],
+        "operator_contracts should mirror blocker_codes: {execute}"
+    );
+    assert_eq!(
         execute["dispatch_target"], "analyst",
         "fresh explicit packet must reach the dispatch/prelaunch layer: {execute}"
     );

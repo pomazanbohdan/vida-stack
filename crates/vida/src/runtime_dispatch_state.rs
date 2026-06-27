@@ -612,22 +612,65 @@ fn internal_host_app_bridge_requires_prelaunch_blocker(
     true
 }
 
+fn apply_internal_host_blocker_output_contract_parity(
+    execution_result: &mut serde_json::Value,
+    blocker_code: &str,
+) {
+    let blocker_codes = serde_json::json!([blocker_code]);
+    let next_actions = execution_result
+        .get("next_actions")
+        .filter(|value| value.is_array())
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    let artifact_refs = execution_result
+        .get("artifact_refs")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "surface": "vida agent-init" }));
+    execution_result["blocker_code"] = serde_json::Value::String(blocker_code.to_string());
+    execution_result["blocker_codes"] = blocker_codes.clone();
+    execution_result["shared_fields"] = serde_json::json!({
+        "trace_id": serde_json::Value::Null,
+        "workflow_class": serde_json::Value::Null,
+        "risk_tier": serde_json::Value::Null,
+        "status": "blocked",
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+    });
+    execution_result["operator_contracts"] = serde_json::json!({
+        "contract_id": "release-1-operator-contracts",
+        "schema_version": "release-1-v1",
+        "status": "blocked",
+        "trace_id": serde_json::Value::Null,
+        "workflow_class": serde_json::Value::Null,
+        "risk_tier": serde_json::Value::Null,
+        "blocker_codes": execution_result["shared_fields"]["blocker_codes"].clone(),
+        "next_actions": execution_result["shared_fields"]["next_actions"].clone(),
+        "artifact_refs": execution_result["shared_fields"]["artifact_refs"].clone(),
+    });
+}
+
 fn normalize_internal_host_timeout_result_blocker(
     project_root: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     execution_result: &mut serde_json::Value,
 ) {
-    if json_string(execution_result.get("blocker_code")).as_deref()
-        != Some(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT)
-    {
+    let blocker_code = json_string(execution_result.get("blocker_code"));
+    let Some(blocker_code) = blocker_code.as_deref().filter(|code| {
+        matches!(
+            *code,
+            INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
+                | INTERNAL_CODEX_CARRIER_UNAVAILABLE
+                | "host_tool_bridge_adapter_required"
+        )
+    }) else {
         return;
-    }
+    };
     if !dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
         return;
     }
-    execution_result["blocker_code"] =
-        serde_json::Value::String(INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT.to_string());
+    apply_internal_host_blocker_output_contract_parity(execution_result, blocker_code);
 }
 
 fn is_internal_activation_view_without_receipt_blocker(blocker_code: Option<&str>) -> bool {
