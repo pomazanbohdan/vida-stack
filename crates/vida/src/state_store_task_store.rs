@@ -3100,7 +3100,6 @@ impl StateStore {
             metadata_update_requested = true;
         }
         if let Some(parent_id) = parent_id {
-            parent_update_requested = true;
             let normalized_parent_id = parent_id.and_then(|value| {
                 let trimmed = value.trim();
                 if trimmed.is_empty() {
@@ -3146,6 +3145,8 @@ impl StateStore {
                     thread_id: String::new(),
                 });
             }
+            parent_update_requested =
+                Self::parent_id_for_task(&base_task_for_update) != Self::parent_id_for_task(&task);
         }
         if let Some(set_labels) = set_labels {
             task.labels = set_labels
@@ -5320,6 +5321,87 @@ mod tests {
             .await
             .expect("validate")
             .is_empty());
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn update_task_allows_unchanged_parent_with_metadata_update() {
+        let root = unique_task_store_temp_root("vida-update-unchanged-parent");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "unchanged-parent",
+                title: "Unchanged parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "unchanged-child",
+                title: "Unchanged child",
+                display_id: None,
+                description: "before",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("unchanged-parent"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create child");
+
+        store
+            .update_task(UpdateTaskRequest {
+                task_id: "unchanged-child",
+                title: None,
+                status: None,
+                priority: None,
+                notes: None,
+                description: Some("after"),
+                parent_id: Some(Some("unchanged-parent")),
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect("metadata update with unchanged parent should be accepted");
+
+        let child = store
+            .show_task("unchanged-child")
+            .await
+            .expect("load child");
+        assert_eq!(child.description, "after");
+        assert_eq!(
+            StateStore::parent_id_for_task(&child).as_deref(),
+            Some("unchanged-parent")
+        );
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("validate")
+            .is_empty());
+
         close_store_and_remove_root(store, root).await;
     }
 
