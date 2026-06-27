@@ -3389,6 +3389,14 @@ mod tests {
         }
     }
 
+    pub(super) fn cli_tokio_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(32 * 1024 * 1024)
+            .build()
+            .expect("tokio runtime should initialize")
+    }
+
     fn sample_agent_init_dispatch_receipt() -> RunGraphDispatchReceipt {
         RunGraphDispatchReceipt {
             run_id: "run-agent-init-error".to_string(),
@@ -10146,15 +10154,20 @@ mod agent_init_surface_tests {
 
     #[test]
     fn orchestrator_init_succeeds_after_init_scaffold() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-        let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
+        super::tests::run_on_cli_runtime_stack(
+            "orchestrator_init_succeeds_after_init_scaffold",
+            || {
+                let runtime = super::tests::cli_tokio_runtime();
+                let harness = TempStateHarness::new().expect("temp state harness should initialize");
+                let _cwd = guard_current_dir(harness.path());
+                let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
 
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        assert_eq!(
-            runtime.block_on(run(cli(&["orchestrator-init", "--json"]))),
-            ExitCode::SUCCESS
+                assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+                assert_eq!(
+                    runtime.block_on(run(cli(&["orchestrator-init", "--json"]))),
+                    ExitCode::SUCCESS
+                );
+            },
         );
     }
 
@@ -10664,7 +10677,7 @@ mod agent_init_surface_tests {
     #[test]
     fn agent_init_succeeds_after_init_scaffold() {
         super::tests::run_on_cli_runtime_stack("agent_init_succeeds_after_init_scaffold", || {
-            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+            let runtime = super::tests::cli_tokio_runtime();
             let harness = TempStateHarness::new().expect("temp state harness should initialize");
             let _cwd = guard_current_dir(harness.path());
             let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
@@ -10681,7 +10694,7 @@ mod agent_init_surface_tests {
 
     #[test]
     fn parallel_agent_init_role_views_do_not_contend_on_write_open() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let runtime = super::tests::cli_tokio_runtime();
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
         let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
