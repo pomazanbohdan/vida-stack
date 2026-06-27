@@ -835,7 +835,8 @@ impl RedbOperationalJournal {
     ) -> Result<RedbTaskflowSnapshotParity, TaskflowStateError> {
         let snapshot_path = snapshot_path.as_ref();
         let source_bytes = fs::read(snapshot_path).map_err(storage_error)?;
-        let snapshot = taskflow_state_fs::read_snapshot(snapshot_path).map_err(storage_error)?;
+        let snapshot: taskflow_state_fs::TaskSnapshot =
+            serde_json::from_slice(&source_bytes).map_err(storage_error)?;
         let preview = taskflow_snapshot_import_preview(
             &snapshot,
             "file_snapshot",
