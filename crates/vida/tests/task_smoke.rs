@@ -2929,6 +2929,58 @@ fn task_close_feedback_ignores_historical_blocker_words_in_success_reason() {
 }
 
 #[test]
+fn task_close_feedback_ignores_if_blocked_process_field_in_task_notes() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    create_epic_parent(
+        &state_dir,
+        "feedback-if-blocked-parent",
+        "Feedback if blocked parent",
+        "open",
+    );
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-if-blocked-task",
+            "Feedback if blocked task",
+            "--parent-id",
+            "feedback-if-blocked-parent",
+            "--notes",
+            "owner=orchestrator; activeForm=closing successful task; if_blocked=record blocker and stop",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+
+    let closed = run_command_json(
+        &[
+            "task",
+            "close",
+            "feedback-if-blocked-task",
+            "--reason",
+            "Implemented closeout proof command and all focused proof commands passed.",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(closed["status"], "pass");
+    assert_eq!(closed["blocker_codes"], serde_json::json!([]));
+    assert_eq!(closed["feedback_blocked"], false);
+    assert_eq!(
+        closed["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(
+        closed["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
+        serde_json::json!([])
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
