@@ -852,10 +852,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     .as_ref()
                 {
                     Some(terminal)
-                        if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
-                            latest_run_graph_status.as_ref(),
-                            terminal,
-                        ) =>
+                        if latest_run_graph_status.as_ref().is_none_or(|status| {
+                            crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                                Some(status),
+                                terminal,
+                            )
+                        }) =>
                     {
                         if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
                             terminal,
@@ -881,10 +883,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let terminal_task_active_run_graph_task_missing =
                     match latest_terminal_task_active_run_graph_status.as_ref() {
                         Some(terminal)
-                            if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
-                                latest_run_graph_status.as_ref(),
-                                terminal,
-                            ) =>
+                            if latest_run_graph_status.as_ref().is_none_or(|status| {
+                                crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                                    Some(status),
+                                    terminal,
+                                )
+                            }) =>
                         {
                             match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, terminal).await {
                                 Ok(verdict) => verdict.task_missing(),
@@ -2119,10 +2123,12 @@ async fn refresh_cached_status_projection_runtime_fields(
     let terminal_closed_run_is_current = match latest_terminal_task_active_run_graph_status.as_ref()
     {
         Some(terminal)
-            if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
-                latest_run_graph_status.as_ref(),
-                terminal,
-            ) =>
+            if latest_run_graph_status.as_ref().is_none_or(|status| {
+                crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                    Some(status),
+                    terminal,
+                )
+            }) =>
         {
             if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
                 terminal,
@@ -2157,10 +2163,12 @@ async fn refresh_cached_status_projection_runtime_fields(
     let terminal_task_active_run_graph_task_missing =
         match latest_terminal_task_active_run_graph_status.as_ref() {
         Some(terminal)
-            if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
-                latest_run_graph_status.as_ref(),
-                terminal,
-            ) =>
+            if latest_run_graph_status.as_ref().is_none_or(|status| {
+                crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                    Some(status),
+                    terminal,
+                )
+            }) =>
         {
                 crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
                     &store, terminal,

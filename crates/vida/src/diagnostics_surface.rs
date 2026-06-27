@@ -664,10 +664,12 @@ async fn build_post_commit_diagnostics(
     let latest_terminal_task_active_run_graph_task_stale =
         match latest_terminal_task_active_run_graph_status.as_ref() {
             Some(status)
-                if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
-                    latest_run_graph_status.as_ref(),
-                    status,
-                ) =>
+                if latest_run_graph_status.as_ref().is_none_or(|current| {
+                    crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                        Some(current),
+                        status,
+                    )
+                }) =>
             {
                 let verdict =
                     crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(

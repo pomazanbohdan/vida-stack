@@ -16636,13 +16636,14 @@ fn taskflow_settle_retires_closed_task_run_and_converges_runtime_surfaces() {
         .bind(("task", parent_id))
         .await
         .expect("close parent with canonical close truth");
+        db.query(
+            "UPDATE type::record('execution_plan_state', $run) SET status = 'ready', active_node = 'implementation', lifecycle_stage = 'implementation_active', updated_at = '9999999999999999999'",
+        )
+        .bind(("run", task_id))
+        .await
+        .expect("leave run graph as a stale active projection before settle");
         drop(db);
     });
-
-    let (doctor_before, _) = run_command_json_allow_failure(&["doctor", "--json"], &state_dir);
-    let before_blockers =
-        require_json_string_array(&doctor_before["blocker_codes"], "before blockers");
-    assert!(before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()));
 
     let settle = run_command_json(
         &["taskflow", "settle", "--limit", "25", "--json"],
@@ -16679,6 +16680,14 @@ fn taskflow_settle_retires_closed_task_run_and_converges_runtime_surfaces() {
     let (orchestrator, _) = run_command_json_allow_failure(
         &["orchestrator-init", "--state-dir", &state_dir, "--json"],
         &state_dir,
+    );
+    assert_eq!(
+        orchestrator["continuation_binding"]["status"], "idle",
+        "orchestrator-init must preserve terminal-retired idle binding after taskflow settle: {orchestrator}"
+    );
+    assert!(
+        orchestrator["continuation_binding"]["active_bounded_unit"].is_null(),
+        "orchestrator-init must not expose active work after taskflow settle: {orchestrator}"
     );
     assert_ne!(
         orchestrator["continuation_binding"]["ambiguity_reason"],
@@ -16904,6 +16913,12 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
     assert!(
         status_before["active_bounded_unit"].is_null(),
         "status must invalidate cached active bounded unit when current state has a closed-task active run mismatch: {status_before}"
+    );
+    let status_before_blockers =
+        require_json_string_array(&status_before["blocker_codes"], "status before blockers");
+    assert!(
+        status_before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "status must publish the closed-run mismatch blocker after cache invalidation: {status_before}"
     );
     assert_eq!(
         status_before["continuation_binding"]["ambiguity_reason"],

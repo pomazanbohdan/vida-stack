@@ -223,10 +223,12 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
     let terminal_task_active_status_is_current = latest_terminal_task_active_run_graph_status
         .as_ref()
         .is_some_and(|terminal| {
-            crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
-                latest_run_graph_status.as_ref(),
-                terminal,
-            )
+            latest_run_graph_status.as_ref().is_none_or(|status| {
+                crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                    Some(status),
+                    terminal,
+                )
+            })
         });
     let terminal_task_active_run_graph_task_missing = if terminal_task_active_status_is_current {
         match latest_terminal_task_active_run_graph_status.as_ref() {
@@ -354,10 +356,12 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
     let terminal_closed_run_is_current = match latest_terminal_task_active_run_graph_status.as_ref()
     {
         Some(terminal)
-            if crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
-                latest_run_graph_status.as_ref(),
-                terminal,
-            ) =>
+            if latest_run_graph_status.as_ref().is_none_or(|status| {
+                crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
+                    Some(status),
+                    terminal,
+                )
+            }) =>
         {
             if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
                 terminal,
@@ -374,9 +378,12 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         }
         _ => false,
     };
-    let closed_task_active_run_projection_mismatch = latest_run_graph_task_closed
-        || global_closed_run_is_current
-        || terminal_closed_run_is_current;
+    let latest_recovery_is_terminal_retired_runtime_run = crate::runtime_dispatch_receipt_helpers::recovery_summary_is_reconciled_terminal_retired_runtime_run(
+        effective_latest_run_graph_status,
+        effective_latest_run_graph_recovery,
+    );
+    let closed_task_active_run_projection_mismatch = !latest_recovery_is_terminal_retired_runtime_run
+        && (latest_run_graph_task_closed || global_closed_run_is_current || terminal_closed_run_is_current);
     let continuation_binding = if closed_task_active_run_projection_mismatch {
         crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
             continuation_binding,

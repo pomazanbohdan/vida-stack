@@ -135,12 +135,13 @@ fn terminal_task_active_run_matches_effective_run(
 ) -> bool {
     current_session_run_graph_status
         .or(latest_run_graph_status)
-        .is_some_and(|status| {
+        .map(|status| {
             crate::taskflow_run_graph_task_authority::terminal_task_active_status_matches_current_run(
                 Some(status),
                 terminal,
             )
         })
+        .unwrap_or(true)
 }
 
 fn trace_evidence_blocker_codes(
