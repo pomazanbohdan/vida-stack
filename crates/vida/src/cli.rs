@@ -50,6 +50,9 @@ const TASK_VERIFY_ABOUT: &str =
     "record partial verification evidence on one task without closing it";
 const TASK_VERIFY_LONG_ABOUT: &str = "Record partial verification evidence on one task without closing it.\n\nUse this when source changes and tests are verified but browser, API, or external proof remains unavailable due to a runtime condition. The command leaves the task open, appends structured verification notes, updates proof-blocking labels, and emits source_fixed/tests_green/proof_blocked fields in JSON.";
 const TASK_VERIFY_AFTER_HELP: &str = "Examples:\n  vida task verify <task-id> --source-fixed --tests-green --proof-blocked --proof-blocker \"browser proof unavailable\" --evidence \"cargo test -p vida task_verify\" --json\n\nOptions:\n  --source-fixed          Record that the source fix is complete\n  --tests-green           Record that focused tests passed\n  --proof-blocked         Record that final proof is pending on runtime/external conditions\n  --proof-blocker <text>  Human-readable proof blocker reason\n  --evidence <text>       Evidence command, file, receipt, or observation; accepts repeated flags\n  --state-dir <path>      Override the TaskFlow state directory\n  --json                  Emit machine-readable JSON output";
+const TASK_VALIDATOR_PACKET_ABOUT: &str =
+    "render a compact pre-commit validator packet for one task";
+const TASK_VALIDATOR_PACKET_AFTER_HELP: &str = "Examples:\n  vida task validator-packet <task-id>\n  vida task validator-packet <task-id> --proof \"cargo check -p vida --tests\" --json\n\nOutput:\n  Default output is a copyable validator packet with active task context, owned files, diffstat, bounded hunks, proof commands, prior validator blockers, and the expected PASS/BLOCKED schema.\n  Use --json for machine-readable packet fields.";
 const TASK_PRUNE_CLOSED_EPICS_ABOUT: &str =
     "archive and prune closed epic task rows without touching runtime receipts";
 const TASK_PRUNE_CLOSED_EPICS_LONG_ABOUT: &str = "Archive and prune only TaskFlow task rows for closed epic/container subtrees.\n\nThe command previews by default. Use --apply to write a JSONL archive of pruned task rows and then delete only those task rows plus their owned task_dependency rows. Runtime receipts, run-graph state, lane state, and non-task runtime state are never removed by this surface.";
@@ -976,6 +979,12 @@ pub(crate) enum TaskCommand {
     Search(TaskSearchArgs),
     #[command(about = "show one tracked task with dependency and planner metadata")]
     Show(TaskShowArgs),
+    #[command(
+        name = "validator-packet",
+        about = TASK_VALIDATOR_PACKET_ABOUT,
+        after_help = TASK_VALIDATOR_PACKET_AFTER_HELP
+    )]
+    ValidatorPacket(TaskValidatorPacketArgs),
     #[command(about = "show progress and dependency context for one task or open epics")]
     Progress(TaskProgressArgs),
     #[command(about = "inspect whether one task or epic is ready to close")]
@@ -1510,6 +1519,51 @@ pub(crate) struct TaskShowArgs {
         help = "Output view for task detail: compact, summary, or full"
     )]
     pub(crate) view: String,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskValidatorPacketArgs {
+    #[arg(help = "Task id for the validator packet")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "proof",
+        help = "Proof command to include in the packet. Repeat for multiple commands."
+    )]
+    pub(crate) proofs: Vec<String>,
+
+    #[arg(
+        long = "max-hunks",
+        default_value_t = 8,
+        help = "Maximum diff hunks to include in the packet"
+    )]
+    pub(crate) max_hunks: usize,
+
+    #[arg(
+        long = "max-lines",
+        default_value_t = 180,
+        help = "Maximum diff lines to include in the packet"
+    )]
+    pub(crate) max_lines: usize,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
 
     #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
@@ -3957,6 +4011,48 @@ mod tests {
         };
         assert!(close.stage_owned);
         assert!(!close.commit);
+    }
+
+    #[test]
+    fn task_validator_packet_help_and_args_are_discoverable() {
+        let packet_error = Cli::try_parse_from(["vida", "task", "validator-packet", "--help"])
+            .expect_err("help should render clap display error");
+        let packet_help = packet_error.to_string();
+        assert!(packet_help.contains("<TASK_ID>"));
+        assert!(packet_help.contains("--proof"));
+        assert!(packet_help.contains("--max-hunks"));
+        assert!(packet_help.contains("--max-lines"));
+        assert!(packet_help.contains("--state-dir"));
+        assert!(packet_help.contains("--json"));
+
+        let parsed = Cli::try_parse_from([
+            "vida",
+            "task",
+            "validator-packet",
+            "task-a",
+            "--proof",
+            "cargo check -p vida --tests",
+            "--max-hunks",
+            "3",
+            "--max-lines",
+            "80",
+            "--json",
+        ])
+        .expect("validator-packet should parse");
+        let Some(super::Command::Task(task_args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let TaskCommand::ValidatorPacket(command) = task_args.command else {
+            panic!("validator-packet command should parse");
+        };
+        assert_eq!(command.task_id, "task-a");
+        assert_eq!(
+            command.proofs,
+            vec!["cargo check -p vida --tests".to_string()]
+        );
+        assert_eq!(command.max_hunks, 3);
+        assert_eq!(command.max_lines, 80);
+        assert!(command.json);
     }
 
     #[test]

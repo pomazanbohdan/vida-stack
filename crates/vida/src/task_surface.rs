@@ -8877,6 +8877,199 @@ fn dirty_paths_for_repo(repo_root: &std::path::Path) -> Result<Vec<String>, Stri
         .collect::<Vec<_>>())
 }
 
+fn git_text_for_repo(repo_root: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string())
+}
+
+fn limit_lines(text: &str, max_lines: usize) -> (String, bool) {
+    let mut lines = text.lines();
+    let limited = lines.by_ref().take(max_lines).collect::<Vec<_>>();
+    let truncated = lines.next().is_some();
+    (limited.join("\n"), truncated)
+}
+
+fn limit_diff_hunks(text: &str, max_hunks: usize, max_lines: usize) -> (String, bool) {
+    let mut hunk_count = 0usize;
+    let mut line_count = 0usize;
+    let mut truncated = false;
+    let mut selected = Vec::new();
+
+    for line in text.lines() {
+        if line.starts_with("@@") {
+            hunk_count += 1;
+            if hunk_count > max_hunks {
+                truncated = true;
+                break;
+            }
+        }
+        if line_count >= max_lines {
+            truncated = true;
+            break;
+        }
+        selected.push(line);
+        line_count += 1;
+    }
+
+    (selected.join("\n"), truncated)
+}
+
+fn validator_blocker_history(task: &state_store::TaskRecord, max_lines: usize) -> Vec<String> {
+    task.notes
+        .as_deref()
+        .unwrap_or("")
+        .lines()
+        .filter(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower.contains("validator")
+                || lower.contains("blocking_findings")
+                || lower.contains("residual_risk")
+                || lower.contains("blocked")
+        })
+        .take(max_lines)
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn task_validator_packet_payload(
+    task: &state_store::TaskRecord,
+    read_metadata: &TaskReadMetadata,
+    repo_root: &std::path::Path,
+    command: &TaskValidatorPacketArgs,
+) -> serde_json::Value {
+    let dirty_paths = dirty_paths_for_repo(repo_root).unwrap_or_default();
+    let owned_files = if task.planner_metadata.owned_paths.is_empty() {
+        dirty_paths.clone()
+    } else {
+        task.planner_metadata.owned_paths.clone()
+    };
+    let proof_commands = if command.proofs.is_empty() {
+        task.planner_metadata.proof_targets.clone()
+    } else {
+        command.proofs.clone()
+    };
+    let diffstat = git_text_for_repo(repo_root, &["diff", "--stat", "HEAD", "--", "."])
+        .unwrap_or_else(|error| format!("git_diff_stat_failed: {error}"));
+    let diff = git_text_for_repo(repo_root, &["diff", "--unified=3", "HEAD", "--", "."])
+        .unwrap_or_else(|error| format!("git_diff_failed: {error}"));
+    let (diff_hunks, diff_truncated) =
+        limit_diff_hunks(&diff, command.max_hunks, command.max_lines);
+    let (diffstat_limited, diffstat_truncated) = limit_lines(&diffstat, 40);
+    let prior_validator_blockers = validator_blocker_history(task, 20);
+    let requested_schema = serde_json::json!({
+        "verdict": "PASS|BLOCKED",
+        "blocking_findings": ["file:line - blocking issue, or empty"],
+        "residual_risks": ["non-blocking risk, or empty"],
+        "evidence_checked": ["commands/files reviewed"],
+    });
+
+    serde_json::json!({
+        "surface": "vida task validator-packet",
+        "active_bounded_unit": {
+            "task_id": task.id,
+            "title": task.title,
+            "status": task.status,
+            "issue_type": task.issue_type,
+            "priority": task.priority,
+        },
+        "read_metadata": read_metadata,
+        "repo_root": repo_root.display().to_string(),
+        "owned_files": owned_files,
+        "dirty_files": dirty_paths,
+        "diffstat": diffstat_limited,
+        "diffstat_truncated": diffstat_truncated,
+        "key_hunks": diff_hunks,
+        "key_hunks_truncated": diff_truncated,
+        "proof_commands": proof_commands,
+        "prior_validator_blockers": prior_validator_blockers,
+        "requested_schema": requested_schema,
+    })
+}
+
+fn render_validator_packet_text(payload: &serde_json::Value) -> String {
+    let unit = &payload["active_bounded_unit"];
+    let list = |field: &str| -> String {
+        payload[field]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(|item| format!("- {item}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| "- none".to_string())
+    };
+    format!(
+        "VALIDATOR PACKET\nactive_bounded_unit: {task_id}\ntitle: {title}\nstatus: {status}\nrepo_root: {repo_root}\n\nOWNED FILES\n{owned_files}\n\nDIRTY FILES\n{dirty_files}\n\nDIFFSTAT\n{diffstat}\n\nKEY HUNKS\n{key_hunks}\n\nPROOF COMMANDS\n{proof_commands}\n\nPRIOR VALIDATOR BLOCKERS\n{prior_validator_blockers}\n\nREQUESTED RESPONSE SCHEMA\nVERDICT: PASS|BLOCKED\nBLOCKING_FINDINGS:\nRESIDUAL_RISKS:\nEVIDENCE_CHECKED:\n",
+        task_id = unit["task_id"].as_str().unwrap_or("unknown"),
+        title = unit["title"].as_str().unwrap_or(""),
+        status = unit["status"].as_str().unwrap_or("unknown"),
+        repo_root = payload["repo_root"].as_str().unwrap_or(""),
+        owned_files = list("owned_files"),
+        dirty_files = list("dirty_files"),
+        diffstat = payload["diffstat"].as_str().unwrap_or(""),
+        key_hunks = payload["key_hunks"].as_str().unwrap_or(""),
+        proof_commands = list("proof_commands"),
+        prior_validator_blockers = list("prior_validator_blockers"),
+    )
+}
+
+async fn run_task_validator_packet(command: TaskValidatorPacketArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    let repo_root = project_root_for_task_state(&state_dir)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    match task_show_authoritative_first(state_dir, &command.task_id).await {
+        Ok((task, metadata)) => {
+            let payload = task_validator_packet_payload(&task, &metadata, &repo_root, &command);
+            if command.json {
+                crate::print_json_pretty(&payload);
+            } else {
+                let text = render_validator_packet_text(&payload);
+                if matches!(command.render, crate::RenderMode::Plain) {
+                    println!("{text}");
+                } else {
+                    print_surface_header(command.render, "vida task validator-packet");
+                    print_surface_line(command.render, "packet", &text);
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            if command.json {
+                crate::print_json_pretty(&serde_json::json!({
+                    "status": "blocked",
+                    "surface": "vida task validator-packet",
+                    "blocker_codes": ["task_validator_packet_failed"],
+                    "next_actions": ["Run `vida task show <task-id>` to verify the task exists, then retry validator-packet."],
+                    "error": error.to_string(),
+                    "task_id": command.task_id,
+                }));
+            } else {
+                eprintln!("task validator-packet failed: {error}");
+            }
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn porcelain_status_path(line: &str) -> Option<String> {
     let path = line.get(3..)?.trim();
     if path.is_empty() {
@@ -10240,6 +10433,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 | "list"
                 | "adaptive-preview"
                 | "show"
+                | "validator-packet"
                 | "import"
                 | "create-bulk"
                 | "bulk-create"
@@ -10489,6 +10683,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::ValidatorPacket(command) => run_task_validator_packet(command).await,
         TaskCommand::Show(command) => {
             let state_dir = command
                 .state_dir
@@ -13489,13 +13684,13 @@ mod tests {
         build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
         build_split_mutation_preview, canonical_json_string_array_entries,
         classify_task_close_git_stage_failure, ensure_existing_task_mismatch_reason,
-        load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
+        limit_diff_hunks, load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
         parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
         parse_proof_target_values, pass_completed_lane_task_next_lawful_receipt,
         pass_exception_takeover_task_next_lawful_receipt,
         pass_ready_downstream_handoff_task_next_lawful_receipt,
         persist_task_handoff_accept_receipt, reconcile_epics_from_descendant_progress,
-        runtime_binding_has_active_exception_takeover,
+        render_validator_packet_text, runtime_binding_has_active_exception_takeover,
         runtime_binding_open_delegated_cycle_next_action, runtime_recovery_blocks_task_next_lawful,
         select_task_next_lawful_binding, task_browser_proof_planner_metadata,
         task_close_automation_is_blocked, task_close_automation_receipt,
@@ -13527,6 +13722,46 @@ mod tests {
         append_task_browser_proof_note, task_browser_proof_target, TaskBrowserProofArtifact,
         TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION, TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
     };
+
+    #[test]
+    fn validator_packet_limits_diff_hunks_and_lines() {
+        let diff =
+            "diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+new\n@@ -4 +4 @@\n-a\n+b\n@@ -8 +8 @@\n-c\n+d";
+
+        let (limited, truncated) = limit_diff_hunks(diff, 2, 20);
+
+        assert!(truncated);
+        assert!(limited.contains("@@ -1 +1 @@"));
+        assert!(limited.contains("@@ -4 +4 @@"));
+        assert!(!limited.contains("@@ -8 +8 @@"));
+    }
+
+    #[test]
+    fn validator_packet_text_contains_required_schema_and_context() {
+        let payload = serde_json::json!({
+            "active_bounded_unit": {
+                "task_id": "task-a",
+                "title": "Task A",
+                "status": "in_progress"
+            },
+            "repo_root": "C:/project/vida-stack",
+            "owned_files": ["crates/vida/src/cli.rs"],
+            "dirty_files": ["crates/vida/src/cli.rs"],
+            "diffstat": "1 file changed",
+            "key_hunks": "@@ -1 +1 @@",
+            "proof_commands": ["cargo check -p vida --tests"],
+            "prior_validator_blockers": ["validator blocking_findings: none"],
+        });
+
+        let text = render_validator_packet_text(&payload);
+
+        assert!(text.contains("active_bounded_unit: task-a"));
+        assert!(text.contains("OWNED FILES"));
+        assert!(text.contains("KEY HUNKS"));
+        assert!(text.contains("PROOF COMMANDS"));
+        assert!(text.contains("VERDICT: PASS|BLOCKED"));
+        assert!(text.contains("BLOCKING_FINDINGS:"));
+    }
 
     async fn create_task_for_test(
         store: &crate::StateStore,

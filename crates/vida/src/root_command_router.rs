@@ -264,6 +264,7 @@ fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
         TaskCommand::List(command) => command.state_dir.is_some(),
         TaskCommand::Search(command) => command.state_dir.is_some(),
         TaskCommand::Show(command) => command.state_dir.is_some(),
+        TaskCommand::ValidatorPacket(command) => command.state_dir.is_some(),
         TaskCommand::Progress(command) => command.state_dir.is_some(),
         TaskCommand::ClosureReady(command) => command.state_dir.is_some(),
         TaskCommand::Closeout(command) => command.state_dir.is_some(),
