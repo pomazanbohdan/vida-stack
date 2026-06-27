@@ -69,7 +69,9 @@ mod tests {
 
         assert_eq!(body["status"], "blocked");
         assert_eq!(body["execution_state"], "blocked");
-        assert_eq!(body["completion_verdict"], "blocked");
+        assert_eq!(body["decision"], "rework_required");
+        assert_eq!(body["verdict"], "rework_required");
+        assert_eq!(body["completion_verdict"], "rework_required");
         assert_eq!(
             body["blocker_codes"],
             serde_json::json!(["host_bridge_completion_summary_blocked"])
@@ -88,8 +90,8 @@ mod tests {
             body["blocker_code"],
             "host_bridge_completion_summary_blocked"
         );
-        assert_eq!(body["rework_target"], "coach");
-        assert_eq!(body["allowed_next_node"], serde_json::Value::Null);
+        assert_eq!(body["rework_target"], "developer");
+        assert_eq!(body["allowed_next_node"], "developer_rework");
 
         let _ = fs::remove_dir_all(&state_root);
     }
@@ -97,23 +99,25 @@ mod tests {
     #[test]
     fn completion_result_routes_negative_summary_prose_to_blocked_gate() {
         let cases = [
-            ("coach", None, "pass", "executed", "closure"),
+            ("coach", None, "pass", "executed", "closure", "__null__"),
             (
                 "coach",
                 Some("coach decision=blocked; rework required"),
                 "blocked",
                 "blocked",
-                "__null__",
+                "developer_rework",
+                "developer",
             ),
-            ("tester", None, "pass", "executed", "closure"),
+            ("tester", None, "pass", "executed", "closure", "__null__"),
             (
                 "tester",
                 Some("tester decision=blocked; focused proof failed; completion failed"),
                 "blocked",
                 "blocked",
-                "__null__",
+                "developer_rework",
+                "developer",
             ),
-            ("reviewer", None, "pass", "executed", "closure"),
+            ("reviewer", None, "pass", "executed", "closure", "__null__"),
             (
                 "reviewer",
                 Some(
@@ -121,11 +125,19 @@ mod tests {
                 ),
                 "blocked",
                 "blocked",
-                "__null__",
+                "tester",
+                "tester",
             ),
         ];
 
-        for (target, summary, expected_status, expected_execution_state, allowed_next_node) in cases
+        for (
+            target,
+            summary,
+            expected_status,
+            expected_execution_state,
+            allowed_next_node,
+            expected_rework_target,
+        ) in cases
         {
             let state_root = std::env::temp_dir().join(format!(
                 "vida-lane-completion-{}-{target}-{}",
@@ -161,20 +173,16 @@ mod tests {
                 assert_eq!(body["rework_target"], serde_json::Value::Null, "{target}");
                 assert_eq!(body["allowed_next_node"], allowed_next_node, "{target}");
             } else {
-                assert_eq!(body["decision"], "blocked", "{target}");
-                assert_eq!(body["verdict"], "blocked", "{target}");
-                assert_eq!(body["completion_verdict"], "blocked", "{target}");
+                assert_eq!(body["decision"], "rework_required", "{target}");
+                assert_eq!(body["verdict"], "rework_required", "{target}");
+                assert_eq!(body["completion_verdict"], "rework_required", "{target}");
                 assert_eq!(
                     body["blocker_codes"],
                     serde_json::json!(["host_bridge_completion_summary_blocked"]),
                     "{target}"
                 );
-                assert_eq!(body["rework_target"], target, "{target}");
-                assert_eq!(
-                    body["allowed_next_node"],
-                    serde_json::Value::Null,
-                    "{target}"
-                );
+                assert_eq!(body["rework_target"], expected_rework_target, "{target}");
+                assert_eq!(body["allowed_next_node"], allowed_next_node, "{target}");
             }
             assert_eq!(
                 body["summary_classifier_source"], "typed_and_summary_blockers",

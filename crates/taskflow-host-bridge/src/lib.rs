@@ -42,10 +42,11 @@ pub use completion::{
 };
 pub use completion_authority::{
     BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_PROVENANCE_REJECTED, BLOCKER_RECEIPT_NOT_BOUND,
-    BLOCKER_TYPED_BLOCKED_OUTCOME, HostBridgeCompletionAuthorityDecision,
+    BLOCKER_SUMMARY_DERIVED, BLOCKER_TYPED_BLOCKED_OUTCOME, HostBridgeCompletionAuthorityDecision,
     HostBridgeCompletionAuthorityInput, HostBridgeCompletionEffectIntent,
     HostBridgeCompletionEvent, HostBridgeCompletionState, HostBridgeCompletionTransitionCase,
     completion_authority_transition_matrix, decide_host_bridge_completion_authority,
+    summary_blocker_codes, summary_text_reports_blocked_completion,
 };
 pub use errors::HostBridgeError;
 pub use legacy_normalization::{
