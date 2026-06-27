@@ -79,12 +79,13 @@ impl TarpcLocalIpcVidaClient {
             .try_overwrite(true)
             .create_tokio()?;
 
+        let server = VidaEnvelopeServer::new_ready();
         let server_task = tokio::spawn(async move {
             if let Ok(connection) = listener.accept().await {
                 let framed = LengthDelimitedCodec::builder().new_framed(connection);
                 let transport = serde_transport::new(framed, Json::default());
                 BaseChannel::with_defaults(transport)
-                    .execute(VidaEnvelopeServer::new_ready().serve())
+                    .execute(server.serve())
                     .for_each(|request| async move {
                         request.await;
                     })

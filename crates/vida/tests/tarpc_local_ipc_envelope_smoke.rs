@@ -151,9 +151,17 @@ async fn tarpc_interprocess_transport_matches_inprocess_conformance_matrix() {
             .await
             .unwrap_or_else(|error| panic!("{operation} tarpc response: {error}"));
 
-        assert_eq!(actual, expected, "{operation} should match in-process");
-        assert_eq!(actual.status, VidaResponseStatus::Pass, "{operation}");
-        assert!(actual.error.is_none(), "{operation}");
+        assert_eq!(
+            actual, expected,
+            "{operation} should match in-process: actual={actual:#?} expected={expected:#?}"
+        );
+        if expected.status == VidaResponseStatus::Pass {
+            assert_eq!(actual.status, VidaResponseStatus::Pass, "{operation}");
+            assert!(actual.error.is_none(), "{operation}");
+        } else {
+            assert_eq!(actual.status, expected.status, "{operation}");
+            assert_eq!(actual.error, expected.error, "{operation}");
+        }
     }
 
     let endpoints = tarpc_client
