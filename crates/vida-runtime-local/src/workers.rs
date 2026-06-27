@@ -77,6 +77,22 @@ pub struct TypedApprovalState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationTraceEntry {
+    pub kind: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationCommandEnvelope {
+    pub operation: String,
+    pub run_id: String,
+    pub idempotency_key: String,
+    pub policy_ref: String,
+    pub payload: serde_json::Value,
+    pub trace: Vec<AutomationTraceEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerClaimConflict {
     pub run_id: String,
     pub active_idempotency_key: String,
@@ -110,9 +126,11 @@ pub struct AutomationWorkerOutcome {
     pub status: AutomationWorkerStatus,
     pub packet: Option<NextRolePacket>,
     pub approval: Option<TypedApprovalState>,
+    pub command: Option<AutomationCommandEnvelope>,
     pub conflict: Option<WorkerClaimConflict>,
     pub retry: Option<RetryObservation>,
     pub policy_verdict: CedarPolicyVerdict,
+    pub trace: Vec<AutomationTraceEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -170,19 +188,29 @@ impl AutomationWorkerRuntime {
             return outcome(AutomationWorkerStatus::Paused, policy_verdict);
         }
 
+        if !policy_verdict.allowed {
+            return outcome(AutomationWorkerStatus::PolicyDenied, policy_verdict);
+        }
+
         if let Some(packet) = self.state.completed_packets.get(&request.idempotency_key) {
             return AutomationWorkerOutcome {
                 status: AutomationWorkerStatus::IdempotentReplay,
                 packet: Some(packet.clone()),
                 approval: None,
+                command: Some(command_envelope(
+                    "taskflow.replay_next_packet",
+                    &request,
+                    &policy_verdict,
+                    serde_json::json!({ "packet": packet }),
+                )),
                 conflict: None,
                 retry: None,
                 policy_verdict,
+                trace: trace_for(
+                    "idempotent_replay",
+                    "completed packet returned by idempotency key",
+                ),
             };
-        }
-
-        if !policy_verdict.allowed {
-            return outcome(AutomationWorkerStatus::PolicyDenied, policy_verdict);
         }
 
         if request.approval_required {
@@ -190,14 +218,28 @@ impl AutomationWorkerRuntime {
                 status: AutomationWorkerStatus::ApprovalRequired,
                 packet: None,
                 approval: Some(TypedApprovalState {
-                    run_id: request.run_id,
+                    run_id: request.run_id.clone(),
                     required_role: "operator".to_string(),
                     approval_kind: "taskflow_next_role_materialization".to_string(),
                     resume_action: "approve_then_materialize_next_packet".to_string(),
                 }),
+                command: Some(command_envelope(
+                    "taskflow.await_operator_approval",
+                    &request,
+                    &policy_verdict,
+                    serde_json::json!({
+                        "required_role": "operator",
+                        "approval_kind": "taskflow_next_role_materialization",
+                        "resume_action": "approve_then_materialize_next_packet"
+                    }),
+                )),
                 conflict: None,
                 retry: None,
                 policy_verdict,
+                trace: trace_for(
+                    "approval_required",
+                    "typed approval state blocks automatic materialization",
+                ),
             };
         }
 
@@ -207,6 +249,7 @@ impl AutomationWorkerRuntime {
                     status: AutomationWorkerStatus::Conflict,
                     packet: None,
                     approval: None,
+                    command: None,
                     conflict: Some(WorkerClaimConflict {
                         run_id: request.run_id,
                         active_idempotency_key: active_key.clone(),
@@ -215,6 +258,7 @@ impl AutomationWorkerRuntime {
                     }),
                     retry: None,
                     policy_verdict,
+                    trace: trace_for("claim_conflict", WORKER_CLAIM_CONFLICT_BLOCKER),
                 };
             }
         } else {
@@ -244,9 +288,27 @@ impl AutomationWorkerRuntime {
             status: AutomationWorkerStatus::MaterializedNextPacket,
             packet: Some(packet),
             approval: None,
+            command: Some(command_envelope(
+                "taskflow.materialize_next_packet",
+                &request,
+                &policy_verdict,
+                serde_json::json!({
+                    "packet_id": self
+                        .state
+                        .completed_packets
+                        .get(&request.idempotency_key)
+                        .map(|packet| packet.packet_id.clone()),
+                    "from_role": request.from_role,
+                    "next_role": request.next_role
+                }),
+            )),
             conflict: None,
             retry: None,
             policy_verdict,
+            trace: trace_for(
+                "materialized_next_packet",
+                "durable packet materialization command accepted",
+            ),
         }
     }
 
@@ -278,6 +340,7 @@ impl AutomationWorkerRuntime {
             },
             packet: None,
             approval: None,
+            command: None,
             conflict: None,
             retry: Some(RetryObservation {
                 run_id: request.run_id.clone(),
@@ -287,6 +350,14 @@ impl AutomationWorkerRuntime {
                 blocker_code: exhausted.then(|| WORKER_RETRY_EXHAUSTED_BLOCKER.to_string()),
             }),
             policy_verdict,
+            trace: trace_for(
+                "retry_observed",
+                if exhausted {
+                    WORKER_RETRY_EXHAUSTED_BLOCKER
+                } else {
+                    "transient failure scheduled for bounded retry"
+                },
+            ),
         }
     }
 }
@@ -330,9 +401,43 @@ fn outcome(
         status,
         packet: None,
         approval: None,
+        command: None,
         conflict: None,
         retry: None,
         policy_verdict,
+        trace: Vec::new(),
+    }
+}
+
+fn command_envelope(
+    operation: &str,
+    request: &AnalystCompletionRequest,
+    policy_verdict: &CedarPolicyVerdict,
+    payload: serde_json::Value,
+) -> AutomationCommandEnvelope {
+    AutomationCommandEnvelope {
+        operation: operation.to_string(),
+        run_id: request.run_id.clone(),
+        idempotency_key: request.idempotency_key.clone(),
+        policy_ref: policy_verdict.policy_ref.clone(),
+        payload,
+        trace: vec![
+            trace_entry("policy_engine", &policy_verdict.policy_engine),
+            trace_entry("policy_ref", &policy_verdict.policy_ref),
+            trace_entry("from_role", &request.from_role),
+            trace_entry("next_role", &request.next_role),
+        ],
+    }
+}
+
+fn trace_for(kind: &str, detail: &str) -> Vec<AutomationTraceEntry> {
+    vec![trace_entry(kind, detail)]
+}
+
+fn trace_entry(kind: &str, detail: &str) -> AutomationTraceEntry {
+    AutomationTraceEntry {
+        kind: kind.to_string(),
+        detail: detail.to_string(),
     }
 }
 
@@ -384,16 +489,54 @@ mod tests {
                 .map(|packet| packet.next_role.as_str()),
             Some("developer")
         );
+        let command = completed.command.as_ref().expect("command envelope");
+        assert_eq!(command.operation, "taskflow.materialize_next_packet");
+        assert_eq!(command.run_id, "run-42");
+        assert_eq!(command.idempotency_key, "idem-42");
+        assert_eq!(command.payload["from_role"], "analyst");
+        assert_eq!(command.payload["next_role"], "developer");
+        assert!(
+            command
+                .trace
+                .iter()
+                .any(|entry| entry.kind == "policy_engine" && entry.detail == "cedar")
+        );
 
         let replay = runtime.process_analyst_completion(request);
         assert_eq!(replay.status, AutomationWorkerStatus::IdempotentReplay);
+        assert_eq!(
+            replay
+                .command
+                .as_ref()
+                .map(|command| command.operation.as_str()),
+            Some("taskflow.replay_next_packet")
+        );
         assert_eq!(runtime.state.completed_packets.len(), 1);
+
+        let denied_replay = runtime.process_analyst_completion(AnalystCompletionRequest {
+            run_id: "run-42".to_string(),
+            from_role: "analyst".to_string(),
+            next_role: "developer".to_string(),
+            idempotency_key: "idem-42".to_string(),
+            approval_required: false,
+            cedar_action: "vida.taskflow.bypass_policy".to_string(),
+        });
+        assert_eq!(denied_replay.status, AutomationWorkerStatus::PolicyDenied);
+        assert!(denied_replay.packet.is_none());
+        assert!(denied_replay.command.is_none());
 
         let approval = runtime.process_analyst_completion(
             AnalystCompletionRequest::next_developer_packet("run-approval", "idem-approval")
                 .requiring_approval(),
         );
         assert_eq!(approval.status, AutomationWorkerStatus::ApprovalRequired);
+        assert_eq!(
+            approval
+                .command
+                .as_ref()
+                .map(|command| command.operation.as_str()),
+            Some("taskflow.await_operator_approval")
+        );
         assert_eq!(
             approval
                 .approval
@@ -426,6 +569,14 @@ mod tests {
 
         let retry = restarted.process_analyst_completion(request.clone());
         assert_eq!(retry.status, AutomationWorkerStatus::Retrying);
+        assert_eq!(
+            retry
+                .trace
+                .iter()
+                .find(|entry| entry.kind == "retry_observed")
+                .map(|entry| entry.detail.as_str()),
+            Some("transient failure scheduled for bounded retry")
+        );
         assert_eq!(
             retry.retry,
             Some(RetryObservation {
