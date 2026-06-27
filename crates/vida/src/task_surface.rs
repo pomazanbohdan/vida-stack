@@ -1817,7 +1817,14 @@ async fn task_takeover_status_receipt(
     let (lane_source, status) = if let Some(status) = status_override {
         (lane_source_override.unwrap_or("run_id"), Some(status))
     } else if !allow_latest_fallback {
-        (lane_source_override.unwrap_or("task_id"), None)
+        (
+            lane_source_override.unwrap_or("task_id"),
+            store
+                .latest_run_graph_status_for_task(&task.id)
+                .await
+                .ok()
+                .flatten(),
+        )
     } else {
         let current_status = store
             .latest_run_graph_status_for_current_session()
@@ -1873,16 +1880,13 @@ async fn task_takeover_status_receipt(
                 "no run-graph lane evidence is available for takeover status of task `{}`",
                 task.id
             ),
-            recommended_command: Some(operator_output::command_text::human_command(&format!(
-                "vida lane show {} --json",
-                crate::shell_quote(&task.id)
-            ))),
+            recommended_command: Some(operator_output::command_text::human_command(
+                "vida lane show --latest --json",
+            )),
             next_actions: vec![format!(
-                "Run `{}` to inspect task-scoped lane evidence before attempting exception takeover.",
-                operator_output::command_text::human_command(&format!(
-                    "vida lane show {} --json",
-                    crate::shell_quote(&task.id)
-                ))
+                "Run `{}` to inspect latest lane evidence before attempting exception takeover for task `{}`.",
+                operator_output::command_text::human_command("vida lane show --latest --json"),
+                task.id
             )],
             blocker_codes: vec![if allow_latest_fallback {
                 "missing_latest_lane_receipt".to_string()
@@ -14615,6 +14619,130 @@ mod tests {
     }
 
     #[test]
+    fn task_takeover_status_resolves_task_scoped_active_exception_takeover() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+        runtime.block_on(async {
+            let store = crate::StateStore::open(harness.path().to_path_buf())
+                .await
+                .expect("state store should open");
+            let task = owned_task_record(
+                "task-takeover-active-scope",
+                vec!["crates/vida/src/task_surface.rs"],
+            );
+            create_task_for_test(
+                &store,
+                "task-takeover-active-parent",
+                "Task takeover active parent",
+                "epic",
+                "open",
+                1,
+                None,
+            )
+            .await;
+            create_task_for_test(
+                &store,
+                &task.id,
+                &task.title,
+                &task.issue_type,
+                &task.status,
+                task.priority,
+                Some("task-takeover-active-parent"),
+            )
+            .await;
+            let run_id = "run-task-takeover-active-scope";
+            let metadata_path = task_exception_takeover_metadata_path(harness.path(), run_id)
+                .expect("metadata path");
+            fs::create_dir_all(metadata_path.parent().expect("metadata dir should exist"))
+                .expect("metadata dir should create");
+            fs::write(
+                &metadata_path,
+                serde_json::json!({
+                    "run_id": run_id,
+                    "dispatch_target": "implementer",
+                    "source_exception_path_receipt_id": "takeover-receipt",
+                    "owned_write_scope": ["crates/vida/src/task_surface.rs"]
+                })
+                .to_string(),
+            )
+            .expect("metadata should write");
+            let status = state_store::RunGraphStatus {
+                run_id: run_id.to_string(),
+                task_id: task.id.clone(),
+                task_class: "implementation".to_string(),
+                active_node: "implementer".to_string(),
+                next_node: None,
+                status: "blocked".to_string(),
+                route_task_class: "implementation".to_string(),
+                selected_backend: "internal_subagents".to_string(),
+                lane_id: "implementer".to_string(),
+                lifecycle_stage: "implementer_blocked".to_string(),
+                policy_gate: "blocked_open_delegated_cycle".to_string(),
+                handoff_state: "bridge_request_pending".to_string(),
+                context_state: "ready".to_string(),
+                checkpoint_kind: "runtime_dispatch".to_string(),
+                resume_target: "none".to_string(),
+                recovery_ready: false,
+            };
+            store
+                .record_run_graph_status(&status)
+                .await
+                .expect("run graph status should persist");
+            store
+                .record_run_graph_dispatch_receipt(&state_store::RunGraphDispatchReceipt {
+                    run_id: status.run_id.clone(),
+                    dispatch_target: "implementer".to_string(),
+                    dispatch_status: "blocked".to_string(),
+                    lane_status: "lane_exception_takeover".to_string(),
+                    supersedes_receipt_id: Some("takeover-receipt".to_string()),
+                    exception_path_receipt_id: Some("takeover-receipt".to_string()),
+                    dispatch_kind: "agent_lane".to_string(),
+                    dispatch_surface: Some("vida lane exception-takeover".to_string()),
+                    dispatch_command: Some("vida lane exception-takeover".to_string()),
+                    dispatch_packet_path: None,
+                    dispatch_result_path: None,
+                    blocker_code: Some("host_tool_bridge_adapter_required".to_string()),
+                    downstream_dispatch_target: None,
+                    downstream_dispatch_command: None,
+                    downstream_dispatch_note: None,
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: Vec::new(),
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: None,
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("junior".to_string()),
+                    activation_runtime_role: Some("implementer".to_string()),
+                    selected_backend: Some("internal_subagents".to_string()),
+                    recorded_at: "2026-06-27T00:00:00Z".to_string(),
+                })
+                .await
+                .expect("dispatch receipt should persist");
+
+            let receipt =
+                task_takeover_status_receipt(&store, &task, None, Some("task_id"), false).await;
+
+            assert_eq!(receipt.status, task_json_success_status());
+            assert!(receipt.allowed);
+            assert!(receipt.root_local_write_allowed);
+            assert_eq!(receipt.local_exception_takeover_state, "active");
+            assert_eq!(receipt.lane["source"], "task_id");
+            assert_eq!(receipt.lane["run_id"], run_id);
+            assert_eq!(receipt.lane["task_id"], task.id);
+            assert_eq!(
+                receipt.root_write_guard["root_local_write_allowed_for_only_these_paths"],
+                serde_json::json!(["crates/vida/src/task_surface.rs"])
+            );
+            assert!(receipt.recommended_command.is_none());
+            assert!(receipt.blocker_codes.is_empty());
+        });
+    }
+
+    #[test]
     fn task_takeover_status_blocks_completed_lane_exception_scope() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -14861,7 +14989,11 @@ mod tests {
             assert!(lines.iter().any(|(label, value)| *label == "blocker_codes"
                 && value.contains("missing_lane_receipt")));
             assert!(lines.iter().any(|(label, value)| *label == "next action"
-                && value.contains("vida lane show requested-task-without-lane")));
+                && value.contains("vida lane show")
+                && value.contains("--latest")));
+            assert!(!lines
+                .iter()
+                .any(|(_, value)| value.contains("vida lane show requested-task-without-lane")));
         });
     }
 
