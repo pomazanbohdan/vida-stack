@@ -980,6 +980,11 @@ pub(crate) enum TaskCommand {
     Progress(TaskProgressArgs),
     #[command(about = "inspect whether one task or epic is ready to close")]
     ClosureReady(TaskClosureReadyArgs),
+    #[command(
+        about = "bundle task closeout proof, closure, graph, progress, and temp hygiene checks",
+        long_about = "Bundle the small pre-close checks operators otherwise run one by one: proof status, closure readiness, graph validation, parent progress, and tracked temporary artifact hygiene. Default output is compact human-readable text; use --json for the machine-readable contract."
+    )]
+    Closeout(TaskCloseoutArgs),
     #[command(about = "inspect proof targets and evidence status for one tracked task")]
     Proof(TaskProofArgs),
     #[command(about = "list tasks ready for execution from canonical graph truth")]
@@ -3117,6 +3122,35 @@ pub(crate) struct TaskClosureReadyArgs {
         help = "Closure readiness basis: descendants or direct-children"
     )]
     pub(crate) basis: String,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskCloseoutArgs {
+    #[arg(help = "Task or epic id whose closeout proof bundle should be inspected")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "basis",
+        default_value = "descendants",
+        help = "Progress and closure basis: descendants or direct-children"
+    )]
+    pub(crate) basis: String,
+
+    #[arg(
+        long = "include-temp-scan",
+        default_value_t = true,
+        help = "Include tracked temporary artifact hygiene scan in the closeout bundle"
+    )]
+    pub(crate) include_temp_scan: bool,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,

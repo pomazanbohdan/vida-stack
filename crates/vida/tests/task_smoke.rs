@@ -335,6 +335,30 @@ fn run_command_json_allow_failure(args: &[&str], state_dir: &str) -> (serde_json
     (json, output.status.success())
 }
 
+fn run_command_json_allow_failure_in_cwd(
+    args: &[&str],
+    state_dir: &str,
+    cwd: &str,
+) -> (serde_json::Value, bool) {
+    let output = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(args)
+            .env("VIDA_STATE_DIR", state_dir)
+            .current_dir(cwd);
+        command
+    });
+    let json = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "json output should parse for args {args:?}: {error}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    (json, output.status.success())
+}
+
 fn create_epic_parent(state_dir: &str, parent_id: &str, title: &str, status: &str) {
     let parent = run_command_json(
         &[
@@ -7331,6 +7355,210 @@ fn task_proof_attach_evidence_satisfies_status_and_progress() {
     );
 
     let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_closeout_json_bundles_blocked_proof_closure_graph_and_temp_scan() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("closeout-parent");
+    let task_id = unique_test_id("closeout-task");
+    let proof_target = "cargo test -p vida --test task_smoke task_closeout";
+    create_epic_parent(&state_dir, &parent_id, "Closeout parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Closeout task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            &parent_id,
+            "--proof-target",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let (closeout, success) =
+        run_command_json_allow_failure(&["task", "closeout", &task_id, "--json"], &state_dir);
+
+    assert!(!success, "missing proof closeout should be blocked");
+    assert_eq!(closeout["surface"], "vida task closeout");
+    assert_eq!(closeout["status"], "blocked");
+    assert_release1_shared_envelope_fields(&closeout, "task closeout");
+    assert_eq!(closeout["proof"]["configured_count"], 1);
+    assert_eq!(closeout["proof"]["missing_count"], 1);
+    assert_eq!(closeout["closure"]["ready_for_close"], false);
+    assert_eq!(closeout["graph"]["valid"], true);
+    assert_eq!(closeout["temp_scan"]["enabled"], true);
+    assert!(closeout["blocker_codes"]
+        .as_array()
+        .expect("closeout blockers should be an array")
+        .contains(&serde_json::json!("closeout_proof_evidence_missing")));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_closeout_default_output_is_compact_and_help_documents_json_mode() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("closeout-default-parent");
+    let task_id = unique_test_id("closeout-default-task");
+    create_epic_parent(&state_dir, &parent_id, "Closeout default parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Closeout default task",
+            "--type",
+            "task",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let default_output = run_and_assert_failure(&["task", "closeout", &task_id], &state_dir).0;
+    assert!(default_output.starts_with("vida task closeout\n"));
+    assert!(!default_output.trim_start().starts_with('{'));
+    assert!(default_output.contains("proof: configured=0"));
+    assert!(default_output.contains("graph: valid=true issues=0"));
+    assert!(default_output.contains("temp_scan: status="));
+
+    let help = run_and_assert_success(&["task", "closeout", "--help"], &state_dir);
+    assert!(help.contains("Default output is compact human-readable text"));
+    assert!(help.contains("--json"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_closeout_json_pass_has_empty_next_actions_and_rooted_temp_scan() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("closeout-pass-parent");
+    let task_id = unique_test_id("closeout-pass-task");
+    let proof_target = "cargo test -p vida --test task_smoke closeout_pass";
+    create_epic_parent(&state_dir, &parent_id, "Closeout pass parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Closeout pass task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            &parent_id,
+            "--proof-target",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            &task_id,
+            "--proof-target",
+            proof_target,
+            "--result",
+            "pass",
+            "--command",
+            proof_target,
+            "--artifact-ref",
+            "target/closeout-pass.json",
+            "--evidence",
+            "closeout pass proof",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let closeout = run_command_json(&["task", "closeout", &task_id, "--json"], &state_dir);
+
+    assert_eq!(closeout["surface"], "vida task closeout");
+    assert_eq!(closeout["status"], "pass");
+    assert_eq!(closeout["closeout_status"], "pass");
+    assert_eq!(closeout["next_actions"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        closeout["shared_fields"]["next_actions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        closeout["operator_contracts"]["next_actions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(closeout["temp_scan"]["status"], "pass");
+    assert!(closeout["temp_scan"]["repo_root"].as_str().is_some());
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_closeout_temp_scan_fails_closed_for_non_git_project_root() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let outside_cwd = unique_state_dir();
+    fs::create_dir_all(&outside_cwd).expect("create outside cwd");
+    let parent_id = unique_test_id("closeout-temp-parent");
+    let task_id = unique_test_id("closeout-temp-task");
+    create_epic_parent(&state_dir, &parent_id, "Closeout temp parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Closeout temp task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let (closeout, success) = run_command_json_allow_failure_in_cwd(
+        &["task", "closeout", &task_id, "--json"],
+        &state_dir,
+        &outside_cwd,
+    );
+
+    assert!(
+        !success,
+        "non-git project root temp scan should fail closed"
+    );
+    assert_eq!(closeout["surface"], "vida task closeout");
+    assert_eq!(closeout["status"], "blocked");
+    assert_eq!(closeout["temp_scan"]["status"], "blocked");
+    assert_eq!(closeout["temp_scan"]["repo_root"], project_root);
+    assert!(closeout["blocker_codes"]
+        .as_array()
+        .expect("closeout blockers should be an array")
+        .contains(&serde_json::json!("closeout_temp_scan_failed")));
+
+    let _ = fs::remove_dir_all(&project_root);
+    let _ = fs::remove_dir_all(&outside_cwd);
 }
 
 #[test]

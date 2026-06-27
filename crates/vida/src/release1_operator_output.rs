@@ -23,6 +23,12 @@ pub(crate) const RELEASE1_OPERATOR_CONTRACT_SPEC: OperatorContractSpec = Operato
 const DOCUMENTED_LOCAL_OPERATOR_BLOCKER_CODES: &[&str] = &[
     "canonical_gate_blocked",
     "close_feedback_canonical_status_blocked",
+    "closeout_closure_not_ready",
+    "closeout_proof_evidence_missing",
+    "closeout_proof_targets_missing",
+    "closeout_task_graph_invalid",
+    "closeout_temp_scan_failed",
+    "closeout_tracked_temp_artifacts",
     "foreign_claim_conflict_blocked",
     "invalid_task_title_input",
     "missing_structured_proof_evidence",

@@ -963,6 +963,145 @@ pub(crate) fn print_task_progress_with_stage_ensemble(
     print_surface_line(render, "status counts", &status_summary);
 }
 
+pub(crate) fn task_closeout_payload(
+    summary: &crate::task_surface::TaskCloseoutSummary,
+) -> serde_json::Value {
+    crate::release1_operator_output::Release1OperatorOutputBuilder::new("vida task closeout")
+        .blocker_codes(summary.blocker_codes.clone())
+        .next_actions(summary.next_actions.clone())
+        .artifact_refs(serde_json::json!({
+            "surface": "vida task closeout",
+            "task_id": summary.task_id,
+            "proof_surface": "vida task proof status",
+            "closure_surface": "vida task closure-ready",
+            "graph_surface": "vida task validate-graph",
+            "progress_surface": "vida task progress",
+            "temp_scan_command": summary.temp_scan.command,
+        }))
+        .extra_fields(serde_json::json!({
+            "task_id": summary.task_id,
+            "basis": summary.basis,
+            "closeout_status": summary.status,
+            "ready_for_close": summary.closure["ready_for_close"],
+            "proof": {
+                "configured_count": summary.proof["configured_proof_target_count"],
+                "satisfied_count": summary.proof["satisfied_count"],
+                "missing_count": summary.proof["missing_count"],
+                "runtime_blocked_count": summary.proof["runtime_blocked_count"],
+                "missing_targets": summary.proof["missing_targets"],
+            },
+            "closure": summary.closure,
+            "graph": {
+                "valid": summary.graph["valid"],
+                "issue_count": summary.graph["issue_count"],
+                "issues": summary.graph["issues"],
+            },
+            "progress": summary.progress["progress"],
+            "temp_scan": summary.temp_scan,
+        }))
+        .build()
+        .expect("task closeout payload should satisfy release-1 operator contract")
+}
+
+pub(crate) fn print_task_closeout(
+    render: RenderMode,
+    summary: &crate::task_surface::TaskCloseoutSummary,
+    as_json: bool,
+) {
+    let payload = task_closeout_payload(summary);
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task closeout should render as json",
+    ) {
+        return;
+    }
+    let proof = &payload["proof"];
+    if matches!(render, RenderMode::Plain) {
+        let lines = [
+            format!(
+                "status: {}",
+                payload["status"].as_str().unwrap_or("unknown")
+            ),
+            format!(
+                "task: {}",
+                taskflow_format_toon::sanitize_toon_scalar(&summary.task_id)
+            ),
+            format!(
+                "basis: {}",
+                taskflow_format_toon::sanitize_toon_scalar(&summary.basis)
+            ),
+            format!(
+                "proof: configured={} satisfied={} missing={} runtime_blocked={}",
+                proof["configured_count"].as_u64().unwrap_or(0),
+                proof["satisfied_count"].as_u64().unwrap_or(0),
+                proof["missing_count"].as_u64().unwrap_or(0),
+                proof["runtime_blocked_count"].as_u64().unwrap_or(0)
+            ),
+            format!(
+                "closure: ready={} state={}",
+                payload["ready_for_close"].as_bool().unwrap_or(false),
+                payload["closure"]["closure_candidate_state"]
+                    .as_str()
+                    .unwrap_or("unknown")
+            ),
+            format!(
+                "graph: valid={} issues={}",
+                payload["graph"]["valid"].as_bool().unwrap_or(false),
+                payload["graph"]["issue_count"].as_u64().unwrap_or(0)
+            ),
+            format!(
+                "progress: closed={} open={} in_progress={} total={} percent_closed={:.2}",
+                payload["progress"]["closed_count"].as_u64().unwrap_or(0),
+                payload["progress"]["open_count"].as_u64().unwrap_or(0),
+                payload["progress"]["in_progress_count"]
+                    .as_u64()
+                    .unwrap_or(0),
+                payload["progress"]["descendant_count"]
+                    .as_u64()
+                    .unwrap_or(0),
+                payload["progress"]["percent_closed"]
+                    .as_f64()
+                    .unwrap_or(0.0)
+            ),
+            format!(
+                "temp_scan: status={} tracked_matches={}",
+                summary.temp_scan.status, summary.temp_scan.tracked_match_count
+            ),
+            format!(
+                "blocker_codes[{}]: {}",
+                summary.blocker_codes.len(),
+                summary.blocker_codes.join(", ")
+            ),
+            format!(
+                "next_actions[{}]: {}",
+                summary.next_actions.len(),
+                summary.next_actions.join(" | ")
+            ),
+        ];
+        println!(
+            "{}",
+            taskflow_format_toon::render_section("vida task closeout", &lines.join("\n  "))
+        );
+        return;
+    }
+    print_surface_header(render, "vida task closeout");
+    print_surface_line(
+        render,
+        "status",
+        payload["status"].as_str().unwrap_or("unknown"),
+    );
+    print_surface_line(render, "task", &summary.task_id);
+    print_surface_line(render, "basis", &summary.basis);
+    print_surface_line(
+        render,
+        "ready for close",
+        &payload["ready_for_close"].to_string(),
+    );
+    print_surface_line(render, "blocker codes", &summary.blocker_codes.join(", "));
+    print_surface_line(render, "next actions", &summary.next_actions.join(" | "));
+}
+
 pub(crate) fn print_task_mutation(
     render: RenderMode,
     title: &str,

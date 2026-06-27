@@ -1895,15 +1895,13 @@ hierarchy: framework,contracts
             .await
             .expect("dry-run bulk dependency add");
         assert_eq!(dry_run.created_count, 2);
-        assert!(
-            store
-                .show_task("task-a")
-                .await
-                .expect("show task-a")
-                .dependencies
-                .iter()
-                .all(|dependency| dependency.depends_on_id != "blocker-a")
-        );
+        assert!(store
+            .show_task("task-a")
+            .await
+            .expect("show task-a")
+            .dependencies
+            .iter()
+            .all(|dependency| dependency.depends_on_id != "blocker-a"));
 
         let persisted = store
             .add_task_dependencies_bulk(&edges, "tester", false)

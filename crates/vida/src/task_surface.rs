@@ -1,10 +1,10 @@
 use super::*;
 use crate::contract_profile_adapter::render_operator_contract_envelope;
 use crate::task_cli_render::{
-    print_task_bulk_reparent_result, print_task_defect_batch_rehome_result,
+    print_task_bulk_reparent_result, print_task_closeout, print_task_defect_batch_rehome_result,
     print_task_dependency_bulk_add_result, print_task_dependency_bulk_add_result_for_surface,
-    print_task_direct_children, print_task_update_graph_blocked, task_read_metadata_value,
-    task_ready_payload, task_show_payload,
+    print_task_direct_children, print_task_update_graph_blocked, task_closeout_payload,
+    task_read_metadata_value, task_ready_payload, task_show_payload,
 };
 use crate::taskflow_proxy::paths_intersect;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -120,6 +120,31 @@ struct TaskCloseEpicProgressBlocker {
     task_id: String,
     status: String,
     title: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub(crate) struct TaskCloseoutTempScan {
+    pub(crate) enabled: bool,
+    pub(crate) status: String,
+    pub(crate) tracked_match_count: usize,
+    pub(crate) tracked_matches: Vec<String>,
+    pub(crate) command: String,
+    pub(crate) repo_root: Option<String>,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub(crate) struct TaskCloseoutSummary {
+    pub(crate) task_id: String,
+    pub(crate) status: String,
+    pub(crate) basis: String,
+    pub(crate) proof: serde_json::Value,
+    pub(crate) closure: serde_json::Value,
+    pub(crate) graph: serde_json::Value,
+    pub(crate) progress: serde_json::Value,
+    pub(crate) temp_scan: TaskCloseoutTempScan,
+    pub(crate) blocker_codes: Vec<String>,
+    pub(crate) next_actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -1505,6 +1530,207 @@ fn print_task_close_structured_proof_gate_block(
     {
         print_surface_line(render, "next", next_action);
     }
+}
+
+fn task_closeout_graph_payload(issues: &[state_store::TaskGraphIssue]) -> serde_json::Value {
+    crate::release1_operator_output::Release1OperatorOutputBuilder::new("vida task validate-graph")
+        .extra_fields(serde_json::json!({
+            "valid": issues.is_empty(),
+            "issue_count": issues.len(),
+            "issues": issues,
+        }))
+        .build()
+        .expect("task closeout graph payload should satisfy release-1 operator contract")
+}
+
+fn task_closeout_repo_root(state_dir: &std::path::Path) -> std::path::PathBuf {
+    let parts = state_dir
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    if parts.len() >= 3
+        && parts[parts.len() - 3] == ".vida"
+        && parts[parts.len() - 2] == "data"
+        && parts[parts.len() - 1] == "state"
+    {
+        return state_dir
+            .ancestors()
+            .nth(3)
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| state_dir.to_path_buf());
+    }
+    std::env::current_dir().unwrap_or_else(|_| state_dir.to_path_buf())
+}
+
+fn task_closeout_temp_scan(
+    include_temp_scan: bool,
+    state_dir: &std::path::Path,
+) -> TaskCloseoutTempScan {
+    if !include_temp_scan {
+        return TaskCloseoutTempScan {
+            enabled: false,
+            status: "skipped".to_string(),
+            tracked_match_count: 0,
+            tracked_matches: Vec::new(),
+            command: "git ls-files tmp* false true null undefined nul".to_string(),
+            repo_root: None,
+            error: None,
+        };
+    }
+    let repo_root = task_closeout_repo_root(state_dir);
+    let command_text = format!(
+        "git -C {} ls-files tmp* false true null undefined nul",
+        crate::shell_quote(&repo_root.display().to_string())
+    );
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo_root)
+        .args([
+            "ls-files",
+            "tmp*",
+            "false",
+            "true",
+            "null",
+            "undefined",
+            "nul",
+        ])
+        .output();
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            return TaskCloseoutTempScan {
+                enabled: true,
+                status: "blocked".to_string(),
+                tracked_match_count: 0,
+                tracked_matches: Vec::new(),
+                command: command_text,
+                repo_root: Some(repo_root.display().to_string()),
+                error: Some(format!("failed to run git temp scan: {error}")),
+            };
+        }
+    };
+    if !output.status.success() {
+        return TaskCloseoutTempScan {
+            enabled: true,
+            status: "blocked".to_string(),
+            tracked_match_count: 0,
+            tracked_matches: Vec::new(),
+            command: command_text,
+            repo_root: Some(repo_root.display().to_string()),
+            error: Some(format!(
+                "git temp scan exited with status {:?}: {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+        };
+    }
+    let tracked_matches = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    TaskCloseoutTempScan {
+        enabled: true,
+        status: if tracked_matches.is_empty() {
+            "pass".to_string()
+        } else {
+            "blocked".to_string()
+        },
+        tracked_match_count: tracked_matches.len(),
+        tracked_matches,
+        command: command_text.to_string(),
+        repo_root: Some(repo_root.display().to_string()),
+        error: None,
+    }
+}
+
+fn task_closeout_summary(
+    task_id: &str,
+    basis: &str,
+    task: &state_store::TaskRecord,
+    read_metadata: Option<&TaskReadMetadata>,
+    rows: &[state_store::TaskRecord],
+    graph_issues: &[state_store::TaskGraphIssue],
+    include_temp_scan: bool,
+    state_dir: &std::path::Path,
+) -> Result<TaskCloseoutSummary, String> {
+    let progress = task_progress_summary_for_basis(rows, task_id, basis)
+        .map_err(|error| format!("Failed to compute closeout progress: {error}"))?;
+    let proof = task_proof_status_payload_with_inheritance(task, read_metadata, Some(rows));
+    let closure = crate::task_cli_render::build_pass_operator_surface_payload(
+        "vida task closure-ready",
+        serde_json::json!({
+            "task_id": task_id,
+            "state_access": task_read_metadata_value(read_metadata),
+            "basis": basis,
+            "ready_for_close": progress.ready_for_close,
+            "closure_candidate": progress.closure_candidate,
+            "closure_candidate_state": progress.closure_candidate_state,
+            "closure_candidate_reason": progress.closure_candidate_reason,
+            "next_required_command": progress.next_required_command,
+            "recommended_next_action": progress.recommended_next_action,
+            "progress": crate::task_cli_render::task_progress_value(&progress),
+        }),
+    );
+    let graph = task_closeout_graph_payload(graph_issues);
+    let progress_payload = crate::task_cli_render::task_progress_payload(&progress);
+    let temp_scan = task_closeout_temp_scan(include_temp_scan, state_dir);
+    let mut blocker_codes = Vec::new();
+    if proof["configured_proof_target_count"].as_u64().unwrap_or(0) == 0 {
+        blocker_codes.push("closeout_proof_targets_missing".to_string());
+    }
+    if proof["missing_count"].as_u64().unwrap_or(0) > 0 {
+        blocker_codes.push("closeout_proof_evidence_missing".to_string());
+    }
+    if !closure["ready_for_close"].as_bool().unwrap_or(false) {
+        blocker_codes.push("closeout_closure_not_ready".to_string());
+    }
+    if !graph_issues.is_empty() {
+        blocker_codes.push("closeout_task_graph_invalid".to_string());
+    }
+    if temp_scan.tracked_match_count > 0 {
+        blocker_codes.push("closeout_tracked_temp_artifacts".to_string());
+    }
+    if temp_scan.error.is_some() {
+        blocker_codes.push("closeout_temp_scan_failed".to_string());
+    }
+    let mut next_actions = Vec::new();
+    if let Some(command) = proof["next_required_command"].as_str() {
+        next_actions.push(command.to_string());
+    }
+    if let Some(command) = closure["next_required_command"].as_str() {
+        next_actions.push(command.to_string());
+    }
+    if !graph_issues.is_empty() {
+        next_actions.push("Run vida task validate-graph and resolve graph issues.".to_string());
+    }
+    if temp_scan.tracked_match_count > 0 {
+        next_actions.push(
+            "Remove or explicitly justify tracked temporary artifacts before commit.".to_string(),
+        );
+    }
+    next_actions.sort();
+    next_actions.dedup();
+    if blocker_codes.is_empty() {
+        next_actions.clear();
+    }
+    Ok(TaskCloseoutSummary {
+        task_id: task_id.to_string(),
+        status: if blocker_codes.is_empty() {
+            "pass".to_string()
+        } else {
+            "blocked".to_string()
+        },
+        basis: basis.to_string(),
+        proof,
+        closure,
+        graph,
+        progress: progress_payload,
+        temp_scan,
+        blocker_codes,
+        next_actions,
+    })
 }
 
 fn print_task_proof_status(
@@ -10882,6 +11108,112 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::Closeout(command) => {
+            let state_dir = command
+                .state_dir
+                .clone()
+                .unwrap_or_else(state_store::default_state_dir);
+            let basis = match task_progress_basis_arg(&command.basis) {
+                Ok(basis) => basis,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
+                Ok(store) => {
+                    let task = match store.show_task(&command.task_id).await {
+                        Ok(task) => task,
+                        Err(error) => {
+                            eprintln!("Failed to inspect closeout task: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
+                        Ok(rows) => rows,
+                        Err(error) => {
+                            eprintln!("Failed to read task closeout rows: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let graph_issues = match store.validate_task_graph().await {
+                        Ok(issues) => issues,
+                        Err(error) => {
+                            eprintln!("Failed to validate task graph for closeout: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    match task_closeout_summary(
+                        &command.task_id,
+                        basis,
+                        &task,
+                        Some(&TaskReadMetadata::authoritative_live()),
+                        &rows,
+                        &graph_issues,
+                        command.include_temp_scan,
+                        &state_dir,
+                    ) {
+                        Ok(summary) => {
+                            print_task_closeout(command.render, &summary, command.json);
+                            if summary.status == "pass" {
+                                ExitCode::SUCCESS
+                            } else {
+                                ExitCode::from(1)
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("{error}");
+                            ExitCode::from(1)
+                        }
+                    }
+                }
+                Err(error) if is_authoritative_state_lock_error(&error) => {
+                    let rows = match load_task_snapshot_rows_with_retry(&state_dir).await {
+                        Ok(rows) => rows,
+                        Err(snapshot_error) => {
+                            eprintln!("Failed to read task closeout snapshot: {snapshot_error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let Some(task) = rows.iter().find(|row| row.id == command.task_id).cloned()
+                    else {
+                        eprintln!("Failed to inspect closeout task: task not found");
+                        return ExitCode::from(1);
+                    };
+                    let graph_issues = StateStore::validate_task_graph_rows(&rows);
+                    match task_closeout_summary(
+                        &command.task_id,
+                        basis,
+                        &task,
+                        Some(&TaskReadMetadata::snapshot(
+                            &state_dir,
+                            "served from task snapshot after authoritative lock contention",
+                        )),
+                        &rows,
+                        &graph_issues,
+                        command.include_temp_scan,
+                        &state_dir,
+                    ) {
+                        Ok(summary) => {
+                            print_task_closeout(command.render, &summary, command.json);
+                            if summary.status == "pass" {
+                                ExitCode::SUCCESS
+                            } else {
+                                ExitCode::from(1)
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("{error}");
+                            ExitCode::from(1)
+                        }
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         TaskCommand::Proof(command) => match command.command {
             TaskProofCommand::Status(command) => {
                 let state_dir = command
@@ -11110,7 +11442,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     "artifact_refs": {"surface": "vida task proof attach-evidence"}
                                 }));
                             } else {
-                                print_surface_header(command.render, "vida task proof attach-evidence");
+                                print_surface_header(
+                                    command.render,
+                                    "vida task proof attach-evidence",
+                                );
                                 print_surface_line(command.render, "status", "blocked");
                                 print_surface_line(
                                     command.render,
