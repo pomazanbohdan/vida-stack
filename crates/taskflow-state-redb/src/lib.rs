@@ -66,6 +66,8 @@ struct RedbAppendIdempotencyRecord {
     last_error: Option<String>,
     #[serde(default)]
     committed_event_cursor: Option<VidaEventCursor>,
+    #[serde(default)]
+    conflict_code: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -735,36 +737,50 @@ impl OperationalJournal for RedbOperationalJournal {
 
             if let Some(mut record) = existing_append_record {
                 if record.request_fingerprint == request_fingerprint {
-                    record.retry_count += 1;
-                    record.command_id = record
-                        .command_id
-                        .or_else(|| Some(ledger_command_id.clone()));
-                    record.status = "completed".to_string();
-                    record.result_hash = Some(append_receipt_fingerprint(&record.receipt));
-                    record.result_ref = Some(append_receipt_ref(&ledger_key, &record.receipt));
-                    record.last_error = None;
-                    record.committed_event_cursor = record.receipt.last_global_cursor.clone();
-                    let payload = serde_json::to_vec(&record).map_err(storage_error)?;
-                    append_idempotency
-                        .insert(request.idempotency_key.0.as_str(), payload.as_slice())
-                        .map_err(storage_error)?;
-                    let lifecycle = JournalIdempotencyRecord {
-                        key: ledger_key.clone(),
-                        command_id: ledger_command_id.clone(),
-                        state: JournalIdempotencyState::Completed,
-                        receipt_id: record.result_ref.clone(),
-                        conflict_reason: None,
-                    };
-                    write_idempotency_lifecycle(&mut idempotency, lifecycle)?;
-                    Ok(record.receipt)
+                    if record.status == "conflicted" {
+                        record.retry_count += 1;
+                        let payload = serde_json::to_vec(&record).map_err(storage_error)?;
+                        append_idempotency
+                            .insert(request.idempotency_key.0.as_str(), payload.as_slice())
+                            .map_err(storage_error)?;
+                        Err(TaskflowStateError::IdempotencyConflict(
+                            ledger_key.0.clone(),
+                        ))
+                    } else {
+                        record.retry_count += 1;
+                        record.command_id = record
+                            .command_id
+                            .or_else(|| Some(ledger_command_id.clone()));
+                        record.status = "completed".to_string();
+                        record.result_hash = Some(append_receipt_fingerprint(&record.receipt));
+                        record.result_ref = Some(append_receipt_ref(&ledger_key, &record.receipt));
+                        record.last_error = None;
+                        record.committed_event_cursor = record.receipt.last_global_cursor.clone();
+                        let payload = serde_json::to_vec(&record).map_err(storage_error)?;
+                        append_idempotency
+                            .insert(request.idempotency_key.0.as_str(), payload.as_slice())
+                            .map_err(storage_error)?;
+                        let lifecycle = JournalIdempotencyRecord {
+                            key: ledger_key.clone(),
+                            command_id: ledger_command_id.clone(),
+                            state: JournalIdempotencyState::Completed,
+                            receipt_id: record.result_ref.clone(),
+                            conflict_reason: None,
+                        };
+                        write_idempotency_lifecycle(&mut idempotency, lifecycle)?;
+                        Ok(record.receipt)
+                    }
                 } else {
-                    let reason =
-                        "same idempotency key used with different append payload".to_string();
+                    let conflict_code = "idempotency_payload_conflict".to_string();
+                    let reason = format!(
+                        "{conflict_code}: same idempotency key used with different append payload"
+                    );
                     record.retry_count += 1;
                     record.command_id = record
                         .command_id
                         .or_else(|| Some(ledger_command_id.clone()));
                     record.status = "conflicted".to_string();
+                    record.conflict_code = Some(conflict_code);
                     record.conflict_reason = Some(reason.clone());
                     record.last_error = Some(reason.clone());
                     let payload = serde_json::to_vec(&record).map_err(storage_error)?;
@@ -784,139 +800,165 @@ impl OperationalJournal for RedbOperationalJournal {
                     ))
                 }
             } else {
-                let stream_key = request.stream_id.0.clone();
-                let mut actual_version = 0;
-                for row in events_by_stream.iter().map_err(storage_error)? {
-                    let (_, value) = row.map_err(storage_error)?;
-                    let event: VidaDomainEventEnvelope =
-                        serde_json::from_slice(value.value()).map_err(storage_error)?;
-                    if event.stream_id == request.stream_id {
-                        actual_version += 1;
-                    }
-                }
-                if request
-                    .expected_stream_version
-                    .as_ref()
-                    .map(|version| version.0)
-                    != Some(actual_version)
-                {
-                    return Err(TaskflowStateError::StreamVersionConflict {
-                        stream_id: stream_key,
-                        expected: request
-                            .expected_stream_version
-                            .as_ref()
-                            .map(|version| version.0),
-                        actual: actual_version,
-                    });
-                }
-
-                let mut first_index: usize = 0;
-                for row in events_by_global.iter().map_err(storage_error)? {
-                    row.map_err(storage_error)?;
-                    first_index += 1;
-                }
-                let event_count = request.events.len();
-                let effect_intent_count = request.effect_intents.len();
-                let mut next_global_index: usize = first_index;
-                for event in request.events.clone() {
-                    next_global_index += 1;
-                    let cursor = VidaEventCursor(format!("global-{next_global_index}"));
-                    let stream_event_key =
-                        format!("{}:{:020}", request.stream_id.0, event.stream_version.0);
-                    let global_event_key = format!("{next_global_index:020}");
-                    let event_payload = serde_json::to_vec(&event).map_err(storage_error)?;
-                    events_by_stream
-                        .insert(stream_event_key.as_str(), event_payload.as_slice())
-                        .map_err(storage_error)?;
-                    let global_record = JournalEventRecord {
-                        global_cursor: cursor,
-                        event,
-                    };
-                    let global_payload =
-                        serde_json::to_vec(&global_record).map_err(storage_error)?;
-                    events_by_global
-                        .insert(global_event_key.as_str(), global_payload.as_slice())
-                        .map_err(storage_error)?;
-                }
-                drop(events_by_stream);
-                drop(events_by_global);
-                let source_event_cursor = if event_count > 0 {
-                    Some(VidaEventCursor(format!("global-{next_global_index}")))
-                } else {
-                    None
-                };
-
-                let mut outbox = write.open_table(OUTBOX_TABLE).map_err(storage_error)?;
-                let mut outbox_len = 0;
-                for row in outbox.iter().map_err(storage_error)? {
-                    row.map_err(storage_error)?;
-                    outbox_len += 1;
-                }
-                for effect in request.effect_intents {
-                    outbox_len += 1;
-                    let record = JournalOutboxRecord {
-                        outbox_id: VidaEventRef(format!("outbox-{outbox_len}")),
-                        effect,
-                        state: JournalOutboxState::Pending,
-                    };
-                    let durable = RedbOutboxEffectRecord::from_outbox_record(
-                        record,
-                        source_event_cursor.clone(),
-                    );
-                    let payload = serde_json::to_vec(&durable).map_err(storage_error)?;
-                    outbox
-                        .insert(durable.outbox_id.0.as_str(), payload.as_slice())
-                        .map_err(storage_error)?;
-                }
-                drop(outbox);
-
-                let last_index = next_global_index.saturating_sub(1);
-                let receipt = JournalAppendReceipt {
-                    stream_id: request.stream_id,
-                    first_global_cursor: if event_count > 0 {
-                        Some(VidaEventCursor(format!("global-{}", first_index + 1)))
-                    } else {
-                        None
-                    },
-                    last_global_cursor: if event_count > 0 {
-                        Some(VidaEventCursor(format!("global-{last_index}")))
-                    } else {
-                        None
-                    },
-                    stream_version: VidaStreamVersion(actual_version + event_count as u64),
-                    event_count,
-                    effect_intent_count,
-                };
-                let idempotency_record = RedbAppendIdempotencyRecord {
-                    request_fingerprint,
-                    receipt: receipt.clone(),
-                    command_id: Some(ledger_command_id.clone()),
-                    first_seen_at: receipt
-                        .first_global_cursor
-                        .as_ref()
-                        .map(|cursor| cursor.0.clone())
-                        .unwrap_or_else(|| format!("stream-version-{actual_version}")),
-                    status: "completed".to_string(),
-                    result_hash: Some(append_receipt_fingerprint(&receipt)),
-                    result_ref: Some(append_receipt_ref(&ledger_key, &receipt)),
-                    conflict_reason: None,
-                    retry_count: 0,
-                    last_error: None,
-                    committed_event_cursor: receipt.last_global_cursor.clone(),
-                };
-                let payload = serde_json::to_vec(&idempotency_record).map_err(storage_error)?;
-                append_idempotency
-                    .insert(request.idempotency_key.0.as_str(), payload.as_slice())
+                let existing_lifecycle = idempotency
+                    .get(ledger_key.0.as_str())
+                    .map_err(storage_error)?
+                    .map(|existing| {
+                        serde_json::from_slice::<JournalIdempotencyRecord>(existing.value())
+                    })
+                    .transpose()
                     .map_err(storage_error)?;
-                let lifecycle = JournalIdempotencyRecord {
-                    key: ledger_key.clone(),
-                    command_id: ledger_command_id,
-                    state: JournalIdempotencyState::Completed,
-                    receipt_id: idempotency_record.result_ref,
-                    conflict_reason: None,
-                };
-                write_idempotency_lifecycle(&mut idempotency, lifecycle)?;
-                Ok(receipt)
+                if let Some(existing_lifecycle) =
+                    existing_lifecycle.filter(|existing| existing.command_id != ledger_command_id)
+                {
+                    let reason = "idempotency_payload_conflict: same idempotency key used by a different command".to_string();
+                    let lifecycle = JournalIdempotencyRecord {
+                        key: ledger_key.clone(),
+                        command_id: existing_lifecycle.command_id,
+                        state: JournalIdempotencyState::Conflicted,
+                        receipt_id: existing_lifecycle.receipt_id,
+                        conflict_reason: Some(reason),
+                    };
+                    write_idempotency_lifecycle(&mut idempotency, lifecycle)?;
+                    Err(TaskflowStateError::IdempotencyConflict(
+                        ledger_key.0.clone(),
+                    ))
+                } else {
+                    let stream_key = request.stream_id.0.clone();
+                    let mut actual_version = 0;
+                    for row in events_by_stream.iter().map_err(storage_error)? {
+                        let (_, value) = row.map_err(storage_error)?;
+                        let event: VidaDomainEventEnvelope =
+                            serde_json::from_slice(value.value()).map_err(storage_error)?;
+                        if event.stream_id == request.stream_id {
+                            actual_version += 1;
+                        }
+                    }
+                    if request
+                        .expected_stream_version
+                        .as_ref()
+                        .map(|version| version.0)
+                        != Some(actual_version)
+                    {
+                        return Err(TaskflowStateError::StreamVersionConflict {
+                            stream_id: stream_key,
+                            expected: request
+                                .expected_stream_version
+                                .as_ref()
+                                .map(|version| version.0),
+                            actual: actual_version,
+                        });
+                    }
+
+                    let mut first_index: usize = 0;
+                    for row in events_by_global.iter().map_err(storage_error)? {
+                        row.map_err(storage_error)?;
+                        first_index += 1;
+                    }
+                    let event_count = request.events.len();
+                    let effect_intent_count = request.effect_intents.len();
+                    let mut next_global_index: usize = first_index;
+                    for event in request.events.clone() {
+                        next_global_index += 1;
+                        let cursor = VidaEventCursor(format!("global-{next_global_index}"));
+                        let stream_event_key =
+                            format!("{}:{:020}", request.stream_id.0, event.stream_version.0);
+                        let global_event_key = format!("{next_global_index:020}");
+                        let event_payload = serde_json::to_vec(&event).map_err(storage_error)?;
+                        events_by_stream
+                            .insert(stream_event_key.as_str(), event_payload.as_slice())
+                            .map_err(storage_error)?;
+                        let global_record = JournalEventRecord {
+                            global_cursor: cursor,
+                            event,
+                        };
+                        let global_payload =
+                            serde_json::to_vec(&global_record).map_err(storage_error)?;
+                        events_by_global
+                            .insert(global_event_key.as_str(), global_payload.as_slice())
+                            .map_err(storage_error)?;
+                    }
+                    drop(events_by_stream);
+                    drop(events_by_global);
+                    let source_event_cursor = if event_count > 0 {
+                        Some(VidaEventCursor(format!("global-{next_global_index}")))
+                    } else {
+                        None
+                    };
+
+                    let mut outbox = write.open_table(OUTBOX_TABLE).map_err(storage_error)?;
+                    let mut outbox_len = 0;
+                    for row in outbox.iter().map_err(storage_error)? {
+                        row.map_err(storage_error)?;
+                        outbox_len += 1;
+                    }
+                    for effect in request.effect_intents {
+                        outbox_len += 1;
+                        let record = JournalOutboxRecord {
+                            outbox_id: VidaEventRef(format!("outbox-{outbox_len}")),
+                            effect,
+                            state: JournalOutboxState::Pending,
+                        };
+                        let durable = RedbOutboxEffectRecord::from_outbox_record(
+                            record,
+                            source_event_cursor.clone(),
+                        );
+                        let payload = serde_json::to_vec(&durable).map_err(storage_error)?;
+                        outbox
+                            .insert(durable.outbox_id.0.as_str(), payload.as_slice())
+                            .map_err(storage_error)?;
+                    }
+                    drop(outbox);
+
+                    let last_index = next_global_index.saturating_sub(1);
+                    let receipt = JournalAppendReceipt {
+                        stream_id: request.stream_id,
+                        first_global_cursor: if event_count > 0 {
+                            Some(VidaEventCursor(format!("global-{}", first_index + 1)))
+                        } else {
+                            None
+                        },
+                        last_global_cursor: if event_count > 0 {
+                            Some(VidaEventCursor(format!("global-{last_index}")))
+                        } else {
+                            None
+                        },
+                        stream_version: VidaStreamVersion(actual_version + event_count as u64),
+                        event_count,
+                        effect_intent_count,
+                    };
+                    let idempotency_record = RedbAppendIdempotencyRecord {
+                        request_fingerprint,
+                        receipt: receipt.clone(),
+                        command_id: Some(ledger_command_id.clone()),
+                        first_seen_at: receipt
+                            .first_global_cursor
+                            .as_ref()
+                            .map(|cursor| cursor.0.clone())
+                            .unwrap_or_else(|| format!("stream-version-{actual_version}")),
+                        status: "completed".to_string(),
+                        result_hash: Some(append_receipt_fingerprint(&receipt)),
+                        result_ref: Some(append_receipt_ref(&ledger_key, &receipt)),
+                        conflict_reason: None,
+                        retry_count: 0,
+                        last_error: None,
+                        committed_event_cursor: receipt.last_global_cursor.clone(),
+                        conflict_code: None,
+                    };
+                    let payload = serde_json::to_vec(&idempotency_record).map_err(storage_error)?;
+                    append_idempotency
+                        .insert(request.idempotency_key.0.as_str(), payload.as_slice())
+                        .map_err(storage_error)?;
+                    let lifecycle = JournalIdempotencyRecord {
+                        key: ledger_key.clone(),
+                        command_id: ledger_command_id,
+                        state: JournalIdempotencyState::Completed,
+                        receipt_id: idempotency_record.result_ref,
+                        conflict_reason: None,
+                    };
+                    write_idempotency_lifecycle(&mut idempotency, lifecycle)?;
+                    Ok(receipt)
+                }
             }
         };
         write.commit().map_err(storage_error)?;
@@ -1610,11 +1652,27 @@ fn write_idempotency_lifecycle(
     table: &mut redb::Table<'_, &str, &[u8]>,
     record: JournalIdempotencyRecord,
 ) -> Result<(), TaskflowStateError> {
-    if let Some(existing) = table.get(record.key.0.as_str()).map_err(storage_error)? {
-        let existing: JournalIdempotencyRecord =
-            serde_json::from_slice(existing.value()).map_err(storage_error)?;
+    let existing = table
+        .get(record.key.0.as_str())
+        .map_err(storage_error)?
+        .map(|existing| serde_json::from_slice::<JournalIdempotencyRecord>(existing.value()))
+        .transpose()
+        .map_err(storage_error)?;
+    if let Some(existing) = existing {
         if existing.command_id != record.command_id {
-            return Err(TaskflowStateError::IdempotencyConflict(record.key.0));
+            let key = record.key.0.clone();
+            let lifecycle_payload = serde_json::to_vec(&JournalIdempotencyRecord {
+                key: record.key,
+                command_id: existing.command_id,
+                state: JournalIdempotencyState::Conflicted,
+                receipt_id: existing.receipt_id,
+                conflict_reason: Some("idempotency_payload_conflict: same idempotency key used by a different command".to_string()),
+            })
+            .map_err(storage_error)?;
+            table
+                .insert(key.as_str(), lifecycle_payload.as_slice())
+                .map_err(storage_error)?;
+            return Err(TaskflowStateError::IdempotencyConflict(key));
         }
     }
 
@@ -2083,6 +2141,11 @@ mod tests {
             .expect("append ledger row");
         assert_eq!(append_ledger.status, "completed");
         assert_eq!(append_ledger.retry_count, 100);
+        assert!(append_ledger.command_id.is_some());
+        assert_eq!(append_ledger.first_seen_at, "global-1");
+        assert!(append_ledger.conflict_code.is_none());
+        assert!(append_ledger.conflict_reason.is_none());
+        assert!(append_ledger.last_error.is_none());
         assert_eq!(
             append_ledger.result_ref,
             Some(super::append_receipt_ref(
@@ -2132,13 +2195,75 @@ mod tests {
             .expect("append ledger row");
         assert_eq!(append_ledger.status, "conflicted");
         assert_eq!(append_ledger.retry_count, 1);
-        assert!(append_ledger.conflict_reason.is_some());
-        assert!(append_ledger.last_error.is_some());
+        assert_eq!(
+            append_ledger.conflict_code.as_deref(),
+            Some("idempotency_payload_conflict")
+        );
+        assert!(
+            append_ledger
+                .conflict_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("idempotency_payload_conflict"))
+        );
+        assert!(
+            append_ledger
+                .last_error
+                .as_deref()
+                .is_some_and(|reason| reason.contains("idempotency_payload_conflict"))
+        );
         let command_ledger = journal
             .idempotency_record(&VidaIdempotencyKey("idem-1".to_string()))
             .expect("command idempotency record");
         assert_eq!(command_ledger.state, JournalIdempotencyState::Conflicted);
-        assert!(command_ledger.conflict_reason.is_some());
+        assert!(
+            command_ledger
+                .conflict_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("idempotency_payload_conflict"))
+        );
+        let original_retry = journal
+            .append(append_request(1, vec![event(1)], vec![effect("effect-1")]))
+            .expect_err("original payload retry after conflict must stay conflicted");
+        assert_eq!(
+            original_retry,
+            TaskflowStateError::IdempotencyConflict("idem-1".to_string())
+        );
+        let append_ledger_after_original_retry: RedbAppendIdempotencyRecord = journal
+            .read_one(APPEND_IDEMPOTENCY_TABLE, "idem-1")
+            .expect("append ledger read")
+            .expect("append ledger row");
+        assert_eq!(append_ledger_after_original_retry.status, "conflicted");
+        assert_eq!(append_ledger_after_original_retry.retry_count, 2);
+    }
+
+    #[test]
+    fn append_conflict_audit_survives_reopen() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("first append should pass");
+        journal
+            .append(append_request(1, vec![event(2)], vec![effect("effect-2")]))
+            .expect_err("changed payload with same idempotency key must fail");
+        drop(journal);
+
+        let reopened = RedbOperationalJournal::open(&path).expect("reopen journal");
+        let append_ledger: RedbAppendIdempotencyRecord = reopened
+            .read_one(APPEND_IDEMPOTENCY_TABLE, "idem-1")
+            .expect("append ledger read")
+            .expect("append ledger row");
+        assert_eq!(append_ledger.status, "conflicted");
+        assert_eq!(
+            append_ledger.conflict_code.as_deref(),
+            Some("idempotency_payload_conflict")
+        );
+        let command_ledger = reopened
+            .idempotency_record(&VidaIdempotencyKey("idem-1".to_string()))
+            .expect("command idempotency record");
+        assert_eq!(command_ledger.state, JournalIdempotencyState::Conflicted);
     }
 
     #[test]
@@ -2169,8 +2294,14 @@ mod tests {
             .idempotency_record(&key)
             .expect("victim idempotency record should remain");
         assert_eq!(command_ledger.command_id, victim_command);
-        assert_eq!(command_ledger.state, JournalIdempotencyState::Started);
+        assert_eq!(command_ledger.state, JournalIdempotencyState::Conflicted);
         assert_eq!(command_ledger.receipt_id, None);
+        assert!(
+            command_ledger
+                .conflict_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("idempotency_payload_conflict"))
+        );
         assert_eq!(
             journal
                 .load_stream(&VidaStreamRef("stream-1".to_string()))
