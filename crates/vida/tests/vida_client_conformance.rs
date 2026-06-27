@@ -6,6 +6,7 @@ mod vida_client;
 mod vida_client_inprocess;
 
 use std::path::PathBuf;
+use std::task::Poll;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
@@ -106,6 +107,24 @@ fn canonical_command_pipeline_trace_names_are_stable() {
             "response_mapping"
         ]
     );
+}
+
+#[tokio::test]
+async fn command_pipeline_tower_service_runs_under_tower_test_spawn() {
+    let pipeline = command_pipeline::VidaCommandPipeline::new(LocalRuntimeVidaClient::new_ready());
+    let mut service = tower_test::mock::Spawn::new(pipeline);
+
+    assert!(matches!(
+        service.poll_ready::<VidaCommandEnvelope>(),
+        Poll::Ready(Ok(()))
+    ));
+
+    let mut command = envelope(operations::SERVICE_STATUS);
+    command.project_ref = Some(local_project_ref());
+    let response = service.call(command).await.expect("pipeline is infallible");
+
+    assert_eq!(response.status, VidaResponseStatus::Pass);
+    assert_eq!(response.result.expect("status result")["service"], "vida");
 }
 
 #[test]

@@ -11,7 +11,17 @@ use taskflow_state::{JournalAppendRequest, OperationalJournal};
 use taskflow_state_redb::RedbOperationalJournal;
 
 fn vida() -> Command {
-    vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
+    let mut command = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"));
+    command.current_dir(project_root());
+    command
+}
+
+fn project_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("workspace root")
+        .to_path_buf()
 }
 
 fn run_json(args: &[&str]) -> serde_json::Value {
@@ -22,6 +32,27 @@ fn run_json(args: &[&str]) -> serde_json::Value {
     assert!(
         output.status.success(),
         "command {args:?} should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "command {args:?} should emit JSON ({error}): stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
+fn run_json_expect_exit(args: &[&str], expect_success: bool) -> serde_json::Value {
+    let output = vida()
+        .args(args)
+        .output()
+        .expect("vida command should execute");
+    assert_eq!(
+        output.status.success(),
+        expect_success,
+        "command {args:?} exit status mismatch: stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -62,90 +93,112 @@ fn cli_service_first_families_emit_vida_client_operations() {
             &["service", "status", "--json"][..],
             "service",
             "vida.service.status",
+            "pass",
         ),
         (
             &["service", "hello", "--json"][..],
             "service",
             "vida.service.hello",
+            "pass",
         ),
         (
             &["service", "endpoints", "--json"][..],
             "service",
             "vida.service.endpoint.status",
+            "pass",
         ),
         (
             &["service", "endpoint-status", "--json"][..],
             "service",
             "vida.service.endpoint.status",
+            "pass",
         ),
         (
             &["service", "capabilities", "--json"][..],
             "service",
             "vida.service.capabilities",
+            "pass",
         ),
         (
             &["service", "lifecycle-plan", "--json"][..],
             "service",
             "vida.service.lifecycle.plan",
+            "pass",
         ),
         (
             &["service", "lifecycle-status", "--json"][..],
             "service",
             "vida.service.lifecycle.status",
+            "pass",
         ),
         (
             &["service", "events", "--json"][..],
             "service",
             "vida.events.since",
+            "pass",
         ),
         (
             &["project", "list", "--json"][..],
             "project",
             "vida.project.registry.list",
+            "pass",
         ),
         (
             &["project", "resolve", "--project", "vida-stack", "--json"][..],
             "project",
             "vida.project.resolve",
+            "pass",
         ),
         (
             &["project", "status", "--project", "vida-stack", "--json"][..],
             "project",
             "vida.project.status",
+            "pass",
         ),
         (
             &["wizard", "inspect", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.schema.get",
+            "pass",
         ),
         (
             &["wizard", "draft", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.session.start",
+            "blocked",
         ),
         (
             &["wizard", "validate", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.session.validate",
+            "pass",
         ),
         (
             &["wizard", "diff", "--project", "vida-stack", "--json"][..],
             "wizard",
             "vida.wizard.session.diff",
+            "pass",
         ),
-        (&["job", "status", "--json"][..], "job", "vida.jobs.get"),
+        (&["job", "status", "--json"][..], "job", "vida.jobs.get", "pass"),
         (
             &["receipt", "get", "--project", "vida-stack", "--json"][..],
             "receipt",
             "vida.receipts.get",
+            "pass",
         ),
     ];
 
-    for (args, family, operation) in cases {
-        let payload = run_json(args);
+    for (args, family, operation, expected_status) in cases {
+        let payload = run_json_expect_exit(args, expected_status == "pass");
         assert_eq!(payload["family"], family);
         assert_eq!(payload["operation"], operation);
-        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["status"], expected_status);
+        if expected_status == "blocked" {
+            assert_eq!(
+                payload["response"]["blockers"][0]["code"],
+                "operation_owned_write_scope_denied"
+            );
+        }
     }
 }
 

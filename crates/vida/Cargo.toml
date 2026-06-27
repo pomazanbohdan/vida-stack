@@ -47,6 +47,7 @@ vida-contracts = { path = "../vida-contracts" }
 vida-runtime-local = { path = "../vida-runtime-local" }
 
 [dev-dependencies]
+tower-test = "0.4.0"
 vida-test-support = { path = "../vida-test-support" }
 
 [build-dependencies]
