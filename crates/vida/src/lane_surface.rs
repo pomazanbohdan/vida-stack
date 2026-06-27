@@ -3031,7 +3031,6 @@ impl HostBridgeCompletionResultArgs<'_> {
         self.result_file.is_some()
             || self.decision.is_some()
             || self.verdict.is_some()
-            || self.allowed_next_node.is_some()
             || self.blocker_codes.is_some()
             || !self.blocker_code.is_empty()
             || self.rework_target.is_some()
@@ -5500,14 +5499,15 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 match crate::runtime_dispatch_lane_completion::write_runtime_lane_completion_result_with_summary_next_and_blockers(
                     store.root(),
                     run_id,
-                     &completed_target,
-                     receipt_id,
-                     &validated_packet_path,
-                     host_bridge_summary,
-                      effective_allowed_next_node.as_deref(),
-                      &downstream_completion_blockers,
-                      rework_target,
-                  ) {
+                    &completed_target,
+                    receipt_id,
+                    &validated_packet_path,
+                    host_bridge_summary,
+                    derive_summary_blockers,
+                    effective_allowed_next_node.as_deref(),
+                    &downstream_completion_blockers,
+                    rework_target,
+                ) {
                     Ok(path) => path,
                     Err(error) => {
                         eprintln!("{error}");
@@ -12038,6 +12038,8 @@ mod tests {
                 "--host-bridge-summary".to_string(),
                 "verdict: blocker; read-only host evidence blocked by explicit rework wording"
                     .to_string(),
+                "--allowed-next-node".to_string(),
+                "coach".to_string(),
                 "--json".to_string(),
             ],
         };
@@ -15591,6 +15593,216 @@ mod tests {
         .expect("downstream packet should parse");
         assert_eq!(downstream_packet["dispatch_target"], "developer");
         assert_eq!(downstream_packet["downstream_dispatch_target"], "developer");
+        assert_eq!(downstream_packet["source_dispatch_target"], "analyst");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_complete_explicit_pass_summary_does_not_reroute_to_rework() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-explicit-pass-summary-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "activity-meeting-event-form-fields";
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: run_id,
+                title: "Explicit pass completion keeps designer route",
+                display_id: None,
+                description: "",
+                issue_type: "defect",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/lane_surface.rs".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task with owned scope");
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "analysis", "analysis");
+        status.task_id = run_id.to_string();
+        status.active_node = "analyst".to_string();
+        status.next_node = Some("analyst".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "analyst_active".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "awaiting_analysis".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.analyst_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut role_selection = lane_complete_role_selection(run_id);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["execution_lane_sequence"] =
+            serde_json::json!(["designer", "developer"]);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
+            "designer": {
+                "dispatch_target": "designer",
+                "stage": "design",
+                "task_class": "specification",
+                "closure_class": "specification",
+                "completion_blocker": "pending_design_evidence",
+                "packet_template_kind": "delivery_task_packet",
+                "activation_agent_type": "middle",
+                "activation_runtime_role": "designer"
+            },
+            "developer": {
+                "dispatch_target": "developer",
+                "stage": "execution",
+                "task_class": "implementation",
+                "closure_class": "implementation",
+                "completion_blocker": "pending_implementation_evidence",
+                "packet_template_kind": "delivery_task_packet",
+                "activation_agent_type": "junior",
+                "activation_runtime_role": "worker"
+            }
+        });
+        let packet_path =
+            root.join("runtime-consumption/dispatch-packets/activity-meeting-analyst.json");
+        std::fs::create_dir_all(
+            packet_path
+                .parent()
+                .expect("dispatch packet path should have parent"),
+        )
+        .expect("create dispatch packet dir");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "source_dispatch_target": "analyst",
+                "dispatch_target": "analyst",
+                "activation_runtime_role": "analyst",
+                "packet_template_kind": "delivery_task_packet",
+                "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "delivery_task_packet": {
+                    "goal": "Complete the analyst lane evidence.",
+                    "scope_in": ["dispatch_target:analyst"],
+                    "handoff_task_class": "analysis",
+                    "handoff_runtime_role": "analyst",
+                    "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["explicit pass advances to designer"],
+                    "verification_command": "cargo test -p vida lane_complete_explicit_pass_summary_does_not_reroute_to_rework",
+                    "proof_target": "explicit pass materializes designer packet",
+                    "stop_rules": ["stop if packet contract is invalid"],
+                    "blocking_question": "none"
+                },
+                "role_selection_full": role_selection,
+                "run_graph_bootstrap": {
+                    "run_id": run_id
+                },
+                "downstream_dispatch_active_target": "analyst",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["pending_analysis_evidence"],
+                "downstream_dispatch_status": "blocked",
+                "downstream_lane_status": "lane_blocked"
+            })
+            .to_string(),
+        )
+        .expect("write dispatch packet");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.dispatch_command = Some("vida agent-init".to_string());
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.blocker_code = Some("pending_analysis_evidence".to_string());
+        receipt.downstream_dispatch_target = None;
+        receipt.downstream_dispatch_command = None;
+        receipt.downstream_dispatch_note = None;
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["pending_analysis_evidence".to_string()];
+        receipt.downstream_dispatch_packet_path = None;
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_active_target = Some("analyst".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "complete".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "completion-explicit-pass-1".to_string(),
+                "--host-bridge-summary".to_string(),
+                "summary mentions blocker and rework, but typed completion result is pass"
+                    .to_string(),
+                "--decision".to_string(),
+                "pass".to_string(),
+                "--verdict".to_string(),
+                "pass".to_string(),
+                "--allowed-next-node".to_string(),
+                "designer".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after lane command");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt after")
+            .expect("receipt should exist");
+        assert_eq!(
+            after.downstream_dispatch_target.as_deref(),
+            Some("designer")
+        );
+        assert!(after.downstream_dispatch_ready);
+        assert!(after.downstream_dispatch_blockers.is_empty());
+        let dispatch_result: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(after.dispatch_result_path.as_deref().expect("result path"))
+                .expect("read dispatch result"),
+        )
+        .expect("dispatch result should parse");
+        assert_eq!(dispatch_result["status"], "pass");
+        assert_eq!(dispatch_result["decision"], "approve");
+        assert_eq!(dispatch_result["verdict"], "pass");
+        assert_eq!(dispatch_result["allowed_next_node"], "designer");
+        assert_eq!(dispatch_result["blocker_codes"], serde_json::json!([]));
+        assert_eq!(
+            dispatch_result["summary_classifier_source"],
+            "typed_blockers_only"
+        );
+        let downstream_packet_path = after
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .expect("downstream packet path should be recorded");
+        let downstream_packet: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(downstream_packet_path).expect("read downstream packet"),
+        )
+        .expect("downstream packet should parse");
+        assert_eq!(downstream_packet["dispatch_target"], "designer");
+        assert_eq!(downstream_packet["downstream_dispatch_target"], "designer");
         assert_eq!(downstream_packet["source_dispatch_target"], "analyst");
 
         let _ = std::fs::remove_dir_all(&root);

@@ -220,6 +220,43 @@ mod tests {
 
         let _ = fs::remove_dir_all(&state_root);
     }
+
+    #[test]
+    fn completion_result_ignores_advisory_summary_for_explicit_pass_contract() {
+        let state_root = std::env::temp_dir().join(format!(
+            "vida-lane-completion-explicit-pass-summary-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&state_root);
+
+        let result_path =
+            super::write_runtime_lane_completion_result_with_summary_next_and_blockers(
+                &state_root,
+                "activity-meeting-event-form-fields",
+                "analyst",
+                "receipt-1",
+                "packet.json",
+                Some("verdict: blocker; rework required text is advisory for explicit pass"),
+                false,
+                Some("designer"),
+                &[],
+                None,
+            )
+            .expect("completion result should write");
+        let body: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&result_path).expect("completion result should be readable"),
+        )
+        .expect("completion result should decode");
+
+        assert_eq!(body["status"], "pass");
+        assert_eq!(body["decision"], "approve");
+        assert_eq!(body["verdict"], "pass");
+        assert_eq!(body["blocker_codes"], serde_json::json!([]));
+        assert_eq!(body["allowed_next_node"], "designer");
+        assert_eq!(body["summary_classifier_source"], "typed_blockers_only");
+
+        let _ = fs::remove_dir_all(&state_root);
+    }
 }
 
 pub(crate) fn write_runtime_lane_completion_result_with_summary(
@@ -257,6 +294,7 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary_and_next(
         receipt_id,
         source_dispatch_packet_path,
         summary,
+        true,
         allowed_next_node,
         &[],
         None,
@@ -270,6 +308,7 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary_next_and_blocker
     receipt_id: &str,
     source_dispatch_packet_path: &str,
     summary: Option<&str>,
+    derive_summary_blockers: bool,
     allowed_next_node: Option<&str>,
     blocker_codes: &[String],
     rework_target: Option<&str>,
@@ -309,7 +348,9 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary_next_and_blocker
             }
             .to_string(),
             blocker_codes: blocker_codes.clone(),
-            summary: summary
+            summary: derive_summary_blockers
+                .then_some(summary)
+                .flatten()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
@@ -353,7 +394,7 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary_next_and_blocker
         "allowed_next_node": verdict_fields.allowed_next_node,
         "completion_verdict": verdict_fields.verdict,
         "closure_ready": blocker_codes.is_empty(),
-        "summary_classifier_source": "typed_and_summary_blockers",
+        "summary_classifier_source": if derive_summary_blockers { "typed_and_summary_blockers" } else { "typed_blockers_only" },
         "host_bridge_completion_authority": {
             "accepted": authority_decision.accepted,
             "final_state": format!("{:?}", authority_decision.final_state),
