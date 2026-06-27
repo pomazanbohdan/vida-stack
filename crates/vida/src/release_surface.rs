@@ -820,7 +820,7 @@ fn install_target_paths(
     let root = release_install_root(install_root);
     let binary_name = vida_binary_file_name();
     match requested_target {
-        "current" | "all" | "local" | "cargo" => {
+        "current" | "cur" | "all" | "local" | "cargo" => {
             let root = root.ok_or_else(unresolved_install_target)?;
             Ok(vec![(
                 "current".to_string(),
@@ -836,7 +836,7 @@ fn install_target_paths(
             }),
         _ => Err(BlockedRelease {
             blocker_code: "unsupported_install_target",
-            next_action: "Use `--target current` or `--target path`."
+            next_action: "Use `--target current`, `--target cur`, or `--target path`."
                 .to_string(),
             io_error: None,
         }),
@@ -848,7 +848,7 @@ fn companion_runtime_install_target_paths(
     install_root: Option<&Path>,
 ) -> Result<Vec<(String, PathBuf)>, BlockedRelease> {
     match requested_target {
-        "current" | "all" | "local" | "cargo" => {
+        "current" | "cur" | "all" | "local" | "cargo" => {
             let root = release_install_root(install_root).ok_or_else(unresolved_install_target)?;
             Ok(vec![(
                 "current:vida-pi-agent".to_string(),
@@ -1247,6 +1247,7 @@ mod tests {
         assert!(help.contains("--json"));
         assert!(help.contains("--skip-build"));
         assert!(help.contains("--target"));
+        assert!(help.contains("cur"));
         assert!(help.contains("path"));
         assert!(help.contains("--source-binary"));
         assert!(help.contains("--install-root"));
@@ -1283,10 +1284,48 @@ mod tests {
     }
 
     #[test]
+    fn release_install_cur_alias_resolves_to_current_target() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let paths = install_target_paths("cur", Some(harness.path()))
+            .expect("cur install target should resolve");
+
+        assert_eq!(
+            paths,
+            vec![(
+                "current".to_string(),
+                harness
+                    .path()
+                    .join("current")
+                    .join("bin")
+                    .join(vida_binary_file_name())
+            )]
+        );
+    }
+
+    #[test]
     fn release_install_current_target_includes_pi_agent_companion_destination() {
         let harness = TempStateHarness::new().expect("temp harness should initialize");
         let paths = companion_runtime_install_target_paths("current", Some(harness.path()))
             .expect("current companion install target should resolve");
+
+        assert_eq!(
+            paths,
+            vec![(
+                "current:vida-pi-agent".to_string(),
+                harness
+                    .path()
+                    .join("current")
+                    .join("bin")
+                    .join(pi_agent_binary_file_name())
+            )]
+        );
+    }
+
+    #[test]
+    fn release_install_cur_alias_includes_pi_agent_companion_destination() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let paths = companion_runtime_install_target_paths("cur", Some(harness.path()))
+            .expect("cur companion install target should resolve");
 
         assert_eq!(
             paths,
@@ -1605,6 +1644,10 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.blocker_codes, vec!["unsupported_install_target"]);
+        assert_eq!(
+            receipt.next_actions,
+            vec!["Use `--target current`, `--target cur`, or `--target path`."]
+        );
         assert_eq!(receipt.io_error, None);
         assert!(receipt.installed_targets.is_empty());
     }

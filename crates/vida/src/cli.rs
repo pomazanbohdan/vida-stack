@@ -904,7 +904,7 @@ pub(crate) struct ReleaseInstallArgs {
     #[arg(
         long = "target",
         default_value = "current",
-        help = "Install target: current or path. Legacy all/local/cargo aliases resolve to current."
+        help = "Install target: current, cur, or path. Legacy all/local/cargo aliases resolve to current."
     )]
     pub(crate) target: String,
 
