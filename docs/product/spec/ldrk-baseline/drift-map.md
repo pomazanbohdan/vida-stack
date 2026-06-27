@@ -6,14 +6,34 @@ Status: generated baseline artifact for TaskFlow task `ldr-001`.
 
 | Metric | Value |
 | --- | --- |
-| targeted_production_loc | 161388 |
-| direct_surface_mutation_candidates | 1621 |
-| duplicate_classifier_candidates | 260 |
-| status_helper_false_positive_candidates | 409 |
-| cfg_test_classifier_candidates | 276 |
-| cfg_test_status_helper_candidates | 767 |
-| canonical_cli_leaf_command_candidates | 160 |
-| command_specific_option_candidates | 530 |
+| targeted_production_loc | 165072 |
+| all_runtime_lexical_mutation_candidates | 1670 |
+| surface_direct_mutation_candidates | 530 |
+| duplicate_classifier_candidates | 247 |
+| status_helper_false_positive_candidates | 370 |
+| cfg_test_classifier_candidates | 280 |
+| cfg_test_status_helper_candidates | 803 |
+| canonical_cli_leaf_command_candidates | 169 |
+| command_specific_option_candidates | 556 |
+
+## LDR-074 Final Gate Status
+
+Status: `fail`; classification: `partially_fixed`.
+
+| Metric | Value | Threshold | Status |
+| --- | --- | --- | --- |
+| targeted_production_loc | 165072 | 182431 | pass |
+| duplicate_classifier_candidates | 247 | 479 | pass |
+| canonical_cli_leaf_command_candidates | 169 | 96 | fail |
+| command_specific_option_candidates | 556 | 263 | fail |
+| surface_direct_mutation_candidates | 530 | 0 | fail |
+
+All-runtime lexical mutation candidates remain reported separately because the LDR-074 acceptance gate is scoped to CLI/TUI/transport mutation paths.
+
+Next slices:
+
+- ldr-074b: reduce canonical CLI leaf and option counts
+- ldr-074c: eliminate or classify CLI/TUI/transport direct mutation candidates
 
 ## Direct Mutation Candidates
 
@@ -24,81 +44,81 @@ Status: generated baseline artifact for TaskFlow task `ldr-001`.
 | crates/taskflow-authority/src/scheduler_claim.rs | 476 | claim | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/taskflow-contracts/src/lib.rs | 111 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/taskflow-contracts/src/lib.rs | 112 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-core/src/task/aggregate.rs | 688 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-core/src/task/aggregate.rs | 770 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/taskflow-core/src/task/graph.rs | 56 | task_record | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/taskflow-core/src/task/lifecycle.rs | 62 | task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/taskflow-core/src/task/split.rs | 34 | task_record | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/taskflow-core/src/task/update.rs | 1 | task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/taskflow-state/src/lib.rs | 66 | task_record | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-state/src/lib.rs | 707 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-state/src/lib.rs | 708 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-state/src/lib.rs | 711 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-state/src/lib.rs | 714 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-state/src/lib.rs | 982 | claim | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-state/src/lib.rs | 809 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-state/src/lib.rs | 810 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-state/src/lib.rs | 813 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-state/src/lib.rs | 816 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-state/src/lib.rs | 1122 | claim | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/vida-contracts/src/lib.rs | 33 | lane_packet | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/vida-contracts/src/lib.rs | 40 | claim,task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 1961 | lane_packet | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 1967 | lane_packet | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 1971 | lane_packet | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 1983 | host_bridge_artifact | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 3285 | dispatch_receipt,lane_packet,run_graph_state | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 3289 | lane_packet | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 4204 | host_bridge_artifact | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 4859 | lane_packet | remove_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 4860 | lane_packet | create_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 4868 | lane_packet | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 4877 | dispatch_receipt,lane_packet,run_graph_state | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5316 | host_bridge_artifact | remove_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5334 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5342 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5348 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5367 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5409 | host_bridge_artifact | create_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5419 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5583 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5715 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5734 | run_graph_state | persist | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5800 | dispatch_receipt,run_graph_state | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5833 | lane_packet | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5906 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5926 | host_bridge_artifact | create_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6133 | host_bridge_artifact | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6393 | host_bridge_artifact | remove_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6581 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6630 | task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6763 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6818 | task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6913 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6962 | dispatch_receipt,run_graph_state | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 7101 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 7216 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 9946 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida-contracts/src/lib.rs | 94 | claim,task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 2031 | lane_packet | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 2037 | lane_packet | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 2041 | lane_packet | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 2053 | host_bridge_artifact | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 3523 | dispatch_receipt,lane_packet,run_graph_state | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 3527 | lane_packet | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 4822 | host_bridge_artifact | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 5835 | lane_packet | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 5908 | lane_packet | remove_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 5909 | lane_packet | create_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 5917 | lane_packet | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 5926 | dispatch_receipt,lane_packet,run_graph_state | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6387 | host_bridge_artifact | remove_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6405 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6413 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6419 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6438 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6480 | host_bridge_artifact | create_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6490 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6660 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6799 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6818 | run_graph_state | persist | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6907 | dispatch_receipt,run_graph_state | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6940 | lane_packet | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7008 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7028 | host_bridge_artifact | create_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7235 | host_bridge_artifact | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7513 | host_bridge_artifact | remove_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7703 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7752 | task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7886 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7941 | task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 8037 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 8086 | dispatch_receipt,run_graph_state | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 8226 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 8342 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 11542 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/vida/src/approval_surface.rs | 302 | run_graph_state,task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/vida/src/approval_surface.rs | 686 | run_graph_state | persist | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/vida/src/approval_surface.rs | 749 | dispatch_receipt,run_graph_state | persist | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/vida/src/approval_surface.rs | 804 | run_graph_state | persist | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/vida/src/approval_surface.rs | 815 | run_graph_state | persist | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 | crates/vida/src/cli.rs | 5 | task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 37 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 40 | lane_packet,task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 44 | task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 45 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 49 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 54 | lane_packet,run_graph_state,task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 56 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 191 | claim | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 947 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 955 | task_record | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 970 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 978 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 980 | task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 997 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1017 | task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1469 | task_record | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1478 | task_record | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1818 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1959 | task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 2141 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 38 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 41 | lane_packet,task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 45 | task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 46 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 50 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 58 | lane_packet,run_graph_state,task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 60 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 198 | claim | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1017 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1025 | task_record | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1040 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1048 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1050 | task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1067 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1087 | task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1584 | task_record | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1593 | task_record | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1933 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 
 ## Classifier Candidates
 
@@ -108,11 +128,11 @@ Status: generated baseline artifact for TaskFlow task `ldr-001`.
 | crates/taskflow-authority/src/run_graph_evidence.rs | 42 | blocked_source_lane_from_packet_evidence | fold into shared CompletionOutcome/verdict contract |
 | crates/taskflow-authority/src/scheduler_claim.rs | 95 | normalize_scheduler_reservation_blocker_codes | fold into shared CompletionOutcome/verdict contract |
 | crates/taskflow-authority/src/stale_guard.rs | 64 | run_graph_status_is_terminal_closure | fold into shared CompletionOutcome/verdict contract |
-| crates/taskflow-authority/src/terminal_closure.rs | 45 | status_is_terminal_closure | fold into shared CompletionOutcome/verdict contract |
-| crates/taskflow-contracts/src/blocker_code.rs | 208 | canonical_blocker_code_str | fold into shared CompletionOutcome/verdict contract |
-| crates/taskflow-contracts/src/blocker_code.rs | 213 | canonical_blocker_code_value_from_str | fold into shared CompletionOutcome/verdict contract |
-| crates/taskflow-contracts/src/blocker_code.rs | 258 | canonical_parametric_blocker_code_value | fold into shared CompletionOutcome/verdict contract |
-| crates/taskflow-contracts/src/blocker_code.rs | 284 | is_selected_lane_assignment_guard_blocked | fold into shared CompletionOutcome/verdict contract |
+| crates/taskflow-authority/src/terminal_closure.rs | 46 | status_is_terminal_closure_without_next_unit | fold into shared CompletionOutcome/verdict contract |
+| crates/taskflow-contracts/src/blocker_code.rs | 213 | canonical_blocker_code_str | fold into shared CompletionOutcome/verdict contract |
+| crates/taskflow-contracts/src/blocker_code.rs | 218 | canonical_blocker_code_value_from_str | fold into shared CompletionOutcome/verdict contract |
+| crates/taskflow-contracts/src/blocker_code.rs | 263 | canonical_parametric_blocker_code_value | fold into shared CompletionOutcome/verdict contract |
+| crates/taskflow-contracts/src/blocker_code.rs | 289 | is_selected_lane_assignment_guard_blocked | fold into shared CompletionOutcome/verdict contract |
 | crates/taskflow-contracts/src/decision_table.rs | 109 | is_fail_closed_blocked | fold into shared CompletionOutcome/verdict contract |
 | crates/taskflow-core/src/consume/continue_use_case.rs | 17 | blocker_code | fold into shared CompletionOutcome/verdict contract |
 | crates/taskflow-core/src/consume/continue_use_case.rs | 25 | classify_state_access_error | fold into shared CompletionOutcome/verdict contract |
@@ -132,15 +152,15 @@ Status: generated baseline artifact for TaskFlow task `ldr-001`.
 | crates/vida/src/agent_dispatch_surface.rs | 673 | retryable_host_bridge_completion_request_for_state_root | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/agent_dispatch_surface.rs | 713 | completed_host_bridge_completion_request_for_state_root | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/agent_dispatch_surface.rs | 739 | retryable_host_bridge_completion_request | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/agent_dispatch_surface.rs | 1991 | blocked_candidate | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/agent_dispatch_surface.rs | 3108 | fail_closed_flow_projection_for_continuation_gate | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/agent_feedback_surface.rs | 481 | has_failure_state_language | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/agent_feedback_surface.rs | 508 | has_resolved_failure_artifact_action_context | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/agent_feedback_surface.rs | 569 | has_unresolved_failure_artifact_context | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/agent_feedback_surface.rs | 669 | has_failure_state_artifact_language | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/agent_feedback_surface.rs | 687 | has_current_failure_outcome_language | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/agent_feedback_surface.rs | 770 | has_contrastive_blocker_clause | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/command_pipeline.rs | 171 | blocked_response | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/agent_dispatch_surface.rs | 2061 | blocked_candidate | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/agent_dispatch_surface.rs | 3311 | fail_closed_flow_projection_for_continuation_gate | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/agent_feedback_surface.rs | 491 | has_failure_state_language | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/agent_feedback_surface.rs | 518 | has_resolved_failure_artifact_action_context | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/agent_feedback_surface.rs | 579 | has_unresolved_failure_artifact_context | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/agent_feedback_surface.rs | 679 | has_failure_state_artifact_language | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/agent_feedback_surface.rs | 697 | has_current_failure_outcome_language | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/agent_feedback_surface.rs | 780 | has_contrastive_blocker_clause | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/command_pipeline.rs | 260 | blocked_response | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/consume_final_operator_surface.rs | 237 | docflow_verdict_vida_gate_result | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/consume_final_operator_surface.rs | 276 | consume_final_operator_blocker_codes | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/continuation_binding_summary.rs | 5 | explicit_binding_is_admissible_for_status | fold into shared CompletionOutcome/verdict contract |
@@ -156,34 +176,34 @@ Status: generated baseline artifact for TaskFlow task `ldr-001`.
 | crates/vida/src/docflow_runtime_verdict.rs | 6 | runtime_blocker_codes_for_docflow_closeout | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/docflow_runtime_verdict.rs | 17 | docflow_runtime_verdict_next_actions | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/docflow_runtime_verdict.rs | 25 | build_docflow_runtime_verdict | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/doctor_surface.rs | 24 | governance_projection_blocker_codes | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/doctor_surface.rs | 80 | run_graph_status_has_unsupported_architecture_reserved_workflow_boundary | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/doctor_surface.rs | 139 | trace_evidence_blocker_codes | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/doctor_surface.rs | 275 | doctor_operator_blocker_codes | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/doctor_surface.rs | 27 | governance_projection_blocker_codes | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/doctor_surface.rs | 83 | run_graph_status_has_unsupported_architecture_reserved_workflow_boundary | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/doctor_surface.rs | 147 | trace_evidence_blocker_codes | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/doctor_surface.rs | 283 | doctor_operator_blocker_codes | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/external_provider_health.rs | 132 | classify_external_provider_error | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/init_surfaces.rs | 413 | agent_init_dispatch_timeout_blocker_codes | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 1399 | blocked_source_target_from_summary_packet | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 1521 | lane_summary_dispatch_is_blocked | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 1562 | lane_summary_is_terminal_completed | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 1574 | lane_summary_raw_blocker_codes | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 1610 | canonical_lane_show_blocker_codes | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 1643 | lane_show_preserves_raw_blocker_code | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 1656 | blocked_lane_show_next_action | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 2892 | explicit_blocker_codes | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 2956 | parse_host_bridge_completion_blocker_codes | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 2986 | host_bridge_completion_result_value_is_blocked | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 3036 | supplied_host_bridge_completion_result_blocker_codes | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 3095 | supplied_host_bridge_completion_result_is_blocked | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 3232 | host_bridge_request_is_retryable_completion_state | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 3810 | host_bridge_scope_validation_blocker_codes | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 3823 | host_bridge_completion_summary_blocker_code | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 3904 | host_bridge_request_has_retryable_completion_evidence | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/lane_surface.rs | 3934 | host_bridge_request_has_completed_preview_refresh_evidence | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 1164 | lane_status_is_terminal_closure_without_next_unit | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 1526 | blocked_source_target_from_summary_packet | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 1648 | lane_summary_dispatch_is_blocked | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 1688 | lane_summary_is_terminal_completed | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 1700 | lane_summary_raw_blocker_codes | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 1736 | canonical_lane_show_blocker_codes | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 1769 | lane_show_preserves_raw_blocker_code | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 1782 | blocked_lane_show_next_action | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 3018 | explicit_blocker_codes | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 3082 | parse_host_bridge_completion_blocker_codes | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 3112 | host_bridge_completion_result_value_is_blocked | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 3186 | supplied_host_bridge_completion_result_blocker_codes | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 3245 | supplied_host_bridge_completion_result_is_blocked | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 3404 | host_bridge_request_is_retryable_completion_state | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 3982 | host_bridge_scope_validation_blocker_codes | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 4058 | host_bridge_request_has_retryable_completion_evidence | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/lane_surface.rs | 4088 | host_bridge_request_has_completed_preview_refresh_evidence | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/operator_projection_cache.rs | 238 | pass_projection_requires_recompute_without_operator_evidence | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/operator_session_projection.rs | 800 | projection_operator_blocker_codes | fold into shared CompletionOutcome/verdict contract |
+| crates/vida/src/operator_session_projection.rs | 841 | projection_operator_blocker_codes | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/orchestrator_session_surface.rs | 381 | classify_sessions | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/orchestrator_session_surface.rs | 388 | classify_sessions_with_liveness | fold into shared CompletionOutcome/verdict contract |
 | crates/vida/src/release1_contracts.rs | 255 | classify_compatibility_boundary | fold into shared CompletionOutcome/verdict contract |
-| crates/vida/src/release1_contracts.rs | 805 | closure_admission_row_is_pass | fold into shared CompletionOutcome/verdict contract |
 
 ## Host-Bridge Defect Path Review
 

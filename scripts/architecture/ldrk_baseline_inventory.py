@@ -24,6 +24,22 @@ TARGET_ROOTS = [
     "crates/vida-contracts",
 ]
 
+LDR074_THRESHOLDS = {
+    "targeted_production_loc": 182431,
+    "duplicate_classifier_candidates": 479,
+    "canonical_cli_leaf_command_candidates": 96,
+    "command_specific_option_candidates": 263,
+    "surface_direct_mutation_candidates": 0,
+}
+
+SURFACE_MUTATION_PATH_PATTERNS = [
+    re.compile(pattern)
+    for pattern in [
+        r"crates/vida/src/.*(?:cli|surface|router|transport|tui).*\.rs$",
+        r"crates/vida/src/main\.rs$",
+    ]
+]
+
 RUNTIME_ENTITY_PATTERNS = {
     "run_graph_state": [r"run[_-]?graph", r"RunGraph"],
     "dispatch_receipt": [r"dispatch[_-]?receipt", r"DispatchReceipt"],
@@ -257,6 +273,59 @@ def inventory_mutations(files: Iterable[SourceFile]) -> list[dict[str, object]]:
     return sorted(records, key=lambda row: (row["p"], row["l"], row["op"]))
 
 
+def surface_mutation_records(records: Iterable[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        row
+        for row in records
+        if any(pattern.search(str(row["p"])) for pattern in SURFACE_MUTATION_PATH_PATTERNS)
+    ]
+
+
+def ldr074_gate_status(
+    *,
+    loc: dict[str, object],
+    mutations: list[dict[str, object]],
+    literals: dict[str, object],
+    commands: dict[str, object],
+) -> dict[str, object]:
+    surface_mutations = surface_mutation_records(mutations)
+    metrics = {
+        "targeted_production_loc": loc["total_production_loc"],
+        "duplicate_classifier_candidates": len(literals["classifier_functions"]),
+        "canonical_cli_leaf_command_candidates": commands["leaf_command_count"],
+        "command_specific_option_candidates": commands["command_specific_option_count"],
+        "surface_direct_mutation_candidates": len(surface_mutations),
+        "all_runtime_lexical_mutation_candidates": len(mutations),
+    }
+    gate_rows = []
+    for metric, threshold in LDR074_THRESHOLDS.items():
+        value = int(metrics[metric])
+        gate_rows.append(
+            {
+                "metric": metric,
+                "value": value,
+                "threshold": threshold,
+                "status": "pass" if value <= threshold else "fail",
+            }
+        )
+    return {
+        "gate": "ldr-074-final-metrics",
+        "status": "pass"
+        if all(row["status"] == "pass" for row in gate_rows)
+        else "fail",
+        "thresholds": LDR074_THRESHOLDS,
+        "metrics": metrics,
+        "gate_rows": gate_rows,
+        "surface_mutation_record_count": len(surface_mutations),
+        "surface_mutation_records": surface_mutations,
+        "classification": "partially_fixed",
+        "next_slices": [
+            "ldr-074b: reduce canonical CLI leaf and option counts",
+            "ldr-074c: eliminate or classify CLI/TUI/transport direct mutation candidates",
+        ],
+    }
+
+
 def inventory_literals_and_classifiers(files: Iterable[SourceFile]) -> dict[str, object]:
     literals: dict[str, dict[str, object]] = {}
     cfg_test_literals: dict[str, dict[str, object]] = {}
@@ -428,6 +497,12 @@ def build_baseline(root: Path) -> dict[str, object]:
             "canonical_cli_leaf_command_candidates": commands["leaf_command_count"],
             "command_specific_option_candidates": commands["command_specific_option_count"],
         },
+        "ldr074_final_gate": ldr074_gate_status(
+            loc=loc,
+            mutations=mutations,
+            literals=literals,
+            commands=commands,
+        ),
     }
 
 
@@ -462,6 +537,8 @@ def render_drift_map(baseline: dict[str, object]) -> str:
     mutations = baseline["direct_mutation_inventory"]["records"]  # type: ignore[index]
     classifiers = baseline["status_and_classifier_inventory"]["classifier_functions"]  # type: ignore[index]
     commands = baseline["command_inventory"]
+    final_gate = baseline["ldr074_final_gate"]
+    gate_rows = final_gate["gate_rows"]  # type: ignore[index]
     top_mutations = mutations[:80]
     mutation_rows = [
         [
@@ -488,7 +565,8 @@ def render_drift_map(baseline: dict[str, object]) -> str:
             ["Metric", "Value"],
             [
                 ["targeted_production_loc", baseline["success_metric_baseline"]["targeted_production_loc"]],  # type: ignore[index]
-                ["direct_surface_mutation_candidates", baseline["direct_mutation_inventory"]["count"]],  # type: ignore[index]
+                ["all_runtime_lexical_mutation_candidates", baseline["direct_mutation_inventory"]["count"]],  # type: ignore[index]
+                ["surface_direct_mutation_candidates", final_gate["metrics"]["surface_direct_mutation_candidates"]],  # type: ignore[index]
                 ["duplicate_classifier_candidates", baseline["success_metric_baseline"]["duplicate_classifier_candidates"]],  # type: ignore[index]
                 ["status_helper_false_positive_candidates", baseline["status_and_classifier_inventory"]["status_helper_function_count"]],  # type: ignore[index]
                 ["cfg_test_classifier_candidates", baseline["status_and_classifier_inventory"]["cfg_test_classifier_function_count"]],  # type: ignore[index]
@@ -497,6 +575,24 @@ def render_drift_map(baseline: dict[str, object]) -> str:
                 ["command_specific_option_candidates", commands["command_specific_option_count"]],  # type: ignore[index]
             ],
         ),
+        "",
+        "## LDR-074 Final Gate Status",
+        "",
+        f"Status: `{final_gate['status']}`; classification: `{final_gate['classification']}`.",
+        "",
+        markdown_table(
+            ["Metric", "Value", "Threshold", "Status"],
+            [
+                [row["metric"], row["value"], row["threshold"], row["status"]]
+                for row in gate_rows
+            ],
+        ),
+        "",
+        "All-runtime lexical mutation candidates remain reported separately because the LDR-074 acceptance gate is scoped to CLI/TUI/transport mutation paths.",
+        "",
+        "Next slices:",
+        "",
+        *[f"- {item}" for item in final_gate["next_slices"]],  # type: ignore[index]
         "",
         "## Direct Mutation Candidates",
         "",
