@@ -163,6 +163,17 @@ pub struct JournalArtifactRecord {
     pub path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JournalAggregateSnapshotRecord {
+    pub aggregate_id: VidaAggregateRef,
+    pub schema_id: VidaSchemaId,
+    pub schema_version: VidaSchemaVersion,
+    pub stream_id: VidaStreamRef,
+    pub stream_version: VidaStreamVersion,
+    pub payload: serde_json::Value,
+    pub replay_hash: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct JournalAppendIdempotencyRecord {
     request_fingerprint: String,
@@ -235,6 +246,11 @@ pub trait OperationalJournal {
     fn record_projection_checkpoint(&mut self, checkpoint: VidaProjectionCheckpoint);
     fn record_projection_failure(&mut self, failure: JournalProjectionFailure);
     fn index_artifact(&mut self, artifact: JournalArtifactRecord);
+    fn record_aggregate_snapshot(&mut self, snapshot: JournalAggregateSnapshotRecord);
+    fn aggregate_snapshot(
+        &self,
+        aggregate_id: &VidaAggregateRef,
+    ) -> Option<JournalAggregateSnapshotRecord>;
 }
 
 pub struct RunWorkflowJournalRepository<'a, J: OperationalJournal> {
@@ -317,6 +333,91 @@ impl<'a, J: OperationalJournal> RunWorkflowJournalRepository<'a, J> {
             ),
         })
     }
+
+    pub fn save_snapshot(&mut self, aggregate: &RunWorkflowAggregate) {
+        self.journal
+            .record_aggregate_snapshot(run_workflow_snapshot_record(aggregate));
+    }
+
+    pub fn load_snapshot(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<Option<RunWorkflowAggregate>, TaskflowStateError> {
+        let aggregate_id = VidaAggregateRef(run_id.to_string());
+        let Some(snapshot) = self.journal.aggregate_snapshot(&aggregate_id) else {
+            return Ok(None);
+        };
+        validate_run_workflow_snapshot_record(&snapshot, run_id, task_id).map(Some)
+    }
+}
+
+fn run_workflow_snapshot_record(
+    aggregate: &RunWorkflowAggregate,
+) -> JournalAggregateSnapshotRecord {
+    JournalAggregateSnapshotRecord {
+        aggregate_id: VidaAggregateRef(aggregate.run_id.clone()),
+        schema_id: VidaSchemaId("taskflow.run_workflow.snapshot".to_string()),
+        schema_version: VidaSchemaVersion(1),
+        stream_id: run_workflow_stream_id(&aggregate.run_id),
+        stream_version: VidaStreamVersion(aggregate.version),
+        payload: serde_json::json!({
+            "run_id": aggregate.run_id.clone(),
+            "task_id": aggregate.task_id.clone(),
+            "state": aggregate.state.clone(),
+            "version": aggregate.version,
+        }),
+        replay_hash: aggregate.snapshot_replay_hash(),
+    }
+}
+
+fn validate_run_workflow_snapshot_record(
+    snapshot: &JournalAggregateSnapshotRecord,
+    run_id: &str,
+    task_id: &str,
+) -> Result<RunWorkflowAggregate, TaskflowStateError> {
+    if snapshot.schema_id.0 != "taskflow.run_workflow.snapshot" || snapshot.schema_version.0 != 1 {
+        return Err(TaskflowStateError::PayloadDecode(format!(
+            "unsupported run workflow snapshot schema {}@{}",
+            snapshot.schema_id.0, snapshot.schema_version.0
+        )));
+    }
+    if snapshot.aggregate_id.0 != run_id || snapshot.stream_id != run_workflow_stream_id(run_id) {
+        return Err(TaskflowStateError::PayloadDecode(
+            "run workflow snapshot aggregate identity mismatch".to_string(),
+        ));
+    }
+    #[derive(Deserialize)]
+    struct SnapshotPayload {
+        run_id: String,
+        task_id: String,
+        state: RunWorkflowState,
+        version: u64,
+    }
+    let payload: SnapshotPayload = serde_json::from_value(snapshot.payload.clone())
+        .map_err(|error| TaskflowStateError::PayloadDecode(error.to_string()))?;
+    if payload.run_id != run_id || payload.task_id != task_id {
+        return Err(TaskflowStateError::PayloadDecode(
+            "run workflow snapshot payload identity mismatch".to_string(),
+        ));
+    }
+    if payload.version != snapshot.stream_version.0 {
+        return Err(TaskflowStateError::PayloadDecode(
+            "run workflow snapshot version mismatch".to_string(),
+        ));
+    }
+    let aggregate = RunWorkflowAggregate::from_snapshot(
+        payload.run_id,
+        payload.task_id,
+        payload.state,
+        payload.version,
+    );
+    if aggregate.snapshot_replay_hash() != snapshot.replay_hash {
+        return Err(TaskflowStateError::PayloadDecode(
+            "run workflow snapshot replay hash mismatch".to_string(),
+        ));
+    }
+    Ok(aggregate)
 }
 
 fn validate_run_workflow_envelope_metadata(
@@ -512,6 +613,7 @@ pub struct InMemoryOperationalJournal {
     projection_checkpoints: HashMap<String, VidaProjectionCheckpoint>,
     projection_failures: Vec<JournalProjectionFailure>,
     artifacts: HashMap<String, JournalArtifactRecord>,
+    aggregate_snapshots: HashMap<String, JournalAggregateSnapshotRecord>,
 }
 
 impl InMemoryOperationalJournal {
@@ -766,6 +868,18 @@ impl OperationalJournal for InMemoryOperationalJournal {
         self.artifacts
             .insert(artifact.artifact_ref.0.clone(), artifact);
     }
+
+    fn record_aggregate_snapshot(&mut self, snapshot: JournalAggregateSnapshotRecord) {
+        self.aggregate_snapshots
+            .insert(snapshot.aggregate_id.0.clone(), snapshot);
+    }
+
+    fn aggregate_snapshot(
+        &self,
+        aggregate_id: &VidaAggregateRef,
+    ) -> Option<JournalAggregateSnapshotRecord> {
+        self.aggregate_snapshots.get(&aggregate_id.0).cloned()
+    }
 }
 
 fn projection_checkpoint_is_stale(
@@ -792,7 +906,7 @@ mod tests {
     use super::{
         InMemoryOperationalJournal, InMemoryTaskStore, JournalAppendRequest, JournalArtifactRecord,
         JournalIdempotencyState, JournalOutboxState, JournalProjectionFailure, OperationalJournal,
-        RunWorkflowJournalRepository, TaskStore, TaskflowStateError,
+        RunWorkflowJournalRepository, TaskStore, TaskflowStateError, run_workflow_snapshot_record,
         verify_run_workflow_repository_conformance,
         verify_run_workflow_repository_corrupt_payload_fails_closed,
     };
@@ -1071,8 +1185,14 @@ mod tests {
         let replay = RunWorkflowJournalRepository::new(&mut journal)
             .load("run-031-hash", "ldr-031")
             .expect("repository replay should pass");
+        RunWorkflowJournalRepository::new(&mut journal).save_snapshot(&replay);
+        let snapshot = RunWorkflowJournalRepository::new(&mut journal)
+            .load_snapshot("run-031-hash", "ldr-031")
+            .expect("snapshot load should pass")
+            .expect("snapshot should exist");
 
         assert_eq!(replay.snapshot_replay_hash(), first.final_snapshot_hash);
+        assert_eq!(snapshot.snapshot_replay_hash(), first.final_snapshot_hash);
         assert_eq!(replay.version, 2);
     }
 
@@ -1085,6 +1205,28 @@ mod tests {
             "run-031-corrupt",
         )
         .expect("corrupt payload must fail closed");
+    }
+
+    #[test]
+    fn run_workflow_repository_snapshot_load_fails_closed_on_future_schema() {
+        let mut journal = InMemoryOperationalJournal::default();
+        let aggregate = RunWorkflowAggregate::from_snapshot(
+            "run-031-future",
+            "ldr-031",
+            RunWorkflowState::Active {
+                step: TaskRoleStep::developer(),
+            },
+            3,
+        );
+        let mut snapshot = run_workflow_snapshot_record(&aggregate);
+        snapshot.schema_version = VidaSchemaVersion(99);
+        journal.record_aggregate_snapshot(snapshot);
+
+        let error = RunWorkflowJournalRepository::new(&mut journal)
+            .load_snapshot("run-031-future", "ldr-031")
+            .expect_err("future snapshot schema must fail closed");
+
+        assert!(matches!(error, TaskflowStateError::PayloadDecode(_)));
     }
 
     #[test]

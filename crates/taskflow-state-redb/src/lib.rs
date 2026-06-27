@@ -5,15 +5,15 @@ use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use taskflow_contracts::{
-    DependencyEdge, TaskRecord, VidaArtifactRef, VidaCommandRef, VidaDomainEventEnvelope,
-    VidaEffectIntent, VidaEventCursor, VidaEventRef, VidaIdempotencyKey, VidaProjectionCheckpoint,
-    VidaProjectionRef, VidaReceiptId, VidaStreamRef, VidaStreamVersion,
+    DependencyEdge, TaskRecord, VidaAggregateRef, VidaArtifactRef, VidaCommandRef,
+    VidaDomainEventEnvelope, VidaEffectIntent, VidaEventCursor, VidaEventRef, VidaIdempotencyKey,
+    VidaProjectionCheckpoint, VidaProjectionRef, VidaReceiptId, VidaStreamRef, VidaStreamVersion,
 };
 use taskflow_state::{
-    JournalAppendReceipt, JournalAppendRequest, JournalArtifactRecord, JournalEventRecord,
-    JournalIdempotencyRecord, JournalIdempotencyState, JournalOutboxRecord, JournalOutboxState,
-    JournalProjectionFailure, OperationalJournal, TaskflowStateError, append_request_fingerprint,
-    validate_append_event_streams,
+    JournalAggregateSnapshotRecord, JournalAppendReceipt, JournalAppendRequest,
+    JournalArtifactRecord, JournalEventRecord, JournalIdempotencyRecord, JournalIdempotencyState,
+    JournalOutboxRecord, JournalOutboxState, JournalProjectionFailure, OperationalJournal,
+    TaskflowStateError, append_request_fingerprint, validate_append_event_streams,
 };
 
 const SCHEMA_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("journal_schema");
@@ -30,6 +30,8 @@ const PROJECTION_CHECKPOINT_TABLE: TableDefinition<&str, &[u8]> =
 const PROJECTION_FAILURE_TABLE: TableDefinition<&str, &[u8]> =
     TableDefinition::new("projection_failure_by_cursor");
 const ARTIFACT_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("artifact_by_ref");
+const AGGREGATE_SNAPSHOT_TABLE: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("aggregate_snapshot_by_id");
 const TASKFLOW_SNAPSHOT_TASK_TABLE: TableDefinition<&str, &[u8]> =
     TableDefinition::new("taskflow_snapshot_task_by_id");
 const TASKFLOW_SNAPSHOT_DEPENDENCY_TABLE: TableDefinition<&str, &[u8]> =
@@ -295,6 +297,9 @@ impl RedbOperationalJournal {
                 .open_table(PROJECTION_FAILURE_TABLE)
                 .map_err(storage_error)?;
             let _ = write.open_table(ARTIFACT_TABLE).map_err(storage_error)?;
+            let _ = write
+                .open_table(AGGREGATE_SNAPSHOT_TABLE)
+                .map_err(storage_error)?;
             let _ = write
                 .open_table(TASKFLOW_SNAPSHOT_TASK_TABLE)
                 .map_err(storage_error)?;
@@ -1111,6 +1116,23 @@ impl OperationalJournal for RedbOperationalJournal {
         let record = RedbArtifactIndexRecord::from_artifact(artifact, self.latest_global_cursor());
         let _ = self.write_record(ARTIFACT_TABLE, &record.artifact_ref.0, &record);
     }
+
+    fn record_aggregate_snapshot(&mut self, snapshot: JournalAggregateSnapshotRecord) {
+        let _ = self.write_record(
+            AGGREGATE_SNAPSHOT_TABLE,
+            &snapshot.aggregate_id.0,
+            &snapshot,
+        );
+    }
+
+    fn aggregate_snapshot(
+        &self,
+        aggregate_id: &VidaAggregateRef,
+    ) -> Option<JournalAggregateSnapshotRecord> {
+        self.read_one(AGGREGATE_SNAPSHOT_TABLE, &aggregate_id.0)
+            .ok()
+            .flatten()
+    }
 }
 
 impl RedbOperationalJournal {
@@ -1816,14 +1838,23 @@ mod tests {
         let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
         let report = verify_run_workflow_repository_conformance(&mut journal, "run-031-redb")
             .expect("repository conformance should pass");
+        let loaded_before_reopen = RunWorkflowJournalRepository::new(&mut journal)
+            .load("run-031-redb", "ldr-031")
+            .expect("repository load should pass");
+        RunWorkflowJournalRepository::new(&mut journal).save_snapshot(&loaded_before_reopen);
         drop(journal);
 
         let mut reopened = RedbOperationalJournal::open(&path).expect("reopen journal");
         let loaded = RunWorkflowJournalRepository::new(&mut reopened)
             .load("run-031-redb", "ldr-031")
             .expect("repository load should pass");
+        let snapshot = RunWorkflowJournalRepository::new(&mut reopened)
+            .load_snapshot("run-031-redb", "ldr-031")
+            .expect("snapshot load should pass")
+            .expect("snapshot should exist after reopen");
 
         assert_eq!(loaded.snapshot_replay_hash(), report.final_snapshot_hash);
+        assert_eq!(snapshot.snapshot_replay_hash(), report.final_snapshot_hash);
         assert_eq!(report.event_count, 2);
         assert_eq!(
             reopened
