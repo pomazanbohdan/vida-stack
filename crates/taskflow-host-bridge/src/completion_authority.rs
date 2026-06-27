@@ -4,6 +4,7 @@ pub const BLOCKER_OUTCOME_CONTRADICTION: &str = "host_bridge_completion_outcome_
 pub const BLOCKER_PROVENANCE_REJECTED: &str = "host_bridge_completion_provenance_rejected";
 pub const BLOCKER_RECEIPT_NOT_BOUND: &str = "host_bridge_completion_receipt_not_bound";
 pub const BLOCKER_TYPED_BLOCKED_OUTCOME: &str = "host_bridge_completion_blocked";
+pub const BLOCKER_SUMMARY_DERIVED: &str = "host_bridge_completion_summary_blocked";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostBridgeCompletionState {
@@ -64,6 +65,8 @@ pub fn decide_host_bridge_completion_authority(
     input: HostBridgeCompletionAuthorityInput,
 ) -> HostBridgeCompletionAuthorityDecision {
     let mut blockers = typed_blockers(&input);
+    blockers.extend(summary_blocker_codes(input.summary.as_deref()));
+    dedup_blockers(&mut blockers);
     let passed = completion_tuple_is_passed(&input);
     let blocked = completion_tuple_is_blocked(&input);
 
@@ -97,7 +100,7 @@ pub fn completion_authority_transition_matrix() -> Vec<HostBridgeCompletionTrans
             expected_state: HostBridgeCompletionState::Passed,
         },
         HostBridgeCompletionTransitionCase {
-            name: "passed_summary_mentions_blocker",
+            name: "passed_summary_mentions_resolved_blocker",
             input: input(
                 "approve",
                 "pass",
@@ -105,6 +108,18 @@ pub fn completion_authority_transition_matrix() -> Vec<HostBridgeCompletionTrans
                 Some("proof passed; previous blocker was resolved"),
             ),
             expected_state: HostBridgeCompletionState::Passed,
+        },
+        HostBridgeCompletionTransitionCase {
+            name: "summary_only_blocked_outcome",
+            input: input(
+                "approve",
+                "pass",
+                [],
+                Some(
+                    "verdict: blocker; rework required; implementation evidence missing; not closure-ready",
+                ),
+            ),
+            expected_state: HostBridgeCompletionState::Blocked,
         },
         HostBridgeCompletionTransitionCase {
             name: "blocked_typed_blocker",
@@ -191,6 +206,75 @@ fn typed_blockers(input: &HostBridgeCompletionAuthorityInput) -> Vec<String> {
         })
 }
 
+#[must_use]
+pub fn summary_blocker_codes(summary: Option<&str>) -> Vec<String> {
+    let Some(summary) = summary.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    if summary_text_reports_blocked_completion(summary) {
+        vec![BLOCKER_SUMMARY_DERIVED.to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
+#[must_use]
+pub fn summary_text_reports_blocked_completion(summary: &str) -> bool {
+    let normalized = normalized_summary(summary);
+    let resolved_context = [
+        "resolved blocker",
+        "blocker resolved",
+        "previous blocker was resolved",
+        "no blocker",
+        "no blockers",
+        "not blocked",
+        "not a blocker",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
+    if resolved_context {
+        return false;
+    }
+    [
+        "verdict blocker",
+        "verdict blocked",
+        "decision blocked",
+        "completion blocked",
+        "closure blocked",
+        "not closure ready",
+        "not closure_ready",
+        "closure ready false",
+        "rework required",
+        "implementation evidence missing",
+        "evidence missing",
+        "execution failed",
+        "completion failed",
+        "failed completion",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+}
+
+fn normalized_summary(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn dedup_blockers(blockers: &mut Vec<String>) {
+    let mut deduped = Vec::new();
+    for blocker in blockers.drain(..) {
+        push_unique(&mut deduped, &blocker);
+    }
+    *blockers = deduped;
+}
+
 fn completion_tuple_is_passed(input: &HostBridgeCompletionAuthorityInput) -> bool {
     normalized(&input.decision) == "approve"
         && matches!(normalized(&input.verdict).as_str(), "pass" | "passed")
@@ -237,9 +321,9 @@ fn input<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        BLOCKER_OUTCOME_CONTRADICTION, HostBridgeCompletionEffectIntent, HostBridgeCompletionEvent,
-        HostBridgeCompletionState, completion_authority_transition_matrix,
-        decide_host_bridge_completion_authority, input,
+        BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_SUMMARY_DERIVED, HostBridgeCompletionEffectIntent,
+        HostBridgeCompletionEvent, HostBridgeCompletionState,
+        completion_authority_transition_matrix, decide_host_bridge_completion_authority, input,
     };
 
     #[test]
@@ -273,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_text_cannot_change_typed_outcome() {
+    fn summary_text_derived_blocker_rejects_summary_only_negative_outcome() {
         let pass = decide_host_bridge_completion_authority(input(
             "approve",
             "pass",
@@ -287,9 +371,9 @@ mod tests {
             Some("everything looks fine"),
         ));
 
-        assert_eq!(pass.final_state, HostBridgeCompletionState::Passed);
-        assert!(pass.accepted);
-        assert!(pass.blocker_codes.is_empty());
+        assert_eq!(pass.final_state, HostBridgeCompletionState::Blocked);
+        assert!(!pass.accepted);
+        assert_eq!(pass.blocker_codes, vec![BLOCKER_SUMMARY_DERIVED]);
         assert_eq!(blocked.final_state, HostBridgeCompletionState::Blocked);
         assert!(!blocked.accepted);
         assert_eq!(blocked.blocker_codes, vec!["coach_rework_required"]);
