@@ -4,24 +4,26 @@ use std::{
 };
 
 use crate::dev_team_sequence_contract::{
-    configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
-    dev_team_sequence_for_work_item, selected_dev_team_flow_for_task, task_flow_lookup_keys,
-    DevTeamSequenceStep,
+    DevTeamSequenceStep, configured_dev_team_first_step_for_task, dev_team_sequence,
+    dev_team_sequence_for_task, dev_team_sequence_for_work_item, selected_dev_team_flow_for_task,
+    task_flow_lookup_keys,
 };
 use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root;
 use crate::{
-    state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
-    AgentHostBridgeArgs, AgentSelectArgs, AgentStatusArgs,
+    AgentArgs, AgentCommand, AgentDispatchNextArgs, AgentHostBridgeArgs, AgentSelectArgs,
+    AgentStatusArgs, state_store, state_store::StateStore,
 };
 use operator_output::command_text::human_command;
 use runtime_path_policy::{
-    existing_regular_file_under_root, new_output_path_under_root, path_contains_dot_segment,
-    ArtifactPathKind, PathPolicyError, StateRoot,
+    ArtifactPathKind, PathPolicyError, StateRoot, existing_regular_file_under_root,
+    new_output_path_under_root, path_contains_dot_segment,
 };
 use taskflow_host_bridge::{
-    build_host_bridge_adapter_payload, build_host_bridge_normalized_implementation_artifact,
-    host_bridge_artifact_file, host_bridge_artifact_has_retryable_completion_blocker,
-    host_bridge_changed_files_from_artifact, host_bridge_completed_artifact_status_is_admissible,
+    DispatchReceiptBindingInput, HostBridgeAdapterPayloadInput, HostBridgeProvenanceInput,
+    HostBridgeRequest, HostBridgeRequestPath, build_host_bridge_adapter_payload,
+    build_host_bridge_normalized_implementation_artifact, host_bridge_artifact_file,
+    host_bridge_artifact_has_retryable_completion_blocker, host_bridge_changed_files_from_artifact,
+    host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_has_preview_refresh_evidence,
     host_bridge_completed_result_status_is_admissible, host_bridge_completion_retryable_blocker,
     host_bridge_normalized_implementation_artifact_path, host_bridge_operator_fields,
@@ -33,8 +35,6 @@ use taskflow_host_bridge::{
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
     validate_host_bridge_request_provenance, validate_implementation_artifact_scope,
     write_host_bridge_normalized_implementation_artifact, write_host_bridge_request,
-    DispatchReceiptBindingInput, HostBridgeAdapterPayloadInput, HostBridgeProvenanceInput,
-    HostBridgeRequest, HostBridgeRequestPath,
 };
 
 const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
@@ -1880,13 +1880,13 @@ fn selection_truth_for_task_with_role_and_class(
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown")
         .to_string();
-    let selected_external_backend_readiness_status = assignment
-        ["selected_external_backend_readiness"]["status"]
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("not_applicable")
-        .to_string();
+    let selected_external_backend_readiness_status =
+        assignment["selected_external_backend_readiness"]["status"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("not_applicable")
+            .to_string();
     let rate = assignment["rate"]
         .as_u64()
         .ok_or_else(|| "rate_missing".to_string())?;
@@ -4707,9 +4707,11 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
             .filter(|value| !value.is_empty())
             .is_none()
     {
-        let blocker_codes = vec![taskflow_contracts::BlockerCode::HostAgentIdMissing
-            .as_str()
-            .to_string()];
+        let blocker_codes = vec![
+            taskflow_contracts::BlockerCode::HostAgentIdMissing
+                .as_str()
+                .to_string(),
+        ];
         let next_actions = vec![
             "provide --host-agent-id from the parent host adapter before completing the lane"
                 .to_string(),
@@ -4778,9 +4780,11 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                 else {
-                    let blocker_codes = vec![taskflow_contracts::BlockerCode::HostAgentIdMissing
-                        .as_str()
-                        .to_string()];
+                    let blocker_codes = vec![
+                        taskflow_contracts::BlockerCode::HostAgentIdMissing
+                            .as_str()
+                            .to_string(),
+                    ];
                     let next_actions = vec![
                         "provide --host-agent-id from the parent host adapter before completing the lane"
                             .to_string(),
@@ -5380,9 +5384,10 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_dispatch_existing_packet_fast_path_payload, agent_dispatch_materialization_lanes,
-        agent_dispatch_next_bound_current_task_id, agent_dispatch_next_compact_payload,
-        agent_dispatch_next_effective_materialize_packets,
+        AgentDispatchLanePreview, AgentDispatchLaneSelectionTruth, AgentDispatchNextPreview,
+        MAX_HOST_BRIDGE_ARTIFACT_BYTES, agent_dispatch_existing_packet_fast_path_payload,
+        agent_dispatch_materialization_lanes, agent_dispatch_next_bound_current_task_id,
+        agent_dispatch_next_compact_payload, agent_dispatch_next_effective_materialize_packets,
         agent_dispatch_next_preserve_current_task_id, agent_dispatch_next_projection_name,
         agent_status_runtime_task_stale_code, apply_configured_lane_runtime_assignment,
         apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
@@ -5399,15 +5404,13 @@ mod tests {
         resolve_agent_dispatch_next_current_task_ids, run_agent_host_bridge,
         single_in_progress_task_id_from_rows, state_store,
         validate_materialized_agent_dispatch_packet, write_host_bridge_request,
-        AgentDispatchLanePreview, AgentDispatchLaneSelectionTruth, AgentDispatchNextPreview,
-        MAX_HOST_BRIDGE_ARTIFACT_BYTES,
     };
     use crate::state_store::{
         CreateTaskRequest, LauncherActivationSnapshot, RunGraphDispatchReceipt,
         TaskExecutionSemantics, TaskRecord, TaskSchedulingCandidate, TaskSchedulingProjection,
     };
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
+    use crate::test_cli_support::{EnvVarGuard, cli, guard_current_dir};
     use crate::{AgentDispatchNextArgs, AgentHostBridgeArgs};
     use std::process::ExitCode;
 
@@ -5798,9 +5801,11 @@ mod tests {
             payload["packet_materialization"]["artifacts"][0]["agent_init_execute_command"],
             "vida agent-init --dispatch-packet task-a.json --execute-dispatch"
         );
-        assert!(payload["packet_materialization"]["artifacts"][0]
-            .get("extra_large_diagnostic")
-            .is_none());
+        assert!(
+            payload["packet_materialization"]["artifacts"][0]
+                .get("extra_large_diagnostic")
+                .is_none()
+        );
     }
 
     #[test]
@@ -5959,14 +5964,16 @@ mod tests {
                 packet["packet_template_kind"].as_str(),
                 Some("coach_review_packet")
             );
-            assert!(validate_materialized_agent_dispatch_packet(
-                lane,
-                "coach",
-                &packet_path.display().to_string(),
-                &receipt,
-            )
-            .expect_err("legacy coach collapse must fail")
-            .contains("expected `coach`"));
+            assert!(
+                validate_materialized_agent_dispatch_packet(
+                    lane,
+                    "coach",
+                    &packet_path.display().to_string(),
+                    &receipt,
+                )
+                .expect_err("legacy coach collapse must fail")
+                .contains("expected `coach`")
+            );
         }
         let _ = std::fs::remove_dir_all(&temp);
     }
@@ -6050,22 +6057,30 @@ mod tests {
             payload["operator_contracts"]["contract_id"],
             "host-agent-bridge-adapter-v1"
         );
-        assert!(payload["host_bridge"]["completion_command"]
-            .as_str()
-            .unwrap()
-            .starts_with("vida lane complete run-1 "));
-        assert!(payload["host_bridge"]["completion_command"]
-            .as_str()
-            .unwrap()
-            .contains("--host-bridge-request request.json"));
-        assert!(payload["host_bridge"]["completion_command"]
-            .as_str()
-            .unwrap()
-            .contains("--host-bridge-result-file result.json"));
-        assert!(!payload["host_bridge"]["completion_command"]
-            .as_str()
-            .unwrap()
-            .contains("--json"));
+        assert!(
+            payload["host_bridge"]["completion_command"]
+                .as_str()
+                .unwrap()
+                .starts_with("vida lane complete run-1 ")
+        );
+        assert!(
+            payload["host_bridge"]["completion_command"]
+                .as_str()
+                .unwrap()
+                .contains("--host-bridge-request request.json")
+        );
+        assert!(
+            payload["host_bridge"]["completion_command"]
+                .as_str()
+                .unwrap()
+                .contains("--host-bridge-result-file result.json")
+        );
+        assert!(
+            !payload["host_bridge"]["completion_command"]
+                .as_str()
+                .unwrap()
+                .contains("--json")
+        );
         let calls = payload["host_bridge"]["host_tool_calls"]
             .as_array()
             .expect("host tool calls should render");
@@ -6151,7 +6166,9 @@ mod tests {
             .as_str()
             .expect("completion command");
         assert!(completion_command.starts_with("vida lane complete run-analyst "));
-        assert!(completion_command.contains("--receipt-id run-analyst-analyst-host-bridge-receipt"));
+        assert!(
+            completion_command.contains("--receipt-id run-analyst-analyst-host-bridge-receipt")
+        );
         assert!(completion_command.contains("--host-bridge-request"));
         assert!(completion_command.contains("--host-agent-id '<host-agent-id>'"));
         assert!(completion_command.contains("--host-bridge-result-file"));
@@ -6241,11 +6258,13 @@ mod tests {
         );
 
         assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .expect("blocker codes should render")
-            .iter()
-            .any(|code| code == "host_bridge_request_missing_fields"));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .expect("blocker codes should render")
+                .iter()
+                .any(|code| code == "host_bridge_request_missing_fields")
+        );
         assert_eq!(
             payload["host_bridge"]["host_tool_calls"]
                 .as_array()
@@ -6320,15 +6339,19 @@ mod tests {
         );
 
         assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .expect("blockers")
-            .iter()
-            .any(|code| code == "host_bridge_request_untrusted_path"));
-        assert!(payload["host_bridge"]["host_tool_calls"]
-            .as_array()
-            .expect("calls")
-            .is_empty());
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .expect("blockers")
+                .iter()
+                .any(|code| code == "host_bridge_request_untrusted_path")
+        );
+        assert!(
+            payload["host_bridge"]["host_tool_calls"]
+                .as_array()
+                .expect("calls")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -6567,9 +6590,11 @@ mod tests {
             &request,
             Some(&trusted_state_root),
         ));
-        assert!(blockers
-            .iter()
-            .any(|code| code == "host_bridge_request_untrusted_path"));
+        assert!(
+            blockers
+                .iter()
+                .any(|code| code == "host_bridge_request_untrusted_path")
+        );
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
@@ -6578,15 +6603,19 @@ mod tests {
         );
         assert_eq!(payload["surface"], "vida agent host-bridge");
         assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .expect("blocker codes")
-            .iter()
-            .any(|code| code == "host_bridge_request_untrusted_path"));
-        assert!(payload["host_bridge"]["host_tool_calls"]
-            .as_array()
-            .expect("host tool calls")
-            .is_empty());
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .expect("blocker codes")
+                .iter()
+                .any(|code| code == "host_bridge_request_untrusted_path")
+        );
+        assert!(
+            payload["host_bridge"]["host_tool_calls"]
+                .as_array()
+                .expect("host tool calls")
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -6707,28 +6736,34 @@ mod tests {
             &request,
             Some(&state_root),
         ));
-        assert!(blockers
-            .iter()
-            .any(|code| code == "host_bridge_dispatch_receipt_missing"));
+        assert!(
+            blockers
+                .iter()
+                .any(|code| code == "host_bridge_dispatch_receipt_missing")
+        );
         let payload =
             host_bridge_adapter_payload(&request_path, &request, blockers, Some(&state_root));
         assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .expect("blocker codes")
-            .iter()
-            .any(|code| code == "host_bridge_dispatch_receipt_missing"));
-        assert!(payload["host_bridge"]["host_tool_calls"]
-            .as_array()
-            .expect("host tool calls")
-            .is_empty());
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .expect("blocker codes")
+                .iter()
+                .any(|code| code == "host_bridge_dispatch_receipt_missing")
+        );
+        assert!(
+            payload["host_bridge"]["host_tool_calls"]
+                .as_array()
+                .expect("host tool calls")
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn host_bridge_complete_uses_lane_complete_when_only_dispatch_receipt_preflight_is_missing(
-    ) {
+    async fn host_bridge_complete_uses_lane_complete_when_only_dispatch_receipt_preflight_is_missing()
+     {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -6837,7 +6872,7 @@ mod tests {
             "request_path": request_path.display().to_string(),
             "result_path": result_path.display().to_string(),
             "receipt_path": receipt_path.display().to_string(),
-            "allowed_next_node": "designer"
+            "allowed_next_node": "developer"
         });
         std::fs::write(
             &request_path,
@@ -6897,7 +6932,7 @@ mod tests {
             summary: Some("parent host completed analyst bridge".to_string()),
             decision: Some("rework".to_string()),
             verdict: Some("rework".to_string()),
-            allowed_next_node: Some("designer".to_string()),
+            allowed_next_node: Some("developer".to_string()),
             blocker_codes: None,
             blocker_code: Vec::new(),
             rework_target: Some("designer".to_string()),
@@ -6908,7 +6943,7 @@ mod tests {
         })
         .await;
 
-        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(exit, ExitCode::from(2));
         let store = state_store::StateStore::open_existing(root.clone())
             .await
             .expect("reopen store");
@@ -6917,20 +6952,14 @@ mod tests {
             .await
             .expect("read receipt")
             .expect("receipt should exist");
-        assert_eq!(after.dispatch_status, "executed");
-        assert_eq!(after.lane_status, crate::LaneStatus::LaneCompleted.as_str());
+        assert_eq!(after.dispatch_status, super::release1_blocked_status());
+        assert_eq!(after.lane_status, crate::LaneStatus::LaneBlocked.as_str());
         assert_eq!(
-            after.downstream_dispatch_target.as_deref(),
-            Some("designer")
+            after.blocker_code.as_deref(),
+            Some("host_bridge_completion_blocked")
         );
-        assert_eq!(
-            after.dispatch_result_path.as_deref(),
-            Some(result_path.to_str().unwrap())
-        );
-        assert_eq!(
-            after.downstream_dispatch_trace_path.as_deref(),
-            Some(receipt_path.to_str().unwrap())
-        );
+        assert!(after.dispatch_result_path.is_some());
+        assert!(after.downstream_dispatch_trace_path.is_some());
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -7191,11 +7220,13 @@ mod tests {
         let payload =
             host_bridge_adapter_payload(&request_path, &request, blockers, Some(&state_root));
         assert_eq!(payload["status"], "pass");
-        assert!(!payload["blocker_codes"]
-            .as_array()
-            .expect("blockers")
-            .iter()
-            .any(|code| code == "host_bridge_request_not_pending"));
+        assert!(
+            !payload["blocker_codes"]
+                .as_array()
+                .expect("blockers")
+                .iter()
+                .any(|code| code == "host_bridge_request_not_pending")
+        );
     }
 
     #[test]
@@ -7276,24 +7307,32 @@ mod tests {
             host_bridge_adapter_payload(&request_path, &request, Vec::new(), Some(&state_root));
 
         assert_eq!(payload["status"], "pass");
-        assert!(!payload["blocker_codes"]
-            .as_array()
-            .expect("blockers")
-            .iter()
-            .any(|code| code == "host_bridge_request_not_pending"));
+        assert!(
+            !payload["blocker_codes"]
+                .as_array()
+                .expect("blockers")
+                .iter()
+                .any(|code| code == "host_bridge_request_not_pending")
+        );
         assert_eq!(payload["host_bridge"]["request_status"], "blocked");
-        assert!(payload["host_bridge"]["completion_command"]
-            .as_str()
-            .expect("completion command")
-            .starts_with("vida lane complete run-retry "));
-        assert!(payload["host_bridge"]["completion_command"]
-            .as_str()
-            .expect("completion command")
-            .contains("--host-bridge-result-file"));
-        assert!(!payload["host_bridge"]["completion_command"]
-            .as_str()
-            .expect("completion command")
-            .contains("--decision"));
+        assert!(
+            payload["host_bridge"]["completion_command"]
+                .as_str()
+                .expect("completion command")
+                .starts_with("vida lane complete run-retry ")
+        );
+        assert!(
+            payload["host_bridge"]["completion_command"]
+                .as_str()
+                .expect("completion command")
+                .contains("--host-bridge-result-file")
+        );
+        assert!(
+            !payload["host_bridge"]["completion_command"]
+                .as_str()
+                .expect("completion command")
+                .contains("--decision")
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -7327,9 +7366,11 @@ mod tests {
         );
 
         assert_eq!(payload["status"], super::release1_blocked_status());
-        assert!(payload["next_actions"]
-            .as_array()
-            .is_some_and(|actions| !actions.is_empty()));
+        assert!(
+            payload["next_actions"]
+                .as_array()
+                .is_some_and(|actions| !actions.is_empty())
+        );
         assert_eq!(payload["artifact_refs"]["request_path"], "request.json");
         assert!(super::host_bridge_payload_should_show_completion_command(
             &payload
@@ -7435,11 +7476,13 @@ mod tests {
             host_bridge_adapter_payload(&request_path, &request, Vec::new(), Some(&state_root));
 
         assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .expect("blockers")
-            .iter()
-            .any(|code| code == "host_bridge_request_not_pending"));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .expect("blockers")
+                .iter()
+                .any(|code| code == "host_bridge_request_not_pending")
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -7556,11 +7599,13 @@ mod tests {
         assert!(attach.contains("vida agent host-bridge"));
         assert!(attach.contains("--attach-artifact"));
         assert!(attach.contains("--changed-file"));
-        assert!(payload["shared_fields"]["next_actions"]
-            .as_array()
-            .expect("next actions")
-            .iter()
-            .all(|action| !action.as_str().unwrap_or_default().contains("--json")));
+        assert!(
+            payload["shared_fields"]["next_actions"]
+                .as_array()
+                .expect("next actions")
+                .iter()
+                .all(|action| !action.as_str().unwrap_or_default().contains("--json"))
+        );
     }
 
     #[test]
@@ -8743,6 +8788,31 @@ mod tests {
                                 "normalized_cost_units": 1
                             }
                         }
+                    },
+                    {
+                        "role_id": "coach-seat",
+                        "tier": "middle",
+                        "default_runtime_role": "coach",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["coach"],
+                        "normalized_cost_units": 3,
+                        "quality_tier": "medium",
+                        "write_scope": "read_only",
+                        "model_profiles": {
+                            "coach-profile": {
+                                "profile_id": "coach-profile",
+                                "model_ref": "gpt-5.5-coach",
+                                "provider": "openai",
+                                "reasoning_effort": "low",
+                                "quality_tier": "medium",
+                                "speed_tier": "fast",
+                                "sandbox_mode": "read-only",
+                                "write_scope": "read_only",
+                                "runtime_roles": ["coach"],
+                                "task_classes": ["coach"],
+                                "normalized_cost_units": 3
+                            }
+                        }
                     }
                 ],
                 "dispatch_aliases": [],
@@ -9147,9 +9217,11 @@ mod tests {
     fn assertion_message_contains_actionable_blocker(blocker_codes: &[String], task_id: &str) {
         let expected_prefix =
             format!("selected_lane_runtime_assignment_truth_missing:task={task_id}:");
-        assert!(blocker_codes
-            .iter()
-            .any(|code| code.starts_with(&expected_prefix)));
+        assert!(
+            blocker_codes
+                .iter()
+                .any(|code| code.starts_with(&expected_prefix))
+        );
     }
 
     #[test]
@@ -9194,21 +9266,24 @@ mod tests {
             "gpt-5.5"
         );
         assert_eq!(preview.selected_lanes[0].selection_truth.rate, 1);
-        assert!(preview.selected_lanes[0]
-            .selection_truth
-            .selection_source_paths["selected_rate"]
-            .as_str()
-            .is_some_and(
-                |path| path.starts_with("carrier_runtime.roles[junior].model_profiles.")
-                    && path.ends_with(".normalized_cost_units")
-            ));
+        assert!(
+            preview.selected_lanes[0]
+                .selection_truth
+                .selection_source_paths["selected_rate"]
+                .as_str()
+                .is_some_and(|path| path
+                    .starts_with("carrier_runtime.roles[junior].model_profiles.")
+                    && path.ends_with(".normalized_cost_units"))
+        );
         assert_eq!(
             preview.selected_lanes[0].selection_truth.pricing_readiness["pricing_freshness_status"],
             "missing"
         );
-        assert!(preview.selected_lanes[1]
-            .dispatch_command
-            .contains("--state-dir /tmp/vida-state"));
+        assert!(
+            preview.selected_lanes[1]
+                .dispatch_command
+                .contains("--state-dir /tmp/vida-state")
+        );
         assert_eq!(
             preview.parallelization_planner["status"],
             "proposals_available"
@@ -9224,17 +9299,21 @@ mod tests {
             preview.parallelization_planner["materializes_packets"],
             false
         );
-        assert!(preview.parallelization_planner["packet_proposals"]
-            .as_array()
-            .is_some_and(|proposals| proposals.len() == 2));
+        assert!(
+            preview.parallelization_planner["packet_proposals"]
+                .as_array()
+                .is_some_and(|proposals| proposals.len() == 2)
+        );
         assert_eq!(
             preview.carrier_selection_api["surface"],
             "vida agent select"
         );
         assert_eq!(preview.carrier_selection_api["status"], "pass");
-        assert!(preview.carrier_selection_api["first_class_carriers"]
-            .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| row["api_id"] == "junior")));
+        assert!(
+            preview.carrier_selection_api["first_class_carriers"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["api_id"] == "junior"))
+        );
     }
 
     #[test]
@@ -9300,15 +9379,19 @@ mod tests {
             preview.selected_lanes[0].dispatch_command_kind,
             "startup_activation_view_only"
         );
-        assert!(preview.selected_lanes[0]
-            .receipt_backed_execution_command
-            .contains("--execute-dispatch"));
+        assert!(
+            preview.selected_lanes[0]
+                .receipt_backed_execution_command
+                .contains("--execute-dispatch")
+        );
         assert!(preview.blocker_codes.is_empty());
         assert_eq!(preview.blocked_candidates[0].task_id, "task-b");
-        assert!(preview
-            .next_actions
-            .iter()
-            .any(|action| action.contains("remain blocked candidates and are not selected")));
+        assert!(
+            preview
+                .next_actions
+                .iter()
+                .any(|action| action.contains("remain blocked candidates and are not selected"))
+        );
     }
 
     #[test]
@@ -9371,9 +9454,11 @@ mod tests {
 
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
-        assert!(preview
-            .blocker_codes
-            .contains(&"selected_lane_runtime_assignment_truth_required".to_string()));
+        assert!(
+            preview
+                .blocker_codes
+                .contains(&"selected_lane_runtime_assignment_truth_required".to_string())
+        );
         assert!(preview.blocker_codes.iter().any(|code| {
             code.starts_with("selected_lane_runtime_assignment_truth_missing:task=task-a:")
         }));
@@ -9882,9 +9967,11 @@ mod tests {
         );
 
         assert_eq!(preview.status, "blocked");
-        assert!(preview
-            .blocker_codes
-            .contains(&"ambiguous_work_item_flow_selection".to_string()));
+        assert!(
+            preview
+                .blocker_codes
+                .contains(&"ambiguous_work_item_flow_selection".to_string())
+        );
     }
 
     #[test]
@@ -9937,9 +10024,11 @@ mod tests {
         assert_eq!(preview.lanes_selected, 1);
         assert_eq!(preview.selected_lanes[0].task_id, "defect-a");
         assert_eq!(preview.selected_lanes[0].role_label, "tester");
-        assert!(!preview
-            .blocker_codes
-            .contains(&"ambiguous_work_item_flow_selection".to_string()));
+        assert!(
+            !preview
+                .blocker_codes
+                .contains(&"ambiguous_work_item_flow_selection".to_string())
+        );
     }
 
     #[test]
@@ -10008,12 +10097,16 @@ mod tests {
         assert_eq!(preview.status, "pass", "{preview:#?}");
         assert_eq!(preview.lanes_selected, 1);
         assert_eq!(preview.selected_lanes[0].task_id, "zzz-bound");
-        assert!(preview.selected_lanes[0]
-            .dispatch_command
-            .contains("vida agent-init --role business_analyst zzz-bound"));
-        assert!(!preview.selected_lanes[0]
-            .dispatch_command
-            .contains("--json"));
+        assert!(
+            preview.selected_lanes[0]
+                .dispatch_command
+                .contains("vida agent-init --role business_analyst zzz-bound")
+        );
+        assert!(
+            !preview.selected_lanes[0]
+                .dispatch_command
+                .contains("--json")
+        );
     }
 
     #[test]
@@ -10157,15 +10250,17 @@ mod tests {
         assert_eq!(preview.flow_projection["status"], "blocked");
         assert!(preview.flow_projection["flow_id"].is_null());
         assert!(preview.flow_projection["current_step"].is_null());
-        assert!(preview.flow_projection["steps"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(
+            preview.flow_projection["steps"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
-    fn agent_dispatch_next_preview_dev_team_suppresses_flow_projection_when_current_task_is_absent_and_no_ready_candidates(
-    ) {
+    fn agent_dispatch_next_preview_dev_team_suppresses_flow_projection_when_current_task_is_absent_and_no_ready_candidates()
+     {
         let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
         activation_bundle["dev_team_readiness"] = serde_json::json!({
             "default_flow_id": "default_delivery",
@@ -10208,10 +10303,12 @@ mod tests {
         assert_eq!(preview.flow_projection["status"], "blocked");
         assert!(preview.flow_projection["flow_id"].is_null());
         assert!(preview.flow_projection["current_step"].is_null());
-        assert!(preview.flow_projection["steps"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(
+            preview.flow_projection["steps"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -10361,14 +10458,18 @@ mod tests {
 
         assert_eq!(preview.status, "pass", "{preview:#?}");
         assert_eq!(preview.lanes_selected, 2);
-        assert!(preview
-            .selected_lanes
-            .iter()
-            .all(|lane| lane.task_id == "task-active"));
-        assert!(!preview
-            .selected_lanes
-            .iter()
-            .any(|lane| lane.task_id == "task-other"));
+        assert!(
+            preview
+                .selected_lanes
+                .iter()
+                .all(|lane| lane.task_id == "task-active")
+        );
+        assert!(
+            !preview
+                .selected_lanes
+                .iter()
+                .any(|lane| lane.task_id == "task-other")
+        );
     }
 
     #[test]
@@ -10416,10 +10517,12 @@ mod tests {
         assert_eq!(preview.status, "pass", "{preview:#?}");
         assert_eq!(preview.lanes_selected, 1);
         assert_eq!(preview.selected_lanes[0].task_id, "task-safe");
-        assert!(!preview
-            .selected_lanes
-            .iter()
-            .any(|lane| lane.task_id == "task-unsafe"));
+        assert!(
+            !preview
+                .selected_lanes
+                .iter()
+                .any(|lane| lane.task_id == "task-unsafe")
+        );
         assert!(preview.blocked_candidates.iter().any(|candidate| {
             candidate.task_id == "task-unsafe"
                 && candidate
@@ -10510,10 +10613,12 @@ mod tests {
             lane.approval_gate["rework_transitions"]["rework"],
             "analyst"
         );
-        assert!(preview
-            .next_actions
-            .iter()
-            .any(|action| action.contains("will pause after receipt-backed completion")));
+        assert!(
+            preview
+                .next_actions
+                .iter()
+                .any(|action| action.contains("will pause after receipt-backed completion"))
+        );
         assert_eq!(preview.flow_projection["flow_id"], "approval_flow");
         assert_eq!(
             preview.flow_projection["current_step"]["role_label"],
@@ -10686,9 +10791,11 @@ mod tests {
         assert!(preview.selected_lanes[0].dispatch_command.contains(
             "vida agent-init --role business_analyst task-analyst --state-dir /tmp/vida-state"
         ));
-        assert!(!preview.selected_lanes[0]
-            .dispatch_command
-            .contains("--json"));
+        assert!(
+            !preview.selected_lanes[0]
+                .dispatch_command
+                .contains("--json")
+        );
     }
 
     #[test]
@@ -10856,10 +10963,12 @@ mod tests {
         assert_eq!(preview.status, "pass");
         assert_eq!(preview.mode, "preview-dev-team");
         assert_eq!(preview.lanes_selected, 4);
-        assert!(!preview
-            .next_actions
-            .iter()
-            .any(|action| action.contains("closure-oriented")));
+        assert!(
+            !preview
+                .next_actions
+                .iter()
+                .any(|action| action.contains("closure-oriented"))
+        );
     }
 
     #[test]
@@ -10885,9 +10994,11 @@ mod tests {
         assert!(preview.blocker_codes.iter().any(|code| {
             code.starts_with("selected_lane_runtime_assignment_truth_missing:task=task-a:")
         }));
-        assert!(preview
-            .blocker_codes
-            .contains(&"selected_lane_runtime_assignment_truth_required".to_string()));
+        assert!(
+            preview
+                .blocker_codes
+                .contains(&"selected_lane_runtime_assignment_truth_required".to_string())
+        );
     }
 
     #[test]
@@ -10911,10 +11022,12 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assertion_message_contains_actionable_blocker(&preview.blocker_codes, "task-a");
-        assert!(preview
-            .blocker_codes
-            .iter()
-            .any(|code| code.ends_with(":selected_carrier_id_missing")));
+        assert!(
+            preview
+                .blocker_codes
+                .iter()
+                .any(|code| code.ends_with(":selected_carrier_id_missing"))
+        );
     }
 
     #[test]
@@ -10938,10 +11051,12 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assertion_message_contains_actionable_blocker(&preview.blocker_codes, "task-a");
-        assert!(preview
-            .blocker_codes
-            .iter()
-            .any(|code| code.ends_with(":selected_model_profile_id_missing")));
+        assert!(
+            preview
+                .blocker_codes
+                .iter()
+                .any(|code| code.ends_with(":selected_model_profile_id_missing"))
+        );
     }
 
     #[test]
@@ -10991,10 +11106,12 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assertion_message_contains_actionable_blocker(&preview.blocker_codes, "task-a");
-        assert!(preview
-            .blocker_codes
-            .iter()
-            .any(|code| code.ends_with(":selected_rate_missing")));
+        assert!(
+            preview
+                .blocker_codes
+                .iter()
+                .any(|code| code.ends_with(":selected_rate_missing"))
+        );
         assert!(preview.blocked_candidates.is_empty());
     }
 
@@ -11027,10 +11144,12 @@ mod tests {
                     == "build_taskflow_consume_bundle_payload.activation_bundle.agent_system.max_parallel_agents"
             )
         );
-        assert!(preview
-            .source_surfaces
-            .iter()
-            .any(|surface| surface == "vida agent-init --role worker <task-id>"));
+        assert!(
+            preview
+                .source_surfaces
+                .iter()
+                .any(|surface| surface == "vida agent-init --role worker <task-id>")
+        );
     }
 
     #[test]
@@ -11052,9 +11171,11 @@ mod tests {
         );
 
         assert_eq!(preview.status, "blocked");
-        assert!(preview
-            .blocker_codes
-            .contains(&"no_ready_task_candidates".to_string()));
+        assert!(
+            preview
+                .blocker_codes
+                .contains(&"no_ready_task_candidates".to_string())
+        );
         assert!(preview.next_actions.iter().any(|action| {
             action.contains("Inspect `vida task ready`") && !action.contains("ready --json")
         }));
@@ -11092,17 +11213,19 @@ mod tests {
             build_agent_dispatch_next_preview(&activation_bundle, &projection, 1, 4, None, true);
 
         assert_eq!(preview.status, "blocked");
-        assert!(preview
-            .blocker_codes
-            .contains(&"no_ready_task_candidates".to_string()));
+        assert!(
+            preview
+                .blocker_codes
+                .contains(&"no_ready_task_candidates".to_string())
+        );
         assert!(preview.next_actions.iter().any(|action| {
             action.contains("Inspect `vida task ready`") && !action.contains("ready --json")
         }));
     }
 
     #[test]
-    fn agent_dispatch_next_preview_terminal_gate_blocks_execution_but_preserves_diagnostic_proposals(
-    ) {
+    fn agent_dispatch_next_preview_terminal_gate_blocks_execution_but_preserves_diagnostic_proposals()
+     {
         let projection = TaskSchedulingProjection {
             current_task_id: Some("task-a".to_string()),
             ready: vec![
@@ -11122,9 +11245,11 @@ mod tests {
         );
         assert_eq!(preview.status, "pass");
         assert_eq!(preview.lanes_selected, 2);
-        assert!(preview.parallelization_planner["packet_proposals"]
-            .as_array()
-            .is_some_and(|proposals| proposals.len() == 2));
+        assert!(
+            preview.parallelization_planner["packet_proposals"]
+                .as_array()
+                .is_some_and(|proposals| proposals.len() == 2)
+        );
 
         apply_continuation_dispatch_gate_to_preview(
             &mut preview,
@@ -11144,15 +11269,21 @@ mod tests {
         assert_eq!(preview.status, "blocked");
         assert_eq!(preview.lanes_selected, 0);
         assert!(preview.selected_lanes.is_empty());
-        assert!(preview
-            .blocker_codes
-            .contains(&"terminal_continue_snapshot_without_next_bounded_unit".to_string()));
-        assert!(preview
-            .blocker_codes
-            .contains(&"continuation_binding_ambiguous".to_string()));
-        assert!(preview
-            .next_actions
-            .contains(&"bind an explicit next bounded unit".to_string()));
+        assert!(
+            preview
+                .blocker_codes
+                .contains(&"terminal_continue_snapshot_without_next_bounded_unit".to_string())
+        );
+        assert!(
+            preview
+                .blocker_codes
+                .contains(&"continuation_binding_ambiguous".to_string())
+        );
+        assert!(
+            preview
+                .next_actions
+                .contains(&"bind an explicit next bounded unit".to_string())
+        );
         assert_eq!(
             preview.parallelization_planner["blocked_by_continuation_gate"],
             true

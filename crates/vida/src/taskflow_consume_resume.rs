@@ -7175,6 +7175,24 @@ fn consume_continue_accepts_resolved_materialization_completion(
             .map_or(true, |path| path.trim().is_empty())
 }
 
+fn consume_continue_accepts_receipt_backed_completed_lane(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    matches!(
+        receipt.dispatch_kind.as_str(),
+        "agent_lane" | "taskflow_pack"
+    ) && receipt.dispatch_status == "executed"
+        && receipt.lane_status == crate::LaneStatus::LaneCompleted.as_str()
+        && !receipt.downstream_dispatch_ready
+        && receipt.blocker_code.is_none()
+        && receipt.downstream_dispatch_blockers.is_empty()
+        && receipt
+            .dispatch_result_path
+            .as_deref()
+            .or(receipt.downstream_dispatch_result_path.as_deref())
+            .is_some_and(|path| !path.trim().is_empty())
+}
+
 async fn persist_and_emit_deferred_agent_handoff(
     store: &super::StateStore,
     surface_name: &str,
@@ -8109,7 +8127,9 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     eprintln!("{error}");
                     return ExitCode::from(1);
                 }
-                if consume_continue_accepts_resolved_materialization_completion(&dispatch_receipt) {
+                if consume_continue_accepts_resolved_materialization_completion(&dispatch_receipt)
+                    || consume_continue_accepts_receipt_backed_completed_lane(&dispatch_receipt)
+                {
                     return match emit_runtime_consumption_resume_json(
                         &store,
                         surface_name,

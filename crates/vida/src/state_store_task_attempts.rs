@@ -1,9 +1,10 @@
 use super::*;
 use taskflow_authority::task_attempts::{
-    decide_task_attempt_binding, decide_task_attempt_rollup,
+    TaskAttemptBindingDecision, TaskAttemptBindingInput, TaskAttemptRollupAttempt,
+    TaskAttemptRollupInput, TaskAttemptSummaryInput, decide_task_attempt_binding,
+    decide_task_attempt_rollup,
     normalize_task_attempt_status as normalize_authority_attempt_status,
-    summarize_task_stage_attempts, TaskAttemptBindingDecision, TaskAttemptBindingInput,
-    TaskAttemptRollupAttempt, TaskAttemptRollupInput, TaskAttemptSummaryInput,
+    summarize_task_stage_attempts,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue, PartialEq, Eq)]
@@ -444,12 +445,14 @@ impl StateStore {
         let stage_id = normalize_non_empty("stage_id", stage_id)?;
         let attempts = self.task_stage_attempts(&task_id, &stage_id).await?;
         let stage = self.task_stage_record(&task_id, &stage_id).await?;
-        Ok(task_stage_summary_from_attempts(
-            task_id,
-            stage_id,
-            stage.as_ref(),
-            &attempts,
-        ))
+        let mut summary =
+            task_stage_summary_from_attempts(task_id, stage_id.clone(), stage.as_ref(), &attempts);
+        if summary.latest_consolidation_receipt_id.is_none() {
+            summary.latest_consolidation_receipt_id = self
+                .latest_task_stage_consolidation_receipt_id(&summary.task_id, &stage_id)
+                .await?;
+        }
+        Ok(summary)
     }
 
     pub async fn task_stage_summaries_for_task(
@@ -469,12 +472,18 @@ impl StateStore {
         let mut summaries = Vec::with_capacity(attempts_by_stage.len());
         for (stage_id, attempts) in attempts_by_stage {
             let stage = self.task_stage_record(&task_id, &stage_id).await?;
-            summaries.push(task_stage_summary_from_attempts(
+            let mut summary = task_stage_summary_from_attempts(
                 task_id.clone(),
-                stage_id,
+                stage_id.clone(),
                 stage.as_ref(),
                 &attempts,
-            ));
+            );
+            if summary.latest_consolidation_receipt_id.is_none() {
+                summary.latest_consolidation_receipt_id = self
+                    .latest_task_stage_consolidation_receipt_id(&task_id, &stage_id)
+                    .await?;
+            }
+            summaries.push(summary);
         }
         Ok(summaries)
     }
@@ -632,6 +641,23 @@ impl StateStore {
         let stage: Option<TaskStageRecord> =
             self.db.select(("task_stage", record_id.as_str())).await?;
         Ok(stage)
+    }
+
+    async fn latest_task_stage_consolidation_receipt_id(
+        &self,
+        task_id: &str,
+        stage_id: &str,
+    ) -> Result<Option<String>, StateStoreError> {
+        let mut response = self
+            .db
+            .query(format!(
+                "SELECT task_id, receipt_id, created_at FROM task_stage_consolidation_receipt WHERE task_id = '{}' AND stage_id = '{}' ORDER BY created_at DESC LIMIT 1;",
+                escape_surql_literal(task_id),
+                escape_surql_literal(stage_id)
+            ))
+            .await?;
+        let rows: Vec<TaskRuntimeConsolidationReferenceRow> = response.take(0)?;
+        Ok(rows.into_iter().next().map(|row| row.receipt_id))
     }
 
     async fn upsert_task_stage_from_attempt(
@@ -872,8 +898,10 @@ mod tests {
     #[test]
     fn task_attempt_statuses_fail_closed() {
         let error = normalize_task_attempt_status("completed").expect_err("completed is legacy");
-        assert!(error
-            .to_string()
-            .contains("expected one of submitted, running, produced"));
+        assert!(
+            error
+                .to_string()
+                .contains("expected one of submitted, running, produced")
+        );
     }
 }

@@ -3374,9 +3374,31 @@ fn host_bridge_packet_confirms_active_request(
         .get("downstream_dispatch_status")
         .and_then(serde_json::Value::as_str)
         .map(str::trim);
-    direct_target == Some(dispatch_target)
+    let packet_kind = packet
+        .get("packet_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let source_target = packet
+        .get("source_dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let source_status = packet
+        .get("source_dispatch_status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let source_blocker = packet
+        .get("source_blocker_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let direct_runtime_packet_confirms_target = packet_kind
+        == Some("runtime_downstream_dispatch_packet")
+        && direct_target == Some(dispatch_target)
         && downstream_active_target == Some(dispatch_target)
-        && downstream_status == Some("blocked")
+        && downstream_status == Some("blocked");
+    let source_bridge_context_confirms_target = source_target == Some(dispatch_target)
+        && source_status == Some("bridge_request_pending")
+        && source_blocker == Some("host_tool_bridge_adapter_required");
+    direct_runtime_packet_confirms_target || source_bridge_context_confirms_target
 }
 
 fn host_bridge_request_is_retryable_completion_state(request: &serde_json::Value) -> bool {
@@ -3439,7 +3461,11 @@ fn trusted_host_bridge_completion_request_context(
         }
     }
     let receipt_target_matches_request = receipt.dispatch_target.trim() == dispatch_target;
-    if retryable_completion_context && !adapter_gate_context && !receipt_target_matches_request {
+    if retryable_completion_context
+        && !adapter_gate_context
+        && !receipt_target_matches_request
+        && !packet_confirms_active_request
+    {
         return Err(
             "Retryable host bridge request dispatch target does not match persisted dispatch receipt evidence."
                 .to_string(),
@@ -4191,9 +4217,13 @@ fn materialize_host_bridge_completion_evidence(
             "receipt_backed": true,
             "dispatch_status": persisted_receipt.dispatch_status,
             "run_id": persisted_receipt.run_id,
-            "dispatch_target": persisted_receipt.dispatch_target,
+            "dispatch_target": if allow_reconciled_request_paths {
+                dispatch_target
+            } else {
+                persisted_receipt.dispatch_target.as_str()
+            },
         })),
-        allow_active_packet_target_override: false,
+        allow_active_packet_target_override: allow_reconciled_request_paths,
     });
     if !receipt_binding.accepted {
         return Err(format!(
@@ -5154,6 +5184,35 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             {
                 receipt.dispatch_target = context.dispatch_target.clone();
                 (context.packet_path.clone(), true)
+            } else if receipt.dispatch_status == "bridge_request_pending" {
+                if let Some(request_path) = host_bridge_request {
+                    match read_host_bridge_request(store.root(), request_path).and_then(|request| {
+                        host_bridge_path_string(&request, "packet_path").map(str::to_string)
+                    }) {
+                        Ok(packet_path) => (packet_path, true),
+                        Err(_) => {
+                            let Some((packet_path, allow_dispatch_packet)) =
+                                lane_completion_packet_path(&receipt)
+                            else {
+                                eprintln!(
+                                    "Lane `{run_id}` has no persisted dispatch packet evidence for bounded completion."
+                                );
+                                return ExitCode::from(2);
+                            };
+                            (packet_path, allow_dispatch_packet)
+                        }
+                    }
+                } else {
+                    let Some((packet_path, allow_dispatch_packet)) =
+                        lane_completion_packet_path(&receipt)
+                    else {
+                        eprintln!(
+                            "Lane `{run_id}` has no persisted dispatch packet evidence for bounded completion."
+                        );
+                        return ExitCode::from(2);
+                    };
+                    (packet_path, allow_dispatch_packet)
+                }
             } else {
                 let Some((packet_path, allow_dispatch_packet)) =
                     lane_completion_packet_path(&receipt)
@@ -5292,11 +5351,31 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 )
                 .await;
                 let authoritative_owned_paths = owned_paths_from_lane_packet(&packet);
+                let reconciled_request_dispatch_target =
+                    if receipt.dispatch_status == "bridge_request_pending" {
+                        read_host_bridge_request(store.root(), request_path)
+                            .ok()
+                            .and_then(|request| {
+                                request
+                                    .get("dispatch_target")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|target| !target.is_empty())
+                                    .map(str::to_string)
+                            })
+                    } else {
+                        None
+                    };
+                let completion_dispatch_target = host_bridge_completion_context
+                    .as_ref()
+                    .map(|context| context.dispatch_target.as_str())
+                    .or(reconciled_request_dispatch_target.as_deref())
+                    .unwrap_or(receipt.dispatch_target.as_str());
                 match materialize_host_bridge_completion_evidence(
                     store.root(),
                     request_path,
                     run_id,
-                    &receipt.dispatch_target,
+                    completion_dispatch_target,
                     &receipt,
                     receipt_id,
                     host_agent_id,
@@ -5312,6 +5391,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     &authoritative_owned_paths,
                     retrying_summary_guard || retrying_request_guard,
                     host_bridge_completion_context.is_some()
+                        || receipt.dispatch_status == "bridge_request_pending"
                         || retrying_summary_guard
                         || retrying_request_guard,
                 ) {
@@ -11346,7 +11426,8 @@ mod tests {
         assert_eq!(bridge_result["artifact_kind"], "host_tool_bridge_result");
         assert_eq!(bridge_result["execution_evidence"]["receipt_backed"], true);
         assert_eq!(bridge_result["dispatch_target"], "developer");
-        assert_eq!(bridge_result["allowed_next_node"], "coach");
+        assert_eq!(bridge_result["allowed_next_node"], serde_json::Value::Null);
+        assert_eq!(after.downstream_dispatch_target.as_deref(), Some("coach"));
         let bridge_receipt: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(&bridge_receipt_path).expect("read host bridge receipt"),
         )

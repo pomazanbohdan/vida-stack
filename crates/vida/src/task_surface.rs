@@ -9578,9 +9578,8 @@ async fn task_attempt_consolidation_for_command(
         .await?;
     let summary = store
         .task_stage_summary(&receipt.task_id, &receipt.stage_id)
-        .await
-        .ok();
-    Ok((receipt, summary))
+        .await?;
+    Ok((receipt, Some(summary)))
 }
 
 fn consolidate_attempt_artifacts(
@@ -10266,6 +10265,18 @@ fn task_attempt_consolidation_payload(
     receipt: state_store::TaskStageConsolidationReceipt,
     summary: Option<state_store::TaskStageSummary>,
 ) -> serde_json::Value {
+    let mut summary_value = serde_json::to_value(&summary).unwrap_or(serde_json::Value::Null);
+    if let Some(summary_object) = summary_value.as_object_mut() {
+        let missing_latest = summary_object
+            .get("latest_consolidation_receipt_id")
+            .is_none_or(serde_json::Value::is_null);
+        if missing_latest {
+            summary_object.insert(
+                "latest_consolidation_receipt_id".to_string(),
+                serde_json::json!(receipt.receipt_id.clone()),
+            );
+        }
+    }
     task_attempt_operator_payload(
         surface,
         Vec::new(),
@@ -10279,7 +10290,7 @@ fn task_attempt_consolidation_payload(
         }),
         serde_json::json!({
             "attempt": serde_json::Value::Null,
-            "stage_summary": summary,
+            "stage_summary": summary_value,
             "consolidation_receipt": receipt,
             "facts": receipt.facts,
             "hypotheses": receipt.hypotheses,

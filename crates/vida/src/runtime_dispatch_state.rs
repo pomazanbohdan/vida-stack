@@ -6425,6 +6425,13 @@ pub(crate) async fn try_bridge_bounded_specification_completion_to_downstream_re
     .to_string();
     receipt.dispatch_result_path = Some(result_path);
     receipt.blocker_code = None;
+    if receipt.dispatch_target == "specification" {
+        receipt.downstream_dispatch_target = None;
+        receipt.downstream_dispatch_command = None;
+        receipt.downstream_dispatch_note = None;
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers.clear();
+    }
 
     let (next_target, next_command, next_note, next_ready, next_blockers) =
         derive_downstream_dispatch_preview(store, role_selection, receipt).await;
@@ -6795,7 +6802,7 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             true,
             Vec::new(),
         ),
-        "spec-pack" => {
+        "spec-pack" | "specification" => {
             let taskflow_dev_ready = spec_first_dev_handoff_gate_from_taskflow(store, receipt).await;
             if let Some(gate) = taskflow_dev_ready {
                 let Ok(next_target) = first_runtime_dispatch_target_after_dev_pack(role_selection)
@@ -13175,7 +13182,7 @@ host_environment:
                     runtime.block_on(run(cli(&[
                         "taskflow", "consume", "continue", "--run-id", run_id, "--json",
                     ]))),
-                    ExitCode::from(1)
+                    ExitCode::SUCCESS
                 );
                 wait_for_state_unlock(harness.path());
                 let elapsed = started.elapsed();
@@ -19640,6 +19647,16 @@ host_environment:
                 .expect("design doc path should be utf-8"),
         );
         let run_graph_bootstrap = json!({ "run_id": "run-spec-bridge-ready" });
+        let spec_packet_path = root.join("specification-packet.json");
+        std::fs::write(
+            &spec_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "run_id": "run-spec-bridge-ready",
+                "dispatch_target": "specification"
+            }))
+            .expect("spec packet should encode"),
+        )
+        .expect("write specification packet");
         let mut receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: "run-spec-bridge-ready".to_string(),
             dispatch_target: "specification".to_string(),
@@ -19650,7 +19667,7 @@ host_environment:
             dispatch_kind: "agent_lane".to_string(),
             dispatch_surface: Some("vida agent-init".to_string()),
             dispatch_command: Some("vida agent-init".to_string()),
-            dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+            dispatch_packet_path: Some(spec_packet_path.display().to_string()),
             dispatch_result_path: Some("/tmp/specification-started.json".to_string()),
             blocker_code: None,
             downstream_dispatch_target: Some("work-pool-pack".to_string()),
@@ -19677,6 +19694,15 @@ host_environment:
             selected_backend: Some("middle".to_string()),
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
         };
+
+        assert!(tracked_design_doc_finalized(&role_selection));
+        assert!(tracked_specification_task_closed(&store, &role_selection, &receipt).await);
+        assert!(
+            tracked_specification_gate_completion_evidence_path(&store, &role_selection, &receipt)
+                .await
+                .expect("specification completion evidence should resolve")
+                .is_some()
+        );
 
         let bridged = try_bridge_bounded_specification_completion_to_downstream_receipt(
             &store,
