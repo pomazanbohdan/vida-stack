@@ -162,7 +162,7 @@ fn command_pipeline_blocks_apply_operation_without_apply_token_after_idempotency
 }
 
 #[test]
-fn command_pipeline_reaches_handler_when_apply_token_is_present() {
+fn command_pipeline_denies_payload_owned_scope_even_when_apply_token_is_present() {
     let mut command = envelope(operations::SERVICE_LIFECYCLE_APPLY);
     command.client_kind = VidaClientKind::Service;
     command.apply_token = Some(VidaApplyToken("test-apply-token".to_string()));
@@ -172,7 +172,10 @@ fn command_pipeline_reaches_handler_when_apply_token_is_present() {
     });
     let response = InProcessVidaClient::new_ready().execute(command);
     assert_eq!(response.status, VidaResponseStatus::Blocked);
-    assert_eq!(response.blockers[0].code, "operation_not_registered");
+    assert_eq!(
+        response.blockers[0].code,
+        "operation_owned_write_scope_denied"
+    );
 }
 
 #[test]
@@ -187,29 +190,35 @@ fn command_pipeline_uses_cedar_for_client_kind_denial() {
 }
 
 #[test]
-fn command_pipeline_uses_cedar_for_claim_denial() {
+fn command_pipeline_denies_task_apply_without_trusted_owned_write_scope_before_claim_policy() {
     let mut command = authorized_task_apply_envelope();
     command.claim_kind = Some(vida_contracts::VidaClaimKind::SharedRead);
 
     let response = InProcessVidaClient::new_ready().execute(command);
 
     assert_eq!(response.status, VidaResponseStatus::Blocked);
-    assert_eq!(response.blockers[0].code, "operation_policy_denied");
+    assert_eq!(
+        response.blockers[0].code,
+        "operation_owned_write_scope_denied"
+    );
 }
 
 #[test]
-fn command_pipeline_uses_cedar_for_cross_project_denial() {
+fn command_pipeline_denies_task_apply_without_trusted_owned_write_scope_before_project_policy() {
     let mut command = authorized_task_apply_envelope();
     command.payload["resource_project_id"] = json!("foreign-project");
 
     let response = InProcessVidaClient::new_ready().execute(command);
 
     assert_eq!(response.status, VidaResponseStatus::Blocked);
-    assert_eq!(response.blockers[0].code, "operation_policy_denied");
+    assert_eq!(
+        response.blockers[0].code,
+        "operation_owned_write_scope_denied"
+    );
 }
 
 #[test]
-fn command_pipeline_uses_cedar_for_out_of_scope_write_denial() {
+fn command_pipeline_denies_task_apply_with_payload_out_of_scope_write_evidence() {
     let mut command = authorized_task_apply_envelope();
     command.payload["owned_path"] = json!("crates/vida/src/main.rs");
     command.payload["owned_write_scopes"] = json!(["crates/taskflow-authority"]);

@@ -1,16 +1,16 @@
 use std::{
-    future::{Ready, ready},
+    future::{ready, Ready},
     task::{Context, Poll},
 };
 
 use taskflow_authority::operation_authorization::{
-    OperationAuthorizationDecision, OperationAuthorizationInput, authorize_operation,
+    authorize_operation, OperationAuthorizationDecision, OperationAuthorizationInput,
 };
 use tower::Service;
 use vida_contracts::{
-    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaBlocker, VidaClaimKind,
-    VidaCommandEnvelope, VidaCommandResponse, VidaOperationSpec, VidaProblem, VidaProblemSeverity,
-    VidaProjectId, VidaProjectRef, operation_spec,
+    operation_spec, VidaBlocker, VidaClaimKind, VidaCommandEnvelope, VidaCommandResponse,
+    VidaOperationSpec, VidaProblem, VidaProblemSeverity, VidaProjectId, VidaProjectRef,
+    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
 };
 
 use crate::vida_client::VidaClient;
@@ -143,13 +143,6 @@ fn authorization_blocker(
     envelope: &VidaCommandEnvelope,
     spec: &VidaOperationSpec,
 ) -> Option<VidaCommandResponse> {
-    let payload_owned_scope_allowed =
-        matches!(
-            spec.posture,
-            vida_contracts::VidaOperationPosture::PlanOnly
-                | vida_contracts::VidaOperationPosture::Apply
-        ) && matches!(spec.required_claim, VidaClaimKind::ExclusiveWrite)
-            && payload_owned_scope_evidence_is_bounded(&envelope.payload);
     let decision = authorize_operation(&OperationAuthorizationInput {
         session_id: envelope.session_id.0.clone(),
         project_id: project_id_from_ref(envelope.project_ref.as_ref()),
@@ -167,12 +160,8 @@ fn authorization_blocker(
         resource_project_id: string_payload_field(&envelope.payload, "resource_project_id")
             .map(VidaProjectId)
             .or_else(|| project_id_from_ref(envelope.project_ref.as_ref())),
-        owned_path: payload_owned_scope_allowed
-            .then(|| string_payload_field(&envelope.payload, "owned_path"))
-            .flatten(),
-        owned_write_scopes: payload_owned_scope_allowed
-            .then(|| string_array_payload_field(&envelope.payload, "owned_write_scopes"))
-            .unwrap_or_default(),
+        owned_path: None,
+        owned_write_scopes: Vec::new(),
         idempotency_key_present: envelope.idempotency_key.is_some(),
         apply_token_present: envelope.apply_token.is_some(),
     });
@@ -213,48 +202,6 @@ fn string_payload_field(payload: &serde_json::Value, field: &str) -> Option<Stri
         .get(field)
         .and_then(|value| value.as_str())
         .map(str::to_string)
-}
-
-fn string_array_payload_field(payload: &serde_json::Value, field: &str) -> Vec<String> {
-    payload
-        .get(field)
-        .and_then(|value| value.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|value| value.as_str())
-        .map(str::to_string)
-        .collect()
-}
-
-fn payload_owned_scope_evidence_is_bounded(payload: &serde_json::Value) -> bool {
-    let Some(owned_path) = string_payload_field(payload, "owned_path") else {
-        return false;
-    };
-    let scopes = string_array_payload_field(payload, "owned_write_scopes");
-    !scopes.is_empty()
-        && path_scope_is_bounded(&owned_path)
-        && scopes.iter().all(|scope| path_scope_is_bounded(scope))
-}
-
-fn path_scope_is_bounded(path: &str) -> bool {
-    let normalized = path.replace('\\', "/");
-    let components = normalized
-        .split('/')
-        .filter(|component| !component.is_empty())
-        .collect::<Vec<_>>();
-    if components.len() < 2 {
-        return false;
-    }
-    if components
-        .iter()
-        .any(|component| matches!(*component, "." | ".."))
-    {
-        return false;
-    }
-    matches!(
-        components.first().copied(),
-        Some("crates" | "docs" | "install" | "scripts" | "vida")
-    )
 }
 
 fn blocked_response(
@@ -301,13 +248,13 @@ fn layer_name(layer: CommandPipelineLayer) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::VidaCommandPipeline;
-    use crate::vida_client::{VidaClient, pass_response};
+    use crate::vida_client::{pass_response, VidaClient};
     use serde_json::json;
     use vida_contracts::{
-        VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaApplyToken,
-        VidaClaimKind, VidaClientKind, VidaCommandEnvelope, VidaCommandResponse,
-        VidaIdempotencyKey, VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId,
-        VidaResponseStatus, VidaSessionId, operations,
+        operations, VidaApplyToken, VidaClaimKind, VidaClientKind, VidaCommandEnvelope,
+        VidaCommandResponse, VidaIdempotencyKey, VidaOperation, VidaProjectId, VidaProjectRef,
+        VidaRequestId, VidaResponseStatus, VidaSessionId, VIDA_COMMAND_PROTOCOL_VERSION,
+        VIDA_CONTRACTS_SCHEMA_VERSION,
     };
 
     #[derive(Debug, Clone)]
@@ -371,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_ignores_payload_supplied_owned_write_evidence() {
+    fn pipeline_ignores_bounded_payload_supplied_owned_write_evidence() {
         let pipeline = VidaCommandPipeline::new(EchoOperationClient);
         let response = pipeline.execute(VidaCommandEnvelope {
             operation: VidaOperation(operations::TASK_APPLY.to_string()),
@@ -382,8 +329,8 @@ mod tests {
             claim_kind: Some(VidaClaimKind::ExclusiveWrite),
             payload: json!({
                 "resource_project_id": "project-1",
-                "owned_path": "unowned/admin/root.toml",
-                "owned_write_scopes": ["unowned"]
+                "owned_path": "crates/vida/src/main.rs",
+                "owned_write_scopes": ["crates/vida"]
             }),
             idempotency_key: Some(VidaIdempotencyKey("idem-1".to_string())),
             apply_token: Some(VidaApplyToken("apply-1".to_string())),
