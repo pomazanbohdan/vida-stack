@@ -1725,7 +1725,7 @@ pub(crate) enum TaskProofCommand {
     #[command(
         name = "attach-evidence",
         about = "attach structured proof evidence to one task",
-        after_help = "Examples:\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --evidence \"test log\"\n  vida task proof attach-evidence task-1 --proof-target \"proof a\" --proof-target \"proof b\" --result pass\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --json\n\nOptions:\n  --proof-target <text> Proof target this evidence satisfies; repeat to attach the same evidence to multiple targets\n  --result <result>     Proof result: pass, fail, or blocked\n  --command <command>   Command or artifact command equivalent; defaults to each --proof-target\n  --artifact-ref <path> Receipt, log, screenshot, or artifact path\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
+        after_help = "Examples:\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --evidence \"test log\"\n  vida task proof attach-evidence task-1 --proof-target \"proof a\" --proof-target \"proof b\" --result pass\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --artifact-ref logs/a.txt --artifact-ref logs/b.txt --json\n\nOptions:\n  --proof-target <text> Proof target this evidence satisfies; repeat to attach the same evidence to multiple targets\n  --result <result>     Proof result: pass, fail, or blocked\n  --command <command>   Command or artifact command equivalent; defaults to each --proof-target\n  --artifact-ref <path> Receipt, log, screenshot, or artifact path; repeat to attach multiple artifacts\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
     )]
     AttachEvidence(TaskProofAttachEvidenceArgs),
 }
@@ -1820,9 +1820,9 @@ pub(crate) struct TaskProofAttachEvidenceArgs {
 
     #[arg(
         long = "artifact-ref",
-        help = "Receipt, log, screenshot, or artifact path"
+        help = "Receipt, log, screenshot, or artifact path; repeat to attach multiple artifacts"
     )]
-    pub(crate) artifact_ref: Option<String>,
+    pub(crate) artifact_ref: Vec<String>,
 
     #[arg(
         long = "evidence",
@@ -4336,7 +4336,9 @@ mod tests {
         assert!(coder_help.contains("provider-check"));
         assert!(coder_help.contains("run"));
         assert!(coder_help.contains("Default output is compact TOON/plain"));
-        assert!(coder_help.contains("Use --json only when a machine-readable payload is required."));
+        assert!(
+            coder_help.contains("Use --json only when a machine-readable payload is required.")
+        );
         assert!(coder_help.contains("vida coder capabilities\n"));
         assert!(!coder_help.contains("vida coder capabilities --json"));
 
