@@ -35,6 +35,13 @@ pub struct AcceptedCommandRecord {
     pub replay_state: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingJobRecord {
+    pub job_id: String,
+    pub source_request_id: String,
+    pub replay_state: String,
+}
+
 pub struct AcceptedCommandJournal {
     path: PathBuf,
 }
@@ -90,6 +97,62 @@ impl AcceptedCommandJournal {
     }
 }
 
+pub struct PendingJobJournal {
+    path: PathBuf,
+}
+
+impl PendingJobJournal {
+    pub fn open(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn record_pending(
+        &self,
+        job_id: impl Into<String>,
+        envelope: &VidaCommandEnvelope,
+    ) -> Result<PendingJobRecord> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("create pending-job journal parent {}", parent.display())
+            })?;
+        }
+        let record = PendingJobRecord {
+            job_id: job_id.into(),
+            source_request_id: envelope.request_id.0.clone(),
+            replay_state: "pending_replayable".to_string(),
+        };
+        let line = serde_json::to_string(&record)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .with_context(|| format!("open pending-job journal {}", self.path.display()))?;
+        writeln!(file, "{line}")?;
+        Ok(record)
+    }
+
+    pub fn replayable_jobs(&self) -> Result<Vec<PendingJobRecord>> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .open(&self.path)
+            .with_context(|| format!("read pending-job journal {}", self.path.display()))?;
+        BufReader::new(file)
+            .lines()
+            .filter_map(|line| match line {
+                Ok(value) if value.trim().is_empty() => None,
+                other => Some(other),
+            })
+            .map(|line| {
+                let line = line?;
+                Ok(serde_json::from_str::<PendingJobRecord>(&line)?)
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IpcConformanceRow {
     pub platform: String,
@@ -97,6 +160,7 @@ pub struct IpcConformanceRow {
     pub framing: String,
     pub rpc_methods: Vec<String>,
     pub domain_mutation_logic: bool,
+    pub proof_scope: String,
 }
 
 pub fn ipc_conformance_matrix() -> Vec<IpcConformanceRow> {
@@ -107,6 +171,7 @@ pub fn ipc_conformance_matrix() -> Vec<IpcConformanceRow> {
             framing: "tarpc_length_delimited_json".to_string(),
             rpc_methods: vec!["execute(VidaCommandEnvelope)".to_string()],
             domain_mutation_logic: false,
+            proof_scope: "exercised_on_windows_host".to_string(),
         },
         IpcConformanceRow {
             platform: "unix".to_string(),
@@ -114,6 +179,7 @@ pub fn ipc_conformance_matrix() -> Vec<IpcConformanceRow> {
             framing: "tarpc_length_delimited_json".to_string(),
             rpc_methods: vec!["execute(VidaCommandEnvelope)".to_string()],
             domain_mutation_logic: false,
+            proof_scope: "metadata_contract_cross_platform_runner_required".to_string(),
         },
     ]
 }
@@ -158,6 +224,13 @@ pub fn lifecycle_plan(mode: &str, config: &ServiceDaemonConfig) -> LifecyclePlan
             "uninstall user-level service entry".to_string(),
         ],
     }
+}
+
+pub fn mark_in_flight_command_replayable(
+    journal: &AcceptedCommandJournal,
+    envelope: &VidaCommandEnvelope,
+) -> Result<AcceptedCommandRecord> {
+    journal.record_accepted(envelope)
 }
 
 pub async fn run_foreground_until_shutdown(config: ServiceDaemonConfig) -> Result<()> {
@@ -233,15 +306,63 @@ mod tests {
     }
 
     #[test]
+    fn daemon_restart_smoke_replays_pending_jobs() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let journal_path = temp.path().join("pending-jobs.jsonl");
+        let first_daemon = PendingJobJournal::open(&journal_path);
+        first_daemon
+            .record_pending(
+                "job-service-status-1",
+                &sample_status_request(operations::SERVICE_STATUS),
+            )
+            .expect("record pending job");
+
+        let restarted_daemon = PendingJobJournal::open(&journal_path);
+        let replayable = restarted_daemon
+            .replayable_jobs()
+            .expect("read replayable jobs");
+
+        assert_eq!(replayable.len(), 1);
+        assert_eq!(replayable[0].job_id, "job-service-status-1");
+        assert_eq!(
+            replayable[0].source_request_id,
+            "vida-service-request-vida.service.status"
+        );
+        assert_eq!(replayable[0].replay_state, "pending_replayable");
+    }
+
+    #[test]
+    fn graceful_shutdown_marks_in_flight_command_replayable() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let journal_path = temp.path().join("accepted.jsonl");
+        let journal = AcceptedCommandJournal::open(&journal_path);
+        let envelope = sample_status_request(operations::SERVICE_STATUS);
+
+        let record = mark_in_flight_command_replayable(&journal, &envelope)
+            .expect("mark in-flight command replayable");
+        let replayable = journal.replayable_commands().expect("read replayable");
+
+        assert_eq!(record.replay_state, "accepted_replayable");
+        assert_eq!(replayable, vec![record]);
+    }
+
+    #[test]
     fn ipc_conformance_matrix_is_envelope_only() {
         let matrix = ipc_conformance_matrix();
         assert!(matrix.iter().any(|row| row.platform == "windows"));
         assert!(matrix.iter().any(|row| row.platform == "unix"));
-        for row in matrix {
+        for row in &matrix {
             assert_eq!(row.rpc_methods, vec!["execute(VidaCommandEnvelope)"]);
             assert!(!row.domain_mutation_logic);
             assert_eq!(row.framing, "tarpc_length_delimited_json");
         }
+        assert_eq!(
+            matrix
+                .iter()
+                .find(|row| row.platform == "unix")
+                .map(|row| row.proof_scope.as_str()),
+            Some("metadata_contract_cross_platform_runner_required")
+        );
     }
 
     #[test]
