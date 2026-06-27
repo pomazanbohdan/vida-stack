@@ -8954,6 +8954,30 @@ fn git_text_for_repo(repo_root: &std::path::Path, args: &[&str]) -> Result<Strin
         .to_string())
 }
 
+fn git_diff_text_for_paths(
+    repo_root: &std::path::Path,
+    diff_args: &[&str],
+    paths: &[String],
+) -> Result<String, String> {
+    if paths.is_empty() {
+        return Ok(String::new());
+    }
+
+    let output = std::process::Command::new("git")
+        .args(diff_args)
+        .arg("--")
+        .args(paths)
+        .current_dir(repo_root)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string())
+}
+
 fn limit_lines(text: &str, max_lines: usize) -> (String, bool) {
     let mut lines = text.lines();
     let limited = lines.by_ref().take(max_lines).collect::<Vec<_>>();
@@ -9022,9 +9046,9 @@ fn task_validator_packet_payload(
     } else {
         command.proofs.clone()
     };
-    let diffstat = git_text_for_repo(repo_root, &["diff", "--stat", "HEAD", "--", "."])
+    let diffstat = git_diff_text_for_paths(repo_root, &["diff", "--stat", "HEAD"], &owned_files)
         .unwrap_or_else(|error| format!("git_diff_stat_failed: {error}"));
-    let diff = git_text_for_repo(repo_root, &["diff", "--unified=3", "HEAD", "--", "."])
+    let diff = git_diff_text_for_paths(repo_root, &["diff", "--unified=3", "HEAD"], &owned_files)
         .unwrap_or_else(|error| format!("git_diff_failed: {error}"));
     let (diff_hunks, diff_truncated) =
         limit_diff_hunks(&diff, command.max_hunks, command.max_lines);
@@ -13768,9 +13792,10 @@ mod tests {
         build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
         build_split_mutation_preview, canonical_json_string_array_entries,
         classify_task_close_git_stage_failure, ensure_existing_task_mismatch_reason,
-        limit_diff_hunks, load_adaptive_preview_finding_json, normalize_task_json_contract_arrays,
-        parse_adaptive_replan_finding_input, parse_label_values, parse_optional_label_value,
-        parse_proof_target_values, pass_completed_lane_task_next_lawful_receipt,
+        git_diff_text_for_paths, limit_diff_hunks, load_adaptive_preview_finding_json,
+        normalize_task_json_contract_arrays, parse_adaptive_replan_finding_input,
+        parse_label_values, parse_optional_label_value, parse_proof_target_values,
+        pass_completed_lane_task_next_lawful_receipt,
         pass_exception_takeover_task_next_lawful_receipt,
         pass_ready_downstream_handoff_task_next_lawful_receipt,
         persist_task_handoff_accept_receipt, reconcile_epics_from_descendant_progress,
@@ -13799,6 +13824,7 @@ mod tests {
     use crate::test_cli_support::cli;
     use crate::test_cli_support::guard_current_dir;
     use std::fs;
+    use std::process::Command;
     use std::process::ExitCode;
     use taskflow_core::task::verify::{
         TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION, TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
@@ -13816,6 +13842,58 @@ mod tests {
         assert!(limited.contains("@@ -1 +1 @@"));
         assert!(limited.contains("@@ -4 +4 @@"));
         assert!(!limited.contains("@@ -8 +8 @@"));
+    }
+
+    #[test]
+    fn validator_packet_diff_is_limited_to_owned_paths() {
+        let repo = std::env::temp_dir().join(format!(
+            "vida-validator-packet-owned-diff-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&repo).expect("create temporary repo");
+
+        let run_git = |args: &[&str]| {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .expect("run git");
+            assert!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        run_git(&["init"]);
+        run_git(&["config", "user.email", "test@example.invalid"]);
+        run_git(&["config", "user.name", "VIDA Test"]);
+        fs::write(repo.join("owned.txt"), "owned=old\n").expect("write owned fixture");
+        fs::write(repo.join("secret.env"), "API_TOKEN=old\n").expect("write secret fixture");
+        run_git(&["add", "owned.txt", "secret.env"]);
+        run_git(&["commit", "-m", "seed"]);
+
+        fs::write(repo.join("owned.txt"), "owned=new\n").expect("modify owned fixture");
+        fs::write(repo.join("secret.env"), "API_TOKEN=LEAK_ME\n").expect("modify secret fixture");
+
+        let owned_paths = vec!["owned.txt".to_string()];
+        let diff = git_diff_text_for_paths(&repo, &["diff", "--unified=3", "HEAD"], &owned_paths)
+            .expect("owned path diff should succeed");
+        let diffstat = git_diff_text_for_paths(&repo, &["diff", "--stat", "HEAD"], &owned_paths)
+            .expect("owned path diffstat should succeed");
+
+        assert!(diff.contains("owned=new"));
+        assert!(diffstat.contains("owned.txt"));
+        assert!(!diff.contains("secret.env"));
+        assert!(!diff.contains("LEAK_ME"));
+        assert!(!diffstat.contains("secret.env"));
+
+        fs::remove_dir_all(repo).expect("remove temporary repo");
     }
 
     #[test]
