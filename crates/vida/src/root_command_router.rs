@@ -279,6 +279,7 @@ fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
         TaskCommand::NextDisplayId(command) => command.state_dir.is_some(),
         TaskCommand::Create(command) | TaskCommand::Ensure(command) => command.state_dir.is_some(),
         TaskCommand::Update(command) => command.state_dir.is_some(),
+        TaskCommand::Reset(command) => command.state_dir.is_some(),
         TaskCommand::Note(command) => match &command.command {
             super::TaskNoteCommand::Append(command) => command.state_dir.is_some(),
         },

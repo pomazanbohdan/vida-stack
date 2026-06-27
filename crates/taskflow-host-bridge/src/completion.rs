@@ -2,15 +2,15 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
+use taskflow_contracts::{release1_contract_status_str, Release1ContractStatus};
 use time::OffsetDateTime;
 
 use crate::legacy_normalization::{
-    LEGACY_OUTCOME_CONTRADICTION, normalize_legacy_host_bridge_completion_result,
+    normalize_legacy_host_bridge_completion_result, LEGACY_OUTCOME_CONTRADICTION,
 };
 use crate::provenance::HostBridgeProvenanceDecision;
 use crate::receipt_binding::DispatchReceiptBindingDecision;
-use crate::request::{HostBridgeRequest, host_bridge_request_string};
+use crate::request::{host_bridge_request_string, HostBridgeRequest};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostBridgeCompletionInput {
@@ -158,6 +158,7 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
     matches!(
         blocker_code,
         "lane_completion_blocked_by_summary"
+            | "host_bridge_completion_summary_blocked"
             | "verification_rework_required"
             | "coach_rework_required"
             | "review_rework_required"
@@ -799,11 +800,9 @@ mod tests {
             &crate::request::default_host_bridge_required_result_fields(),
         );
 
-        assert!(
-            blockers
-                .iter()
-                .any(|blocker| blocker == LEGACY_OUTCOME_CONTRADICTION)
-        );
+        assert!(blockers
+            .iter()
+            .any(|blocker| blocker == LEGACY_OUTCOME_CONTRADICTION));
     }
 
     #[test]

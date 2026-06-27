@@ -1022,6 +1022,12 @@ pub(crate) enum TaskCommand {
         after_help = TASK_UPDATE_AFTER_HELP
     )]
     Update(TaskUpdateArgs),
+    #[command(
+        about = "reset a task/subtask subtree to its initial open state",
+        long_about = "Reset the selected task or subtask subtree back to open state while preserving task records, dependencies, planner metadata, labels, and notes. Closed timestamps and close reasons are cleared. Execution steps are excluded by default; pass --include-steps only when you intentionally want to replay step state too.",
+        after_help = "Examples:\n  vida task reset <task-id>\n  vida task reset <task-id> --dry-run\n  vida task reset <task-id> --include-steps --json"
+    )]
+    Reset(TaskResetArgs),
     #[command(about = "append-only task notes without replacing existing notes")]
     Note(TaskNoteArgs),
     #[command(
@@ -2238,6 +2244,43 @@ pub(crate) struct TaskUpdateArgs {
         long = "state-dir",
         env = "VIDA_STATE_DIR",
         help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskResetArgs {
+    #[arg(help = "Task or subtask id whose subtree should reset to open")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "include-steps",
+        help = "Also reset execution-step rows under the selected subtree"
+    )]
+    pub(crate) include_steps: bool,
+
+    #[arg(
+        long = "dry-run",
+        help = "Preview affected rows without mutating state"
+    )]
+    pub(crate) dry_run: bool,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory"
     )]
     pub(crate) state_dir: Option<PathBuf>,
 
@@ -4420,9 +4463,7 @@ mod tests {
         assert!(coder_help.contains("provider-check"));
         assert!(coder_help.contains("run"));
         assert!(coder_help.contains("Default output is compact TOON/plain"));
-        assert!(
-            coder_help.contains("Use --json only when a machine-readable payload is required.")
-        );
+        assert!(coder_help.contains("Use --json only when a machine-readable payload is required."));
         assert!(coder_help.contains("vida coder capabilities\n"));
         assert!(!coder_help.contains("vida coder capabilities --json"));
 
