@@ -302,11 +302,13 @@ fn descendant_progress_summary(
     let blocked_by_runtime = proof_blocked_by_runtime
         || (!root_closed
             && is_non_container_work_item
-            && (root_task.status == "blocked"
-                || root_task
-                    .labels
-                    .iter()
-                    .any(|label| label == "runtime-blocked" || label == "blocked-by-runtime")));
+            && (matches!(
+                parse_task_status(&root_task.status),
+                Some(TaskStatus::Blocked)
+            ) || root_task
+                .labels
+                .iter()
+                .any(|label| label == "runtime-blocked" || label == "blocked-by-runtime")));
     let missing_proof = !root_closed
         && is_non_container_work_item
         && non_container_descendants_clear
@@ -777,6 +779,35 @@ mod tests {
         assert!(summary.ready_for_close);
         assert!(!summary.missing_proof);
         assert_eq!(summary.closure_candidate_state, "leaf_ready_for_close");
+    }
+
+    #[test]
+    fn descendant_progress_blocks_paused_parent_task_even_when_children_and_proof_are_satisfied() {
+        for status in ["paused", "blocked"] {
+            let mut parent = row("parent", status, "task", None);
+            parent.proof_targets = vec!["vida task progress parent --json".to_string()];
+            parent.proof_satisfied = true;
+            let rows = vec![parent, row("child", "closed", "task", Some("parent"))];
+
+            let summary = task_progress_summary_from_rows(
+                &rows,
+                "parent",
+                TaskProgressBasis::DescendantsExcludingRoot,
+                |value| value.to_string(),
+                |value| value.replace(" --json", ""),
+            )
+            .unwrap();
+
+            assert_eq!(summary.descendant_count, 1);
+            assert_eq!(summary.closed_count, 1);
+            assert!(!summary.ready_for_close, "{status} must remain blocked");
+            assert!(!summary.missing_proof);
+            assert!(
+                summary.blocked_by_runtime,
+                "{status} must be runtime-blocked"
+            );
+            assert_eq!(summary.closure_candidate_state, "leaf_blocked_by_runtime");
+        }
     }
 
     #[test]
