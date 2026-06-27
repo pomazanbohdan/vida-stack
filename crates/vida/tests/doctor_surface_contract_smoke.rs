@@ -139,12 +139,10 @@ fn assert_failure(output: &std::process::Output, context: &str) {
 
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER: &str =
     "unsupported_architecture_reserved_workflow_boundary";
-const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str =
-    "clear unsupported/architecture-reserved workflow boundary state in run-graph policy/context before operator handoff.";
+const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str = "clear unsupported/architecture-reserved workflow boundary state in run-graph policy/context before operator handoff.";
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
     "missing_run_graph_dispatch_receipt_operator_evidence";
-const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
-    "run `vida taskflow consume continue` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
+const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "run `vida taskflow consume continue` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
 
 fn sync_protocol_binding(state_dir: &str) {
     let output = vida()
@@ -775,8 +773,7 @@ fn doctor_json_blocks_on_unsupported_architecture_reserved_boundary_contract() {
     );
     assert!(
         next_actions.iter().any(|action| {
-            action.as_str()
-                == Some(UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION)
+            action.as_str() == Some(UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION)
         }),
         "doctor must publish remediation action for unsupported architecture-reserved workflow boundary blocker"
     );
@@ -2338,23 +2335,45 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
             "host-bridge-{target}-{}-summary-receipt",
             if should_pass { "pass" } else { "blocked" }
         );
-        let output = vida()
-            .args([
-                "lane",
-                "complete",
-                &fixture.run_id,
-                "--receipt-id",
-                &receipt_id,
-                "--host-bridge-request",
-                &fixture.request_path,
-                "--host-agent-id",
-                "agent-quality-gate-proof",
-                "--host-bridge-summary",
-                summary,
-                "--state-dir",
-                &fixture.state_dir,
-                "--json",
-            ])
+        let mut command = vida();
+        command.args([
+            "lane",
+            "complete",
+            &fixture.run_id,
+            "--receipt-id",
+            &receipt_id,
+            "--host-bridge-request",
+            &fixture.request_path,
+            "--host-agent-id",
+            "agent-quality-gate-proof",
+            "--host-bridge-summary",
+            summary,
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ]);
+        if should_pass {
+            command.args([
+                "--decision",
+                "approve",
+                "--verdict",
+                "pass",
+                "--allowed-next-node",
+                allowed_next_node,
+            ]);
+        } else {
+            command.args([
+                "--decision",
+                "rework_required",
+                "--verdict",
+                "rework_required",
+                "--blocker-code",
+                blocker_code.expect("blocked case should name blocker code"),
+                "--rework-target",
+                rework_target.expect("blocked case should name rework target"),
+            ]);
+        }
+        let output = command
             .output()
             .expect("quality-gate lane complete should run");
         if should_pass {
@@ -2448,10 +2467,10 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
                     .is_empty(),
                 "lane payload should expose a blocked envelope for {target}: {payload}"
             );
-            let completion_result_path = payload["artifact_refs"]
-                ["downstream_dispatch_result_path"]
-                .as_str()
-                .expect("completion result path should be present");
+            let completion_result_path =
+                payload["artifact_refs"]["downstream_dispatch_result_path"]
+                    .as_str()
+                    .expect("completion result path should be present");
             let completion_result: serde_json::Value = serde_json::from_str(
                 &std::fs::read_to_string(completion_result_path)
                     .expect("completion result should exist"),
@@ -2503,6 +2522,14 @@ fn coach_blocked_flow_does_not_dispatch_verification() {
             "agent-coach-blocked-regression",
             "--host-bridge-summary",
             "coach decision=blocked; implementation must return to developer rework",
+            "--decision",
+            "rework_required",
+            "--verdict",
+            "rework_required",
+            "--blocker-code",
+            "coach_rework_required",
+            "--rework-target",
+            "developer",
             "--state-dir",
             &fixture.state_dir,
             "--json",
@@ -2620,10 +2647,12 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
         lane_payload["recommended_surface"], "vida agent host-bridge",
         "lane payload should recommend active implementer request: {lane_payload}"
     );
-    assert!(lane_payload["recommended_command"]
-        .as_str()
-        .expect("recommended command")
-        .starts_with("vida agent host-bridge --request "));
+    assert!(
+        lane_payload["recommended_command"]
+            .as_str()
+            .expect("recommended command")
+            .starts_with("vida agent host-bridge --request ")
+    );
     assert!(
         !lane_payload["recommended_command"]
             .as_str()
@@ -2724,10 +2753,12 @@ fn host_bridge_public_cli_completes_reconciled_active_request_when_receipt_point
         lane_payload["recommended_surface"],
         "vida agent host-bridge"
     );
-    assert!(lane_payload["recommended_command"]
-        .as_str()
-        .expect("recommended command")
-        .contains(&fixture.request_path));
+    assert!(
+        lane_payload["recommended_command"]
+            .as_str()
+            .expect("recommended command")
+            .contains(&fixture.request_path)
+    );
 
     let output = vida()
         .args([
@@ -2779,14 +2810,18 @@ fn lane_show_recommends_host_bridge_completion_before_exception_takeover() {
         payload["recommended_surface"], "vida agent host-bridge",
         "payload={payload}"
     );
-    assert!(payload["recommended_command"]
-        .as_str()
-        .expect("recommended command should exist")
-        .starts_with("vida agent host-bridge --request "));
-    assert!(payload["recommended_command"]
-        .as_str()
-        .expect("recommended command should exist")
-        .contains(&fixture.request_path));
+    assert!(
+        payload["recommended_command"]
+            .as_str()
+            .expect("recommended command should exist")
+            .starts_with("vida agent host-bridge --request ")
+    );
+    assert!(
+        payload["recommended_command"]
+            .as_str()
+            .expect("recommended command should exist")
+            .contains(&fixture.request_path)
+    );
     assert!(
         !payload["recommended_command"]
             .as_str()
@@ -2828,11 +2863,13 @@ fn host_bridge_public_cli_blocks_out_of_scope_taskflow_attempt_artifacts_without
     assert_eq!(payload["surface"], "vida lane");
     assert_eq!(payload["status"], "blocked");
     assert_eq!(payload["dispatch_status"], "blocked");
-    assert!(payload["blocker_codes"]
-        .as_array()
-        .expect("blocker codes should be an array")
-        .iter()
-        .any(|code| code == "implementation_attempt_scope_guard_violation"));
+    assert!(
+        payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should be an array")
+            .iter()
+            .any(|code| code == "implementation_attempt_scope_guard_violation")
+    );
     let bridge_result: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
     )
@@ -4177,7 +4214,9 @@ fn consume_bundle_check_without_final_snapshot_fails_closed_on_retrieval_trust()
         "missing_retrieval_trust_evidence_source_registry_ref",
     ] {
         assert!(
-            blocker_codes.iter().any(|code| code.as_str() == Some(expected)),
+            blocker_codes
+                .iter()
+                .any(|code| code.as_str() == Some(expected)),
             "bundle check must fail closed with `{expected}` when no final snapshot provides retrieval trust: {blocker_codes:?}"
         );
     }
@@ -4476,11 +4515,13 @@ fn status_and_doctor_quarantine_missing_task_orphan_run_graph() {
         status_json["continuation_binding"]["ambiguity_reason"],
         "latest_run_graph_status_blocked"
     );
-    assert!(!status_json["operator_contracts"]["blocker_codes"]
-        .as_array()
-        .expect("status blocker codes")
-        .iter()
-        .any(|code| code == "continuation_binding_ambiguous"));
+    assert!(
+        !status_json["operator_contracts"]["blocker_codes"]
+            .as_array()
+            .expect("status blocker codes")
+            .iter()
+            .any(|code| code == "continuation_binding_ambiguous")
+    );
 
     let doctor = vida()
         .args(["doctor", "--json"])
@@ -4493,9 +4534,11 @@ fn status_and_doctor_quarantine_missing_task_orphan_run_graph() {
     let doctor_blockers = doctor_json["blocker_codes"]
         .as_array()
         .expect("doctor blocker codes");
-    assert!(!doctor_blockers
-        .iter()
-        .any(|code| code == "recovery_readiness_blocked"));
+    assert!(
+        !doctor_blockers
+            .iter()
+            .any(|code| code == "recovery_readiness_blocked")
+    );
 }
 
 #[test]

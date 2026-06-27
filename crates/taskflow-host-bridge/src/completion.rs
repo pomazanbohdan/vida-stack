@@ -177,147 +177,6 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
 }
 
 #[must_use]
-pub fn host_bridge_lane_completion_summary_blocker_code(
-    completed_target: &str,
-    summary: Option<&str>,
-) -> Option<String> {
-    let normalized = summary?.trim().to_ascii_lowercase();
-    if normalized.is_empty() {
-        return None;
-    }
-
-    let classifier_text = completion_summary_classifier_text(&normalized);
-    let has_explicit_blocker_verdict = [
-        "verdict: blocker",
-        "verdict=blocker",
-        "verdict: blocked",
-        "verdict=blocked",
-        "verdict: rework_required",
-        "verdict=rework_required",
-        "completion_verdict: blocker",
-        "completion_verdict=blocker",
-        "completion_verdict: blocked",
-        "completion_verdict=blocked",
-        "completion_verdict: rework_required",
-        "completion_verdict=rework_required",
-        "decision: blocked",
-        "decision=blocked",
-        "decision: blocker",
-        "decision=blocker",
-        "decision: rework_required",
-        "decision=rework_required",
-        "status: blocked",
-        "status=blocked",
-        "blocker: true",
-        "blocked: true",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle));
-    let has_negative_completion_semantics = [
-        "not closure-ready",
-        "not closure ready",
-        "not approve",
-        "not approved",
-        "not closure_ready",
-        "rework",
-        "review_findings",
-        "changed_scope",
-        "implementation evidence absent",
-        "implementation evidence missing",
-        "product implementation evidence absent",
-        "product implementation evidence missing",
-        "not ready for closure",
-        "closure not ready",
-    ]
-    .iter()
-    .any(|needle| classifier_text.contains(needle));
-
-    let has_explicit_blocker = has_explicit_blocker_verdict || has_negative_completion_semantics;
-    if !has_explicit_blocker {
-        return None;
-    }
-
-    let only_positive_blocker_context = [
-        "no blocker",
-        "no blockers",
-        "without blockers",
-        "blockers: []",
-        "blocker_codes: []",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
-        && ![
-            "not closure-ready",
-            "not closure ready",
-            "not approve",
-            "not approved",
-            "rework",
-            "review_findings",
-            "changed_scope",
-            "implementation evidence absent",
-            "implementation evidence missing",
-        ]
-        .iter()
-        .any(|needle| normalized.contains(needle));
-
-    if only_positive_blocker_context {
-        return None;
-    }
-
-    Some(blocker_code_for_completion_context(completed_target, &normalized).to_string())
-}
-
-fn blocker_code_for_completion_context(
-    completed_target: &str,
-    normalized_summary: &str,
-) -> &'static str {
-    for (_, transition) in QUALITY_GATE_TRANSITIONS {
-        if quality_gate_decision_is_blocked(transition.gate, normalized_summary) {
-            return transition.blocker_code;
-        }
-    }
-    blocker_code_for_completed_target(completed_target)
-}
-
-fn blocker_code_for_completed_target(completed_target: &str) -> &'static str {
-    if let Some(transition) = host_bridge_quality_gate_transition(completed_target) {
-        return transition.blocker_code;
-    }
-    match completed_target.trim() {
-        "closure" | "closure_lane" => "closure_evidence_blocked",
-        _ => "lane_completion_blocked_by_summary",
-    }
-}
-
-fn quality_gate_decision_is_blocked(gate: &str, normalized_summary: &str) -> bool {
-    [
-        format!("{gate} decision: blocked"),
-        format!("{gate} decision=blocked"),
-        format!("{gate} decision: blocker"),
-        format!("{gate} decision=blocker"),
-        format!("{gate} decision: rework_required"),
-        format!("{gate} decision=rework_required"),
-    ]
-    .iter()
-    .any(|needle| normalized_summary.contains(needle))
-}
-
-fn completion_summary_classifier_text(normalized_summary: &str) -> String {
-    [
-        "blocker_codes",
-        "blocker code",
-        "blocker codes",
-        "blocker_code",
-        "blockers field",
-        "blockers array",
-    ]
-    .iter()
-    .fold(normalized_summary.to_string(), |text, field_name| {
-        text.replace(field_name, " ")
-    })
-}
-
-#[must_use]
 pub fn host_bridge_artifact_has_retryable_completion_blocker(artifact: &Value) -> bool {
     artifact
         .get("blocker_code")
@@ -973,7 +832,7 @@ mod tests {
             ),
         ];
 
-        for (gate, blocked_summary, blocker_code, rework_target, allowed_next_node) in cases {
+        for (gate, _blocked_summary, blocker_code, rework_target, allowed_next_node) in cases {
             let pass_fields = host_bridge_result_verdict_fields_for_gate(gate, &[], None);
             assert_eq!(pass_fields.decision, "approve", "{gate}");
             assert_eq!(pass_fields.verdict, "pass", "{gate}");
@@ -984,12 +843,6 @@ mod tests {
                 host_bridge_result_verdict_fields_for_gate(gate, &[], Some(allowed_next_node));
             assert_eq!(
                 targeted_pass_fields.allowed_next_node, allowed_next_node,
-                "{gate}"
-            );
-
-            assert_eq!(
-                host_bridge_lane_completion_summary_blocker_code(gate, Some(blocked_summary)),
-                Some(blocker_code.to_string()),
                 "{gate}"
             );
             let blocked_fields =
@@ -1116,36 +969,6 @@ mod tests {
                 "expected blocker `{expected_blocker}` for result {result}, got {blockers:?}"
             );
         }
-    }
-
-    #[test]
-    fn summary_classifier_ignores_positive_receipt_blocker_context() {
-        let summary = "verifier proof passed focused host-bridge tests and confirmed pending receipt was the only closure blocker";
-
-        assert_eq!(
-            host_bridge_lane_completion_summary_blocker_code("verification", Some(summary)),
-            None
-        );
-    }
-
-    #[test]
-    fn summary_classifier_keeps_explicit_blocker_verdicts() {
-        let summary = "verdict: blocker; rework required; product implementation evidence missing";
-
-        assert_eq!(
-            host_bridge_lane_completion_summary_blocker_code("verification", Some(summary)),
-            Some("verification_rework_required".to_string())
-        );
-    }
-
-    #[test]
-    fn summary_classifier_preserves_coach_decision_when_target_is_stale() {
-        let summary = "coach decision=blocked; scheduledAt missing for non-all-day meeting";
-
-        assert_eq!(
-            host_bridge_lane_completion_summary_blocker_code("implementer", Some(summary)),
-            Some("coach_rework_required".to_string())
-        );
     }
 
     #[test]

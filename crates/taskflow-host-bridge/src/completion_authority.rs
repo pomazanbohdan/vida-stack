@@ -237,8 +237,9 @@ fn input<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        BLOCKER_OUTCOME_CONTRADICTION, HostBridgeCompletionEffectIntent, HostBridgeCompletionState,
-        completion_authority_transition_matrix, decide_host_bridge_completion_authority, input,
+        BLOCKER_OUTCOME_CONTRADICTION, HostBridgeCompletionEffectIntent, HostBridgeCompletionEvent,
+        HostBridgeCompletionState, completion_authority_transition_matrix,
+        decide_host_bridge_completion_authority, input,
     };
 
     #[test]
@@ -254,6 +255,16 @@ mod tests {
         assert_eq!(decision.final_state, HostBridgeCompletionState::Passed);
         assert!(decision.blocker_codes.is_empty());
         assert!(decision.next_step_packet_admitted);
+        assert!(
+            !decision
+                .events
+                .contains(&HostBridgeCompletionEvent::CompletionRejected)
+        );
+        assert!(
+            !decision
+                .effect_intents
+                .contains(&HostBridgeCompletionEffectIntent::RecordBlocker)
+        );
         assert!(
             decision
                 .effect_intents
@@ -277,7 +288,10 @@ mod tests {
         ));
 
         assert_eq!(pass.final_state, HostBridgeCompletionState::Passed);
+        assert!(pass.accepted);
+        assert!(pass.blocker_codes.is_empty());
         assert_eq!(blocked.final_state, HostBridgeCompletionState::Blocked);
+        assert!(!blocked.accepted);
         assert_eq!(blocked.blocker_codes, vec!["coach_rework_required"]);
     }
 
@@ -293,6 +307,11 @@ mod tests {
         assert!(!decision.accepted);
         assert!(!decision.next_step_packet_admitted);
         assert!(
+            decision
+                .events
+                .contains(&HostBridgeCompletionEvent::CompletionRejected)
+        );
+        assert!(
             !decision
                 .effect_intents
                 .contains(&HostBridgeCompletionEffectIntent::PlanNextStepPacket)
@@ -304,6 +323,21 @@ mod tests {
         for case in completion_authority_transition_matrix() {
             let decision = decide_host_bridge_completion_authority(case.input);
             assert_eq!(decision.final_state, case.expected_state, "{}", case.name);
+            assert_eq!(
+                decision.accepted,
+                case.expected_state == HostBridgeCompletionState::Passed,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                decision.next_step_packet_admitted,
+                decision.accepted
+                    && decision
+                        .effect_intents
+                        .contains(&HostBridgeCompletionEffectIntent::PlanNextStepPacket),
+                "{}",
+                case.name
+            );
         }
     }
 
