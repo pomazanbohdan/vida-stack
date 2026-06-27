@@ -143,7 +143,7 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         }
     };
 
-    let build = release_build_receipt(args.skip_build);
+    let mut build = release_build_receipt(args.skip_build);
     if build.status == "blocked" {
         return blocked_receipt(
             requested_target,
@@ -278,6 +278,8 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
             refreshed_paths: Vec::new(),
         }
     };
+
+    record_skip_build_release_install_progress(&mut build);
 
     ReleaseInstallReceipt {
         status: "pass".to_string(),
@@ -428,6 +430,31 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
             }
         }
     }
+}
+
+fn record_skip_build_release_install_progress(build: &mut ReleaseBuildReceipt) {
+    if !build.skipped {
+        return;
+    }
+    let command = vec![
+        "vida".to_string(),
+        "release".to_string(),
+        "install".to_string(),
+        "--skip-build".to_string(),
+    ];
+    let progress_path = release_install_progress_path();
+    if let Some(path) = progress_path.as_ref() {
+        let _ = write_release_install_progress_event(path, "pass", &command, Some(0));
+    }
+    build.command = Some(command);
+    build.exit_code = Some(0);
+    build.progress_path = progress_path
+        .as_ref()
+        .map(|path| path.display().to_string());
+    build.artifact_refs = progress_path
+        .as_ref()
+        .map(|path| vec![path.display().to_string()])
+        .unwrap_or_default();
 }
 
 fn release_install_progress_path() -> Option<PathBuf> {
@@ -874,11 +901,7 @@ pub(crate) fn default_release_install_root() -> Option<PathBuf> {
 }
 
 fn release_env_file_name() -> &'static str {
-    if cfg!(windows) {
-        "env.ps1"
-    } else {
-        "env.sh"
-    }
+    if cfg!(windows) { "env.ps1" } else { "env.sh" }
 }
 
 fn user_home_dir() -> Option<PathBuf> {
@@ -1405,6 +1428,8 @@ mod tests {
 
     #[test]
     fn release_install_skip_build_installs_fake_binary_to_current_target() {
+        let _guard = release_progress_test_lock();
+        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
         let source = harness.path().join("fake-vida");
         fs::write(&source, b"fake vida binary").expect("fake source should write");
@@ -1419,21 +1444,43 @@ mod tests {
 
         assert_eq!(receipt.status, "pass");
         assert_eq!(receipt.build.status, "skipped");
+        assert_eq!(receipt.build.exit_code, Some(0));
+        assert!(!receipt.build.artifact_refs.is_empty());
+        let progress_path = receipt
+            .build
+            .progress_path
+            .as_deref()
+            .expect("skip-build install should record progress path");
+        assert!(PathBuf::from(progress_path).is_file());
+        let latest_progress = release_install_progress_latest_path();
+        let latest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&latest_progress).expect("latest progress should write"),
+        )
+        .expect("latest progress should be json");
+        assert_eq!(latest["status"], "pass");
+        assert_eq!(latest["exit_code"], 0);
+        assert_eq!(latest["progress_path"], progress_path);
         assert_eq!(receipt.io_error, None);
         assert_eq!(receipt.asset_update.status, "refreshed");
-        assert!(receipt
-            .asset_update
-            .refreshed_paths
-            .iter()
-            .any(|path| path == "vida/config"));
-        assert!(harness
-            .path()
-            .join("install-root/current/vida/config/instructions/bundles/framework-source")
-            .is_dir());
-        assert!(harness
-            .path()
-            .join("install-root/current/install/assets/feature-design-document.template.md")
-            .is_file());
+        assert!(
+            receipt
+                .asset_update
+                .refreshed_paths
+                .iter()
+                .any(|path| path == "vida/config")
+        );
+        assert!(
+            harness
+                .path()
+                .join("install-root/current/vida/config/instructions/bundles/framework-source")
+                .is_dir()
+        );
+        assert!(
+            harness
+                .path()
+                .join("install-root/current/install/assets/feature-design-document.template.md")
+                .is_file()
+        );
         assert_eq!(receipt.installed_targets.len(), 1);
         assert_eq!(receipt.installed_targets[0].target, "current");
         assert_eq!(
@@ -1441,6 +1488,7 @@ mod tests {
             Some(receipt.installed_targets[0].fingerprint.as_str())
         );
         assert!(PathBuf::from(&receipt.installed_targets[0].path).is_file());
+        clean_release_progress_latest_markers();
     }
 
     #[test]
@@ -1497,9 +1545,11 @@ mod tests {
                 .display()
                 .to_string()
         );
-        assert!(layout
-            .env_file
-            .ends_with(if cfg!(windows) { "env.ps1" } else { "env.sh" }));
+        assert!(
+            layout
+                .env_file
+                .ends_with(if cfg!(windows) { "env.ps1" } else { "env.sh" })
+        );
         assert_eq!(layout.platform, std::env::consts::OS);
     }
 
@@ -1518,6 +1568,8 @@ mod tests {
 
     #[test]
     fn release_install_skip_build_blocks_missing_source_binary() {
+        let _guard = release_progress_test_lock();
+        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
         let receipt = release_install_receipt(&ReleaseInstallArgs {
             target: "current".to_string(),
@@ -1529,8 +1581,12 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.blocker_codes, vec!["missing_source_binary"]);
+        assert_eq!(receipt.build.status, "skipped");
+        assert_eq!(receipt.build.progress_path, None);
+        assert!(!release_install_progress_latest_path().exists());
         assert_eq!(receipt.io_error, None);
         assert!(receipt.installed_targets.is_empty());
+        clean_release_progress_latest_markers();
     }
 
     #[test]
