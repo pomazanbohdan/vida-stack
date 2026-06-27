@@ -1,5 +1,11 @@
 use std::path::Path;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeLaneCompletionResultWrite {
+    pub(crate) path: String,
+    pub(crate) blocker_codes: Vec<String>,
+}
+
 use time::format_description::well_known::Rfc3339;
 
 fn safe_dispatch_result_run_id(run_id: &str) -> String {
@@ -200,7 +206,7 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&state_root);
 
-        let result_path = write_runtime_lane_completion_result_with_summary_and_next(
+        let result = write_runtime_lane_completion_result_with_summary_and_next(
             &state_root,
             "run-analyst",
             "analyst",
@@ -210,6 +216,8 @@ mod tests {
             Some("developer"),
         )
         .expect("completion result should write");
+        assert!(result.blocker_codes.is_empty());
+        let result_path = result.path;
         let body: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(&result_path).expect("completion result should be readable"),
         )
@@ -239,6 +247,7 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary(
         summary,
         None,
     )
+    .map(|result| result.path)
 }
 
 pub(crate) fn write_runtime_lane_completion_result_with_summary_and_next(
@@ -249,7 +258,7 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary_and_next(
     source_dispatch_packet_path: &str,
     summary: Option<&str>,
     allowed_next_node: Option<&str>,
-) -> Result<String, String> {
+) -> Result<RuntimeLaneCompletionResultWrite, String> {
     write_runtime_lane_completion_result_with_summary_next_and_blockers(
         state_root,
         run_id,
@@ -273,7 +282,7 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary_next_and_blocker
     allowed_next_node: Option<&str>,
     blocker_codes: &[String],
     rework_target: Option<&str>,
-) -> Result<String, String> {
+) -> Result<RuntimeLaneCompletionResultWrite, String> {
     let result_dir = state_root
         .join("runtime-consumption")
         .join("dispatch-results");
@@ -387,5 +396,8 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary_next_and_blocker
         .map_err(|error| format!("Failed to encode lane completion result: {error}"))?;
     std::fs::write(&result_path, encoded)
         .map_err(|error| format!("Failed to write lane completion result: {error}"))?;
-    Ok(result_path.display().to_string())
+    Ok(RuntimeLaneCompletionResultWrite {
+        path: result_path.display().to_string(),
+        blocker_codes,
+    })
 }

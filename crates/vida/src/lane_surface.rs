@@ -5476,7 +5476,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             downstream_completion_blockers.extend(supplied_completion_blocker_codes.clone());
             downstream_completion_blockers.sort();
             downstream_completion_blockers.dedup();
-            let completion_result_path =
+            let completion_result =
                 match crate::runtime_dispatch_lane_completion::write_runtime_lane_completion_result_with_summary_next_and_blockers(
                     store.root(),
                     run_id,
@@ -5488,12 +5488,16 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                       &downstream_completion_blockers,
                       rework_target,
                   ) {
-                    Ok(path) => path,
+                    Ok(result) => result,
                     Err(error) => {
                         eprintln!("{error}");
                         return ExitCode::from(1);
                     }
                 };
+            let completion_result_path = completion_result.path;
+            downstream_completion_blockers = completion_result.blocker_codes;
+            downstream_completion_blockers.sort();
+            downstream_completion_blockers.dedup();
             let missing_owned_scope_handoff = receipt
                 .downstream_dispatch_blockers
                 .iter()
@@ -5504,11 +5508,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     .as_ref()
                     .is_some_and(|evidence| evidence.execution_state == "blocked");
             if completion_blocked {
-                let mut blocker_codes = Vec::new();
-                if let Some(evidence) = host_bridge_evidence.as_ref() {
-                    blocker_codes.extend(evidence.blocker_codes.clone());
-                }
-                blocker_codes.extend(supplied_completion_blocker_codes.clone());
+                let mut blocker_codes = downstream_completion_blockers.clone();
                 if blocker_codes.is_empty() {
                     blocker_codes.push("host_bridge_completion_result_blocked".to_string());
                 }
@@ -9396,7 +9396,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -9553,7 +9553,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -9694,7 +9694,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -9779,7 +9779,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -9914,7 +9914,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -10054,7 +10054,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -10357,7 +10357,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -10902,7 +10902,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -11083,7 +11083,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -11138,6 +11138,143 @@ mod tests {
         assert_eq!(binding.binding_source, "lane_complete");
         assert_eq!(binding.active_bounded_unit["kind"], "run_graph_task");
         assert_eq!(binding.active_bounded_unit["active_node"], "implementer");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_complete_plain_summary_blocker_updates_receipt_authority() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-summary-blocker-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-lane-summary-blocker";
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "implementation",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = "implementer".to_string();
+        status.next_node = Some("implementer".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.resume_target = "dispatch.implementer_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let packet_path = root
+            .join("runtime-consumption/downstream-dispatch-packets/run-lane-summary-blocker.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet dir");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": "implementer",
+                "activation_runtime_role": "worker",
+                "packet_template_kind": "delivery_task_packet",
+                "owned_paths": ["src/lib.rs"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "delivery_task_packet": {
+                    "goal": "Complete implementer lane evidence.",
+                    "scope_in": ["dispatch_target:implementer"],
+                    "handoff_task_class": "implementation",
+                    "handoff_runtime_role": "worker",
+                    "owned_paths": ["src/lib.rs"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["lane completion is receipt-backed"],
+                    "verification_command": "cargo test -p vida lane_complete_plain_summary_blocker_updates_receipt_authority",
+                    "proof_target": "lane completion receipt",
+                    "stop_rules": ["stop if packet contract is invalid"],
+                    "blocking_question": "none"
+                },
+                "downstream_dispatch_target": "coach",
+                "downstream_dispatch_active_target": "implementer",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["pending_implementation_evidence"],
+                "downstream_dispatch_status": "blocked",
+                "downstream_lane_status": "lane_blocked"
+            })
+            .to_string(),
+        )
+        .expect("write downstream packet");
+
+        let mut receipt = sample_receipt("executed");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "implementer".to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.downstream_dispatch_target = Some("coach".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["pending_implementation_evidence".to_string()];
+        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_active_target = Some("implementer".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "complete".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "summary-blocker-completion".to_string(),
+                "--host-bridge-summary".to_string(),
+                "implementation blocked; rework required before completion".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after lane command");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt after")
+            .expect("receipt should exist");
+        assert!(!after.downstream_dispatch_ready);
+        assert_eq!(after.downstream_dispatch_status.as_deref(), Some("blocked"));
+        assert_eq!(after.dispatch_status, "blocked");
+        assert_eq!(after.lane_status, crate::LaneStatus::LaneBlocked.as_str());
+        assert_eq!(
+            after.blocker_code.as_deref(),
+            Some("host_bridge_completion_summary_blocked")
+        );
+        assert_eq!(
+            after.downstream_dispatch_blockers,
+            vec!["host_bridge_completion_summary_blocked".to_string()]
+        );
+        let result_path = after
+            .downstream_dispatch_result_path
+            .clone()
+            .expect("completion result path should be recorded");
+        let result_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&result_path).expect("read completion result"),
+        )
+        .expect("completion result should be json");
+        assert_eq!(result_json["status"], "blocked");
+        assert_eq!(
+            result_json["blocker_codes"],
+            serde_json::json!(["host_bridge_completion_summary_blocked"])
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -11384,7 +11521,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -15420,7 +15557,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -15615,7 +15752,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -15809,7 +15946,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
@@ -16029,7 +16166,7 @@ mod tests {
                 "--json".to_string(),
             ],
         };
-        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
 
         let store = StateStore::open_existing(root.clone())
             .await
