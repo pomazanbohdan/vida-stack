@@ -121,6 +121,10 @@ impl StateStore {
         actual == expected
     }
 
+    fn task_is_execution_step(task: &TaskRecord) -> bool {
+        taskflow_core::issue_type_is_execution_step(&task.issue_type)
+    }
+
     pub(crate) fn run_graph_status_is_terminal_closure(status: &RunGraphStatus) -> bool {
         status.is_terminal_closure()
     }
@@ -252,6 +256,7 @@ impl StateStore {
             .filter(|candidate| {
                 candidate.id != task_id
                     && !Self::task_status_is_closed_like(&candidate.status)
+                    && !Self::task_is_execution_step(candidate)
                     && candidate.dependencies.iter().any(|dependency| {
                         dependency.edge_type == "parent-child"
                             && dependency.depends_on_id == task_id
@@ -504,9 +509,14 @@ impl StateStore {
 
     fn reopen_closed_parent_chain_for_extension(
         tasks: &mut [TaskRecord],
+        child_issue_type: &str,
         parent_id: Option<&str>,
         now: &str,
     ) -> Vec<TaskRecord> {
+        if taskflow_core::issue_type_is_execution_step(child_issue_type) {
+            return Vec::new();
+        }
+
         let mut reopened = Vec::new();
         let mut current_parent_id = parent_id.map(ToOwned::to_owned);
         let mut visited = BTreeSet::new();
@@ -590,6 +600,7 @@ impl StateStore {
             let has_non_closed_child_not_in_chain = child_indices.iter().any(|index| {
                 let child = &tasks[*index];
                 !Self::task_status_is_closed_like(&child.status)
+                    && !Self::task_is_execution_step(child)
                     && !tasks_being_closed.contains(&child.id)
             });
 
@@ -680,6 +691,7 @@ impl StateStore {
 
             let has_non_closed_child = tasks.iter().any(|task| {
                 !Self::task_status_is_closed_like(&task.status)
+                    && !Self::task_is_execution_step(task)
                     && task.dependencies.iter().any(|dependency| {
                         dependency.edge_type == "parent-child"
                             && dependency.depends_on_id == parent_id
@@ -2865,6 +2877,7 @@ impl StateStore {
         let reopened_parents = if !Self::task_status_is_closed_like(&task.status) {
             Self::reopen_closed_parent_chain_for_extension(
                 &mut tasks,
+                &task.issue_type,
                 normalized_parent_id.as_deref(),
                 &now,
             )
@@ -3214,6 +3227,7 @@ impl StateStore {
             (
                 Self::reopen_closed_parent_chain_for_extension(
                     &mut tasks,
+                    &task.issue_type,
                     parent_id.as_deref(),
                     &task.updated_at,
                 ),
@@ -4954,6 +4968,93 @@ mod tests {
         assert_eq!(parent.status, "in_progress");
         assert!(parent.closed_at.is_none());
         assert!(parent.close_reason.is_none());
+        assert!(store
+            .validate_task_graph()
+            .await
+            .expect("validate")
+            .is_empty());
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn create_open_step_under_closed_parent_preserves_parent_closure() {
+        let root = unique_task_store_temp_root("vida-create-step-preserves-closed-parent");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "parent-epic",
+                title: "Parent epic",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create epic");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "closed-parent-task",
+                title: "Closed parent task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("parent-epic"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent");
+        store
+            .close_task("closed-parent-task", "done")
+            .await
+            .expect("close parent");
+
+        let closed_parent = store
+            .show_task("closed-parent-task")
+            .await
+            .expect("load closed parent");
+        let closed_at = closed_parent.closed_at.clone();
+        let close_reason = closed_parent.close_reason.clone();
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "post-close-step",
+                title: "Post-close evidence step",
+                display_id: None,
+                description: "",
+                issue_type: "step",
+                status: "in_progress",
+                priority: 1,
+                parent_id: Some("closed-parent-task"),
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create execution step under closed parent");
+
+        let parent = store
+            .show_task("closed-parent-task")
+            .await
+            .expect("load parent");
+        assert_eq!(parent.status, "closed");
+        assert_eq!(parent.closed_at, closed_at);
+        assert_eq!(parent.close_reason, close_reason);
         assert!(store
             .validate_task_graph()
             .await

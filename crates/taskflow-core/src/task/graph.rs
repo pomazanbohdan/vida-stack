@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 
-use crate::{task_status_is_closed_like, task_status_is_open_like};
+use crate::{issue_type_is_execution_step, task_status_is_closed_like, task_status_is_open_like};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskGraphDependencyRow {
@@ -193,7 +193,9 @@ impl TaskGraphView {
                     let Some(child) = self.task(child_id) else {
                         continue;
                     };
-                    if !task_status_is_closed_like(&child.status) {
+                    if !task_status_is_closed_like(&child.status)
+                        && !issue_type_is_execution_step(&child.canonical_issue_type)
+                    {
                         issues.push(TaskGraphIssue {
                             issue_type: "closed_parent_has_non_closed_child".to_string(),
                             issue_id: task.id.clone(),
@@ -209,7 +211,10 @@ impl TaskGraphView {
             } else if task_status_is_open_like(&task.status) && task.program_container {
                 let has_non_closed_child = children.iter().any(|child_id| {
                     self.task(child_id)
-                        .map(|child| !task_status_is_closed_like(&child.status))
+                        .map(|child| {
+                            !task_status_is_closed_like(&child.status)
+                                && !issue_type_is_execution_step(&child.canonical_issue_type)
+                        })
                         .unwrap_or(false)
                 });
                 let has_unresolved_non_parent_dependency = task

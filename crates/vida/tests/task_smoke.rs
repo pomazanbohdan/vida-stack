@@ -1319,6 +1319,101 @@ fn task_row_by_id<'a>(payload: &'a Value, task_id: &str) -> &'a Value {
 }
 
 #[test]
+fn task_create_step_under_closed_task_preserves_parent_and_idle_orchestrator() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let epic_id = unique_test_id("post-close-step-epic");
+    let task_id = unique_test_id("post-close-step-task");
+    let step_id = unique_test_id("post-close-step");
+
+    run_command_json(
+        &[
+            "task",
+            "create",
+            &epic_id,
+            "Post-close step epic",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--json",
+        ],
+        &state_dir,
+    );
+    run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Post-close step parent task",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            &epic_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    run_command_json(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "closed before post-close evidence",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    run_command_json(
+        &[
+            "task",
+            "create",
+            &step_id,
+            "Post-close execution evidence",
+            "--type",
+            "step",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            &task_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let parent = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
+    assert_eq!(parent["task"]["status"], "closed", "{parent}");
+    assert!(
+        parent["task"]["closed_at"].as_str().is_some(),
+        "closed_at should remain recorded: {parent}"
+    );
+    assert_eq!(
+        parent["task"]["close_reason"], "closed before post-close evidence",
+        "{parent}"
+    );
+
+    let orchestrator = run_command_json(
+        &["orchestrator-init", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
+    assert_eq!(
+        orchestrator["continuation_binding"]["status"], "idle",
+        "post-close step must not bind closed parent or execution step as active work: {orchestrator}"
+    );
+    assert!(
+        orchestrator["continuation_binding"]["active_bounded_unit"].is_null(),
+        "post-close step must leave active bounded unit empty: {orchestrator}"
+    );
+    assert_task_graph_valid_after(&state_dir, "post-close step under closed task");
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
 fn taskflow_model_profile_readiness_cli_smoke_matches_config_census_embedding() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
