@@ -935,6 +935,14 @@ impl StateStore {
                 )
             })
             .collect::<BTreeSet<_>>();
+        let after_by_id = after
+            .iter()
+            .map(|task| (task.id.as_str(), task))
+            .collect::<BTreeMap<_, _>>();
+        let before_by_id = before
+            .iter()
+            .map(|task| (task.id.as_str(), task))
+            .collect::<BTreeMap<_, _>>();
 
         Self::validate_task_graph_rows_strict(after)
             .into_iter()
@@ -951,7 +959,22 @@ impl StateStore {
                     .depends_on_id
                     .as_ref()
                     .is_some_and(|id| touched_task_ids.contains(id));
-                if issue.issue_type == "invalid_parent_child_kind" && issue_existed {
+                let issue_task_is_step = after_by_id
+                    .get(issue.issue_id.as_str())
+                    .is_some_and(|task| canonical_work_item_issue_type(&task.issue_type) == "step");
+                let issue_task_was_step = before_by_id
+                    .get(issue.issue_id.as_str())
+                    .is_some_and(|task| canonical_work_item_issue_type(&task.issue_type) == "step");
+                let legacy_step_parent_self_repair = issue.issue_type
+                    == "invalid_parent_child_kind"
+                    && issue_existed
+                    && issue_id_touched
+                    && issue_task_is_step
+                    && issue_task_was_step
+                    && !dependency_touched;
+                if legacy_step_parent_self_repair {
+                    false
+                } else if issue.issue_type == "invalid_parent_child_kind" && issue_existed {
                     issue_id_touched
                 } else {
                     issue_id_touched || dependency_touched || !issue_existed
@@ -1599,6 +1622,85 @@ mod tests {
             }),
             "{mutation_issues:?}"
         );
+    }
+
+    #[test]
+    fn mutation_allows_touched_existing_step_parented_to_epic_for_legacy_repair() {
+        let mut epic = task_record("parent-epic", "open");
+        epic.issue_type = "epic".to_string();
+        let mut legacy_step = task_record("legacy-step", "in_progress");
+        legacy_step.issue_type = "step".to_string();
+        legacy_step
+            .dependencies
+            .push(parent_child_dependency("legacy-step", "parent-epic"));
+
+        let before = vec![epic, legacy_step.clone()];
+        let mut after_step = legacy_step.clone();
+        after_step.notes = Some("repair evidence".to_string());
+        let after = vec![before[0].clone(), after_step];
+        let touched_task_ids = BTreeSet::from(["legacy-step".to_string()]);
+
+        let mutation_issues =
+            StateStore::validate_task_graph_rows_for_mutation(&before, &after, &touched_task_ids);
+
+        assert!(
+            mutation_issues
+                .iter()
+                .all(|issue| issue.issue_id != "legacy-step"),
+            "{mutation_issues:?}"
+        );
+    }
+
+    #[test]
+    fn mutation_keeps_existing_invalid_subtask_parent_kind_blocked_when_child_is_touched() {
+        let mut epic = task_record("parent-epic", "open");
+        epic.issue_type = "epic".to_string();
+        let mut invalid_subtask = task_record("invalid-subtask", "in_progress");
+        invalid_subtask.issue_type = "subtask".to_string();
+        invalid_subtask
+            .dependencies
+            .push(parent_child_dependency("invalid-subtask", "parent-epic"));
+
+        let before = vec![epic, invalid_subtask.clone()];
+        let mut after_subtask = invalid_subtask.clone();
+        after_subtask.notes = Some("attempted update".to_string());
+        let after = vec![before[0].clone(), after_subtask];
+        let touched_task_ids = BTreeSet::from(["invalid-subtask".to_string()]);
+
+        let mutation_issues =
+            StateStore::validate_task_graph_rows_for_mutation(&before, &after, &touched_task_ids);
+
+        assert!(mutation_issues.iter().any(|issue| {
+            issue.issue_type == "invalid_parent_child_kind"
+                && issue.issue_id == "invalid-subtask"
+                && issue.depends_on_id.as_deref() == Some("parent-epic")
+        }));
+    }
+
+    #[test]
+    fn mutation_keeps_existing_invalid_subtask_parent_kind_blocked_when_converted_to_step() {
+        let mut epic = task_record("parent-epic", "open");
+        epic.issue_type = "epic".to_string();
+        let mut invalid_subtask = task_record("invalid-subtask", "in_progress");
+        invalid_subtask.issue_type = "subtask".to_string();
+        invalid_subtask
+            .dependencies
+            .push(parent_child_dependency("invalid-subtask", "parent-epic"));
+
+        let before = vec![epic, invalid_subtask.clone()];
+        let mut after_subtask = invalid_subtask.clone();
+        after_subtask.issue_type = "step".to_string();
+        let after = vec![before[0].clone(), after_subtask];
+        let touched_task_ids = BTreeSet::from(["invalid-subtask".to_string()]);
+
+        let mutation_issues =
+            StateStore::validate_task_graph_rows_for_mutation(&before, &after, &touched_task_ids);
+
+        assert!(mutation_issues.iter().any(|issue| {
+            issue.issue_type == "invalid_parent_child_kind"
+                && issue.issue_id == "invalid-subtask"
+                && issue.depends_on_id.as_deref() == Some("parent-epic")
+        }));
     }
 
     #[test]
