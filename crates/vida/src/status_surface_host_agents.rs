@@ -589,18 +589,22 @@ mod tests {
     }
 
     #[test]
-    fn build_host_agent_status_summary_exposes_hybrid_external_cli_relevance() {
+    fn build_host_agent_status_summary_exposes_internal_cli_posture() {
         let project_root = repo_root();
         let summary = build_host_agent_status_summary(&project_root)
             .expect("host agent summary should render");
         assert_eq!(summary["host_cli_system"], "codex");
-        assert_eq!(summary["hybrid_external_cli_relevant"], true);
+        assert_eq!(summary["hybrid_external_cli_relevant"], false);
         assert_eq!(
             summary["external_cli_preflight"]["hybrid_external_cli_relevant"],
-            true
+            false
         );
-        assert_eq!(summary["effective_execution_posture"], "mixed");
-        assert_eq!(summary["mixed_posture"], true);
+        assert_eq!(summary["effective_execution_posture"], "internal");
+        assert_eq!(
+            summary["mixed_posture_details"]["effective_execution_posture"],
+            "internal_only"
+        );
+        assert_eq!(summary["mixed_posture"], false);
         assert_eq!(summary["model_selection"]["enabled"], true);
         assert!(summary["agents"]["junior"]["default_model_profile"]
             .as_str()

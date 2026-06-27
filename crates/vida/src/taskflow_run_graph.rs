@@ -7746,15 +7746,17 @@ fn dispatch_init_fast_cache_payload_is_reusable(
     let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(packet_path)) else {
         return false;
     };
+    let packet_selected_backend = dispatch_init_packet_selected_backend(packet_path);
     if packet
         .get("runtime_assignment")
         .and_then(|assignment| assignment.get("enabled"))
         .and_then(serde_json::Value::as_bool)
         == Some(false)
+        && packet_selected_backend.is_none()
     {
         return false;
     }
-    if dispatch_init_packet_selected_backend(packet_path).is_none() {
+    if packet_selected_backend.is_none() {
         return false;
     }
     if dispatch_init_packet_template_kind(packet_path).as_deref() == Some("delivery_task_packet") {
@@ -7888,15 +7890,17 @@ fn reusable_routed_dispatch_receipt(
     ) {
         return None;
     }
+    let packet_selected_backend = dispatch_init_packet_selected_backend(packet_path);
     if packet
         .get("runtime_assignment")
         .and_then(|assignment| assignment.get("enabled"))
         .and_then(serde_json::Value::as_bool)
         == Some(false)
+        && packet_selected_backend.is_none()
     {
         return None;
     }
-    if dispatch_init_packet_selected_backend(packet_path).is_none() {
+    if packet_selected_backend.is_none() {
         return None;
     }
     Some(packet_path.to_string())
@@ -7909,6 +7913,9 @@ fn dispatch_init_packet_selected_backend(packet_path: &str) -> Option<String> {
         "/runtime_assignment/selected_carrier_id",
         "/carrier_runtime_assignment/selected_backend_id",
         "/carrier_runtime_assignment/selected_carrier_id",
+        "/selected_backend",
+        "/execution_truth/effective_selected_backend",
+        "/route_policy/effective_selected_backend",
     ]
     .into_iter()
     .find_map(|pointer| {

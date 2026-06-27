@@ -11405,6 +11405,9 @@ fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_c
         serde_json::to_string_pretty(&serde_json::json!({
             "packet_template_kind": "delivery_task_packet",
             "run_id": run_id,
+            "task_id": run_id,
+            "owned_paths": ["crates/vida/tests/task_smoke.rs"],
+            "read_only_paths": ["runtime-consumption"],
             "role_selection_full": {
                 "ok": true,
                 "activation_source": "test",
@@ -11426,7 +11429,15 @@ fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_c
                         }
                     },
                     "development_flow": {
-                        "dispatch_contract": {}
+                        "dispatch_contract": {
+                            "lane_catalog": {
+                                "developer": {
+                                    "dispatch_target": "developer",
+                                    "task_class": "implementation"
+                                }
+                            },
+                            "execution_lane_sequence": ["developer"]
+                        }
                     },
                     "orchestration_contract": {}
                 },
@@ -11629,6 +11640,8 @@ fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_c
             &feature_id,
             "--labels",
             "dev-pack",
+            "--owned-path",
+            "crates/vida/tests/task_smoke.rs",
             "--json",
         ],
         &state_dir,
@@ -11752,6 +11765,8 @@ fn dev_pack_materialization_pass_resolves_identity_and_unblocks_closure_via_cli(
             &feature_id,
             "--labels",
             "dev-pack",
+            "--owned-path",
+            "crates/vida/tests/task_smoke.rs",
             "--json",
         ],
         &state_dir,
@@ -11796,7 +11811,7 @@ fn dev_pack_materialization_pass_resolves_identity_and_unblocks_closure_via_cli(
                 "reused_existing": false,
                 "label": "dev-pack"
             },
-            "changed_files": ["taskflow:dev"]
+            "changed_files": ["crates/vida/tests/task_smoke.rs"]
         }))
         .expect("dev materialization result should encode"),
     )
@@ -11810,6 +11825,9 @@ fn dev_pack_materialization_pass_resolves_identity_and_unblocks_closure_via_cli(
         serde_json::to_string_pretty(&serde_json::json!({
             "packet_template_kind": "delivery_task_packet",
             "run_id": run_id,
+            "task_id": run_id,
+            "owned_paths": ["crates/vida/tests/task_smoke.rs"],
+            "read_only_paths": ["runtime-consumption"],
             "role_selection_full": {
                 "ok": true,
                 "activation_source": "test",
@@ -11827,11 +11845,20 @@ fn dev_pack_materialization_pass_resolves_identity_and_unblocks_closure_via_cli(
                 "execution_plan": {
                     "tracked_flow_bootstrap": {
                         "dev_task": {
+                            "task_id": dev_id,
                             "ensure_command": format!("vida task ensure {dev_id} \"Dev pack\" --type task --status open")
                         }
                     },
                     "development_flow": {
-                        "dispatch_contract": {}
+                        "dispatch_contract": {
+                            "lane_catalog": {
+                                "developer": {
+                                    "dispatch_target": "developer",
+                                    "task_class": "implementation"
+                                }
+                            },
+                            "execution_lane_sequence": ["developer"]
+                        }
                     },
                     "orchestration_contract": {}
                 },
@@ -11843,8 +11870,13 @@ fn dev_pack_materialization_pass_resolves_identity_and_unblocks_closure_via_cli(
             },
             "delivery_task_packet": {
                 "packet_id": format!("{run_id}::dev-pack::delivery"),
+                "task_id": run_id,
                 "goal": "Continue after dev-pack materialization",
                 "scope_in": ["dispatch_target:dev-pack"],
+                "owned_paths": ["crates/vida/tests/task_smoke.rs"],
+                "implementation_isolation": {
+                    "owned_paths": ["crates/vida/tests/task_smoke.rs"]
+                },
                 "read_only_paths": ["runtime-consumption"],
                 "definition_of_done": ["dev-pack materialization resolved"],
                 "verification_command": format!("vida taskflow consume continue --run-id {run_id}"),
