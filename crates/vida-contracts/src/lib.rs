@@ -1185,6 +1185,10 @@ pub struct VidaCommandEnvelope {
     pub client_kind: VidaClientKind,
     pub project_ref: Option<VidaProjectRef>,
     pub claim_kind: Option<VidaClaimKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_owned_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_owned_write_scopes: Vec<String>,
     #[serde(default)]
     pub payload: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1259,6 +1263,10 @@ struct VidaCommandEnvelopeWire {
     project_ref: Option<VidaProjectRef>,
     claim_kind: Option<VidaClaimKind>,
     #[serde(default)]
+    trusted_owned_path: Option<String>,
+    #[serde(default)]
+    trusted_owned_write_scopes: Vec<String>,
+    #[serde(default)]
     payload: serde_json::Value,
     #[serde(default)]
     correlation: Option<serde_json::Value>,
@@ -1301,6 +1309,8 @@ impl<'de> Deserialize<'de> for VidaCommandEnvelope {
             client_kind: wire.client_kind,
             project_ref: wire.project_ref,
             claim_kind: wire.claim_kind,
+            trusted_owned_path: wire.trusted_owned_path,
+            trusted_owned_write_scopes: wire.trusted_owned_write_scopes,
             payload: wire.payload,
             correlation,
             idempotency_key: wire.idempotency_key,

@@ -160,8 +160,8 @@ fn authorization_blocker(
         resource_project_id: string_payload_field(&envelope.payload, "resource_project_id")
             .map(VidaProjectId)
             .or_else(|| project_id_from_ref(envelope.project_ref.as_ref())),
-        owned_path: None,
-        owned_write_scopes: Vec::new(),
+        owned_path: envelope.trusted_owned_path.clone(),
+        owned_write_scopes: envelope.trusted_owned_write_scopes.clone(),
         idempotency_key_present: envelope.idempotency_key.is_some(),
         apply_token_present: envelope.apply_token.is_some(),
     });
@@ -292,6 +292,8 @@ mod tests {
             client_kind: VidaClientKind::Cli,
             project_ref: None::<VidaProjectRef>,
             claim_kind: Some(VidaClaimKind::SharedRead),
+            trusted_owned_path: None,
+            trusted_owned_write_scopes: Vec::new(),
             payload: json!({}),
             correlation: None,
             idempotency_key: None,
