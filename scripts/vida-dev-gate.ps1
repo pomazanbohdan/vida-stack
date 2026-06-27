@@ -1,8 +1,10 @@
 param(
-    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "target-dir-policy", "invoke-timed-argv-smoke")]
+    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke")]
     [string]$Mode = "quick",
     [string]$Package = "vida",
     [string]$TestFilter = "",
+    [string[]]$ProofCommand = @(),
+    [string]$ProofCommandJson = "",
     [string[]]$FormatFile = @(),
     [string[]]$AllowDirtyFile = @(),
     [string]$ReleaseVersion = "",
@@ -254,9 +256,12 @@ Modes:
   release-package   Build release archives with native PowerShell scripts/build-release.ps1.
   release-install   Installed launcher proof through vida release install.
   target-dir-policy Print the effective Cargo target directory policy.
+  proof-scheduler   Run proof command snippets: non-Cargo in parallel, Cargo-like sequentially.
 
 Notes:
   Cargo modes set CARGO_TARGET_DIR unless the caller already provided it.
+  proof-scheduler accepts -ProofCommandJson '["cmd1","cmd2","cargo --version"]' from any host shell.
+  proof-scheduler also accepts -ProofCommand array values when invoked from an already-running PowerShell script.
   coverage runs cargo llvm-cov nextest, writes LCOV to -CoverageOutputPath (default .vida/tmp/operator-output.lcov), and writes CRAP JSON to -CrapOutputPath (default .vida/tmp/workspace-crap.json).
   coverage fails on test failure unless -CoverageIgnoreRunFail is set, then still generates LCOV when cargo-llvm-cov can report it.
   release-package accepts explicit -SkipBuild, -Windows, -ReleaseBinDir, -ReleaseVersion, and -ReleaseSuffix flags for packaging already-built release binaries.
@@ -392,6 +397,40 @@ function Join-WindowsProcessArguments {
     return (($Arguments | ForEach-Object { ConvertTo-WindowsProcessArgument $_ }) -join " ")
 }
 
+function Test-CommandCanInvokeCargo {
+    param([string[]]$Command)
+
+    if ($Command.Count -eq 0) {
+        return $false
+    }
+    $joined = ($Command -join " ").Trim().ToLowerInvariant()
+    $exe = [System.IO.Path]::GetFileNameWithoutExtension($Command[0]).ToLowerInvariant()
+    return $exe -eq "cargo" -or
+        $exe -eq "cargo-nextest" -or
+        $joined -match '(^|[\s;&|])cargo(\.exe)?\s' -or
+        $joined -match '(^|[\s;&|])cargo-nextest(\.exe)?\s' -or
+        $joined.Contains("vida release install")
+}
+
+function New-CargoTimingContract {
+    param(
+        [string[]]$Command,
+        [int64]$DurationMs
+    )
+
+    if (-not (Test-CommandCanInvokeCargo -Command $Command)) {
+        return $null
+    }
+
+    [pscustomobject]@{
+        target_dir_policy = $CargoTargetDirState.target_dir_policy
+        effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+        artifact_lock_wait_ms = $null
+        compile_ms = $null
+        wait_classification = $(if ($DurationMs -gt 5000) { "cargo_wait_unclassified_without_cargo_phase_data" } else { "not_over_budget" })
+    }
+}
+
 $GitPath = Resolve-CommandPath "git" @("C:\Program Files\Git\cmd\git.exe")
 $PwshPath = Resolve-CommandPath "pwsh" @(
     "C:\Program Files\PowerShell\7\pwsh.exe",
@@ -478,7 +517,7 @@ function Invoke-Timed {
         throw
     } finally {
         $sw.Stop()
-        $Records.Add([pscustomobject]@{
+        $record = [pscustomobject]@{
             operation_id = $OperationId
             command_or_surface = ($Command -join " ")
             cwd_or_context = $RootDir
@@ -489,10 +528,154 @@ function Invoke-Timed {
             target_dir_policy = $CargoTargetDirState.target_dir_policy
             effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
             artifact_refs = $artifactRefs
-        })
+        }
+        $cargoTiming = New-CargoTimingContract -Command $Command -DurationMs ([int64]$sw.ElapsedMilliseconds)
+        if ($null -ne $cargoTiming) {
+            $record | Add-Member -NotePropertyName "cargo" -NotePropertyValue $cargoTiming
+        }
+        $Records.Add($record)
     }
     if ($exitCode -ne 0) {
         exit $exitCode
+    }
+}
+
+function Start-ScheduledProofProcess {
+    param(
+        [string]$OperationId,
+        [string[]]$Command,
+        [string]$SchedulerGroup,
+        [int]$SchedulerOrder
+    )
+
+    $started = Get-Date
+    $exe = $Command[0]
+    $args = @()
+    if ($Command.Length -gt 1) {
+        $args = $Command[1..($Command.Length - 1)]
+    }
+    $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    Assert-NoReparsePointInPath -Root $RootDir -Path $logDir -OriginalPath $logDir
+    $safeId = $OperationId -replace '[^A-Za-z0-9_.-]', '-'
+    $stdoutPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.out.txt" -f $safeId, $started)
+    $stderrPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.err.txt" -f $safeId, $started)
+    $process = Start-Process `
+        -FilePath $exe `
+        -ArgumentList (Join-WindowsProcessArguments $args) `
+        -WorkingDirectory $RootDir `
+        -RedirectStandardOutput $stdoutPath `
+        -RedirectStandardError $stderrPath `
+        -NoNewWindow `
+        -PassThru
+    return [pscustomobject]@{
+        operation_id = $OperationId
+        command = $Command
+        process = $process
+        started_at_value = $started
+        stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        artifact_refs = @($stdoutPath, $stderrPath)
+        scheduler_group = $SchedulerGroup
+        scheduler_order = $SchedulerOrder
+    }
+}
+
+function Complete-ScheduledProofProcess {
+    param([object]$Handle)
+
+    $Handle.process.WaitForExit()
+    $Handle.stopwatch.Stop()
+    $exitCode = $Handle.process.ExitCode
+    if ($null -eq $exitCode) {
+        $exitCode = 0
+    }
+    $durationMs = [int64]$Handle.stopwatch.ElapsedMilliseconds
+    $record = [pscustomobject]@{
+        operation_id = $Handle.operation_id
+        command_or_surface = ($Handle.command -join " ")
+        cwd_or_context = $RootDir
+        started_at = $Handle.started_at_value.ToString("o")
+        duration_ms = $durationMs
+        exit_status = $(if ($exitCode -eq 0) { "pass" } else { "fail" })
+        classification = $(if ($durationMs -le 2000) { "fast" } elseif ($durationMs -le 5000) { "watch" } else { "long_gate_expected" })
+        target_dir_policy = $CargoTargetDirState.target_dir_policy
+        effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+        artifact_refs = $Handle.artifact_refs
+        scheduler_group = $Handle.scheduler_group
+        scheduler_order = $Handle.scheduler_order
+    }
+    $cargoTiming = New-CargoTimingContract -Command $Handle.command -DurationMs $durationMs
+    if ($null -ne $cargoTiming) {
+        $record | Add-Member -NotePropertyName "cargo" -NotePropertyValue $cargoTiming
+    }
+    $Records.Add($record)
+    if ($exitCode -ne 0) {
+        exit $exitCode
+    }
+}
+
+function Resolve-ProofSchedulerCommands {
+    if ($ProofCommand.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($ProofCommandJson)) {
+        Write-Error "Use either -ProofCommand or -ProofCommandJson, not both."
+        exit 2
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ProofCommandJson)) {
+        try {
+            $parsed = $ProofCommandJson | ConvertFrom-Json
+        } catch {
+            Write-Error "-ProofCommandJson must be a JSON array of command strings."
+            exit 2
+        }
+        $commands = @($parsed)
+        if ($commands.Count -eq 0) {
+            Write-Error "-ProofCommandJson must contain at least one command string."
+            exit 2
+        }
+        foreach ($command in $commands) {
+            if (-not ($command -is [string]) -or [string]::IsNullOrWhiteSpace($command)) {
+                Write-Error "-ProofCommandJson must be a JSON array of non-empty command strings."
+                exit 2
+            }
+        }
+        return [string[]]$commands
+    }
+    return [string[]]$ProofCommand
+}
+
+function Invoke-ProofScheduler {
+    param([string[]]$Commands)
+
+    if ($Commands.Count -eq 0) {
+        Write-Error "-Mode proof-scheduler requires at least one -ProofCommand <command>."
+        exit 2
+    }
+
+    $cargoCommands = New-Object System.Collections.Generic.List[string]
+    $nonCargoCommands = New-Object System.Collections.Generic.List[string]
+    foreach ($commandText in $Commands) {
+        $command = @($PwshPath, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $commandText)
+        if (Test-CommandCanInvokeCargo -Command $command) {
+            $cargoCommands.Add($commandText)
+        } else {
+            $nonCargoCommands.Add($commandText)
+        }
+    }
+
+    $parallelHandles = New-Object System.Collections.Generic.List[object]
+    $order = 0
+    foreach ($commandText in $nonCargoCommands) {
+        $order += 1
+        $parallelHandles.Add((Start-ScheduledProofProcess -OperationId "proof-scheduler-noncargo:$order" -Command @($PwshPath, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $commandText) -SchedulerGroup "non_cargo_parallel" -SchedulerOrder $order))
+    }
+    foreach ($handle in $parallelHandles) {
+        Complete-ScheduledProofProcess -Handle $handle
+    }
+
+    $order = 0
+    foreach ($commandText in $cargoCommands) {
+        $order += 1
+        $handle = Start-ScheduledProofProcess -OperationId "proof-scheduler-cargo:$order" -Command @($PwshPath, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $commandText) -SchedulerGroup "cargo_sequential" -SchedulerOrder $order
+        Complete-ScheduledProofProcess -Handle $handle
     }
 }
 
@@ -1205,6 +1388,8 @@ try {
             effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
             artifact_refs = @()
         })
+    } elseif ($Mode -eq "proof-scheduler") {
+        Invoke-ProofScheduler -Commands (Resolve-ProofSchedulerCommands)
     } elseif ($Mode -eq "invoke-timed-argv-smoke") {
         $probeDir = Join-Path $RootDir ".vida\data\state\command-timing"
         New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
@@ -1261,6 +1446,44 @@ exit 0
         }
         if ($statusRecords[-1].exit_status -ne "pass") {
             throw "installed-vida-status retry smoke failed: final attempt status was $($statusRecords[-1].exit_status)."
+        }
+        Invoke-Timed "cargo-timing-contract-smoke" @("cargo", "--version")
+        $cargoRecord = $Records[$Records.Count - 1]
+        if ($null -eq $cargoRecord.cargo) {
+            throw "cargo timing contract smoke failed: cargo object was missing."
+        }
+        if ($cargoRecord.cargo.target_dir_policy -ne $CargoTargetDirState.target_dir_policy) {
+            throw "cargo timing contract smoke failed: target_dir_policy mismatch."
+        }
+        if ($cargoRecord.cargo.effective_cargo_target_dir -ne $CargoTargetDirState.effective_cargo_target_dir) {
+            throw "cargo timing contract smoke failed: effective_cargo_target_dir mismatch."
+        }
+        if ($cargoRecord.cargo.wait_classification -ne "not_over_budget") {
+            throw "cargo timing contract smoke failed: unexpected wait classification."
+        }
+        Invoke-ProofScheduler -Commands @(
+            "Start-Sleep -Milliseconds 250; 'noncargo-a'",
+            "Start-Sleep -Milliseconds 250; 'noncargo-b'",
+            "cargo --version",
+            "cargo --version"
+        )
+        $scheduled = @($Records | Where-Object { $_.operation_id -like "proof-scheduler-*" })
+        $parallelRecords = @($scheduled | Where-Object { $_.scheduler_group -eq "non_cargo_parallel" })
+        $cargoRecords = @($scheduled | Where-Object { $_.scheduler_group -eq "cargo_sequential" })
+        if ($parallelRecords.Count -ne 2 -or $cargoRecords.Count -ne 2) {
+            throw "proof scheduler smoke failed: expected 2 non-Cargo and 2 Cargo records."
+        }
+        if ($null -ne $parallelRecords[0].cargo -or $null -ne $parallelRecords[1].cargo) {
+            throw "proof scheduler smoke failed: non-Cargo records received cargo timing."
+        }
+        if ($null -eq $cargoRecords[0].cargo -or $null -eq $cargoRecords[1].cargo) {
+            throw "proof scheduler smoke failed: Cargo records missed cargo timing."
+        }
+        if ([datetime]$parallelRecords[1].started_at -ge ([datetime]$parallelRecords[0].started_at).AddMilliseconds($parallelRecords[0].duration_ms)) {
+            throw "proof scheduler smoke failed: non-Cargo commands did not overlap."
+        }
+        if ([datetime]$cargoRecords[1].started_at -lt ([datetime]$cargoRecords[0].started_at).AddMilliseconds($cargoRecords[0].duration_ms)) {
+            throw "proof scheduler smoke failed: Cargo commands overlapped."
         }
         Remove-Item -LiteralPath $retryProbePath, $retryMarkerPath -Force -ErrorAction SilentlyContinue
     } elseif ($Mode -eq "script-check") {
