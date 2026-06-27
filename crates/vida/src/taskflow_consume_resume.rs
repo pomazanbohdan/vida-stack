@@ -8935,6 +8935,7 @@ mod tests {
             "tester packet path should remain lane-scoped"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -8986,6 +8987,7 @@ mod tests {
             "cleared lane-scoped dispatch receipt must not remain usable"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -9106,6 +9108,7 @@ mod tests {
             .await
             .expect("strict validation should accept receipt-backed execution evidence");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -9166,8 +9169,26 @@ mod tests {
         fs::create_dir_all(&root).expect("temp root");
         let stale_packet = root.join("stale-pi-packet.json");
         let fresh_packet = root.join("fresh-middle-packet.json");
-        fs::write(&stale_packet, "{}").expect("stale packet");
-        fs::write(&fresh_packet, "{}").expect("fresh packet");
+        fs::write(
+            &stale_packet,
+            serde_json::json!({
+                "runtime_assignment": {
+                    "selected_backend_id": "pi_cli",
+                },
+            })
+            .to_string(),
+        )
+        .expect("stale packet");
+        fs::write(
+            &fresh_packet,
+            serde_json::json!({
+                "runtime_assignment": {
+                    "selected_backend_id": "middle",
+                },
+            })
+            .to_string(),
+        )
+        .expect("fresh packet");
 
         let project_root = crate::state_store::repo_root();
         let source_config_digest = crate::launcher_activation_snapshot::config_file_digest(
@@ -11887,6 +11908,7 @@ agent_system:
             Some("coach")
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -12557,6 +12579,7 @@ agent_system:
         );
         assert_eq!(persisted.lane_status, "lane_exception_recorded");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -14713,6 +14736,7 @@ agent_system:
             .await
             .expect("receipt lineage should allow downstream resume validation");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -14795,6 +14819,7 @@ agent_system:
             .await
             .expect("closure-complete receipt lineage should allow downstream resume validation");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -14905,6 +14930,7 @@ agent_system:
             .await
             .expect("strict resume validation should allow internal timeout retry receipt");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -14980,6 +15006,7 @@ agent_system:
             .await
             .expect("strict resume validation should accept superseded exception replay");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -15053,6 +15080,7 @@ agent_system:
             .expect_err("unsuperseded exception takeover must still fail closed");
         assert!(error.contains("Stale missing-task run graph"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -15262,6 +15290,7 @@ agent_system:
                 "receipt-backed downstream packet_ready should allow downstream resume validation",
             );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -15329,6 +15358,7 @@ agent_system:
             "unexpected error: {error}"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -15437,6 +15467,7 @@ agent_system:
             "unexpected error: {error}"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -15514,6 +15545,7 @@ agent_system:
             "unexpected error: {error}"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -16028,6 +16060,7 @@ agent_system:
         );
         assert!(resolved.dispatch_receipt.supersedes_receipt_id.is_none());
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -16271,6 +16304,7 @@ agent_system:
             closure_packet_path.display().to_string()
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -16522,6 +16556,7 @@ agent_system:
             closure_packet_path.display().to_string()
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -16721,6 +16756,7 @@ agent_system:
         assert_eq!(resolved.dispatch_receipt.dispatch_target, "closure");
         assert_eq!(resolved.dispatch_receipt.dispatch_status, "packet_ready");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -17144,6 +17180,7 @@ agent_system:
         assert_eq!(replay_lineage.lineage_kind, "root_dispatch_packet");
         assert_eq!(replay_lineage.resolved_dispatch_target, "coach");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -17428,6 +17465,7 @@ agent_system:
             Some("internal_subagents")
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -17557,6 +17595,7 @@ agent_system:
         );
         assert_eq!(receipt.selected_backend.as_deref(), Some("hermes_cli"));
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -17713,6 +17752,7 @@ agent_system:
             Some(packet_path.display().to_string().as_str())
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -17842,6 +17882,7 @@ agent_system:
             Some("opencode_cli")
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -18384,6 +18425,7 @@ agent_system:
                 .expect("dispatch packet path should exist")
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -18522,6 +18564,7 @@ agent_system:
         assert_eq!(persisted.dispatch_target, "analysis");
         assert_eq!(persisted.dispatch_status, "routed");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -18600,6 +18643,7 @@ agent_system:
             "fail-closed recovery must not persist a new dispatch receipt"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -18708,6 +18752,7 @@ agent_system:
         assert_eq!(persisted.dispatch_target, "implementer");
         assert_eq!(persisted.dispatch_status, "packet_ready");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -18926,6 +18971,7 @@ agent_system:
             packet_path.display().to_string()
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -19177,6 +19223,7 @@ agent_system:
             active_packet_path.display().to_string()
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -19384,6 +19431,7 @@ agent_system:
             "unexpected error: {error}"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -19555,6 +19603,7 @@ agent_system:
             "unexpected error: {error}"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -19932,6 +19981,7 @@ agent_system:
             "unexpected error: {error}"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -19972,6 +20022,7 @@ agent_system:
             "terminal resolved missing-task status must not request stale cleanup: {error:?}"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -20047,6 +20098,7 @@ agent_system:
             "unexpected strict error: {strict_error}"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -20234,6 +20286,7 @@ agent_system:
             "fail-closed lineage mismatch must not persist a replay-lineage receipt"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -20353,6 +20406,7 @@ agent_system:
             "fail-closed status mismatch must not persist a replay-lineage receipt"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -20437,6 +20491,7 @@ agent_system:
         );
         assert!(error.contains("run-upstream"), "unexpected error: {error}");
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -20511,6 +20566,7 @@ agent_system:
             "unexpected error: {error}"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -20653,6 +20709,7 @@ agent_system:
             .expect("active exception takeover should select the latest run");
         assert_eq!(resolved, active_run_id);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -20825,6 +20882,7 @@ agent_system:
             .expect("stale exception takeover should be skipped");
         assert_eq!(resolved, current_run_id);
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -21069,6 +21127,7 @@ agent_system:
                 .starts_with(&format!("{run_id}:execution_cursor:dispatch.implementer"))
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -23311,6 +23370,7 @@ agent_system:
             "terminal closure_complete receipts must be exempt from downstream readiness"
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -23524,6 +23584,7 @@ agent_system:
             active_packet_path.display().to_string()
         );
 
+        store.close().await;
         let _ = fs::remove_dir_all(&root);
     }
 }
