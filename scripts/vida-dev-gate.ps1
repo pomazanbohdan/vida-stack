@@ -848,6 +848,7 @@ function Read-DevGateJsonFile {
     }
 
     try {
+        Assert-NoReparsePointInPath -Root $RootDir -Path $Path -OriginalPath $Path
         $content = Get-Content -LiteralPath $Path -Encoding UTF8 -Raw
         if ([string]::IsNullOrWhiteSpace($content)) {
             return $null
