@@ -478,3 +478,37 @@ fn cli_taskflow_and_docflow_remain_direct_proxy_families() {
         "docflow help should render DocFlow output, got {docflow_stdout}"
     );
 }
+
+#[test]
+fn cli_mutation_entry_architecture_lint_covers_service_first_boundary() {
+    let router = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/root_command_router.rs"),
+    )
+    .expect("root command router source");
+    for (command, runner) in [
+        ("Service", "run_service"),
+        ("Project", "run_project"),
+        ("Wizard", "run_wizard"),
+        ("Job", "run_job"),
+        ("Receipt", "run_receipt"),
+    ] {
+        let expected =
+            format!("Some(Command::{command}(args)) => service_client_cli::{runner}(args)");
+        assert!(
+            router.contains(&expected),
+            "{command} must enter through service_client_cli::{runner}"
+        );
+    }
+    assert!(router.contains("Some(Command::Taskflow(args)) => run_taskflow_proxy(args).await"));
+    assert!(
+        router.contains("Some(Command::Docflow(args)) => docflow_proxy::run_docflow_proxy(args)")
+    );
+
+    let service_client = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/service_client_cli.rs"),
+    )
+    .expect("service client source");
+    assert!(service_client.contains("client.execute(envelope_for_request(request))"));
+    assert!(!service_client.contains("authorize_operation("));
+    assert!(!service_client.contains("OperationalJournal"));
+}
