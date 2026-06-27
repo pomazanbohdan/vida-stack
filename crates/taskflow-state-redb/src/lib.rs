@@ -100,6 +100,15 @@ pub struct RedbProjectionCheckpointRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedbProjectionReadBarrier {
+    pub projection_id: VidaProjectionRef,
+    pub required_event_cursor: VidaEventCursor,
+    pub as_of_event_cursor: Option<VidaEventCursor>,
+    pub status: String,
+    pub blocker_code: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedbProjectionFailureRecord {
     pub projection_id: VidaProjectionRef,
     pub stream_id: VidaStreamRef,
@@ -491,6 +500,33 @@ impl RedbOperationalJournal {
             records.push(decode_projection_checkpoint_record(value.value())?);
         }
         Ok(records)
+    }
+
+    pub fn projection_read_barrier(
+        &self,
+        projection_id: &VidaProjectionRef,
+        required_event_cursor: &VidaEventCursor,
+    ) -> Result<RedbProjectionReadBarrier, TaskflowStateError> {
+        let checkpoint = self.projection_checkpoint_record(projection_id)?;
+        let as_of_event_cursor = checkpoint.map(|record| record.last_global_cursor);
+        let required_cursor = strict_global_cursor_number(required_event_cursor)?;
+        let status = if as_of_event_cursor
+            .as_ref()
+            .map(strict_global_cursor_number)
+            .transpose()?
+            .is_some_and(|cursor| cursor >= required_cursor)
+        {
+            "pass"
+        } else {
+            "blocked"
+        };
+        Ok(RedbProjectionReadBarrier {
+            projection_id: projection_id.clone(),
+            required_event_cursor: required_event_cursor.clone(),
+            as_of_event_cursor,
+            status: status.to_string(),
+            blocker_code: (status == "blocked").then(|| "projection_not_caught_up".to_string()),
+        })
     }
 
     pub fn projection_failure_records(
@@ -1627,6 +1663,19 @@ fn global_cursor_number(cursor: &VidaEventCursor) -> usize {
         .strip_prefix("global-")
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(0)
+}
+
+fn strict_global_cursor_number(cursor: &VidaEventCursor) -> Result<usize, TaskflowStateError> {
+    cursor
+        .0
+        .strip_prefix("global-")
+        .and_then(|value| value.parse::<usize>().ok())
+        .ok_or_else(|| {
+            TaskflowStateError::Storage(format!(
+                "redb projection barrier cursor is malformed: {}",
+                cursor.0
+            ))
+        })
 }
 
 fn storage_error(error: impl std::fmt::Display) -> TaskflowStateError {
@@ -3141,6 +3190,55 @@ mod tests {
             VidaEventCursor("global-4".to_string())
         );
         assert_eq!(checkpoint.last_stream_version, VidaStreamVersion(4));
+    }
+
+    #[test]
+    fn projection_read_barrier_exposes_as_of_cursor_and_blocks_lag() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal.record_projection_checkpoint(projection_checkpoint(3));
+
+        let pass = journal
+            .projection_read_barrier(
+                &VidaProjectionRef("projection-1".to_string()),
+                &VidaEventCursor("global-3".to_string()),
+            )
+            .expect("barrier should read");
+        assert_eq!(pass.status, "pass");
+        assert_eq!(
+            pass.as_of_event_cursor,
+            Some(VidaEventCursor("global-3".to_string()))
+        );
+        assert_eq!(pass.blocker_code, None);
+
+        let blocked = journal
+            .projection_read_barrier(
+                &VidaProjectionRef("projection-1".to_string()),
+                &VidaEventCursor("global-4".to_string()),
+            )
+            .expect("barrier should read");
+        assert_eq!(blocked.status, "blocked");
+        assert_eq!(
+            blocked.as_of_event_cursor,
+            Some(VidaEventCursor("global-3".to_string()))
+        );
+        assert_eq!(
+            blocked.blocker_code,
+            Some("projection_not_caught_up".to_string())
+        );
+
+        let malformed = journal
+            .projection_read_barrier(
+                &VidaProjectionRef("projection-1".to_string()),
+                &VidaEventCursor("cursor-three".to_string()),
+            )
+            .expect_err("malformed required cursor must fail closed");
+        assert!(
+            malformed
+                .to_string()
+                .contains("projection barrier cursor is malformed")
+        );
     }
 
     #[test]
