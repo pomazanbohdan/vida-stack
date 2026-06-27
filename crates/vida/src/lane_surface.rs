@@ -4152,7 +4152,7 @@ fn materialize_host_bridge_completion_evidence(
     supplied_rework_target: Option<&str>,
     supplied_blocker_codes: &[String],
     supplied_completion_blocked: bool,
-    _derive_summary_blockers: bool,
+    derive_summary_blockers: bool,
     taskflow_evidence: HostBridgeTaskflowImplementationEvidence,
     authoritative_owned_paths: &[String],
     replace_existing_evidence: bool,
@@ -4351,7 +4351,7 @@ fn materialize_host_bridge_completion_evidence(
                 })
                 .to_string(),
             blocker_codes: blocker_codes.clone(),
-            summary: Some(summary.to_string()),
+            summary: derive_summary_blockers.then(|| summary.to_string()),
             provenance_valid: true,
             receipt_bound: true,
             next_step_packet_requested: allowed_next_node
@@ -4468,7 +4468,7 @@ fn materialize_host_bridge_completion_evidence(
         "allowed_next_node": result_allowed_next_node.clone(),
         "host_agent_id": host_agent_id,
         "summary": summary,
-        "summary_classifier_source": "advisory_only",
+        "summary_classifier_source": if derive_summary_blockers { "typed_and_summary_blockers" } else { "advisory_only" },
         "host_bridge_completion_authority": {
             "accepted": authority_decision.accepted,
             "final_state": format!("{:?}", authority_decision.final_state),
@@ -5499,6 +5499,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 .iter()
                 .any(|blocker| blocker == "missing_owned_write_scope");
             let completion_blocked = supplied_completion_blocked
+                || !downstream_completion_blockers.is_empty()
                 || host_bridge_evidence
                     .as_ref()
                     .is_some_and(|evidence| evidence.execution_state == "blocked");

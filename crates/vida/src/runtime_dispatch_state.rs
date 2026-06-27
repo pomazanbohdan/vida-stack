@@ -5670,7 +5670,17 @@ fn verification_result_blocks_closure_admission(result: &serde_json::Value) -> b
     {
         return true;
     }
-    false
+    if result
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|values| !values.is_empty())
+    {
+        return true;
+    }
+    ["summary", "verdict", "completion_verdict", "decision"]
+        .iter()
+        .filter_map(|field| result.get(*field).and_then(serde_json::Value::as_str))
+        .any(taskflow_host_bridge::summary_text_reports_blocked_completion)
 }
 
 fn synthetic_execution_completion_receipt_id(
@@ -19357,19 +19367,34 @@ host_environment:
     }
 
     #[test]
-    fn verification_closure_admission_ignores_summary_and_verdict_prose() {
+    fn verification_closure_admission_blocks_negative_summary_and_verdict_prose() {
         let result = json!({
             "artifact_kind": "runtime_lane_completion_result",
             "status": "pass",
             "execution_state": "executed",
             "receipt_backed": true,
             "closure_ready": true,
-            "summary": "verifier mentioned blocked evidence while explaining resolved history",
-            "verdict": "blocked text in prose is advisory only",
+            "summary": "verdict: blocker; rework required; implementation evidence missing; not closure-ready",
+            "verdict": "pass",
             "completion_verdict": "pass"
         });
 
-        assert!(!verification_result_blocks_closure_admission(&result));
+        assert!(verification_result_blocks_closure_admission(&result));
+
+        let resolved_history = json!({
+            "artifact_kind": "runtime_lane_completion_result",
+            "status": "pass",
+            "execution_state": "executed",
+            "receipt_backed": true,
+            "closure_ready": true,
+            "summary": "verifier mentioned previous blocker was resolved",
+            "verdict": "pass",
+            "completion_verdict": "pass"
+        });
+
+        assert!(!verification_result_blocks_closure_admission(
+            &resolved_history
+        ));
 
         let structured_blocked = json!({
             "artifact_kind": "runtime_lane_completion_result",

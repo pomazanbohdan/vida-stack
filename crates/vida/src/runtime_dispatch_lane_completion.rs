@@ -48,7 +48,7 @@ mod tests {
     };
 
     #[test]
-    fn completion_result_treats_summary_prose_as_advisory_only() {
+    fn completion_result_blocks_negative_summary_prose() {
         let state_root =
             std::env::temp_dir().join(format!("vida-lane-completion-{}", std::process::id()));
         let _ = fs::remove_dir_all(&state_root);
@@ -59,7 +59,7 @@ mod tests {
             "coach",
             "receipt-1",
             "packet.json",
-            Some("coach decision=blocked; scheduledAt missing"),
+            Some("coach decision=blocked; rework required; implementation evidence missing"),
         )
         .expect("completion result should write");
         let body: serde_json::Value = serde_json::from_str(
@@ -67,49 +67,66 @@ mod tests {
         )
         .expect("completion result should decode");
 
-        assert_eq!(body["status"], "pass");
-        assert_eq!(body["execution_state"], "executed");
-        assert_eq!(body["completion_verdict"], "pass");
-        assert_eq!(body["blocker_codes"], serde_json::json!([]));
-        assert_eq!(body["closure_ready"], true);
-        assert_eq!(body["summary_classifier_source"], "advisory_only");
-        assert_eq!(body["host_bridge_completion_authority"]["accepted"], true);
+        assert_eq!(body["status"], "blocked");
+        assert_eq!(body["execution_state"], "blocked");
+        assert_eq!(body["completion_verdict"], "blocked");
+        assert_eq!(
+            body["blocker_codes"],
+            serde_json::json!(["host_bridge_completion_summary_blocked"])
+        );
+        assert_eq!(body["closure_ready"], false);
+        assert_eq!(
+            body["summary_classifier_source"],
+            "typed_and_summary_blockers"
+        );
+        assert_eq!(body["host_bridge_completion_authority"]["accepted"], false);
         assert_eq!(
             body["summary"],
-            "coach decision=blocked; scheduledAt missing"
+            "coach decision=blocked; rework required; implementation evidence missing"
         );
-        assert!(body.get("blocker_code").is_none());
-        assert!(body.get("blocker_details").is_none());
-        assert_eq!(body["rework_target"], serde_json::Value::Null);
-        assert_eq!(body["allowed_next_node"], "closure");
+        assert_eq!(
+            body["blocker_code"],
+            "host_bridge_completion_summary_blocked"
+        );
+        assert_eq!(body["rework_target"], "coach");
+        assert_eq!(body["allowed_next_node"], serde_json::Value::Null);
 
         let _ = fs::remove_dir_all(&state_root);
     }
 
     #[test]
-    fn completion_result_does_not_route_quality_gates_from_summary_prose() {
+    fn completion_result_routes_negative_summary_prose_to_blocked_gate() {
         let cases = [
-            ("coach", None, "closure"),
+            ("coach", None, "pass", "executed", "closure"),
             (
                 "coach",
-                Some("coach decision=blocked; implementation acceptance gap"),
-                "closure",
+                Some("coach decision=blocked; rework required"),
+                "blocked",
+                "blocked",
+                "__null__",
             ),
-            ("tester", None, "closure"),
+            ("tester", None, "pass", "executed", "closure"),
             (
                 "tester",
-                Some("tester decision=blocked; focused proof failed"),
-                "closure",
+                Some("tester decision=blocked; focused proof failed; completion failed"),
+                "blocked",
+                "blocked",
+                "__null__",
             ),
-            ("reviewer", None, "closure"),
+            ("reviewer", None, "pass", "executed", "closure"),
             (
                 "reviewer",
-                Some("reviewer decision=blocked; proof review needs tester rework"),
-                "closure",
+                Some(
+                    "reviewer decision=blocked; proof review needs tester rework; rework required",
+                ),
+                "blocked",
+                "blocked",
+                "__null__",
             ),
         ];
 
-        for (target, summary, allowed_next_node) in cases {
+        for (target, summary, expected_status, expected_execution_state, allowed_next_node) in cases
+        {
             let state_root = std::env::temp_dir().join(format!(
                 "vida-lane-completion-{}-{target}-{}",
                 std::process::id(),
@@ -131,18 +148,38 @@ mod tests {
             )
             .expect("completion result should decode");
 
-            assert_eq!(body["status"], "pass", "{target}");
-            assert_eq!(body["execution_state"], "executed", "{target}");
-            assert_eq!(body["decision"], "approve", "{target}");
-            assert_eq!(body["verdict"], "pass", "{target}");
-            assert_eq!(body["completion_verdict"], "pass", "{target}");
-            assert_eq!(body["blocker_codes"], serde_json::json!([]), "{target}");
-            assert_eq!(body["rework_target"], serde_json::Value::Null, "{target}");
+            assert_eq!(body["status"], expected_status, "{target}");
             assert_eq!(
-                body["summary_classifier_source"], "advisory_only",
+                body["execution_state"], expected_execution_state,
                 "{target}"
             );
-            assert_eq!(body["allowed_next_node"], allowed_next_node, "{target}");
+            if expected_status == "pass" {
+                assert_eq!(body["decision"], "approve", "{target}");
+                assert_eq!(body["verdict"], "pass", "{target}");
+                assert_eq!(body["completion_verdict"], "pass", "{target}");
+                assert_eq!(body["blocker_codes"], serde_json::json!([]), "{target}");
+                assert_eq!(body["rework_target"], serde_json::Value::Null, "{target}");
+                assert_eq!(body["allowed_next_node"], allowed_next_node, "{target}");
+            } else {
+                assert_eq!(body["decision"], "blocked", "{target}");
+                assert_eq!(body["verdict"], "blocked", "{target}");
+                assert_eq!(body["completion_verdict"], "blocked", "{target}");
+                assert_eq!(
+                    body["blocker_codes"],
+                    serde_json::json!(["host_bridge_completion_summary_blocked"]),
+                    "{target}"
+                );
+                assert_eq!(body["rework_target"], target, "{target}");
+                assert_eq!(
+                    body["allowed_next_node"],
+                    serde_json::Value::Null,
+                    "{target}"
+                );
+            }
+            assert_eq!(
+                body["summary_classifier_source"], "typed_and_summary_blockers",
+                "{target}"
+            );
 
             let _ = fs::remove_dir_all(&state_root);
         }
@@ -273,6 +310,7 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary_next_and_blocker
             next_step_packet_requested: pass_allowed_next_node.is_some(),
         },
     );
+    let blocker_codes = authority_decision.blocker_codes.clone();
     let verdict_fields = if blocker_codes.is_empty() {
         taskflow_host_bridge::host_bridge_result_verdict_fields_for_gate(
             completed_target,
@@ -307,7 +345,7 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary_next_and_blocker
         "allowed_next_node": verdict_fields.allowed_next_node,
         "completion_verdict": verdict_fields.verdict,
         "closure_ready": blocker_codes.is_empty(),
-        "summary_classifier_source": "advisory_only",
+        "summary_classifier_source": "typed_and_summary_blockers",
         "host_bridge_completion_authority": {
             "accepted": authority_decision.accepted,
             "final_state": format!("{:?}", authority_decision.final_state),
