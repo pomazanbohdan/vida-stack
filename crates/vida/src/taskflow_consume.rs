@@ -769,10 +769,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 &role_selection,
                             )
                             .await;
-                        if let Err(error) = apply_run_graph_runtime_assignment_to_selection(
+                        if let Err(error) = crate::apply_run_graph_runtime_assignment_to_selection(
                             &mut role_selection,
                             &runtime_bundle.activation_bundle,
                             &run_graph_bootstrap,
+                            "run-graph role selection execution_plan is not an object",
                         ) {
                             eprintln!("{error}");
                             return ExitCode::from(1);
@@ -1819,42 +1820,6 @@ fn build_retrieval_policy_decision_gate(
 
 fn should_record_blocked_dispatch_receipt(consume_final_mode: ConsumeFinalMode) -> bool {
     !consume_final_mode.is_read_only()
-}
-
-fn apply_run_graph_runtime_assignment_to_selection(
-    role_selection: &mut super::RuntimeConsumptionLaneSelection,
-    compiled_bundle: &serde_json::Value,
-    run_graph_bootstrap: &serde_json::Value,
-) -> Result<(), String> {
-    let latest_status = &run_graph_bootstrap["latest_status"];
-    let Some(task_class) = super::json_string(latest_status.get("task_class"))
-        .or_else(|| super::json_string(latest_status.get("route_task_class")))
-    else {
-        return Ok(());
-    };
-    let runtime_role = super::json_string(latest_status.get("activation_runtime_role"))
-        .unwrap_or_else(|| role_selection.selected_role.clone());
-    let conversation_role = role_selection
-        .fallback_role
-        .trim()
-        .is_empty()
-        .then_some("orchestrator")
-        .unwrap_or(role_selection.fallback_role.as_str());
-    let assignment = crate::build_runtime_assignment_from_resolved_constraints(
-        compiled_bundle,
-        conversation_role,
-        &task_class,
-        &runtime_role,
-    );
-    if !assignment["enabled"].as_bool().unwrap_or(false) {
-        return Ok(());
-    }
-    let execution_plan = role_selection
-        .execution_plan
-        .as_object_mut()
-        .ok_or_else(|| "run-graph role selection execution_plan is not an object".to_string())?;
-    execution_plan.extend(crate::runtime_assignment_alias_fields(&assignment));
-    Ok(())
 }
 
 async fn persist_blocked_consume_final_resume_evidence(

@@ -5593,6 +5593,10 @@ mod tests {
             role_selection.execution_plan["carrier_runtime_assignment"]["selected_backend_id"],
             "internal_subagents"
         );
+        assert_eq!(
+            role_selection.execution_plan["runtime_assignment"],
+            role_selection.execution_plan["carrier_runtime_assignment"]
+        );
     }
 
     fn sample_agent_dispatch_next_preview() -> AgentDispatchNextPreview {

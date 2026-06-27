@@ -293,8 +293,9 @@ use runtime_assignment_policy::{
     role_supports_task_class, runtime_role_for_task_class, task_complexity_multiplier,
 };
 pub(crate) use runtime_assignment_projection_utils::{
-    carrier_runtime_section, infer_task_class_from_task_payload, json_u64,
-    runtime_assignment_alias_fields, runtime_assignment_from_execution_plan,
+    apply_run_graph_runtime_assignment_to_selection, carrier_runtime_section,
+    infer_task_class_from_task_payload, json_u64, runtime_assignment_alias_fields,
+    runtime_assignment_from_execution_plan,
 };
 #[allow(unused_imports)]
 pub(crate) use runtime_consumption_state::{

@@ -35,6 +35,43 @@ pub(crate) fn runtime_assignment_alias_fields(
     fields
 }
 
+pub(crate) fn apply_run_graph_runtime_assignment_to_selection(
+    role_selection: &mut crate::RuntimeConsumptionLaneSelection,
+    compiled_bundle: &serde_json::Value,
+    run_graph_bootstrap: &serde_json::Value,
+    execution_plan_error: &str,
+) -> Result<(), String> {
+    let latest_status = &run_graph_bootstrap["latest_status"];
+    let Some(task_class) = crate::json_string(latest_status.get("task_class"))
+        .or_else(|| crate::json_string(latest_status.get("route_task_class")))
+    else {
+        return Ok(());
+    };
+    let runtime_role = crate::json_string(latest_status.get("activation_runtime_role"))
+        .unwrap_or_else(|| role_selection.selected_role.clone());
+    let conversation_role = role_selection
+        .fallback_role
+        .trim()
+        .is_empty()
+        .then_some("orchestrator")
+        .unwrap_or(role_selection.fallback_role.as_str());
+    let assignment = crate::build_runtime_assignment_from_resolved_constraints(
+        compiled_bundle,
+        conversation_role,
+        &task_class,
+        &runtime_role,
+    );
+    if !assignment["enabled"].as_bool().unwrap_or(false) {
+        return Ok(());
+    }
+    let execution_plan = role_selection
+        .execution_plan
+        .as_object_mut()
+        .ok_or_else(|| execution_plan_error.to_string())?;
+    execution_plan.extend(runtime_assignment_alias_fields(&assignment));
+    Ok(())
+}
+
 pub(crate) fn infer_task_class_from_task_payload(task: &serde_json::Value) -> String {
     let labels = task["labels"]
         .as_array()
@@ -120,4 +157,58 @@ pub(crate) fn infer_task_class_from_task_payload(task: &serde_json::Value) -> St
         return "specification".to_string();
     }
     "implementation".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn runtime_assignment_alias_fields_emits_canonical_and_compat_aliases() {
+        let assignment = serde_json::json!({
+            "enabled": true,
+            "selected_backend_id": "internal_subagents",
+            "activation_agent_type": "middle",
+        });
+
+        let fields = super::runtime_assignment_alias_fields(&assignment);
+
+        assert_eq!(fields.get("runtime_assignment"), Some(&assignment));
+        assert_eq!(fields.get("carrier_runtime_assignment"), Some(&assignment));
+    }
+
+    #[test]
+    fn run_graph_assignment_helper_ignores_status_without_task_class() {
+        let mut selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "test".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "fix runtime".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "test".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let compiled_bundle = serde_json::json!({});
+        let run_graph_bootstrap = serde_json::json!({
+            "latest_status": {
+                "activation_runtime_role": "worker"
+            }
+        });
+
+        super::apply_run_graph_runtime_assignment_to_selection(
+            &mut selection,
+            &compiled_bundle,
+            &run_graph_bootstrap,
+            "execution_plan is not an object",
+        )
+        .expect("assignment helper should update selection");
+
+        assert_eq!(selection.execution_plan, serde_json::json!({}));
+    }
 }
