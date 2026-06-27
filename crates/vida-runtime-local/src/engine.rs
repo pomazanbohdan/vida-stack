@@ -279,6 +279,8 @@ mod tests {
             client_kind: VidaClientKind::Service,
             project_ref: None,
             claim_kind: None,
+            trusted_owned_path: None,
+            trusted_owned_write_scopes: Vec::new(),
             payload: serde_json::json!({}),
             correlation: None,
             idempotency_key: Some(VidaIdempotencyKey("fake-engine-idem".to_string())),

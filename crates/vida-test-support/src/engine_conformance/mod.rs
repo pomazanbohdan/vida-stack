@@ -274,6 +274,8 @@ pub fn envelope(operation: &str) -> VidaCommandEnvelope {
         client_kind: VidaClientKind::Service,
         project_ref: None,
         claim_kind: None,
+        trusted_owned_path: None,
+        trusted_owned_write_scopes: Vec::new(),
         payload: serde_json::json!({"scenario":"runtime-engine-conformance"}),
         correlation: Some(serde_json::json!({"trace_id":"conformance-trace"})),
         idempotency_key: Some(VidaIdempotencyKey("conformance-idempotency".to_string())),

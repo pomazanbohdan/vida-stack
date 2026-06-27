@@ -40,6 +40,8 @@ fn envelope(operation: &str) -> VidaCommandEnvelope {
         client_kind: VidaClientKind::Cli,
         project_ref: None,
         claim_kind: operation_spec(operation).map(|spec| spec.required_claim),
+        trusted_owned_path: None,
+        trusted_owned_write_scopes: Vec::new(),
         payload: json!({}),
         correlation: None,
         idempotency_key: Some(VidaIdempotencyKey(format!("idem-{operation}"))),
@@ -162,17 +164,22 @@ fn command_pipeline_blocks_apply_operation_without_apply_token_after_idempotency
 }
 
 #[test]
-fn command_pipeline_reaches_handler_when_apply_token_is_present() {
+fn command_pipeline_denies_payload_owned_scope_even_when_apply_token_is_present() {
     let mut command = envelope(operations::SERVICE_LIFECYCLE_APPLY);
     command.client_kind = VidaClientKind::Service;
     command.apply_token = Some(VidaApplyToken("test-apply-token".to_string()));
+    command.trusted_owned_path = Some("vida/config/policies".to_string());
+    command.trusted_owned_write_scopes = vec!["vida/config/policies".to_string()];
     command.payload = json!({
         "owned_path": "vida/config/policies",
         "owned_write_scopes": ["vida/config/policies"]
     });
     let response = InProcessVidaClient::new_ready().execute(command);
     assert_eq!(response.status, VidaResponseStatus::Blocked);
-    assert_eq!(response.blockers[0].code, "operation_not_registered");
+    assert_eq!(
+        response.blockers[0].code,
+        "operation_owned_write_scope_denied"
+    );
 }
 
 #[test]
@@ -187,32 +194,38 @@ fn command_pipeline_uses_cedar_for_client_kind_denial() {
 }
 
 #[test]
-fn command_pipeline_uses_cedar_for_claim_denial() {
+fn command_pipeline_denies_task_apply_without_trusted_owned_write_scope_before_claim_policy() {
     let mut command = authorized_task_apply_envelope();
     command.claim_kind = Some(vida_contracts::VidaClaimKind::SharedRead);
 
     let response = InProcessVidaClient::new_ready().execute(command);
 
     assert_eq!(response.status, VidaResponseStatus::Blocked);
-    assert_eq!(response.blockers[0].code, "operation_policy_denied");
+    assert_eq!(
+        response.blockers[0].code,
+        "operation_owned_write_scope_denied"
+    );
 }
 
 #[test]
-fn command_pipeline_uses_cedar_for_cross_project_denial() {
+fn command_pipeline_denies_task_apply_without_trusted_owned_write_scope_before_project_policy() {
     let mut command = authorized_task_apply_envelope();
     command.payload["resource_project_id"] = json!("foreign-project");
 
     let response = InProcessVidaClient::new_ready().execute(command);
 
     assert_eq!(response.status, VidaResponseStatus::Blocked);
-    assert_eq!(response.blockers[0].code, "operation_policy_denied");
+    assert_eq!(
+        response.blockers[0].code,
+        "operation_owned_write_scope_denied"
+    );
 }
 
 #[test]
-fn command_pipeline_uses_cedar_for_out_of_scope_write_denial() {
+fn command_pipeline_denies_task_apply_with_payload_out_of_scope_write_evidence() {
     let mut command = authorized_task_apply_envelope();
-    command.payload["owned_path"] = json!("crates/vida/src/main.rs");
-    command.payload["owned_write_scopes"] = json!(["crates/taskflow-authority"]);
+    command.trusted_owned_path = Some("crates/vida/src/main.rs".to_string());
+    command.trusted_owned_write_scopes = vec!["crates/taskflow-authority".to_string()];
 
     let response = InProcessVidaClient::new_ready().execute(command);
 
@@ -229,20 +242,16 @@ fn authorized_task_apply_envelope() -> VidaCommandEnvelope {
     command.project_ref = Some(local_project_ref());
     command.idempotency_key = Some(VidaIdempotencyKey("task-apply-idem".to_string()));
     command.apply_token = Some(VidaApplyToken("task-apply-token".to_string()));
-    command.payload = json!({
-        "owned_path": "crates/taskflow-authority",
-        "owned_write_scopes": ["crates/taskflow-authority"]
-    });
+    command.trusted_owned_path = Some("crates/taskflow-authority".to_string());
+    command.trusted_owned_write_scopes = vec!["crates/taskflow-authority".to_string()];
     command
 }
 
 fn authorized_wizard_plan_envelope(operation: &str) -> VidaCommandEnvelope {
     let mut command = envelope(operation);
     command.project_ref = Some(local_project_ref());
-    command.payload = json!({
-        "owned_path": "crates/vida-contracts",
-        "owned_write_scopes": ["crates/vida-contracts"]
-    });
+    command.trusted_owned_path = Some("crates/vida-contracts".to_string());
+    command.trusted_owned_write_scopes = vec!["crates/vida-contracts".to_string()];
     command
 }
 

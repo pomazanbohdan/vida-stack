@@ -111,6 +111,8 @@ fn service_envelope(operation: &str) -> VidaCommandEnvelope {
         client_kind: VidaClientKind::Tui,
         project_ref: None,
         claim_kind: operation_spec(operation).map(|spec| spec.required_claim),
+        trusted_owned_path: None,
+        trusted_owned_write_scopes: Vec::new(),
         payload: serde_json::json!({}),
         correlation: None,
         idempotency_key: Some(VidaIdempotencyKey(format!("tui-live-idem-{operation}"))),

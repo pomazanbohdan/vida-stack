@@ -272,6 +272,8 @@ pub fn sample_status_request(operation: &str) -> VidaCommandEnvelope {
         client_kind: vida_contracts::VidaClientKind::Service,
         project_ref: None,
         claim_kind: vida_contracts::operation_spec(operation).map(|spec| spec.required_claim),
+        trusted_owned_path: None,
+        trusted_owned_write_scopes: Vec::new(),
         payload: serde_json::json!({}),
         correlation: None,
         idempotency_key: Some(vida_contracts::VidaIdempotencyKey(format!(

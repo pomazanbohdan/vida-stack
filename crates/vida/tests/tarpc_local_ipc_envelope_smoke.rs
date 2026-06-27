@@ -32,6 +32,8 @@ fn envelope(operation: &str) -> VidaCommandEnvelope {
         client_kind: VidaClientKind::Service,
         project_ref: None,
         claim_kind: operation_spec(operation).map(|spec| spec.required_claim),
+        trusted_owned_path: None,
+        trusted_owned_write_scopes: Vec::new(),
         payload: json!({}),
         correlation: None,
         idempotency_key: Some(VidaIdempotencyKey(format!("tarpc-smoke-idem-{operation}"))),

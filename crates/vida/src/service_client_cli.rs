@@ -182,6 +182,8 @@ fn envelope_for_request(request: &ServiceCliRequest) -> VidaCommandEnvelope {
         client_kind: VidaClientKind::Cli,
         project_ref: request.project_ref.clone(),
         claim_kind: operation_spec(request.operation).map(|spec| spec.required_claim),
+        trusted_owned_path: None,
+        trusted_owned_write_scopes: Vec::new(),
         payload: request.payload.clone(),
         correlation: Some(json!({
             "source": "vida_cli_service_client",
