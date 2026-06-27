@@ -3213,8 +3213,8 @@ pub(crate) struct TaskCloseoutArgs {
 
     #[arg(
         long = "include-temp-scan",
-        default_value_t = true,
-        help = "Include tracked temporary artifact hygiene scan in the closeout bundle"
+        default_value_t = false,
+        help = "Opt in to a tracked temporary artifact hygiene scan in the closeout bundle"
     )]
     pub(crate) include_temp_scan: bool,
 

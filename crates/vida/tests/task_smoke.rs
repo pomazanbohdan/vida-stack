@@ -7668,7 +7668,8 @@ fn task_closeout_json_bundles_blocked_proof_closure_graph_and_temp_scan() {
     assert_eq!(closeout["proof"]["missing_count"], 1);
     assert_eq!(closeout["closure"]["ready_for_close"], false);
     assert_eq!(closeout["graph"]["valid"], true);
-    assert_eq!(closeout["temp_scan"]["enabled"], true);
+    assert_eq!(closeout["temp_scan"]["enabled"], false);
+    assert_eq!(closeout["temp_scan"]["status"], "skipped");
     assert!(closeout["blocker_codes"]
         .as_array()
         .expect("closeout blockers should be an array")
@@ -7704,7 +7705,7 @@ fn task_closeout_default_output_is_compact_and_help_documents_json_mode() {
     assert!(!default_output.trim_start().starts_with('{'));
     assert!(default_output.contains("proof: configured=0"));
     assert!(default_output.contains("graph: valid=true issues=0"));
-    assert!(default_output.contains("temp_scan: status="));
+    assert!(default_output.contains("temp_scan: status=skipped"));
 
     let help = run_and_assert_success(&["task", "closeout", "--help"], &state_dir);
     assert!(help.contains("Default output is compact human-readable text"));
@@ -7760,7 +7761,16 @@ fn task_closeout_json_pass_has_empty_next_actions_and_rooted_temp_scan() {
         &state_dir,
     );
 
-    let closeout = run_command_json(&["task", "closeout", &task_id, "--json"], &state_dir);
+    let closeout = run_command_json(
+        &[
+            "task",
+            "closeout",
+            &task_id,
+            "--include-temp-scan",
+            "--json",
+        ],
+        &state_dir,
+    );
 
     assert_eq!(closeout["surface"], "vida task closeout");
     assert_eq!(closeout["status"], "pass");
@@ -7828,7 +7838,13 @@ fn task_closeout_temp_scan_fails_closed_for_non_git_project_root() {
     );
 
     let (closeout, success) = run_command_json_allow_failure_in_cwd(
-        &["task", "closeout", &task_id, "--json"],
+        &[
+            "task",
+            "closeout",
+            &task_id,
+            "--include-temp-scan",
+            "--json",
+        ],
         &state_dir,
         &outside_cwd,
     );

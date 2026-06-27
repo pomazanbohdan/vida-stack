@@ -1562,6 +1562,32 @@ fn task_closeout_repo_root(state_dir: &std::path::Path) -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_else(|_| state_dir.to_path_buf())
 }
 
+fn task_closeout_git_executable(repo_root: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let path_var = std::env::var_os("PATH").ok_or_else(|| "PATH is not set".to_string())?;
+    let current_dir = std::env::current_dir().ok();
+    #[cfg(windows)]
+    let executable_names = ["git.exe", "git.cmd", "git.bat", "git"];
+    #[cfg(not(windows))]
+    let executable_names = ["git"];
+
+    for path_dir in std::env::split_paths(&path_var) {
+        if path_dir.as_os_str().is_empty() || path_dir.is_relative() {
+            continue;
+        }
+        if path_dir == repo_root || current_dir.as_ref().is_some_and(|cwd| &path_dir == cwd) {
+            continue;
+        }
+        for executable_name in executable_names {
+            let candidate = path_dir.join(executable_name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    Err("no trusted absolute git executable found on PATH".to_string())
+}
+
 fn task_closeout_temp_scan(
     include_temp_scan: bool,
     state_dir: &std::path::Path,
@@ -1578,13 +1604,32 @@ fn task_closeout_temp_scan(
         };
     }
     let repo_root = task_closeout_repo_root(state_dir);
+    let git_executable = match task_closeout_git_executable(&repo_root) {
+        Ok(git_executable) => git_executable,
+        Err(error) => {
+            return TaskCloseoutTempScan {
+                enabled: true,
+                status: "blocked".to_string(),
+                tracked_match_count: 0,
+                tracked_matches: Vec::new(),
+                command: "git ls-files tmp* false true null undefined nul".to_string(),
+                repo_root: Some(repo_root.display().to_string()),
+                error: Some(format!(
+                    "failed to resolve trusted git temp scan executable: {error}"
+                )),
+            };
+        }
+    };
     let command_text = format!(
-        "git -C {} ls-files tmp* false true null undefined nul",
+        "{} -C {} -c core.fsmonitor=false ls-files tmp* false true null undefined nul",
+        crate::shell_quote(&git_executable.display().to_string()),
         crate::shell_quote(&repo_root.display().to_string())
     );
-    let output = std::process::Command::new("git")
+    let output = std::process::Command::new(&git_executable)
         .arg("-C")
         .arg(&repo_root)
+        .arg("-c")
+        .arg("core.fsmonitor=false")
         .args([
             "ls-files",
             "tmp*",
@@ -1594,6 +1639,8 @@ fn task_closeout_temp_scan(
             "undefined",
             "nul",
         ])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GIT_CONFIG_GLOBAL")
         .output();
     let output = match output {
         Ok(output) => output,
