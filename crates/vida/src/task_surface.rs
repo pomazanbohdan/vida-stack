@@ -3848,6 +3848,24 @@ fn normalize_proof_target_commands(values: Vec<String>) -> Vec<String> {
     taskflow_core::task::update::normalize_proof_target_commands(values)
 }
 
+fn release_proof_template_targets() -> Vec<String> {
+    vec![
+        "cargo check -p vida --tests".to_string(),
+        "vida task validate-graph --json".to_string(),
+        "vida release install --json".to_string(),
+        "vida --version".to_string(),
+        "vida status --json".to_string(),
+        "vida doctor --json".to_string(),
+    ]
+}
+
+fn append_release_proof_template_targets(mut proof_targets: Vec<String>) -> Vec<String> {
+    proof_targets.extend(release_proof_template_targets());
+    proof_targets.sort();
+    proof_targets.dedup();
+    proof_targets
+}
+
 fn parse_optional_label_value(value: Option<&str>) -> Option<Vec<String>> {
     taskflow_core::task::update::parse_optional_label_value(value)
 }
@@ -3859,6 +3877,7 @@ fn task_update_planner_metadata_requested(command: &crate::TaskUpdateArgs) -> bo
         || !command.acceptance_target_literals.is_empty()
         || !command.proof_targets.is_empty()
         || !command.proof_target_literals.is_empty()
+        || command.release_proof_template
         || command.clear_proof_targets
 }
 
@@ -3872,10 +3891,14 @@ fn task_create_planner_metadata_arg(command: &TaskCreateArgs) -> state_store::Ta
             &command.acceptance_targets,
             &command.acceptance_target_literals,
         ),
-        proof_targets: parse_mixed_proof_target_values(
-            &command.proof_targets,
-            &command.proof_target_literals,
-        ),
+        proof_targets: if command.release_proof_template {
+            append_release_proof_template_targets(parse_mixed_proof_target_values(
+                &command.proof_targets,
+                &command.proof_target_literals,
+            ))
+        } else {
+            parse_mixed_proof_target_values(&command.proof_targets, &command.proof_target_literals)
+        },
         ..state_store::TaskPlannerMetadata::default()
     }
 }
@@ -3900,11 +3923,13 @@ fn task_update_planner_metadata_arg(
     if !acceptance_targets.is_empty() {
         metadata.acceptance_targets = acceptance_targets;
     }
-    if (!command.proof_targets.is_empty() || !command.proof_target_literals.is_empty())
+    if (!command.proof_targets.is_empty()
+        || !command.proof_target_literals.is_empty()
+        || command.release_proof_template)
         && command.clear_proof_targets
     {
         return Err(
-            "Use either --proof-target/--proof-target-literal or --clear-proof-targets, not both."
+            "Use either --proof-target/--proof-target-literal/--release-proof-template or --clear-proof-targets, not both."
                 .to_string(),
         );
     }
@@ -3913,7 +3938,17 @@ fn task_update_planner_metadata_arg(
     } else {
         let proof_targets =
             parse_mixed_proof_target_values(&command.proof_targets, &command.proof_target_literals);
-        if !proof_targets.is_empty() {
+        if command.release_proof_template {
+            metadata.proof_targets =
+                append_release_proof_template_targets(metadata.proof_targets.clone());
+            metadata.proof_targets.extend(
+                proof_targets
+                    .into_iter()
+                    .filter(|target| !target.trim().is_empty()),
+            );
+            metadata.proof_targets.sort();
+            metadata.proof_targets.dedup();
+        } else if !proof_targets.is_empty() {
             metadata.proof_targets = proof_targets;
         }
     }
@@ -15016,6 +15051,7 @@ mod tests {
             acceptance_target_literals: Vec::new(),
             proof_targets: Vec::new(),
             proof_target_literals: Vec::new(),
+            release_proof_template: false,
             state_dir: None,
             render: crate::RenderMode::Plain,
             json: false,
@@ -15327,6 +15363,74 @@ mod tests {
                 "vida docflow protocol-coverage-check --profile active-canon",
             ]
         );
+    }
+
+    #[test]
+    fn task_create_release_proof_template_adds_standard_targets() {
+        let mut command = minimal_task_create_args(Some("Runtime defect"), None);
+        command.issue_type = "runtime_defect".to_string();
+        command.proof_targets = vec![
+            "cargo test -p vida --test task_smoke focused_release_template -- --nocapture"
+                .to_string(),
+        ];
+        command.release_proof_template = true;
+
+        let metadata = task_create_planner_metadata_arg(&command);
+
+        assert!(metadata.proof_targets.contains(
+            &"cargo test -p vida --test task_smoke focused_release_template -- --nocapture"
+                .to_string()
+        ));
+        assert!(metadata
+            .proof_targets
+            .contains(&"cargo check -p vida --tests".to_string()));
+        assert!(metadata
+            .proof_targets
+            .contains(&"vida release install --json".to_string()));
+        assert!(metadata
+            .proof_targets
+            .contains(&"vida doctor --json".to_string()));
+    }
+
+    #[test]
+    fn task_update_release_proof_template_preserves_existing_targets() {
+        let existing = crate::state_store::TaskPlannerMetadata {
+            proof_targets: vec!["cargo test -p vida existing_focus -- --nocapture".to_string()],
+            ..Default::default()
+        };
+        let command = crate::TaskUpdateArgs {
+            task_id: "runtime-defect".to_string(),
+            proof_targets: vec!["cargo test -p vida new_focus -- --nocapture".to_string()],
+            release_proof_template: true,
+            ..Default::default()
+        };
+
+        let metadata = task_update_planner_metadata_arg(&existing, &command)
+            .expect("release proof template update should pass")
+            .expect("release proof template should request metadata");
+
+        assert!(metadata
+            .proof_targets
+            .contains(&"cargo test -p vida existing_focus -- --nocapture".to_string()));
+        assert!(metadata
+            .proof_targets
+            .contains(&"cargo test -p vida new_focus -- --nocapture".to_string()));
+        assert!(metadata
+            .proof_targets
+            .contains(&"vida task validate-graph --json".to_string()));
+        assert!(metadata
+            .proof_targets
+            .contains(&"vida release install --json".to_string()));
+
+        let clear_conflict = crate::TaskUpdateArgs {
+            task_id: "runtime-defect".to_string(),
+            release_proof_template: true,
+            clear_proof_targets: true,
+            ..Default::default()
+        };
+        let error = task_update_planner_metadata_arg(&existing, &clear_conflict)
+            .expect_err("release proof template should conflict with clear");
+        assert!(error.contains("--release-proof-template"));
     }
 
     #[test]

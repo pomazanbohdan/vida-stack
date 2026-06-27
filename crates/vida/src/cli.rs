@@ -2012,6 +2012,12 @@ pub(crate) struct TaskCreateArgs {
     pub(crate) proof_target_literals: Vec<String>,
 
     #[arg(
+        long = "release-proof-template",
+        help = "Append standard release/install proof targets for runtime-defect closeout"
+    )]
+    pub(crate) release_proof_template: bool,
+
+    #[arg(
         long = "state-dir",
         env = "VIDA_STATE_DIR",
         help = "Override the TaskFlow state directory for this command"
@@ -2136,6 +2142,12 @@ pub(crate) struct TaskUpdateArgs {
         help = "Planner metadata proof target to replace without comma splitting. Repeat for long prose values."
     )]
     pub(crate) proof_target_literals: Vec<String>,
+
+    #[arg(
+        long = "release-proof-template",
+        help = "Append standard release/install proof targets while preserving existing proof targets"
+    )]
+    pub(crate) release_proof_template: bool,
 
     #[arg(
         long = "clear-proof-targets",

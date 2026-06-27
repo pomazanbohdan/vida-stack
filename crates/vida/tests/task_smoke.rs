@@ -2981,6 +2981,90 @@ fn task_close_feedback_ignores_if_blocked_process_field_in_task_notes() {
 }
 
 #[test]
+fn task_release_proof_template_create_and_update_cli() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    create_epic_parent(
+        &state_dir,
+        "release-proof-template-parent",
+        "Release proof template parent",
+        "open",
+    );
+
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            "release-proof-template-task",
+            "Release proof template task",
+            "--type",
+            "runtime_defect",
+            "--parent-id",
+            "release-proof-template-parent",
+            "--release-proof-template",
+            "--proof-target",
+            "cargo test -p vida focused_template -- --nocapture",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let created_targets = require_json_string_array(
+        &created["task"]["planner_metadata"]["proof_targets"],
+        "created proof targets",
+    );
+    assert!(
+        created_targets.contains(&"cargo test -p vida focused_template -- --nocapture".to_string())
+    );
+    assert!(created_targets.contains(&"cargo check -p vida --tests".to_string()));
+    assert!(created_targets.contains(&"vida release install --json".to_string()));
+    assert!(created_targets.contains(&"vida task validate-graph --json".to_string()));
+
+    let updated = run_command_json(
+        &[
+            "task",
+            "update",
+            "release-proof-template-task",
+            "--release-proof-template",
+            "--proof-target",
+            "cargo test -p vida second_focus -- --nocapture",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let updated_targets = require_json_string_array(
+        &updated["task"]["planner_metadata"]["proof_targets"],
+        "updated proof targets",
+    );
+    assert!(
+        updated_targets.contains(&"cargo test -p vida focused_template -- --nocapture".to_string())
+    );
+    assert!(updated_targets.contains(&"cargo test -p vida second_focus -- --nocapture".to_string()));
+    assert!(updated_targets.contains(&"vida doctor --json".to_string()));
+    assert!(updated_targets.contains(&"vida --version".to_string()));
+
+    let create_help = run_and_assert_success(&["task", "create", "--help"], &state_dir);
+    assert!(create_help.contains("--release-proof-template"));
+    let update_help = run_and_assert_success(&["task", "update", "--help"], &state_dir);
+    assert!(update_help.contains("--release-proof-template"));
+
+    let (_stdout, stderr) = run_and_assert_failure(
+        &[
+            "task",
+            "update",
+            "release-proof-template-task",
+            "--release-proof-template",
+            "--clear-proof-targets",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(stderr.contains("--release-proof-template"));
+    assert!(stderr.contains("--clear-proof-targets"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn taskflow_factual_sandbox_h1_h3_cli_task_graph() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
