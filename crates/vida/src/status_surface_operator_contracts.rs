@@ -39,6 +39,28 @@ pub(crate) struct StatusOperatorContractInputs<'a> {
     pub(crate) operator_session_projection: &'a serde_json::Value,
 }
 
+pub(crate) struct LatestRunGraphArtifactRefsInputs<'a> {
+    pub(crate) run_id: Option<&'a str>,
+    pub(crate) task_id: Option<&'a str>,
+    pub(crate) run_id_source: Option<&'a str>,
+    pub(crate) task_id_source: Option<&'a str>,
+    pub(crate) dispatch_receipt_id: Option<&'a str>,
+    pub(crate) dispatch_packet_path: Option<&'a str>,
+}
+
+pub(crate) fn latest_run_graph_artifact_refs(
+    inputs: LatestRunGraphArtifactRefsInputs<'_>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "latest_run_graph_status_run_id": inputs.run_id,
+        "latest_run_graph_status_task_id": inputs.task_id,
+        "latest_run_graph_status_run_id_source": inputs.run_id_source,
+        "latest_run_graph_status_task_id_source": inputs.task_id_source,
+        "latest_run_graph_dispatch_receipt_id": inputs.dispatch_receipt_id,
+        "latest_run_graph_dispatch_packet_path": inputs.dispatch_packet_path,
+    })
+}
+
 pub(crate) fn build_status_operator_contracts(
     inputs: StatusOperatorContractInputs<'_>,
 ) -> Result<serde_json::Value, String> {
@@ -307,15 +329,17 @@ pub(crate) fn build_status_operator_contracts(
             &operator_blocker_codes,
         ),
     );
-    let operator_artifact_refs = serde_json::json!({
+    let latest_run_graph_refs = latest_run_graph_artifact_refs(LatestRunGraphArtifactRefsInputs {
+        run_id: inputs.latest_run_graph_status_run_id,
+        task_id: inputs.latest_run_graph_status_task_id,
+        run_id_source: inputs.latest_run_graph_status_run_id_source,
+        task_id_source: inputs.latest_run_graph_status_task_id_source,
+        dispatch_receipt_id: inputs.latest_run_graph_dispatch_receipt_id,
+        dispatch_packet_path: inputs.latest_run_graph_dispatch_packet_path,
+    });
+    let mut operator_artifact_refs = serde_json::json!({
         "runtime_consumption_latest_snapshot_path": inputs.latest_final_snapshot_path
             .or(inputs.runtime_consumption.latest_snapshot_path.as_deref()),
-        "latest_run_graph_status_run_id": inputs.latest_run_graph_status_run_id,
-        "latest_run_graph_status_task_id": inputs.latest_run_graph_status_task_id,
-        "latest_run_graph_status_run_id_source": inputs.latest_run_graph_status_run_id_source,
-        "latest_run_graph_status_task_id_source": inputs.latest_run_graph_status_task_id_source,
-        "latest_run_graph_dispatch_receipt_id": inputs.latest_run_graph_dispatch_receipt_id,
-        "latest_run_graph_dispatch_packet_path": inputs.latest_run_graph_dispatch_packet_path,
         "principal_delegation_projection_state": if !inputs.latest_run_graph_gate_present {
             "absent"
         } else if inputs.latest_run_graph_dispatch_receipt_id.is_none() {
@@ -339,6 +363,16 @@ pub(crate) fn build_status_operator_contracts(
             inputs.operator_session_projection
         ),
     });
+    if let (Some(target), Some(source)) = (
+        operator_artifact_refs.as_object_mut(),
+        latest_run_graph_refs.as_object(),
+    ) {
+        target.extend(
+            source
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    }
     let finalized = crate::release1_operator_output::finalize_release1_operator_truth(
         operator_blocker_codes,
         operator_next_actions,

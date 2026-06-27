@@ -263,6 +263,25 @@ fn run_and_assert_success(args: &[&str], state_dir: &str) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+fn run_and_assert_success_with_session(args: &[&str], state_dir: &str, session_id: &str) -> String {
+    let output = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(args)
+            .env("VIDA_STATE_DIR", state_dir)
+            .env("VIDA_SESSION_ID", session_id);
+        command
+    });
+    assert!(
+        output.status.success(),
+        "args: {args:?}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 fn run_and_assert_success_without_state_dir(args: &[&str]) -> String {
     let output = run_with_state_lock_retry(|| {
         let mut command = vida();
@@ -310,6 +329,29 @@ fn run_command_json(args: &[&str], state_dir: &str) -> serde_json::Value {
     let output = run_with_state_lock_retry(|| {
         let mut command = vida();
         command.args(args).env("VIDA_STATE_DIR", state_dir);
+        command
+    });
+    assert!(
+        output.status.success(),
+        "args: {args:?}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("json output should parse")
+}
+
+fn run_command_json_with_session(
+    args: &[&str],
+    state_dir: &str,
+    session_id: &str,
+) -> serde_json::Value {
+    let output = run_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(args)
+            .env("VIDA_STATE_DIR", state_dir)
+            .env("VIDA_SESSION_ID", session_id);
         command
     });
     assert!(
@@ -15883,6 +15925,85 @@ fn doctor_latest_run_matches_recovery_latest() {
 }
 
 #[test]
+fn doctor_latest_artifact_refs_do_not_alias_current_session_refs() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "doctor-latest-current-divergence-parent";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Doctor latest current divergence parent",
+        "open",
+    );
+    let current_task_id = "doctor-current-session-task";
+    let latest_task_id = "doctor-global-latest-task";
+    for task_id in [current_task_id, latest_task_id] {
+        let created = run_command_json(
+            &[
+                "task",
+                "create",
+                task_id,
+                task_id,
+                "--type",
+                "task",
+                "--status",
+                "in_progress",
+                "--priority",
+                "1",
+                "--parent-id",
+                parent_id,
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(created["status"], "pass");
+    }
+
+    let _ = run_and_assert_success_with_session(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            current_task_id,
+            "implementation",
+        ],
+        &state_dir,
+        "doctor-current-session",
+    );
+    let _ = run_and_assert_success_with_session(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            latest_task_id,
+            "implementation",
+        ],
+        &state_dir,
+        "doctor-latest-session",
+    );
+
+    let doctor =
+        run_command_json_with_session(&["doctor", "--json"], &state_dir, "doctor-current-session");
+    assert_eq!(
+        doctor["latest_run_graph_status"]["task_id"], latest_task_id,
+        "doctor latest status should remain the global/latest run: {doctor}"
+    );
+    assert_eq!(
+        doctor["artifact_refs"]["latest_run_graph_status_task_id"], latest_task_id,
+        "doctor latest artifact refs must mirror latest status, not current-session refs: {doctor}"
+    );
+    assert_ne!(
+        doctor["artifact_refs"]["latest_run_graph_status_task_id"],
+        doctor["artifact_refs"]["current_session_run_graph_status_task_id"],
+        "doctor latest artifact refs must not alias current-session refs: {doctor}"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn doctor_detects_closed_task_active_run() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -21887,6 +22008,21 @@ fn status_and_doctor_block_on_current_session_run_graph_snapshot_inconsistency()
         assert_eq!(
             doctor["artifact_refs"]["current_session_run_graph_status_task_id"],
             expected_task_id
+        );
+        assert_eq!(
+            doctor["artifact_refs"]["latest_run_graph_status_run_id"],
+            expected_run_id
+        );
+        assert_eq!(
+            doctor["artifact_refs"]["latest_run_graph_status_task_id"],
+            expected_task_id
+        );
+        assert_eq!(
+            doctor["artifact_refs"]["latest_run_graph_dispatch_packet_path"]
+                .as_str()
+                .expect("doctor latest packet path should render")
+                .replace('\\', "/"),
+            expected_packet_path.replace('\\', "/")
         );
         assert!(
             !doctor["artifact_refs"]["current_session_run_graph_status_run_id_source"].is_null(),

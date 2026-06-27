@@ -8,6 +8,9 @@ use crate::contract_profile_adapter::{
     CompatibilityBoundary, CompatibilityClass,
 };
 use crate::status_surface::{first_non_empty_artifact_ref, StatusRunGraphArtifactSource};
+use crate::status_surface_operator_contracts::{
+    latest_run_graph_artifact_refs, LatestRunGraphArtifactRefsInputs,
+};
 
 fn migration_requires_action(migration_state: &str) -> bool {
     !matches!(migration_state, "none_required" | "no_migration_required")
@@ -1270,10 +1273,18 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 let current_session_run_graph_dispatch_packet_path =
                     current_session_run_graph_dispatch_receipt
                         .and_then(|receipt| receipt.dispatch_packet_path.as_deref());
+                let latest_run_graph_dispatch_packet_path = latest_run_graph_dispatch_receipt
+                    .as_ref()
+                    .and_then(|receipt| receipt.dispatch_packet_path.as_deref());
                 let current_session_run_graph_packet_refs =
                     crate::status_surface::status_dispatch_packet_refs(
                         std::path::Path::new(&launcher_runtime_paths.project_root),
                         current_session_run_graph_dispatch_packet_path,
+                    );
+                let latest_run_graph_packet_refs =
+                    crate::status_surface::status_dispatch_packet_refs(
+                        std::path::Path::new(&launcher_runtime_paths.project_root),
+                        latest_run_graph_dispatch_packet_path,
                     );
                 let (
                     current_session_run_graph_artifact_run_id,
@@ -1310,7 +1321,52 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         StatusRunGraphArtifactSource::DispatchPacket,
                     ),
                 ]);
-                let operator_artifact_refs = serde_json::json!({
+                let (latest_run_graph_artifact_run_id, latest_run_graph_artifact_run_id_source) =
+                    first_non_empty_artifact_ref(&[
+                        (
+                            latest_run_graph_status
+                                .as_ref()
+                                .map(|status| status.run_id.as_str()),
+                            StatusRunGraphArtifactSource::Status,
+                        ),
+                        (
+                            latest_run_graph_dispatch_receipt
+                                .as_ref()
+                                .map(|receipt| receipt.run_id.as_str()),
+                            StatusRunGraphArtifactSource::DispatchReceipt,
+                        ),
+                        (
+                            latest_run_graph_packet_refs.run_id.as_deref(),
+                            StatusRunGraphArtifactSource::DispatchPacket,
+                        ),
+                    ]);
+                let (latest_run_graph_artifact_task_id, latest_run_graph_artifact_task_id_source) =
+                    first_non_empty_artifact_ref(&[
+                        (
+                            latest_run_graph_status
+                                .as_ref()
+                                .map(|status| status.task_id.as_str()),
+                            StatusRunGraphArtifactSource::Status,
+                        ),
+                        (
+                            latest_run_graph_packet_refs.task_id.as_deref(),
+                            StatusRunGraphArtifactSource::DispatchPacket,
+                        ),
+                    ]);
+                let latest_run_graph_refs =
+                    latest_run_graph_artifact_refs(LatestRunGraphArtifactRefsInputs {
+                        run_id: latest_run_graph_artifact_run_id,
+                        task_id: latest_run_graph_artifact_task_id,
+                        run_id_source: latest_run_graph_artifact_run_id_source
+                            .map(StatusRunGraphArtifactSource::as_str),
+                        task_id_source: latest_run_graph_artifact_task_id_source
+                            .map(StatusRunGraphArtifactSource::as_str),
+                        dispatch_receipt_id: latest_run_graph_dispatch_receipt
+                            .as_ref()
+                            .map(|receipt| receipt.run_id.as_str()),
+                        dispatch_packet_path: latest_run_graph_dispatch_packet_path,
+                    });
+                let mut operator_artifact_refs = serde_json::json!({
                     "runtime_consumption_latest_snapshot_path": evidence_snapshot_path,
                     "current_session_run_graph_status_run_id": current_session_run_graph_artifact_run_id,
                     "current_session_run_graph_status_task_id": current_session_run_graph_artifact_task_id,
@@ -1330,9 +1386,6 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     "current_session_run_graph_dispatch_receipt_id": current_session_run_graph_dispatch_receipt
                         .map(|receipt| receipt.run_id.clone()),
                     "current_session_run_graph_dispatch_packet_path": current_session_run_graph_dispatch_packet_path,
-                    "latest_run_graph_dispatch_receipt_id": latest_run_graph_dispatch_receipt
-                        .as_ref()
-                        .map(|receipt| receipt.run_id.clone()),
                     "protocol_binding_latest_receipt_id": protocol_binding.latest_receipt_id,
                     "retrieval_trust_signal": retrieval_trust_signal,
                     "recovery_readiness_target": recovery_readiness_target_evidence(
@@ -1353,6 +1406,16 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         &operator_session_projection
                     ),
                 });
+                if let (Some(target), Some(source)) = (
+                    operator_artifact_refs.as_object_mut(),
+                    latest_run_graph_refs.as_object(),
+                ) {
+                    target.extend(
+                        source
+                            .iter()
+                            .map(|(key, value)| (key.clone(), value.clone())),
+                    );
+                }
                 let finalized =
                     match crate::release1_operator_output::finalize_release1_operator_truth(
                         operator_blocker_codes,
