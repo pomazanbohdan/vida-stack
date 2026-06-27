@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke")]
+    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "release-install-status", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke")]
     [string]$Mode = "quick",
     [string]$Package = "vida",
     [string]$TestFilter = "",
@@ -189,7 +189,8 @@ function Test-ModeNeedsWindowsBuildEnvironment {
         "build-debug",
         "runtime-smoke",
         "coverage",
-        "release-install"
+        "release-install",
+        "release-install-status"
     )
 }
 
@@ -255,6 +256,8 @@ Modes:
   coverage          Default test coverage gate: cargo llvm-cov LCOV, cargo-crap JSON, vida quality gate.
   release-package   Build release archives with native PowerShell scripts/build-release.ps1.
   release-install   Installed launcher proof through vida release install.
+  release-install-status
+                    Non-build summary of latest release-install artifacts, progress, and installed status.
   target-dir-policy Print the effective Cargo target directory policy.
   proof-scheduler   Run proof command snippets: non-Cargo in parallel, Cargo-like sequentially.
 
@@ -697,7 +700,8 @@ function Test-TransientInstalledVidaStatusFailure {
 function Invoke-InstalledVidaStatusWithRetry {
     param(
         [string[]]$Command,
-        [int]$MaxAttempts = 6
+        [int]$MaxAttempts = 6,
+        [switch]$ReturnRecordOnFailure
     )
 
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
@@ -795,7 +799,121 @@ function Invoke-InstalledVidaStatusWithRetry {
                 }
             }
         }
+        if ($ReturnRecordOnFailure) {
+            return
+        }
         exit $exitCode
+    }
+}
+
+function Read-DevGateJsonFile {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $content = Get-Content -LiteralPath $Path -Encoding UTF8 -Raw
+        if ([string]::IsNullOrWhiteSpace($content)) {
+            return $null
+        }
+        return $content | ConvertFrom-Json
+    } catch {
+        return [pscustomobject]@{
+            parse_status = "failed"
+            path = $Path
+            error = $_.Exception.Message
+        }
+    }
+}
+
+function Get-ReleaseInstallStatusSummaryExitStatus {
+    param(
+        [AllowNull()][object]$ProgressSummary,
+        [AllowNull()][object]$InstalledStatusRecord
+    )
+
+    $releaseStatus = if ($null -ne $ProgressSummary -and $ProgressSummary.PSObject.Properties.Name -contains "status") {
+        [string]$ProgressSummary.status
+    } else {
+        "missing"
+    }
+    $installedStatus = if ($null -ne $InstalledStatusRecord -and $InstalledStatusRecord.PSObject.Properties.Name -contains "exit_status") {
+        [string]$InstalledStatusRecord.exit_status
+    } else {
+        "missing"
+    }
+
+    if ($releaseStatus -eq "pass" -and $installedStatus -eq "pass") {
+        return "pass"
+    }
+    if ($releaseStatus -eq "missing") {
+        return "blocked"
+    }
+    return "fail"
+}
+
+function Assert-ReleaseInstallStatusSummaryExitStatus {
+    param(
+        [string]$CaseName,
+        [AllowNull()][object]$ProgressSummary,
+        [AllowNull()][object]$InstalledStatusRecord,
+        [string]$Expected
+    )
+
+    $actual = Get-ReleaseInstallStatusSummaryExitStatus -ProgressSummary $ProgressSummary -InstalledStatusRecord $InstalledStatusRecord
+    if ($actual -ne $Expected) {
+        throw "release-install-status summary smoke failed for ${CaseName}: expected $Expected, got $actual."
+    }
+    Add-SkippedRecord "release-install-status-summary:$CaseName" "contract smoke expected $Expected"
+    $Records[$Records.Count - 1].exit_status = "pass"
+}
+
+function Invoke-ReleaseInstallStatusSummary {
+    $started = Get-Date
+    $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
+    $latestArtifactPath = Join-Path $logDir "latest-release-install-artifacts.json"
+    $progressLatestPath = Join-Path $RootDir ".vida\data\state\release-install-progress\latest.json"
+    $artifactSummary = Read-DevGateJsonFile -Path $latestArtifactPath
+    $progressSummary = Read-DevGateJsonFile -Path $progressLatestPath
+    $artifactRefs = @($latestArtifactPath, $progressLatestPath)
+    $previousVidaStateDir = $env:VIDA_STATE_DIR
+    $statusStateDir = Resolve-PrimaryWorktreeStateDir
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($statusStateDir)) {
+            $env:VIDA_STATE_DIR = $statusStateDir
+        }
+        Invoke-InstalledVidaStatusWithRetry -Command @((Resolve-InstalledVidaPath), "status", "--json") -ReturnRecordOnFailure
+    } finally {
+        if ($null -eq $previousVidaStateDir) {
+            Remove-Item Env:VIDA_STATE_DIR -ErrorAction SilentlyContinue
+        } else {
+            $env:VIDA_STATE_DIR = $previousVidaStateDir
+        }
+    }
+
+    $installedStatusRecord = $Records[$Records.Count - 1]
+    $exitStatus = Get-ReleaseInstallStatusSummaryExitStatus -ProgressSummary $progressSummary -InstalledStatusRecord $installedStatusRecord
+
+    $Records.Add([pscustomobject]@{
+        operation_id = "release-install-status-summary"
+        command_or_surface = "scripts/vida-dev-gate.ps1 -Mode release-install-status"
+        cwd_or_context = $RootDir
+        started_at = $started.ToString("o")
+        duration_ms = [int64]((Get-Date) - $started).TotalMilliseconds
+        exit_status = $exitStatus
+        classification = "fast"
+        target_dir_policy = $CargoTargetDirState.target_dir_policy
+        effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+        artifact_refs = $artifactRefs
+        release_install_latest_artifacts = $artifactSummary
+        release_install_progress_latest = $progressSummary
+        installed_status_record = $installedStatusRecord
+    })
+
+    if ($exitStatus -ne "pass") {
+        exit 2
     }
 }
 
@@ -1447,6 +1565,41 @@ exit 0
         if ($statusRecords[-1].exit_status -ne "pass") {
             throw "installed-vida-status retry smoke failed: final attempt status was $($statusRecords[-1].exit_status)."
         }
+        Assert-ReleaseInstallStatusSummaryExitStatus `
+            -CaseName "pass" `
+            -ProgressSummary ([pscustomobject]@{ status = "pass" }) `
+            -InstalledStatusRecord ([pscustomobject]@{ exit_status = "pass" }) `
+            -Expected "pass"
+        Assert-ReleaseInstallStatusSummaryExitStatus `
+            -CaseName "failed-progress" `
+            -ProgressSummary ([pscustomobject]@{ status = "fail" }) `
+            -InstalledStatusRecord ([pscustomobject]@{ exit_status = "pass" }) `
+            -Expected "fail"
+        Assert-ReleaseInstallStatusSummaryExitStatus `
+            -CaseName "failed-installed-status" `
+            -ProgressSummary ([pscustomobject]@{ status = "pass" }) `
+            -InstalledStatusRecord ([pscustomobject]@{ exit_status = "fail" }) `
+            -Expected "fail"
+        Assert-ReleaseInstallStatusSummaryExitStatus `
+            -CaseName "missing-progress" `
+            -ProgressSummary $null `
+            -InstalledStatusRecord ([pscustomobject]@{ exit_status = "pass" }) `
+            -Expected "blocked"
+        $statusFailProbePath = Join-Path $probeDir "installed-status-fail-probe.ps1"
+        Set-Content -LiteralPath $statusFailProbePath -Encoding UTF8 -Value @'
+[Console]::Error.WriteLine("installed status hard failure")
+exit 3
+'@
+        Invoke-InstalledVidaStatusWithRetry -Command @($PwshPath, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $statusFailProbePath) -MaxAttempts 1 -ReturnRecordOnFailure
+        $failedStatusRecord = $Records[$Records.Count - 1]
+        if ($failedStatusRecord.operation_id -ne "installed-vida-status" -or $failedStatusRecord.exit_status -ne "fail") {
+            throw "installed-vida-status non-exiting failure smoke failed: expected final fail record."
+        }
+        Assert-ReleaseInstallStatusSummaryExitStatus `
+            -CaseName "returned-installed-status-failure" `
+            -ProgressSummary ([pscustomobject]@{ status = "pass" }) `
+            -InstalledStatusRecord $failedStatusRecord `
+            -Expected "fail"
         Invoke-Timed "cargo-timing-contract-smoke" @("cargo", "--version")
         $cargoRecord = $Records[$Records.Count - 1]
         if ($null -eq $cargoRecord.cargo) {
@@ -1485,7 +1638,7 @@ exit 0
         if ([datetime]$cargoRecords[1].started_at -lt ([datetime]$cargoRecords[0].started_at).AddMilliseconds($cargoRecords[0].duration_ms)) {
             throw "proof scheduler smoke failed: Cargo commands overlapped."
         }
-        Remove-Item -LiteralPath $retryProbePath, $retryMarkerPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $retryProbePath, $retryMarkerPath, $statusFailProbePath -Force -ErrorAction SilentlyContinue
     } elseif ($Mode -eq "script-check") {
         Invoke-DiffWhitespaceCheck
         Invoke-RootReadmeOnlyCheck
@@ -1635,6 +1788,8 @@ exit 0
                 $env:VIDA_STATE_DIR = $previousVidaStateDir
             }
         }
+    } elseif ($Mode -eq "release-install-status") {
+        Invoke-ReleaseInstallStatusSummary
     }
 } finally {
     Pop-Location
