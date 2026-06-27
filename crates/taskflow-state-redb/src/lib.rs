@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Component, Path};
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
@@ -36,6 +37,8 @@ const TASKFLOW_SNAPSHOT_TASK_TABLE: TableDefinition<&str, &[u8]> =
     TableDefinition::new("taskflow_snapshot_task_by_id");
 const TASKFLOW_SNAPSHOT_DEPENDENCY_TABLE: TableDefinition<&str, &[u8]> =
     TableDefinition::new("taskflow_snapshot_dependency_by_key");
+const TASKFLOW_SNAPSHOT_SOURCE_METADATA_TABLE: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("taskflow_snapshot_source_metadata_by_entity");
 const SCHEMA_VERSION_KEY: &str = "schema_version";
 const SCHEMA_VERSION: &str = "1";
 
@@ -177,6 +180,31 @@ pub struct RedbTaskflowSnapshotParity {
     pub dependency_count: usize,
     pub task_hash: String,
     pub dependency_hash: String,
+    pub source_kind: String,
+    pub source_ref: String,
+    pub source_hash: String,
+    pub normalization_finding: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedbLegacySnapshotNormalizationFinding {
+    pub entity_kind: String,
+    pub entity_ref: String,
+    pub source_kind: String,
+    pub source_ref: String,
+    pub source_hash: String,
+    pub status: String,
+    pub finding: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedbTaskflowSnapshotImportPreview {
+    pub status: String,
+    pub source_kind: String,
+    pub source_ref: String,
+    pub source_hash: String,
+    pub normalization_findings: Vec<RedbLegacySnapshotNormalizationFinding>,
+    pub quarantine_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -326,6 +354,9 @@ impl RedbOperationalJournal {
                 .map_err(storage_error)?;
             let _ = write
                 .open_table(TASKFLOW_SNAPSHOT_DEPENDENCY_TABLE)
+                .map_err(storage_error)?;
+            let _ = write
+                .open_table(TASKFLOW_SNAPSHOT_SOURCE_METADATA_TABLE)
                 .map_err(storage_error)?;
         }
         write.commit().map_err(storage_error)
@@ -714,8 +745,36 @@ impl RedbOperationalJournal {
         &self,
         snapshot: &taskflow_state_fs::TaskSnapshot,
     ) -> Result<RedbTaskflowSnapshotParity, TaskflowStateError> {
+        let preview = taskflow_snapshot_import_preview(
+            snapshot,
+            "memory_snapshot",
+            "taskflow_state_fs::TaskSnapshot",
+            taskflow_snapshot_source_hash(snapshot),
+        );
+        self.replace_taskflow_snapshot_with_preview(snapshot, preview)
+    }
+
+    fn replace_taskflow_snapshot_with_preview(
+        &self,
+        snapshot: &taskflow_state_fs::TaskSnapshot,
+        preview: RedbTaskflowSnapshotImportPreview,
+    ) -> Result<RedbTaskflowSnapshotParity, TaskflowStateError> {
+        if preview.quarantine_count > 0 {
+            return Err(TaskflowStateError::Storage(format!(
+                "taskflow snapshot import quarantined {} finding(s): {}",
+                preview.quarantine_count,
+                preview
+                    .normalization_findings
+                    .iter()
+                    .filter(|finding| finding.status == "quarantined")
+                    .map(|finding| finding.finding.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )));
+        }
         let normalized = normalize_taskflow_snapshot(snapshot);
         validate_taskflow_snapshot_storage_keys(&normalized)?;
+        let metadata = preview.normalization_findings;
         let write = self.db.begin_write().map_err(storage_error)?;
         {
             let mut tasks = write
@@ -747,9 +806,78 @@ impl RedbOperationalJournal {
                     .insert(key.as_str(), payload.as_slice())
                     .map_err(storage_error)?;
             }
+            drop(dependencies);
+
+            let mut source_metadata = write
+                .open_table(TASKFLOW_SNAPSHOT_SOURCE_METADATA_TABLE)
+                .map_err(storage_error)?;
+            let metadata_keys = table_keys(&source_metadata)?;
+            for key in metadata_keys {
+                source_metadata
+                    .remove(key.as_str())
+                    .map_err(storage_error)?;
+            }
+            for finding in &metadata {
+                let key = taskflow_snapshot_source_metadata_key(finding);
+                let payload = serde_json::to_vec(finding).map_err(storage_error)?;
+                source_metadata
+                    .insert(key.as_str(), payload.as_slice())
+                    .map_err(storage_error)?;
+            }
         }
         write.commit().map_err(storage_error)?;
         self.taskflow_snapshot_parity(&normalized)
+    }
+
+    pub fn replace_taskflow_snapshot_from_file(
+        &self,
+        snapshot_path: impl AsRef<Path>,
+    ) -> Result<RedbTaskflowSnapshotParity, TaskflowStateError> {
+        let snapshot_path = snapshot_path.as_ref();
+        let source_bytes = fs::read(snapshot_path).map_err(storage_error)?;
+        let snapshot = taskflow_state_fs::read_snapshot(snapshot_path).map_err(storage_error)?;
+        let preview = taskflow_snapshot_import_preview(
+            &snapshot,
+            "file_snapshot",
+            snapshot_path.display().to_string(),
+            format!("sha256:{}", sha256_hex(&source_bytes)),
+        );
+        if preview.quarantine_count > 0 {
+            return Err(TaskflowStateError::Storage(format!(
+                "taskflow snapshot import quarantined {} finding(s): {}",
+                preview.quarantine_count,
+                preview
+                    .normalization_findings
+                    .iter()
+                    .filter(|finding| finding.status == "quarantined")
+                    .map(|finding| finding.finding.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )));
+        }
+        let mut report = self.replace_taskflow_snapshot_with_preview(&snapshot, preview)?;
+        report.source_kind = "file_snapshot".to_string();
+        report.source_ref = snapshot_path.display().to_string();
+        report.source_hash = format!("sha256:{}", sha256_hex(&source_bytes));
+        Ok(report)
+    }
+
+    pub fn preview_taskflow_snapshot_import(
+        &self,
+        snapshot: &taskflow_state_fs::TaskSnapshot,
+    ) -> RedbTaskflowSnapshotImportPreview {
+        taskflow_snapshot_import_preview(
+            snapshot,
+            "memory_snapshot",
+            "taskflow_state_fs::TaskSnapshot",
+            taskflow_snapshot_source_hash(snapshot),
+        )
+    }
+
+    pub fn taskflow_snapshot_source_metadata(
+        &self,
+    ) -> Result<Vec<RedbLegacySnapshotNormalizationFinding>, TaskflowStateError> {
+        self.read_all(TASKFLOW_SNAPSHOT_SOURCE_METADATA_TABLE)
     }
 
     pub fn export_taskflow_snapshot(
@@ -784,6 +912,10 @@ impl RedbOperationalJournal {
             dependency_count: actual_fingerprint.dependency_count,
             task_hash: actual_fingerprint.task_hash,
             dependency_hash: actual_fingerprint.dependency_hash,
+            source_kind: expected_fingerprint.source_kind,
+            source_ref: expected_fingerprint.source_ref,
+            source_hash: expected_fingerprint.source_hash,
+            normalization_finding: expected_fingerprint.normalization_finding,
         })
     }
 
@@ -1519,6 +1651,85 @@ fn normalize_taskflow_snapshot(
     }
 }
 
+fn taskflow_snapshot_import_preview(
+    snapshot: &taskflow_state_fs::TaskSnapshot,
+    source_kind: impl Into<String>,
+    source_ref: impl Into<String>,
+    source_hash: impl Into<String>,
+) -> RedbTaskflowSnapshotImportPreview {
+    let source_kind = source_kind.into();
+    let source_ref = source_ref.into();
+    let source_hash = source_hash.into();
+    let mut findings = Vec::new();
+    let mut task_ids = BTreeSet::new();
+    for task in &snapshot.tasks {
+        let inserted = task_ids.insert(task.id.as_str().to_string());
+        findings.push(RedbLegacySnapshotNormalizationFinding {
+            entity_kind: "task".to_string(),
+            entity_ref: task.id.as_str().to_string(),
+            source_kind: source_kind.clone(),
+            source_ref: source_ref.clone(),
+            source_hash: source_hash.clone(),
+            status: if inserted {
+                "normalized"
+            } else {
+                "quarantined"
+            }
+            .to_string(),
+            finding: if inserted {
+                "task record accepted for deterministic normalized import".to_string()
+            } else {
+                format!(
+                    "taskflow snapshot import rejected duplicate task id: {}",
+                    task.id.as_str()
+                )
+            },
+        });
+    }
+
+    let mut dependency_keys = BTreeSet::new();
+    for dependency in &snapshot.dependencies {
+        let key = task_dependency_key(dependency);
+        let inserted = dependency_keys.insert(key.clone());
+        findings.push(RedbLegacySnapshotNormalizationFinding {
+            entity_kind: "dependency".to_string(),
+            entity_ref: key.clone(),
+            source_kind: source_kind.clone(),
+            source_ref: source_ref.clone(),
+            source_hash: source_hash.clone(),
+            status: if inserted {
+                "normalized"
+            } else {
+                "quarantined"
+            }
+            .to_string(),
+            finding: if inserted {
+                "dependency record accepted for deterministic normalized import".to_string()
+            } else {
+                format!("taskflow snapshot import rejected duplicate dependency key: {key}")
+            },
+        });
+    }
+
+    let quarantine_count = findings
+        .iter()
+        .filter(|finding| finding.status == "quarantined")
+        .count();
+    RedbTaskflowSnapshotImportPreview {
+        status: if quarantine_count == 0 {
+            "pass"
+        } else {
+            "quarantined"
+        }
+        .to_string(),
+        source_kind,
+        source_ref,
+        source_hash,
+        normalization_findings: findings,
+        quarantine_count,
+    }
+}
+
 fn validate_taskflow_snapshot_storage_keys(
     snapshot: &taskflow_state_fs::TaskSnapshot,
 ) -> Result<(), TaskflowStateError> {
@@ -1545,6 +1756,10 @@ fn validate_taskflow_snapshot_storage_keys(
     Ok(())
 }
 
+fn taskflow_snapshot_source_hash(snapshot: &taskflow_state_fs::TaskSnapshot) -> String {
+    stable_hash_hex(&serde_json::to_string(snapshot).unwrap_or_default())
+}
+
 fn taskflow_snapshot_fingerprint(
     snapshot: &taskflow_state_fs::TaskSnapshot,
 ) -> RedbTaskflowSnapshotParity {
@@ -1557,6 +1772,10 @@ fn taskflow_snapshot_fingerprint(
         dependency_hash: stable_hash_hex(
             &serde_json::to_string(&normalized.dependencies).unwrap_or_default(),
         ),
+        source_kind: "memory_snapshot".to_string(),
+        source_ref: "taskflow_state_fs::TaskSnapshot".to_string(),
+        source_hash: taskflow_snapshot_source_hash(&normalized),
+        normalization_finding: "normalized_sorted_unique_storage_keys".to_string(),
     }
 }
 
@@ -1567,6 +1786,12 @@ fn task_dependency_key(dependency: &DependencyEdge) -> String {
         dependency.depends_on_id.as_str(),
         dependency.dependency_type
     )
+}
+
+fn taskflow_snapshot_source_metadata_key(
+    finding: &RedbLegacySnapshotNormalizationFinding,
+) -> String {
+    format!("{}\u{1f}{}", finding.entity_kind, finding.entity_ref)
 }
 
 fn table_keys(table: &redb::Table<&str, &[u8]>) -> Result<Vec<String>, TaskflowStateError> {
@@ -3018,10 +3243,30 @@ mod tests {
 
         let journal = RedbOperationalJournal::create(&path).expect("create journal");
         let imported = journal
-            .replace_taskflow_snapshot(&file_snapshot)
+            .replace_taskflow_snapshot_from_file(&snapshot_path)
             .expect("redb shadow import should pass");
         assert_eq!(imported.task_count, 2);
         assert_eq!(imported.dependency_count, 1);
+        assert_eq!(imported.source_kind, "file_snapshot");
+        assert_eq!(imported.source_ref, snapshot_path.display().to_string());
+        assert!(imported.source_hash.starts_with("sha256:"));
+        assert_eq!(
+            imported.normalization_finding,
+            "normalized_sorted_unique_storage_keys"
+        );
+        let preview = journal.preview_taskflow_snapshot_import(&file_snapshot);
+        assert_eq!(preview.status, "pass");
+        assert_eq!(preview.quarantine_count, 0);
+        assert_eq!(
+            preview.normalization_findings.len(),
+            file_snapshot.tasks.len() + file_snapshot.dependencies.len()
+        );
+        assert!(preview.normalization_findings.iter().all(|finding| {
+            finding.status == "normalized"
+                && !finding.source_hash.is_empty()
+                && finding.source_ref == "taskflow_state_fs::TaskSnapshot"
+                && finding.source_kind == "memory_snapshot"
+        }));
         drop(journal);
 
         let reopened = RedbOperationalJournal::open(&path).expect("reopen journal");
@@ -3044,20 +3289,40 @@ mod tests {
         assert_eq!(parity.status, "pass");
         assert_eq!(parity.task_hash, imported.task_hash);
         assert_eq!(parity.dependency_hash, imported.dependency_hash);
+        assert_eq!(
+            parity.normalization_finding,
+            "normalized_sorted_unique_storage_keys"
+        );
+        let metadata = reopened
+            .taskflow_snapshot_source_metadata()
+            .expect("source metadata should read");
+        assert_eq!(
+            metadata.len(),
+            file_snapshot.tasks.len() + file_snapshot.dependencies.len()
+        );
+        assert!(metadata.iter().all(|finding| {
+            finding.status == "normalized"
+                && finding.source_kind == "file_snapshot"
+                && finding.source_ref == snapshot_path.display().to_string()
+                && !finding.source_hash.is_empty()
+                && !finding.finding.is_empty()
+        }));
     }
 
     #[test]
     fn redb_shadow_import_is_idempotent_for_repeated_snapshot() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("journal.redb");
+        let snapshot_path = dir.path().join("taskflow-snapshot.json");
         let snapshot = taskflow_snapshot_fixture();
+        taskflow_state_fs::write_snapshot(&snapshot_path, &snapshot).expect("write snapshot");
         let journal = RedbOperationalJournal::create(&path).expect("create journal");
 
         let first = journal
-            .replace_taskflow_snapshot(&snapshot)
+            .replace_taskflow_snapshot_from_file(&snapshot_path)
             .expect("first import should pass");
         let second = journal
-            .replace_taskflow_snapshot(&snapshot)
+            .replace_taskflow_snapshot_from_file(&snapshot_path)
             .expect("second import should pass");
         let exported = journal
             .export_taskflow_snapshot()
@@ -3067,6 +3332,15 @@ mod tests {
         assert_eq!(second.dependency_count, first.dependency_count);
         assert_eq!(second.task_hash, first.task_hash);
         assert_eq!(second.dependency_hash, first.dependency_hash);
+        assert_eq!(second.source_hash, first.source_hash);
+        assert_eq!(second.normalization_finding, first.normalization_finding);
+        let metadata = journal
+            .taskflow_snapshot_source_metadata()
+            .expect("source metadata should read");
+        assert_eq!(
+            metadata.len(),
+            snapshot.tasks.len() + snapshot.dependencies.len()
+        );
         assert_eq!(
             serde_json::to_value(&exported.tasks).expect("exported tasks should serialize"),
             serde_json::to_value(&snapshot.tasks).expect("snapshot tasks should serialize")
@@ -3157,6 +3431,17 @@ mod tests {
             ],
             dependencies: Vec::new(),
         };
+        let preview = journal.preview_taskflow_snapshot_import(&duplicate);
+        assert_eq!(preview.status, "quarantined");
+        assert_eq!(preview.quarantine_count, 1);
+        assert!(preview.normalization_findings.iter().any(|finding| {
+            finding.entity_kind == "task"
+                && finding.entity_ref == "vida-duplicate"
+                && finding.status == "quarantined"
+                && finding
+                    .finding
+                    .contains("taskflow snapshot import rejected duplicate task id")
+        }));
 
         let error = journal
             .replace_taskflow_snapshot(&duplicate)
@@ -3217,6 +3502,16 @@ mod tests {
                 },
             ],
         };
+        let preview = journal.preview_taskflow_snapshot_import(&colliding);
+        assert_eq!(preview.status, "quarantined");
+        assert_eq!(preview.quarantine_count, 1);
+        assert!(preview.normalization_findings.iter().any(|finding| {
+            finding.entity_kind == "dependency"
+                && finding.status == "quarantined"
+                && finding
+                    .finding
+                    .contains("taskflow snapshot import rejected duplicate dependency key")
+        }));
 
         let error = journal
             .replace_taskflow_snapshot(&colliding)
