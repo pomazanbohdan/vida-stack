@@ -168,12 +168,19 @@ fn command_pipeline_denies_payload_owned_scope_even_when_apply_token_is_present(
     let mut command = envelope(operations::SERVICE_LIFECYCLE_APPLY);
     command.client_kind = VidaClientKind::Service;
     command.apply_token = Some(VidaApplyToken("test-apply-token".to_string()));
-    command.trusted_owned_path = Some("vida/config/policies".to_string());
-    command.trusted_owned_write_scopes = vec!["vida/config/policies".to_string()];
     command.payload = json!({
         "owned_path": "vida/config/policies",
         "owned_write_scopes": ["vida/config/policies"]
     });
+    let mut command_json = serde_json::to_value(command).expect("command should serialize");
+    command_json["trusted_owned_path"] = json!("vida/config/policies");
+    command_json["trusted_owned_write_scopes"] = json!(["vida/config/policies"]);
+    let command: VidaCommandEnvelope =
+        serde_json::from_value(command_json).expect("command should deserialize");
+
+    assert_eq!(command.trusted_owned_path, None);
+    assert!(command.trusted_owned_write_scopes.is_empty());
+
     let response = InProcessVidaClient::new_ready().execute(command);
     assert_eq!(response.status, VidaResponseStatus::Blocked);
     assert_eq!(
@@ -196,6 +203,8 @@ fn command_pipeline_uses_cedar_for_client_kind_denial() {
 #[test]
 fn command_pipeline_denies_task_apply_without_trusted_owned_write_scope_before_claim_policy() {
     let mut command = authorized_task_apply_envelope();
+    command.trusted_owned_path = None;
+    command.trusted_owned_write_scopes.clear();
     command.claim_kind = Some(vida_contracts::VidaClaimKind::SharedRead);
 
     let response = InProcessVidaClient::new_ready().execute(command);
@@ -210,6 +219,8 @@ fn command_pipeline_denies_task_apply_without_trusted_owned_write_scope_before_c
 #[test]
 fn command_pipeline_denies_task_apply_without_trusted_owned_write_scope_before_project_policy() {
     let mut command = authorized_task_apply_envelope();
+    command.trusted_owned_path = None;
+    command.trusted_owned_write_scopes.clear();
     command.payload["resource_project_id"] = json!("foreign-project");
 
     let response = InProcessVidaClient::new_ready().execute(command);

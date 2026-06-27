@@ -1186,8 +1186,10 @@ pub struct VidaCommandEnvelope {
     pub project_ref: Option<VidaProjectRef>,
     pub claim_kind: Option<VidaClaimKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub trusted_owned_path: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
     pub trusted_owned_write_scopes: Vec<String>,
     #[serde(default)]
     pub payload: serde_json::Value,
@@ -1263,10 +1265,6 @@ struct VidaCommandEnvelopeWire {
     project_ref: Option<VidaProjectRef>,
     claim_kind: Option<VidaClaimKind>,
     #[serde(default)]
-    trusted_owned_path: Option<String>,
-    #[serde(default)]
-    trusted_owned_write_scopes: Vec<String>,
-    #[serde(default)]
     payload: serde_json::Value,
     #[serde(default)]
     correlation: Option<serde_json::Value>,
@@ -1309,8 +1307,8 @@ impl<'de> Deserialize<'de> for VidaCommandEnvelope {
             client_kind: wire.client_kind,
             project_ref: wire.project_ref,
             claim_kind: wire.claim_kind,
-            trusted_owned_path: wire.trusted_owned_path,
-            trusted_owned_write_scopes: wire.trusted_owned_write_scopes,
+            trusted_owned_path: None,
+            trusted_owned_write_scopes: Vec::new(),
             payload: wire.payload,
             correlation,
             idempotency_key: wire.idempotency_key,
@@ -2643,6 +2641,33 @@ mod tests {
                 "schema should include `{key}`, got {schema}"
             );
         }
+        for key in ["trusted_owned_path", "trusted_owned_write_scopes"] {
+            assert!(
+                !properties.contains_key(key),
+                "schema must not expose internal trusted write-scope field `{key}`"
+            );
+        }
+    }
+
+    #[test]
+    fn command_envelope_deserialize_ignores_client_supplied_trusted_scope_evidence() {
+        let envelope: VidaCommandEnvelope = serde_json::from_str(
+            r#"{
+              "schema_version": "vida-contracts-v1",
+              "protocol_version": "vida-command-v1",
+              "operation": "vida.wizard.schema.get",
+              "session_id": "session-01",
+              "request_id": "request-01",
+              "client_kind": "tui",
+              "trusted_owned_path": "vida/config/policies",
+              "trusted_owned_write_scopes": ["vida/config/policies"],
+              "payload": {}
+            }"#,
+        )
+        .expect("unknown trusted fields should not reject older clients or probes");
+
+        assert_eq!(envelope.trusted_owned_path, None);
+        assert!(envelope.trusted_owned_write_scopes.is_empty());
     }
 
     #[test]
