@@ -1,9 +1,9 @@
 use clap::Parser;
-use docflow_cli::{Cli, run};
-use std::process::ExitCode;
+use docflow_cli::{Cli, run_with_exit};
 
-fn main() -> ExitCode {
+fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
-    println!("{}", run(cli));
-    ExitCode::SUCCESS
+    let result = run_with_exit(cli);
+    println!("{}", result.output);
+    result.exit_code
 }

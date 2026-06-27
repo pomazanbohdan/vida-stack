@@ -188,6 +188,13 @@ pub(crate) fn run_docflow_cli_command(
     project_root: &Path,
     args: &[String],
 ) -> Result<String, String> {
+    run_docflow_cli_command_with_exit(project_root, args).map(|result| result.output)
+}
+
+pub(crate) fn run_docflow_cli_command_with_exit(
+    project_root: &Path,
+    args: &[String],
+) -> Result<docflow_cli::RunResult, String> {
     let previous = std::env::var_os("VIDA_ROOT");
     std::env::set_var("VIDA_ROOT", project_root);
     let argv = std::iter::once("docflow".to_string())
@@ -195,7 +202,7 @@ pub(crate) fn run_docflow_cli_command(
         .collect::<Vec<_>>();
     let result = DocflowCli::try_parse_from(argv)
         .map_err(|error| error.to_string())
-        .map(docflow_cli::run);
+        .map(docflow_cli::run_with_exit);
     match previous {
         Some(value) => std::env::set_var("VIDA_ROOT", value),
         None => std::env::remove_var("VIDA_ROOT"),

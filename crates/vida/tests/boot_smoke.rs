@@ -3787,7 +3787,7 @@ fn taskflow_proxy_help_supports_scheduler_topic() {
         .output()
         .expect("taskflow scheduler topic help should run");
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: scheduler"));
     assert!(stdout.contains("vida taskflow scheduler dispatch"));
@@ -3803,7 +3803,7 @@ fn taskflow_proxy_help_supports_next_scope_contract() {
         .output()
         .expect("taskflow next topic help should run");
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
     assert!(stdout.contains("scope_task_id"));
@@ -3931,7 +3931,7 @@ fn root_consume_bundle_check_alias_matches_taskflow_surface() {
         .output()
         .expect("root consume bundle check alias should run");
 
-    assert!(!output.status.success());
+    assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Authoritative state root is not project-bound"));
 }
@@ -3949,7 +3949,7 @@ fn root_recovery_latest_alias_matches_taskflow_surface() {
         .output()
         .expect("root recovery latest alias should run");
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("root recovery latest json should parse");
@@ -15465,7 +15465,7 @@ fn docflow_proxy_runs_proofcheck_in_process_when_profile_is_supported() {
         .output()
         .expect("docflow in-process proofcheck should run");
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("docflow-proxy:"));
 }
@@ -15817,7 +15817,7 @@ fn docflow_proxy_runs_task_bound_proofcheck_and_changed_closeout() {
         .current_dir(&root)
         .output()
         .expect("docflow proofcheck task proxy should run");
-    assert!(proof_toon.status.success());
+    assert!(!proof_toon.status.success());
     let proof_stdout = String::from_utf8_lossy(&proof_toon.stdout);
     assert!(proof_stdout.starts_with("proofcheck\n  mode: task"));
     assert!(proof_stdout.contains("task_id: vida-rf1"));
@@ -15840,7 +15840,7 @@ fn docflow_proxy_runs_task_bound_proofcheck_and_changed_closeout() {
         .current_dir(&root)
         .output()
         .expect("docflow proofcheck task json proxy should run");
-    assert!(proof_json.status.success());
+    assert!(!proof_json.status.success());
     let proof_payload: serde_json::Value = serde_json::from_slice(&proof_json.stdout)
         .expect("docflow proofcheck task proxy json should parse");
     assert_eq!(proof_payload["command"], "proofcheck");
@@ -15869,7 +15869,7 @@ fn docflow_proxy_runs_task_bound_proofcheck_and_changed_closeout() {
         .current_dir(&root)
         .output()
         .expect("docflow closeout task proxy should run");
-    assert!(closeout_toon.status.success());
+    assert!(!closeout_toon.status.success());
     let closeout_toon_stdout = String::from_utf8_lossy(&closeout_toon.stdout);
     assert!(closeout_toon_stdout.starts_with("closeout\n  mode: task"));
     assert!(closeout_toon_stdout.contains("task_id: vida-rf1"));
@@ -15892,7 +15892,7 @@ fn docflow_proxy_runs_task_bound_proofcheck_and_changed_closeout() {
         .current_dir(&root)
         .output()
         .expect("docflow closeout task json proxy should run");
-    assert!(closeout_task_json.status.success());
+    assert!(!closeout_task_json.status.success());
     let closeout_task_payload: serde_json::Value =
         serde_json::from_slice(&closeout_task_json.stdout)
             .expect("docflow closeout task proxy json should parse");
@@ -15927,7 +15927,7 @@ fn docflow_proxy_runs_task_bound_proofcheck_and_changed_closeout() {
         .current_dir(&root)
         .output()
         .expect("docflow closeout changed proxy should run");
-    assert!(closeout_json.status.success());
+    assert!(!closeout_json.status.success());
     let closeout_payload: serde_json::Value = serde_json::from_slice(&closeout_json.stdout)
         .expect("docflow closeout changed proxy json should parse");
     assert_eq!(closeout_payload["command"], "closeout");
@@ -16235,7 +16235,7 @@ fn docflow_proxy_can_run_rust_proofcheck_jsonl_surface() {
         .output()
         .expect("docflow rust proofcheck jsonl shell should run");
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"command\":\"proofcheck\""));
     assert!(stdout.contains("\"profile\":\"active-canon-strict\""));

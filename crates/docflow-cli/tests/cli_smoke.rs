@@ -501,7 +501,7 @@ fn proofcheck_task_outputs_default_toon_and_explicit_compact_json() {
         ])
         .output()
         .expect("docflow proofcheck task toon should run");
-    assert!(toon.status.success(), "{}", context.diagnostics(&toon));
+    assert!(!toon.status.success(), "{}", context.diagnostics(&toon));
     let toon_stdout = String::from_utf8_lossy(&toon.stdout);
     assert!(toon_stdout.starts_with("proofcheck\n  mode: task"));
     assert!(toon_stdout.contains("task_id: TASK-1"));
@@ -523,7 +523,7 @@ fn proofcheck_task_outputs_default_toon_and_explicit_compact_json() {
         ])
         .output()
         .expect("docflow proofcheck task json should run");
-    assert!(json.status.success(), "{}", context.diagnostics(&json));
+    assert!(!json.status.success(), "{}", context.diagnostics(&json));
     let parsed: serde_json::Value =
         serde_json::from_slice(&json.stdout).expect("proofcheck task json should parse");
     assert_eq!(parsed["command"], "proofcheck");
@@ -560,7 +560,7 @@ fn closeout_task_outputs_default_toon_and_explicit_json() {
         ])
         .output()
         .expect("docflow closeout task toon should run");
-    assert!(toon.status.success(), "{}", context.diagnostics(&toon));
+    assert!(!toon.status.success(), "{}", context.diagnostics(&toon));
     let toon_stdout = String::from_utf8_lossy(&toon.stdout);
     assert!(toon_stdout.starts_with("closeout\n  mode: task"));
     assert!(toon_stdout.contains("task_id: TASK-CLOSEOUT"));
@@ -582,7 +582,7 @@ fn closeout_task_outputs_default_toon_and_explicit_json() {
         ])
         .output()
         .expect("docflow closeout task json should run");
-    assert!(json.status.success(), "{}", context.diagnostics(&json));
+    assert!(!json.status.success(), "{}", context.diagnostics(&json));
     let parsed: serde_json::Value =
         serde_json::from_slice(&json.stdout).expect("closeout task json should parse");
     assert_eq!(parsed["command"], "closeout");
@@ -614,7 +614,7 @@ fn closeout_and_proofcheck_task_share_protocol_coverage_blocker() {
         ])
         .output()
         .expect("docflow proofcheck task protocol blocker should run");
-    assert!(proof.status.success(), "{}", context.diagnostics(&proof));
+    assert!(!proof.status.success(), "{}", context.diagnostics(&proof));
     let proof_json: serde_json::Value =
         serde_json::from_slice(&proof.stdout).expect("proofcheck protocol json should parse");
     assert_eq!(proof_json["verdict"], "blocking");
@@ -644,7 +644,7 @@ fn closeout_and_proofcheck_task_share_protocol_coverage_blocker() {
         .output()
         .expect("docflow closeout task protocol blocker should run");
     assert!(
-        closeout.status.success(),
+        !closeout.status.success(),
         "{}",
         context.diagnostics(&closeout)
     );
@@ -682,7 +682,7 @@ fn proofcheck_task_uses_root_docflow_evidence_with_default_profile() {
         ])
         .output()
         .expect("docflow proofcheck task json should run with default profile");
-    assert!(json.status.success(), "{}", context.diagnostics(&json));
+    assert!(!json.status.success(), "{}", context.diagnostics(&json));
     let parsed: serde_json::Value =
         serde_json::from_slice(&json.stdout).expect("proofcheck task json should parse");
     assert_eq!(parsed["command"], "proofcheck");
@@ -731,7 +731,7 @@ fn closeout_changed_outputs_default_toon_and_explicit_json() {
         ])
         .output()
         .expect("docflow closeout changed toon should run");
-    assert!(toon.status.success(), "{}", context.diagnostics(&toon));
+    assert!(!toon.status.success(), "{}", context.diagnostics(&toon));
     let toon_stdout = String::from_utf8_lossy(&toon.stdout);
     assert!(toon_stdout.starts_with("closeout\n  mode: changed"));
     assert!(toon_stdout.contains("changed_doc_count: 1"));
@@ -750,7 +750,7 @@ fn closeout_changed_outputs_default_toon_and_explicit_json() {
         ])
         .output()
         .expect("docflow closeout changed json should run");
-    assert!(json.status.success(), "{}", context.diagnostics(&json));
+    assert!(!json.status.success(), "{}", context.diagnostics(&json));
     let parsed: serde_json::Value =
         serde_json::from_slice(&json.stdout).expect("closeout changed json should parse");
     assert_eq!(parsed["command"], "closeout");
@@ -840,7 +840,7 @@ fn assert_closeout_changed_ignores_repo_local_fsmonitor_helper() {
         .output()
         .expect("docflow closeout changed should run");
     assert!(
-        closeout.status.success(),
+        !closeout.status.success(),
         "{}",
         context.diagnostics(&closeout)
     );
@@ -885,7 +885,7 @@ fn closeout_and_proofcheck_report_missing_evidence_blockers() {
         ])
         .output()
         .expect("docflow proofcheck missing evidence should run");
-    assert!(proof.status.success(), "{}", context.diagnostics(&proof));
+    assert!(!proof.status.success(), "{}", context.diagnostics(&proof));
     let proof_json: serde_json::Value =
         serde_json::from_slice(&proof.stdout).expect("proofcheck missing json should parse");
     assert_eq!(proof_json["verdict"], "blocking");
@@ -908,7 +908,7 @@ fn closeout_and_proofcheck_report_missing_evidence_blockers() {
         .output()
         .expect("docflow closeout no changed docs should run");
     assert!(
-        closeout.status.success(),
+        !closeout.status.success(),
         "{}",
         context.diagnostics(&closeout)
     );

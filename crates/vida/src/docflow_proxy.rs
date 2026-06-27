@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser};
 use docflow_cli::Cli as DocflowCli;
 
-use crate::taskflow_spec_bootstrap::run_docflow_cli_command;
+use crate::taskflow_spec_bootstrap::run_docflow_cli_command_with_exit;
 
 use super::{resolve_repo_root, ProxyArgs};
 
@@ -57,14 +57,16 @@ pub(crate) fn run_docflow_proxy(args: ProxyArgs) -> ExitCode {
                     }
                 },
             };
-            match run_docflow_cli_command(&project_root, &args.args) {
-                Ok(output) => println!("{output}"),
+            match run_docflow_cli_command_with_exit(&project_root, &args.args) {
+                Ok(result) => {
+                    println!("{}", result.output);
+                    return result.exit_code;
+                }
                 Err(error) => {
                     eprintln!("{error}");
                     return ExitCode::from(2);
                 }
             }
-            ExitCode::SUCCESS
         }
         Err(error) => {
             if matches!(

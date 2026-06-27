@@ -16,6 +16,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
 
 mod closeout_verdict;
@@ -34,6 +35,11 @@ use closeout_verdict::{
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
+}
+
+pub struct RunResult {
+    pub output: String,
+    pub exit_code: ExitCode,
 }
 
 #[derive(Debug, Subcommand)]
@@ -579,7 +585,12 @@ struct TaskSummaryPayload {
 }
 
 pub fn run(cli: Cli) -> String {
-    match cli.command {
+    run_with_exit(cli).output
+}
+
+pub fn run_with_exit(cli: Cli) -> RunResult {
+    let exit_code = command_exit_code(&cli.command);
+    let output = match cli.command {
         Command::Overview(args) => {
             let rows = vec![ReadinessRow {
                 artifact_path: ArtifactPath("docs/process/vida1-development-conditions.md".into()),
@@ -1179,6 +1190,15 @@ pub fn run(cli: Cli) -> String {
             }
             Err(error) => render_file_read_error("reporting", "issues", &args.path, &error.to_string(), args.json),
         },
+    };
+    RunResult { output, exit_code }
+}
+
+fn command_exit_code(command: &Command) -> ExitCode {
+    match command {
+        Command::Proofcheck(args) => proofcheck_exit_code(args),
+        Command::Closeout(args) => closeout_exit_code(args),
+        _ => ExitCode::SUCCESS,
     }
 }
 
@@ -1769,6 +1789,61 @@ fn render_closeout(args: &CloseoutArgs) -> String {
         Err(error) => {
             render_docflow_closeout_error("closeout", format, args.task_id.as_deref(), error)
         }
+    }
+}
+
+fn proofcheck_exit_code(args: &ProofcheckArgs) -> ExitCode {
+    if let Some(task_id) = args
+        .task_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let profile = task_bound_closeout_profile(&args.profile);
+        return match task_closeout_verdict(
+            args.root.as_deref(),
+            profile,
+            Some(task_id),
+            "task",
+            task_changed_doc_paths(args.root.as_deref(), profile, task_id),
+        ) {
+            Ok(verdict) if verdict.verdict == "blocking" => ExitCode::FAILURE,
+            Ok(_) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::FAILURE,
+        };
+    }
+
+    match proofcheck_summary(args) {
+        Ok(summary) if summary.verdict == "blocking" => ExitCode::FAILURE,
+        Ok(_) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::FAILURE,
+    }
+}
+
+fn closeout_exit_code(args: &CloseoutArgs) -> ExitCode {
+    let mode = if args.changed { "changed" } else { "task" };
+    let paths = if args.changed {
+        changed_markdown_paths(args.root.as_deref())
+    } else if let Some(task_id) = args
+        .task_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        task_changed_doc_paths(args.root.as_deref(), &args.profile, task_id)
+    } else {
+        Err("closeout requires --changed or --task <task-id>".to_string())
+    };
+    match task_closeout_verdict(
+        args.root.as_deref(),
+        &args.profile,
+        args.task_id.as_deref(),
+        mode,
+        paths,
+    ) {
+        Ok(verdict) if verdict.verdict == "blocking" => ExitCode::FAILURE,
+        Ok(_) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::FAILURE,
     }
 }
 
