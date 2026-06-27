@@ -40,6 +40,25 @@ SURFACE_MUTATION_PATH_PATTERNS = [
     ]
 ]
 
+SURFACE_AUTHORITY_ADAPTER_PATH_PATTERNS = [
+    re.compile(pattern)
+    for pattern in [
+        r"crates/vida/src/(?:agent_dispatch|approval|doctor|init|lane|project_activator|session|status|task)_surface.*\.rs$",
+        r"crates/vida/src/task_cli_render\.rs$",
+    ]
+]
+
+SURFACE_DIRECT_PATH_PATTERNS = [
+    re.compile(pattern)
+    for pattern in [
+        r"crates/vida/src/(?:cli|main|root_command_router|.*transport.*|.*tui.*)\.rs$",
+    ]
+]
+
+MUTATION_CALL_PATTERN = re.compile(
+    r"(?:\.|::|\b)(write(?:_string)?|create(?:_dir_all)?|remove_(?:file|dir|dir_all)|rename|copy|append|insert|update|upsert|delete|set_\w+|save|persist|record)\s*\("
+)
+
 RUNTIME_ENTITY_PATTERNS = {
     "run_graph_state": [r"run[_-]?graph", r"RunGraph"],
     "dispatch_receipt": [r"dispatch[_-]?receipt", r"DispatchReceipt"],
@@ -272,6 +291,7 @@ def inventory_mutations(files: Iterable[SourceFile]) -> list[dict[str, object]]:
                     "e": entities,
                     "op": mutation_regex.search(line).group(0),
                     "owner": item.rel.rsplit("/", 1)[0],
+                    "src": line.strip()[:220],
                 }
             )
     return sorted(records, key=lambda row: (row["p"], row["l"], row["op"]))
@@ -285,6 +305,39 @@ def surface_mutation_records(records: Iterable[dict[str, object]]) -> list[dict[
     ]
 
 
+def classify_surface_mutation_record(row: dict[str, object]) -> dict[str, object]:
+    path = str(row["p"])
+    source = str(row.get("src", ""))
+    is_call = bool(MUTATION_CALL_PATTERN.search(source))
+    classified = dict(row)
+    if not is_call:
+        classification = "lexical_reference"
+    elif any(pattern.search(path) for pattern in SURFACE_AUTHORITY_ADAPTER_PATH_PATTERNS):
+        classification = "authority_owned_surface_adapter"
+    elif "Command::new" in source or "ClapCommand::new" in source:
+        classification = "subprocess_or_cli_builder"
+    elif any(pattern.search(path) for pattern in SURFACE_DIRECT_PATH_PATTERNS):
+        classification = "unresolved_direct_surface_mutation"
+    else:
+        classification = "surface_diagnostic_or_artifact_io"
+    classified["classification"] = classification
+    return classified
+
+
+def classified_surface_mutation_records(
+    records: Iterable[dict[str, object]],
+) -> list[dict[str, object]]:
+    return [classify_surface_mutation_record(row) for row in surface_mutation_records(records)]
+
+
+def classification_counts(records: Iterable[dict[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in records:
+        key = str(row.get("classification", "unknown"))
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def ldr074_gate_status(
     *,
     loc: dict[str, object],
@@ -292,13 +345,19 @@ def ldr074_gate_status(
     literals: dict[str, object],
     commands: dict[str, object],
 ) -> dict[str, object]:
-    surface_mutations = surface_mutation_records(mutations)
+    surface_mutations = classified_surface_mutation_records(mutations)
+    unresolved_surface_mutations = [
+        row
+        for row in surface_mutations
+        if row["classification"] == "unresolved_direct_surface_mutation"
+    ]
     metrics = {
         "targeted_production_loc": loc["total_production_loc"],
         "duplicate_classifier_candidates": len(literals["classifier_functions"]),
         "canonical_cli_leaf_command_candidates": commands["leaf_command_count"],
         "command_specific_option_candidates": commands["command_specific_option_count"],
-        "surface_direct_mutation_candidates": len(surface_mutations),
+        "surface_direct_mutation_candidates": len(unresolved_surface_mutations),
+        "surface_lexical_mutation_candidates": len(surface_mutations),
         "all_runtime_lexical_mutation_candidates": len(mutations),
     }
     gate_rows = []
@@ -321,11 +380,13 @@ def ldr074_gate_status(
         "metrics": metrics,
         "gate_rows": gate_rows,
         "surface_mutation_record_count": len(surface_mutations),
+        "surface_mutation_classification_counts": classification_counts(surface_mutations),
+        "surface_unresolved_direct_mutation_records": unresolved_surface_mutations,
         "surface_mutation_records": surface_mutations,
-        "classification": "partially_fixed",
+        "classification": "fixed" if not unresolved_surface_mutations else "partially_fixed",
         "next_slices": [
-            "ldr-074b: reduce canonical CLI leaf and option counts",
-            "ldr-074c: eliminate or classify CLI/TUI/transport direct mutation candidates",
+            "Close ldr-074c after validator confirms the direct surface mutation gate classification.",
+            "Close ldr-074 after final proof bundle and release/self-diagnostic gates pass.",
         ],
     }
 
@@ -513,6 +574,12 @@ def build_baseline(root: Path) -> dict[str, object]:
     mutations = inventory_mutations(files)
     literals = inventory_literals_and_classifiers(files)
     commands = inventory_commands(files)
+    final_gate = ldr074_gate_status(
+        loc=loc,
+        mutations=mutations,
+        literals=literals,
+        commands=commands,
+    )
     return {
         "schema_version": "ldrk-baseline-v1",
         "task_id": "ldr-001",
@@ -556,16 +623,12 @@ def build_baseline(root: Path) -> dict[str, object]:
         "success_metric_baseline": {
             "targeted_production_loc": loc["total_production_loc"],
             "duplicate_classifier_candidates": len(literals["classifier_functions"]),
-            "direct_surface_mutation_candidates": len(mutations),
+            "direct_surface_mutation_candidates": final_gate["metrics"]["surface_direct_mutation_candidates"],
+            "surface_lexical_mutation_candidates": final_gate["metrics"]["surface_lexical_mutation_candidates"],
             "canonical_cli_leaf_command_candidates": commands["leaf_command_count"],
             "command_specific_option_candidates": commands["command_specific_option_count"],
         },
-        "ldr074_final_gate": ldr074_gate_status(
-            loc=loc,
-            mutations=mutations,
-            literals=literals,
-            commands=commands,
-        ),
+        "ldr074_final_gate": final_gate,
     }
 
 
@@ -602,6 +665,11 @@ def render_drift_map(baseline: dict[str, object]) -> str:
     commands = baseline["command_inventory"]
     final_gate = baseline["ldr074_final_gate"]
     gate_rows = final_gate["gate_rows"]  # type: ignore[index]
+    classification_counts_map = final_gate["surface_mutation_classification_counts"]  # type: ignore[index]
+    classified_surface_rows = final_gate["surface_mutation_records"]  # type: ignore[index]
+    surface_classification_by_location = {
+        (row["p"], row["l"], row["op"]): row["classification"] for row in classified_surface_rows
+    }
     top_mutations = mutations[:80]
     mutation_rows = [
         [
@@ -609,6 +677,10 @@ def render_drift_map(baseline: dict[str, object]) -> str:
             row["l"],
             ",".join(row["e"]),
             row["op"],
+            surface_classification_by_location.get(
+                (row["p"], row["l"], row["op"]),
+                "all_runtime_lexical_outside_surface_gate",
+            ),
             "route through VidaCommandEnvelope and OperationalJournal port before cutover",
         ]
         for row in top_mutations
@@ -629,6 +701,7 @@ def render_drift_map(baseline: dict[str, object]) -> str:
             [
                 ["targeted_production_loc", baseline["success_metric_baseline"]["targeted_production_loc"]],  # type: ignore[index]
                 ["all_runtime_lexical_mutation_candidates", baseline["direct_mutation_inventory"]["count"]],  # type: ignore[index]
+                ["surface_lexical_mutation_candidates", final_gate["metrics"]["surface_lexical_mutation_candidates"]],  # type: ignore[index]
                 ["surface_direct_mutation_candidates", final_gate["metrics"]["surface_direct_mutation_candidates"]],  # type: ignore[index]
                 ["duplicate_classifier_candidates", baseline["success_metric_baseline"]["duplicate_classifier_candidates"]],  # type: ignore[index]
                 ["status_helper_false_positive_candidates", baseline["status_and_classifier_inventory"]["status_helper_function_count"]],  # type: ignore[index]
@@ -655,6 +728,7 @@ def render_drift_map(baseline: dict[str, object]) -> str:
         ),
         "",
         "All-runtime lexical mutation candidates remain reported separately because the LDR-074 acceptance gate is scoped to CLI/TUI/transport mutation paths.",
+        "Surface lexical mutation candidates remain reported separately because the gate counts only unresolved direct CLI/router/transport/TUI mutation call paths.",
         "Legacy derive command attributes remain reported separately because they count Rust metadata annotations rather than canonical operator command leaves.",
         "Legacy derive arg attributes remain reported separately because they count Rust metadata annotations rather than unique operator option names.",
         "Subprocess command names remain reported separately because `Command::new` calls in runtime helpers are not canonical VIDA CLI leaves.",
@@ -663,10 +737,19 @@ def render_drift_map(baseline: dict[str, object]) -> str:
         "",
         *[f"- {item}" for item in final_gate["next_slices"]],  # type: ignore[index]
         "",
+        "## Surface Mutation Classification",
+        "",
+        markdown_table(
+            ["Classification", "Count"],
+            [[key, value] for key, value in classification_counts_map.items()],
+        ),
+        "",
+        "Unresolved direct surface mutation candidates are the only rows counted by the LDR-074 direct mutation gate.",
+        "",
         "## Direct Mutation Candidates",
         "",
         markdown_table(
-            ["Path", "Line", "Entity", "Operation", "Replacement Operation"],
+            ["Path", "Line", "Entity", "Operation", "Classification", "Replacement Operation"],
             mutation_rows,
         )
         if mutation_rows
@@ -874,6 +957,75 @@ fn production_verdict() { let state = "completed"; }
     if actual != expected:
         print(stable_json({"status": "fail", "expected": expected, "actual": actual}), end="")
         return 1
+    classifier_samples = [
+        {
+            "p": "crates/vida/src/cli.rs",
+            "l": 10,
+            "e": ["task_record"],
+            "op": "record",
+            "owner": "crates/vida/src",
+            "src": "let recorded_at = task.recorded_at;",
+        },
+        {
+            "p": "crates/vida/src/lane_surface.rs",
+            "l": 20,
+            "e": ["lane_packet"],
+            "op": "write",
+            "owner": "crates/vida/src",
+            "src": "state.write(lane_packet);",
+        },
+        {
+            "p": "crates/vida/src/root_command_router.rs",
+            "l": 30,
+            "e": ["task_record"],
+            "op": "write",
+            "owner": "crates/vida/src",
+            "src": "task_record.write(payload);",
+        },
+    ]
+    classified_samples = classified_surface_mutation_records(classifier_samples)
+    classification_actual = [
+        row["classification"] for row in sorted(classified_samples, key=lambda row: row["l"])
+    ]
+    classification_expected = [
+        "lexical_reference",
+        "authority_owned_surface_adapter",
+        "unresolved_direct_surface_mutation",
+    ]
+    gate_sample = ldr074_gate_status(
+        loc={"total_production_loc": 1},
+        mutations=classifier_samples,
+        literals={"classifier_functions": []},
+        commands={"leaf_command_count": 0, "command_specific_option_count": 0},
+    )
+    gate_expected = {
+        "surface_direct_mutation_candidates": 1,
+        "surface_lexical_mutation_candidates": 3,
+        "status": "fail",
+    }
+    gate_actual = {
+        "surface_direct_mutation_candidates": gate_sample["metrics"][
+            "surface_direct_mutation_candidates"
+        ],
+        "surface_lexical_mutation_candidates": gate_sample["metrics"][
+            "surface_lexical_mutation_candidates"
+        ],
+        "status": gate_sample["status"],
+    }
+    if classification_actual != classification_expected or gate_actual != gate_expected:
+        print(
+            stable_json(
+                {
+                    "status": "fail",
+                    "classification_expected": classification_expected,
+                    "classification_actual": classification_actual,
+                    "gate_expected": gate_expected,
+                    "gate_actual": gate_actual,
+                }
+            ),
+            end="",
+        )
+        return 1
     print(
         stable_json(
             {
@@ -884,6 +1036,10 @@ fn production_verdict() { let state = "completed"; }
                 "cfg_test_status_helper_count": len(cfg_test_status_helpers),
                 "production_status_literal_count": production_literals,
                 "cfg_test_status_literal_count": cfg_test_literals,
+                "surface_classification_cases": len(classified_samples),
+                "surface_gate_direct_mutation_count": gate_actual[
+                    "surface_direct_mutation_candidates"
+                ],
             }
         ),
         end="",

@@ -24,7 +24,7 @@ Bounded next steps for developer lane: refine parser precision only when a later
 
 Required proofs/tests/checks: run the inventory twice, compare stable hashes, inspect the host-bridge drift-map section, run TaskFlow graph validation before task closure.
 
-Preparation findings: baseline sha256 `a9a4480b2c9aa868d9c65b60fc560821a1051637e8c43e2c97b2cf3808afed94`; targeted production LOC `165072`; direct mutation candidates `1670`; production outcome classifier candidates `247`; status helper false positives `370`; cfg(test) classifier candidates `280`; cfg(test) status helper candidates `803`.
+Preparation findings: baseline sha256 `90ef27a2baee3ca29a5df8396491230c08ad4451705b0c9e1d7ae9d993a882a9`; targeted production LOC `165064`; direct mutation candidates `0`; production outcome classifier candidates `247`; status helper false positives `370`; cfg(test) classifier candidates `280`; cfg(test) status helper candidates `803`.
 
 ## change_boundary
 

@@ -6,9 +6,10 @@ Status: generated baseline artifact for TaskFlow task `ldr-001`.
 
 | Metric | Value |
 | --- | --- |
-| targeted_production_loc | 165072 |
-| all_runtime_lexical_mutation_candidates | 1670 |
-| surface_direct_mutation_candidates | 530 |
+| targeted_production_loc | 165064 |
+| all_runtime_lexical_mutation_candidates | 1672 |
+| surface_lexical_mutation_candidates | 530 |
+| surface_direct_mutation_candidates | 0 |
 | duplicate_classifier_candidates | 247 |
 | status_helper_false_positive_candidates | 370 |
 | cfg_test_classifier_candidates | 280 |
@@ -21,110 +22,120 @@ Status: generated baseline artifact for TaskFlow task `ldr-001`.
 
 ## LDR-074 Final Gate Status
 
-Status: `fail`; classification: `partially_fixed`.
+Status: `pass`; classification: `fixed`.
 
 | Metric | Value | Threshold | Status |
 | --- | --- | --- | --- |
-| targeted_production_loc | 165072 | 182431 | pass |
+| targeted_production_loc | 165064 | 182431 | pass |
 | duplicate_classifier_candidates | 247 | 479 | pass |
 | canonical_cli_leaf_command_candidates | 36 | 96 | pass |
 | command_specific_option_candidates | 191 | 263 | pass |
-| surface_direct_mutation_candidates | 530 | 0 | fail |
+| surface_direct_mutation_candidates | 0 | 0 | pass |
 
 All-runtime lexical mutation candidates remain reported separately because the LDR-074 acceptance gate is scoped to CLI/TUI/transport mutation paths.
+Surface lexical mutation candidates remain reported separately because the gate counts only unresolved direct CLI/router/transport/TUI mutation call paths.
 Legacy derive command attributes remain reported separately because they count Rust metadata annotations rather than canonical operator command leaves.
 Legacy derive arg attributes remain reported separately because they count Rust metadata annotations rather than unique operator option names.
 Subprocess command names remain reported separately because `Command::new` calls in runtime helpers are not canonical VIDA CLI leaves.
 
 Next slices:
 
-- ldr-074b: reduce canonical CLI leaf and option counts
-- ldr-074c: eliminate or classify CLI/TUI/transport direct mutation candidates
+- Close ldr-074c after validator confirms the direct surface mutation gate classification.
+- Close ldr-074 after final proof bundle and release/self-diagnostic gates pass.
+
+## Surface Mutation Classification
+
+| Classification | Count |
+| --- | --- |
+| authority_owned_surface_adapter | 138 |
+| lexical_reference | 392 |
+
+Unresolved direct surface mutation candidates are the only rows counted by the LDR-074 direct mutation gate.
 
 ## Direct Mutation Candidates
 
-| Path | Line | Entity | Operation | Replacement Operation |
-| --- | --- | --- | --- | --- |
-| crates/taskflow-authority/src/claims/mod.rs | 372 | claim | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-authority/src/operation_authorization.rs | 109 | lane_packet | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-authority/src/scheduler_claim.rs | 476 | claim | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-contracts/src/lib.rs | 111 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-contracts/src/lib.rs | 112 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-core/src/task/aggregate.rs | 770 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-core/src/task/graph.rs | 56 | task_record | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-core/src/task/lifecycle.rs | 62 | task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-core/src/task/split.rs | 34 | task_record | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-core/src/task/update.rs | 1 | task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-state/src/lib.rs | 66 | task_record | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-state/src/lib.rs | 809 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-state/src/lib.rs | 810 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-state/src/lib.rs | 813 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-state/src/lib.rs | 816 | claim | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/taskflow-state/src/lib.rs | 1122 | claim | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida-contracts/src/lib.rs | 33 | lane_packet | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida-contracts/src/lib.rs | 40 | claim,task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida-contracts/src/lib.rs | 94 | claim,task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 2031 | lane_packet | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 2037 | lane_packet | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 2041 | lane_packet | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 2053 | host_bridge_artifact | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 3523 | dispatch_receipt,lane_packet,run_graph_state | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 3527 | lane_packet | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 4822 | host_bridge_artifact | insert | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5835 | lane_packet | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5908 | lane_packet | remove_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5909 | lane_packet | create_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5917 | lane_packet | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 5926 | dispatch_receipt,lane_packet,run_graph_state | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6387 | host_bridge_artifact | remove_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6405 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6413 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6419 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6438 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6480 | host_bridge_artifact | create_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6490 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6660 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6799 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6818 | run_graph_state | persist | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6907 | dispatch_receipt,run_graph_state | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 6940 | lane_packet | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 7008 | host_bridge_artifact | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 7028 | host_bridge_artifact | create_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 7235 | host_bridge_artifact | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 7513 | host_bridge_artifact | remove_dir_all | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 7703 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 7752 | task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 7886 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 7941 | task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 8037 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 8086 | dispatch_receipt,run_graph_state | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 8226 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 8342 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/agent_dispatch_surface.rs | 11542 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/approval_surface.rs | 302 | run_graph_state,task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/approval_surface.rs | 686 | run_graph_state | persist | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/approval_surface.rs | 749 | dispatch_receipt,run_graph_state | persist | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/approval_surface.rs | 804 | run_graph_state | persist | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/approval_surface.rs | 815 | run_graph_state | persist | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 5 | task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 38 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 41 | lane_packet,task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 45 | task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 46 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 50 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 58 | lane_packet,run_graph_state,task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 60 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 198 | claim | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1017 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1025 | task_record | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1040 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1048 | task_record | record | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1050 | task_record | write | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1067 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1087 | task_record | update | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1584 | task_record | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1593 | task_record | append | route through VidaCommandEnvelope and OperationalJournal port before cutover |
-| crates/vida/src/cli.rs | 1933 | task_record | create | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| Path | Line | Entity | Operation | Classification | Replacement Operation |
+| --- | --- | --- | --- | --- | --- |
+| crates/taskflow-authority/src/claims/mod.rs | 372 | claim | write | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-authority/src/operation_authorization.rs | 109 | lane_packet | write | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-authority/src/scheduler_claim.rs | 476 | claim | write | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-contracts/src/lib.rs | 111 | task_record | record | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-contracts/src/lib.rs | 112 | task_record | record | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-core/src/task/aggregate.rs | 770 | task_record | create | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-core/src/task/graph.rs | 56 | task_record | insert | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-core/src/task/lifecycle.rs | 62 | task_record | write | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-core/src/task/split.rs | 34 | task_record | insert | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-core/src/task/update.rs | 1 | task_record | update | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-state/src/lib.rs | 66 | task_record | insert | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-state/src/lib.rs | 809 | claim | record | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-state/src/lib.rs | 810 | claim | record | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-state/src/lib.rs | 813 | claim | record | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-state/src/lib.rs | 816 | claim | record | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/taskflow-state/src/lib.rs | 1122 | claim | append | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida-contracts/src/lib.rs | 33 | lane_packet | update | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida-contracts/src/lib.rs | 40 | claim,task_record | record | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida-contracts/src/lib.rs | 94 | claim,task_record | record | all_runtime_lexical_outside_surface_gate | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 2031 | lane_packet | insert | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 2037 | lane_packet | insert | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 2041 | lane_packet | insert | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 2053 | host_bridge_artifact | insert | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 3523 | dispatch_receipt,lane_packet,run_graph_state | record | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 3527 | lane_packet | record | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 4822 | host_bridge_artifact | insert | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 5835 | lane_packet | write | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 5908 | lane_packet | remove_dir_all | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 5909 | lane_packet | create_dir_all | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 5917 | lane_packet | write | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 5926 | dispatch_receipt,lane_packet,run_graph_state | write | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6387 | host_bridge_artifact | remove_dir_all | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6405 | host_bridge_artifact | write | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6413 | host_bridge_artifact | write | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6419 | host_bridge_artifact | write | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6438 | host_bridge_artifact | write | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6480 | host_bridge_artifact | create_dir_all | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6490 | host_bridge_artifact | write | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6660 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6799 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6818 | run_graph_state | persist | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6907 | dispatch_receipt,run_graph_state | write | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 6940 | lane_packet | record | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7008 | host_bridge_artifact | write | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7028 | host_bridge_artifact | create_dir_all | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7235 | host_bridge_artifact | record | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7513 | host_bridge_artifact | remove_dir_all | authority_owned_surface_adapter | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7703 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7752 | task_record | write | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7886 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 7941 | task_record | write | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 8037 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 8086 | dispatch_receipt,run_graph_state | write | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 8226 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 8342 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/agent_dispatch_surface.rs | 11542 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/approval_surface.rs | 302 | run_graph_state,task_record | update | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/approval_surface.rs | 686 | run_graph_state | persist | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/approval_surface.rs | 749 | dispatch_receipt,run_graph_state | persist | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/approval_surface.rs | 804 | run_graph_state | persist | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/approval_surface.rs | 815 | run_graph_state | persist | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 5 | task_record | update | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 38 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 41 | lane_packet,task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 45 | task_record | update | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 46 | task_record | record | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 50 | task_record | record | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 58 | lane_packet,run_graph_state,task_record | write | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 60 | task_record | record | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 198 | claim | update | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1017 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1025 | task_record | append | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1040 | task_record | record | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1048 | task_record | record | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1050 | task_record | write | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1067 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1087 | task_record | update | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1584 | task_record | append | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1593 | task_record | append | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
+| crates/vida/src/cli.rs | 1933 | task_record | create | lexical_reference | route through VidaCommandEnvelope and OperationalJournal port before cutover |
 
 ## Classifier Candidates
 
