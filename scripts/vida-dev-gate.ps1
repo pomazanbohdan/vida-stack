@@ -583,8 +583,41 @@ function Start-ScheduledProofProcess {
     }
 }
 
+function Stop-ScheduledProofProcesses {
+    param(
+        [System.Collections.IEnumerable]$Handles,
+        [object]$FailedHandle
+    )
+
+    if ($null -eq $Handles) {
+        return
+    }
+    foreach ($handle in $Handles) {
+        if ($null -eq $handle -or [object]::ReferenceEquals($handle, $FailedHandle)) {
+            continue
+        }
+        $process = $handle.process
+        if ($null -eq $process -or $process.HasExited) {
+            continue
+        }
+        try {
+            $process.Kill()
+        } catch {
+            Write-Warning ("Failed to stop scheduled proof process {0}: {1}" -f $handle.operation_id, $_.Exception.Message)
+        }
+        try {
+            $process.WaitForExit()
+        } catch {
+            Write-Warning ("Failed to wait for scheduled proof process {0}: {1}" -f $handle.operation_id, $_.Exception.Message)
+        }
+    }
+}
+
 function Complete-ScheduledProofProcess {
-    param([object]$Handle)
+    param(
+        [object]$Handle,
+        [System.Collections.IEnumerable]$SiblingHandles = $null
+    )
 
     $Handle.process.WaitForExit()
     $Handle.stopwatch.Stop()
@@ -613,6 +646,7 @@ function Complete-ScheduledProofProcess {
     }
     $Records.Add($record)
     if ($exitCode -ne 0) {
+        Stop-ScheduledProofProcesses -Handles $SiblingHandles -FailedHandle $Handle
         exit $exitCode
     }
 }
@@ -671,7 +705,7 @@ function Invoke-ProofScheduler {
         $parallelHandles.Add((Start-ScheduledProofProcess -OperationId "proof-scheduler-noncargo:$order" -Command @($PwshPath, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $commandText) -SchedulerGroup "non_cargo_parallel" -SchedulerOrder $order))
     }
     foreach ($handle in $parallelHandles) {
-        Complete-ScheduledProofProcess -Handle $handle
+        Complete-ScheduledProofProcess -Handle $handle -SiblingHandles $parallelHandles
     }
 
     $order = 0
