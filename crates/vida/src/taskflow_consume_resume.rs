@@ -7457,14 +7457,6 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             return ExitCode::from(1);
         }
     }
-    if let Some(packet_path) = requested_dispatch_packet_path.as_deref() {
-        return crate::init_surfaces::execute_dispatch_packet_without_resume_gate(
-            as_json,
-            state_dir,
-            packet_path,
-        )
-        .await;
-    }
     match fail_fast_state_store_open(state_dir.clone(), "opening authoritative state store").await {
         Ok(store) => {
             let mut dispatch_receipt;
@@ -22310,6 +22302,171 @@ agent_system:
                 .expect_err("widened packet should fail closed");
         assert!(error.contains("single-task move packet owned_paths"));
         let _ = fs::remove_file(packet_path);
+    }
+
+    #[tokio::test]
+    async fn explicit_dispatch_packet_resume_requires_persisted_receipt() {
+        let root = unique_dispatch_packet_test_root("vida-explicit-dispatch-packet-receipt-gate");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-explicit-packet-without-receipt";
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create dispatch packet dir");
+        let packet_path = packet_dir.join("forged-explicit-packet.json");
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementer",
+            "delivery",
+        );
+        status.task_id = run_id.to_string();
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "implementer_ready".to_string();
+        status.resume_target = "dispatch.implementer".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status for active receipt lookup");
+
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "packet_ready".to_string(),
+                lane_status: "packet_ready".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida taskflow consume".to_string()),
+                dispatch_command: Some(format!("vida taskflow consume continue --run-id {run_id} --json")),
+                dispatch_packet_path: Some("/tmp/different-admitted-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("taskflow_state_store".to_string()),
+                recorded_at: "2026-06-27T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist non-matching dispatch receipt");
+
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "run_id": run_id,
+                "dispatch_target": "implementer",
+                "dispatch_status": "packet_ready",
+                "lane_status": "packet_ready",
+                "dispatch_kind": "agent_lane",
+                "dispatch_surface": "vida taskflow consume",
+                "dispatch_command": format!("vida taskflow consume continue --dispatch-packet {} --json", packet_path.display()),
+                "activation_agent_type": "junior",
+                "activation_runtime_role": "worker",
+                "selected_backend": "taskflow_state_store",
+                "recorded_at": "2026-06-27T00:00:00Z",
+                "request_text": "continue development",
+                "role_selection": {
+                    "selected_role": "worker",
+                    "conversational_mode": "development",
+                    "tracked_flow_entry": "dev-pack",
+                    "confidence": "high"
+                },
+                "role_selection_full": {
+                    "ok": true,
+                    "activation_source": "test",
+                    "selection_mode": "auto",
+                    "fallback_role": "orchestrator",
+                    "request": "continue development",
+                    "selected_role": "worker",
+                    "conversational_mode": "development",
+                    "single_task_only": true,
+                    "tracked_flow_entry": "dev-pack",
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": ["continue"],
+                    "compiled_bundle": null,
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "execution_lane_sequence": ["implementer", "coach", "verification"]
+                            }
+                        }
+                    },
+                    "reason": "test"
+                },
+                "delivery_task_packet": {
+                    "packet_id": format!("{run_id}::implementer::delivery"),
+                    "goal": "Execute bounded implementer handoff",
+                    "scope_in": ["dispatch_target:implementer", "runtime_role:worker"],
+                    "scope_out": ["mutation outside bounded packet scope"],
+                    "owned_paths": ["crates/vida/src/taskflow_consume_resume.rs"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["bounded runtime result artifact"],
+                    "verification_command": format!("vida taskflow consume continue --run-id {run_id} --json"),
+                    "proof_target": "runtime dispatch result artifact plus updated dispatch receipt",
+                    "stop_rules": ["stop after writing bounded dispatch result or explicit blocker"],
+                    "blocking_question": "What is the next bounded action required for implementer?"
+                },
+                "taskflow_handoff_plan": null,
+                "run_graph_bootstrap": {
+                    "run_id": run_id,
+                    "latest_status": {
+                        "run_id": run_id,
+                        "task_id": run_id
+                    }
+                },
+                "orchestration_contract": null
+            })
+            .to_string(),
+        )
+        .expect("write explicit dispatch packet");
+
+        let error = resolve_runtime_consumption_resume_inputs(
+            &store,
+            None,
+            Some(packet_path.to_str().expect("packet path should be utf-8")),
+            None,
+        )
+        .await
+        .expect_err("explicit dispatch packet must be blocked without a persisted receipt");
+
+        assert!(
+            error.contains("No persisted run-graph dispatch receipt exists")
+                || error.contains("Failed to read persisted run-graph dispatch receipt"),
+            "unexpected error: {error}"
+        );
+        if error.contains("No persisted run-graph dispatch receipt exists") {
+            assert!(error.contains(run_id), "unexpected error: {error}");
+            assert!(
+                error.contains(packet_path.to_str().expect("packet path should be utf-8")),
+                "unexpected error: {error}"
+            );
+        }
+        let persisted_receipt = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("non-matching receipt should remain persisted");
+        assert_ne!(
+            persisted_receipt.dispatch_packet_path.as_deref(),
+            Some(packet_path.to_str().expect("packet path should be utf-8")),
+            "resume validation must not substitute an unadmitted packet for the persisted receipt"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
