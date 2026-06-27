@@ -150,6 +150,16 @@ pub struct RedbArtifactIndexRecord {
     pub schema_version: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedbArtifactMaterializationReceipt {
+    pub artifact_ref: VidaArtifactRef,
+    pub path: String,
+    pub content_hash: String,
+    pub source_event_cursor: VidaEventCursor,
+    pub schema_version: String,
+    pub status: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RedbArtifactReconciliationRecord {
     pub artifact_ref: VidaArtifactRef,
@@ -632,6 +642,61 @@ impl RedbOperationalJournal {
             records.push(decode_artifact_index_record(value.value())?);
         }
         Ok(records)
+    }
+
+    pub fn materialized_artifact_receipt(
+        &self,
+        artifact_ref: &VidaArtifactRef,
+    ) -> Result<RedbArtifactMaterializationReceipt, TaskflowStateError> {
+        let Some(record) = self.artifact_index_record(artifact_ref)? else {
+            return Err(TaskflowStateError::Storage(format!(
+                "artifact index record not found: {}",
+                artifact_ref.0
+            )));
+        };
+        let Some(source_event_cursor) = record.producer_event_cursor.clone() else {
+            return Err(TaskflowStateError::Storage(format!(
+                "artifact `{}` is missing source event cursor",
+                artifact_ref.0
+            )));
+        };
+        if record.schema_version != SCHEMA_VERSION {
+            return Err(TaskflowStateError::Storage(format!(
+                "artifact `{}` schema version mismatch: expected={} actual={}",
+                artifact_ref.0, SCHEMA_VERSION, record.schema_version
+            )));
+        }
+        if record.reconciliation_status != "sha256_pass" {
+            return Err(TaskflowStateError::Storage(format!(
+                "artifact `{}` is not hash-reconciled: {}",
+                artifact_ref.0, record.reconciliation_status
+            )));
+        }
+        Ok(RedbArtifactMaterializationReceipt {
+            artifact_ref: record.artifact_ref,
+            path: record.path,
+            content_hash: record.content_hash,
+            source_event_cursor,
+            schema_version: record.schema_version,
+            status: "materialized".to_string(),
+        })
+    }
+
+    pub fn reconcile_and_materialize_artifact(
+        &self,
+        artifact_ref: &VidaArtifactRef,
+        project_root: impl AsRef<Path>,
+    ) -> Result<RedbArtifactMaterializationReceipt, TaskflowStateError> {
+        let Some(mut record) = self.artifact_index_record(artifact_ref)? else {
+            return Err(TaskflowStateError::Storage(format!(
+                "artifact index record not found: {}",
+                artifact_ref.0
+            )));
+        };
+        let reconciliation = reconcile_artifact_record(record.clone(), project_root.as_ref())?;
+        record.reconciliation_status = format!("sha256_{}", reconciliation.status);
+        self.write_record(ARTIFACT_TABLE, &record.artifact_ref.0, &record)?;
+        self.materialized_artifact_receipt(artifact_ref)
     }
 
     pub fn reconcile_artifact_hashes(
@@ -2739,6 +2804,19 @@ mod tests {
             pass[0].computed_content_hash.as_deref(),
             Some(indexed.content_hash.as_str())
         );
+        let receipt = journal
+            .reconcile_and_materialize_artifact(
+                &taskflow_contracts::VidaArtifactRef("artifact-1".to_string()),
+                dir.path(),
+            )
+            .expect("materialization receipt should pass");
+        assert_eq!(receipt.status, "materialized");
+        assert_eq!(receipt.path, "artifacts/snapshot.json");
+        assert_eq!(
+            receipt.source_event_cursor,
+            VidaEventCursor("global-1".to_string())
+        );
+        assert_eq!(receipt.schema_version, "1");
 
         fs::write(&artifact_path, b"{\"status\":\"changed\"}\n").expect("modify artifact");
         let mismatch = journal
@@ -2749,6 +2827,39 @@ mod tests {
             mismatch[0].computed_content_hash.as_deref(),
             Some(indexed.content_hash.as_str())
         );
+        let receipt_error = journal
+            .reconcile_and_materialize_artifact(
+                &taskflow_contracts::VidaArtifactRef("artifact-1".to_string()),
+                dir.path(),
+            )
+            .expect_err("mismatched artifact must not materialize");
+        assert!(receipt_error.to_string().contains("is not hash-reconciled"));
+    }
+
+    #[test]
+    fn artifact_materialization_requires_source_cursor() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("journal.redb");
+        let artifact_dir = dir.path().join("artifacts");
+        fs::create_dir_all(&artifact_dir).expect("create artifact dir");
+        fs::write(artifact_dir.join("snapshot.json"), b"{}\n").expect("write artifact");
+
+        let mut journal = RedbOperationalJournal::create(&path).expect("create journal");
+        journal.index_artifact(JournalArtifactRecord {
+            artifact_ref: taskflow_contracts::VidaArtifactRef("artifact-1".to_string()),
+            content_hash: "sha256:ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+                .to_string(),
+            path: "artifacts/snapshot.json".to_string(),
+        });
+
+        let error = journal
+            .reconcile_and_materialize_artifact(
+                &taskflow_contracts::VidaArtifactRef("artifact-1".to_string()),
+                dir.path(),
+            )
+            .expect_err("artifact without source cursor must not materialize");
+
+        assert!(error.to_string().contains("missing source event cursor"));
     }
 
     #[test]
