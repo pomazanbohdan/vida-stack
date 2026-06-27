@@ -8363,6 +8363,8 @@ dependencies = [
  "taskflow-state",
  "taskflow-state-redb",
  "tempfile",
+ "tokio",
+ "uuid",
  "vida-contracts",
 ]
 

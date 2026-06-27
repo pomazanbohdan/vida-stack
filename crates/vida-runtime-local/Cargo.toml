@@ -11,6 +11,8 @@ serde_json.workspace = true
 taskflow-contracts = { path = "../taskflow-contracts" }
 taskflow-state = { path = "../taskflow-state" }
 taskflow-state-redb = { path = "../taskflow-state-redb" }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync", "time"] }
+uuid.workspace = true
 vida-contracts = { path = "../vida-contracts" }
 
 [dev-dependencies]

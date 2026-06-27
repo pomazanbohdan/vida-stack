@@ -1,11 +1,15 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
+use effectum::{Job, JobRecoveryBehavior};
 use serde::{Deserialize, Serialize};
 use taskflow_contracts::{
     VidaCommandRef, VidaEffectRef, VidaEventCursor, VidaEventRef, VidaIdempotencyKey,
     VidaOperation, VidaStreamRef,
 };
-use taskflow_state::JournalOutboxState;
+use taskflow_state::{JournalOutboxState, OperationalJournal};
 use taskflow_state_redb::{RedbOperationalJournal, RedbOutboxEffectRecord};
 
 pub type EffectumQueue = effectum::Queue;
@@ -145,8 +149,36 @@ pub struct WorkerCommandSubmission {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EffectumEnqueueReceipt {
+    pub job_id: DurableJobId,
+    pub effectum_job_id: String,
+    pub outbox_id: VidaEventRef,
+    pub effect_id: VidaEffectRef,
+    pub duplicate: bool,
+    pub queue_path: PathBuf,
+    pub trace: Vec<DurableJobTraceEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EffectumOutboxWorker {
     pub command_operation: VidaOperation,
+}
+
+#[derive(Debug, Clone)]
+pub struct EffectumWorkerPipeline {
+    pub worker: EffectumOutboxWorker,
+    pub sender: tokio::sync::mpsc::UnboundedSender<WorkerCommandSubmission>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct EffectumOutboxJobPayload {
+    job_id: String,
+    outbox_id: String,
+    effect_id: String,
+    authority: String,
+    runner: String,
+    next_action: String,
+    trace: Vec<DurableJobTraceEntry>,
 }
 
 impl EffectumOutboxWorker {
@@ -183,6 +215,149 @@ impl EffectumOutboxWorker {
                 "authority": "redb_outbox",
                 "outcome": outcome_payload,
             }),
+        }
+    }
+}
+
+impl EffectumWorkerPipeline {
+    pub fn new(
+        command_operation: impl Into<String>,
+        sender: tokio::sync::mpsc::UnboundedSender<WorkerCommandSubmission>,
+    ) -> Self {
+        Self {
+            worker: EffectumOutboxWorker::new(command_operation),
+            sender,
+        }
+    }
+}
+
+pub fn effectum_outbox_job_runner() -> effectum::JobRunner<EffectumWorkerPipeline> {
+    effectum::JobRunner::builder(
+        EFFECTUM_OUTBOX_WORKER,
+        |job: effectum::RunningJob, pipeline: EffectumWorkerPipeline| async move {
+            let payload: EffectumOutboxJobPayload = job
+                .json_payload()
+                .map_err(|error| format!("decode Effectum outbox job payload: {error}"))?;
+            let snapshot = OutboxJobSnapshot {
+                outbox_id: VidaEventRef(payload.outbox_id),
+                effect_id: VidaEffectRef(payload.effect_id),
+                state: JournalOutboxState::Claimed {
+                    consumer_id: job.id.to_string(),
+                },
+                attempt_count: u64::try_from(job.current_try).unwrap_or_default(),
+                source_event_cursor: None,
+                failure_reason: None,
+            };
+            let command = pipeline
+                .worker
+                .acknowledgement_command(&snapshot, EffectAckOutcome::Succeeded);
+            pipeline
+                .sender
+                .send(command.clone())
+                .map_err(|error| format!("submit Effectum worker command: {error}"))?;
+            Ok::<WorkerCommandSubmission, String>(command)
+        },
+    )
+    .build()
+}
+
+pub fn apply_worker_command_to_redb(
+    journal_path: &Path,
+    command: &WorkerCommandSubmission,
+) -> Result<(), String> {
+    let outbox_id = command
+        .payload
+        .get("outbox_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "worker command payload missing `outbox_id`".to_string())?;
+    let outcome = command
+        .payload
+        .get("outcome")
+        .and_then(|value| value.get("status"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "worker command payload missing `outcome.status`".to_string())?;
+    let mut journal = RedbOperationalJournal::open(journal_path).map_err(|error| {
+        format!(
+            "open redb outbox journal `{}` for worker ack: {error}",
+            journal_path.display()
+        )
+    })?;
+    let outbox_ref = VidaEventRef(outbox_id.to_string());
+    match outcome {
+        "succeeded" => journal
+            .mark_outbox_succeeded(&outbox_ref)
+            .map_err(|error| format!("mark outbox `{outbox_id}` succeeded: {error}")),
+        "failed" => {
+            let reason = command
+                .payload
+                .get("outcome")
+                .and_then(|value| value.get("reason"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Effectum worker reported failure")
+                .to_string();
+            journal
+                .mark_outbox_failed(&outbox_ref, reason)
+                .map_err(|error| format!("mark outbox `{outbox_id}` failed: {error}"))
+        }
+        other => Err(format!("unsupported worker command outcome `{other}`")),
+    }
+}
+
+pub async fn open_effectum_queue(config: &EffectumQueueConfig) -> Result<EffectumQueue, String> {
+    if let Some(parent) = config.sqlite_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "create Effectum queue directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    EffectumQueue::builder(&config.sqlite_path)
+        .job_recovery_behavior(recovery_behavior(&config.recovery_behavior)?)
+        .build()
+        .await
+        .map_err(|error| {
+            format!(
+                "open Effectum queue `{}` with recovery `{}`: {error}",
+                config.sqlite_path.display(),
+                config.recovery_behavior
+            )
+        })
+}
+
+pub async fn enqueue_outbox_job_idempotently(
+    queue: &EffectumQueue,
+    config: &EffectumQueueConfig,
+    plan: &DurableJobPlan,
+    policy: &RetryPolicy,
+) -> Result<EffectumEnqueueReceipt, String> {
+    if matches!(
+        plan.lifecycle,
+        DurableJobLifecycle::Succeeded | DurableJobLifecycle::DeadLettered
+    ) {
+        return Err(format!(
+            "refuse to enqueue terminal durable job `{}` with lifecycle `{:?}`",
+            plan.job_id.0, plan.lifecycle
+        ));
+    }
+
+    let effectum_job_id = deterministic_effectum_job_id(&plan.job_id);
+    if queue.get_job_status(effectum_job_id).await.is_ok() {
+        return Ok(enqueue_receipt(config, plan, effectum_job_id, true));
+    }
+
+    let job = effectum_job_for_plan(plan, policy, effectum_job_id)?;
+    match queue.add_job(job).await {
+        Ok(job_id) => Ok(enqueue_receipt(config, plan, job_id, false)),
+        Err(error) => {
+            if queue.get_job_status(effectum_job_id).await.is_ok() {
+                Ok(enqueue_receipt(config, plan, effectum_job_id, true))
+            } else {
+                Err(format!(
+                    "enqueue Effectum job `{}` for outbox `{}`: {error}",
+                    plan.job_id.0, plan.outbox_id.0
+                ))
+            }
         }
     }
 }
@@ -346,6 +521,88 @@ pub fn job_status_payload(plan: &DurableJobPlan) -> serde_json::Value {
     })
 }
 
+fn recovery_behavior(value: &str) -> Result<JobRecoveryBehavior, String> {
+    match value {
+        "fail_and_retry_immediately" => Ok(JobRecoveryBehavior::FailAndRetryImmediately),
+        "fail_and_retry_with_backoff" => Ok(JobRecoveryBehavior::FailAndRetryWithBackoff),
+        other => Err(format!("unsupported Effectum recovery behavior `{other}`")),
+    }
+}
+
+fn deterministic_effectum_job_id(job_id: &DurableJobId) -> uuid::Uuid {
+    let mut bytes = stable_128bit_hash(job_id.0.as_bytes());
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    uuid::Uuid::from_bytes(bytes)
+}
+
+fn effectum_job_for_plan(
+    plan: &DurableJobPlan,
+    policy: &RetryPolicy,
+    effectum_job_id: uuid::Uuid,
+) -> Result<Job, String> {
+    let payload = EffectumOutboxJobPayload {
+        job_id: plan.job_id.0.clone(),
+        outbox_id: plan.outbox_id.0.clone(),
+        effect_id: plan.effect_id.0.clone(),
+        authority: "redb_outbox".to_string(),
+        runner: "effectum".to_string(),
+        next_action: plan.next_action.clone(),
+        trace: plan.trace.clone(),
+    };
+    let mut job = Job::builder(EFFECTUM_OUTBOX_WORKER)
+        .name(&plan.job_id.0)
+        .json_payload(&payload)
+        .map_err(|error| {
+            format!(
+                "serialize Effectum job payload `{}`: {error}",
+                plan.job_id.0
+            )
+        })?
+        .max_retries(policy.max_attempts.try_into().unwrap_or(u32::MAX))
+        .backoff_initial_interval(Duration::from_secs(policy.base_backoff_seconds))
+        .build();
+    job.id = effectum_job_id;
+    Ok(job)
+}
+
+fn enqueue_receipt(
+    config: &EffectumQueueConfig,
+    plan: &DurableJobPlan,
+    effectum_job_id: uuid::Uuid,
+    duplicate: bool,
+) -> EffectumEnqueueReceipt {
+    let mut trace = plan.trace.clone();
+    trace.push(trace_entry("effectum_job_id", &effectum_job_id.to_string()));
+    trace.push(trace_entry(
+        "effectum_enqueue",
+        if duplicate { "duplicate" } else { "created" },
+    ));
+    EffectumEnqueueReceipt {
+        job_id: plan.job_id.clone(),
+        effectum_job_id: effectum_job_id.to_string(),
+        outbox_id: plan.outbox_id.clone(),
+        effect_id: plan.effect_id.clone(),
+        duplicate,
+        queue_path: config.sqlite_path.clone(),
+        trace,
+    }
+}
+
+fn stable_128bit_hash(input: &[u8]) -> [u8; 16] {
+    fn fnv(seed: u64, input: &[u8]) -> u64 {
+        input.iter().fold(seed, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        })
+    }
+    let first = fnv(0xcbf29ce484222325, input);
+    let second = fnv(0x84222325cbf29ce4, input);
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&first.to_be_bytes());
+    bytes[8..].copy_from_slice(&second.to_be_bytes());
+    bytes
+}
+
 fn backoff_seconds(attempt_count: u64, policy: &RetryPolicy) -> u64 {
     let exponent = attempt_count.saturating_sub(1).min(8);
     policy.base_backoff_seconds.saturating_mul(1 << exponent)
@@ -371,6 +628,20 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn effectum_queue_config_records_project_local_recovery_behavior() {
+        let config = EffectumQueueConfig::new(".vida/data/effectum/jobs.sqlite");
+        let registry = EffectumWorkerRegistry::outbox_commands("vida.effect.ack");
+
+        assert_eq!(
+            config.sqlite_path,
+            PathBuf::from(".vida/data/effectum/jobs.sqlite")
+        );
+        assert_eq!(config.recovery_behavior, "fail_and_retry_immediately");
+        assert_eq!(registry.workers[0].job_kind, EFFECTUM_OUTBOX_WORKER);
+        assert_eq!(registry.workers[0].command_operation, "vida.effect.ack");
+    }
+
+    #[test]
     fn deterministic_effect_job_ids_deduplicate_enqueue_attempts() {
         let effect_id = VidaEffectRef("effect:send/email".to_string());
 
@@ -382,6 +653,149 @@ mod tests {
             DurableJobId::from_effect_id(&effect_id).0,
             "vida-effect-effect-send-email"
         );
+    }
+
+    #[tokio::test]
+    async fn effectum_queue_opens_and_enqueue_is_idempotent_for_outbox_effect() {
+        let dir = tempdir().unwrap();
+        let config = EffectumQueueConfig::new(dir.path().join("jobs.sqlite"));
+        let queue = open_effectum_queue(&config).await.unwrap();
+        let policy = RetryPolicy::default();
+        let snapshot = OutboxJobSnapshot {
+            outbox_id: VidaEventRef("outbox-effect-1".to_string()),
+            effect_id: VidaEffectRef("effect-email-1".to_string()),
+            state: JournalOutboxState::Pending,
+            attempt_count: 0,
+            source_event_cursor: Some(VidaEventCursor("cursor-1".to_string())),
+            failure_reason: None,
+        };
+        let plan = plan_outbox_job(&snapshot, &policy);
+
+        let first = enqueue_outbox_job_idempotently(&queue, &config, &plan, &policy)
+            .await
+            .unwrap();
+        let second = enqueue_outbox_job_idempotently(&queue, &config, &plan, &policy)
+            .await
+            .unwrap();
+        let effectum_job_id = uuid::Uuid::parse_str(&first.effectum_job_id).unwrap();
+        let status = queue.get_job_status(effectum_job_id).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&status.payload).unwrap();
+
+        assert!(!first.duplicate);
+        assert!(second.duplicate);
+        assert_eq!(first.effectum_job_id, second.effectum_job_id);
+        assert_eq!(first.queue_path, config.sqlite_path);
+        assert_eq!(status.state, effectum::JobState::Pending);
+        assert_eq!(status.name.as_deref(), Some(plan.job_id.0.as_str()));
+        assert_eq!(status.job_type, EFFECTUM_OUTBOX_WORKER);
+        assert_eq!(payload["authority"], "redb_outbox");
+        assert_eq!(payload["runner"], "effectum");
+        assert_eq!(payload["outbox_id"], snapshot.outbox_id.0);
+        assert_eq!(payload["effect_id"], snapshot.effect_id.0);
+        assert!(
+            first
+                .trace
+                .iter()
+                .any(|entry| entry.kind == "effectum_enqueue" && entry.detail == "created")
+        );
+        assert!(
+            second
+                .trace
+                .iter()
+                .any(|entry| entry.kind == "effectum_enqueue" && entry.detail == "duplicate")
+        );
+    }
+
+    #[tokio::test]
+    async fn effectum_worker_execution_submits_command_and_redb_lifecycle_writeback() {
+        let dir = tempdir().unwrap();
+        let journal_path = dir.path().join("journal.redb");
+        let config = EffectumQueueConfig::new(dir.path().join("jobs.sqlite"));
+        let mut journal = RedbOperationalJournal::create(&journal_path).expect("create journal");
+        journal
+            .append(append_request(0, vec![event(1)], vec![effect("effect-1")]))
+            .expect("append effect");
+        let claimed = journal.claim_outbox_batch("effectum-worker-1", 1);
+        let outbox_id = claimed[0].outbox_id.clone();
+        let record = journal
+            .outbox_effect_record(&outbox_id)
+            .expect("read outbox")
+            .expect("outbox record");
+        let plan = plan_outbox_job(&OutboxJobSnapshot::from(&record), &RetryPolicy::default());
+        drop(journal);
+
+        let queue = open_effectum_queue(&config).await.unwrap();
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let pipeline = EffectumWorkerPipeline::new("vida.completion.record", sender);
+        let worker = effectum::Worker::builder(&queue, pipeline)
+            .jobs([effectum_outbox_job_runner()])
+            .build()
+            .await
+            .unwrap();
+        enqueue_outbox_job_idempotently(&queue, &config, &plan, &RetryPolicy::default())
+            .await
+            .unwrap();
+
+        let command = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("worker command timeout")
+            .expect("worker command");
+        apply_worker_command_to_redb(&journal_path, &command).expect("apply worker ack");
+        worker
+            .unregister(Some(Duration::from_secs(5)))
+            .await
+            .unwrap();
+
+        let reopened = RedbOperationalJournal::open(&journal_path).expect("reopen journal");
+        let record = reopened
+            .outbox_effect_record(&outbox_id)
+            .expect("read outbox")
+            .expect("outbox record");
+        let status = queue
+            .get_job_status(deterministic_effectum_job_id(&plan.job_id))
+            .await
+            .unwrap();
+
+        assert_eq!(command.operation.0, "vida.completion.record");
+        assert_eq!(command.payload["outbox_id"], outbox_id.0);
+        assert_eq!(command.payload["outcome"]["status"], "succeeded");
+        assert_eq!(record.state, JournalOutboxState::Succeeded);
+        assert_eq!(status.state, effectum::JobState::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn reopened_effectum_queue_preserves_pending_outbox_job_for_restart_resume() {
+        let dir = tempdir().unwrap();
+        let config = EffectumQueueConfig::new(dir.path().join("jobs.sqlite"));
+        let policy = RetryPolicy::default();
+        let snapshot = OutboxJobSnapshot {
+            outbox_id: VidaEventRef("outbox-restart-1".to_string()),
+            effect_id: VidaEffectRef("effect-restart-1".to_string()),
+            state: JournalOutboxState::Pending,
+            attempt_count: 0,
+            source_event_cursor: None,
+            failure_reason: None,
+        };
+        let plan = plan_outbox_job(&snapshot, &policy);
+        {
+            let queue = open_effectum_queue(&config).await.unwrap();
+            enqueue_outbox_job_idempotently(&queue, &config, &plan, &policy)
+                .await
+                .unwrap();
+        }
+
+        let reopened = open_effectum_queue(&config).await.unwrap();
+        let status = reopened
+            .get_job_status(deterministic_effectum_job_id(&plan.job_id))
+            .await
+            .unwrap();
+        let duplicate = enqueue_outbox_job_idempotently(&reopened, &config, &plan, &policy)
+            .await
+            .unwrap();
+
+        assert_eq!(status.state, effectum::JobState::Pending);
+        assert_eq!(status.name.as_deref(), Some(plan.job_id.0.as_str()));
+        assert!(duplicate.duplicate);
     }
 
     #[test]
