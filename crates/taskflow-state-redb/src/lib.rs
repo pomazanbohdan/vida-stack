@@ -165,11 +165,28 @@ pub struct RedbJournalBlocker {
 pub const REDB_SINGLE_WRITER_BLOCKER_CODE: &str = "redb_single_writer_lock_held";
 pub const REDB_CORRUPT_PAYLOAD_BLOCKER_CODE: &str = "redb_journal_payload_corrupt";
 pub const REDB_PROJECTION_FAILURE_BLOCKER_CODE: &str = "redb_projection_failure_recorded";
+pub const REDB_STREAM_VERSION_CONFLICT_BLOCKER_CODE: &str = "redb_stream_version_conflict";
 
 pub fn classify_redb_journal_error(
     error: &TaskflowStateError,
     journal_path: impl AsRef<Path>,
 ) -> Option<RedbJournalBlocker> {
+    if let TaskflowStateError::StreamVersionConflict {
+        stream_id,
+        expected,
+        actual,
+    } = error
+    {
+        return Some(RedbJournalBlocker {
+            code: REDB_STREAM_VERSION_CONFLICT_BLOCKER_CODE,
+            next_action: format!(
+                "Reload stream `{stream_id}` from the redb journal, rebase the command on actual version `{actual}`, then retry with expected version `{}`.",
+                expected
+                    .map(|version| version.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            ),
+        });
+    }
     let TaskflowStateError::Storage(reason) = error else {
         return None;
     };
@@ -1716,8 +1733,9 @@ mod tests {
         APPEND_IDEMPOTENCY_TABLE, ARTIFACT_TABLE, EVENTS_BY_GLOBAL_CURSOR_TABLE,
         EVENTS_BY_STREAM_TABLE, OUTBOX_TABLE, REDB_CORRUPT_PAYLOAD_BLOCKER_CODE,
         REDB_PROJECTION_FAILURE_BLOCKER_CODE, REDB_SINGLE_WRITER_BLOCKER_CODE,
-        RedbAppendIdempotencyRecord, RedbOperationalJournal, classify_redb_journal_error,
-        redb_journal_blocker_operator_payload, redb_projection_health_operator_payload,
+        REDB_STREAM_VERSION_CONFLICT_BLOCKER_CODE, RedbAppendIdempotencyRecord,
+        RedbOperationalJournal, classify_redb_journal_error, redb_journal_blocker_operator_payload,
+        redb_projection_health_operator_payload,
     };
     use redb::{ReadableDatabase, ReadableTable, TableDefinition};
     use taskflow_contracts::{
@@ -1891,6 +1909,30 @@ mod tests {
                 expected: Some(0),
                 actual: 1,
             }
+        );
+        let blocker = classify_redb_journal_error(&error, &path).expect("conflict should classify");
+        assert_eq!(blocker.code, REDB_STREAM_VERSION_CONFLICT_BLOCKER_CODE);
+        assert!(blocker.next_action.contains("rebase the command"));
+        let operator_payload = redb_journal_blocker_operator_payload(&blocker, &path);
+        assert_eq!(operator_payload["status"], "blocked");
+        assert_eq!(
+            operator_payload["blocker_codes"][0],
+            REDB_STREAM_VERSION_CONFLICT_BLOCKER_CODE
+        );
+        assert_eq!(
+            journal
+                .load_stream(&VidaStreamRef("stream-1".to_string()))
+                .len(),
+            1
+        );
+        assert_eq!(journal.read_global_after(None, 10).len(), 1);
+        assert_eq!(journal.claim_outbox_batch("worker-1", 10).len(), 0);
+        let append_ledger: Option<RedbAppendIdempotencyRecord> = journal
+            .read_one(APPEND_IDEMPOTENCY_TABLE, "idem-2")
+            .expect("append ledger read");
+        assert!(
+            append_ledger.is_none(),
+            "stale append must not write idempotency ledger rows"
         );
     }
 
