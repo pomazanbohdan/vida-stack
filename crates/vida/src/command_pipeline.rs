@@ -1,16 +1,16 @@
 use std::{
-    future::{ready, Ready},
+    future::{Ready, ready},
     task::{Context, Poll},
 };
 
 use taskflow_authority::operation_authorization::{
-    authorize_operation, OperationAuthorizationDecision, OperationAuthorizationInput,
+    OperationAuthorizationDecision, OperationAuthorizationInput, authorize_operation,
 };
 use tower::Service;
 use vida_contracts::{
-    operation_spec, VidaBlocker, VidaClaimKind, VidaCommandEnvelope, VidaCommandResponse,
-    VidaOperationSpec, VidaProblem, VidaProblemSeverity, VidaProjectId, VidaProjectRef,
-    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
+    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaBlocker, VidaClaimKind,
+    VidaCommandEnvelope, VidaCommandResponse, VidaOperationSpec, VidaProblem, VidaProblemSeverity,
+    VidaProjectId, VidaProjectRef, operation_spec,
 };
 
 use crate::vida_client::VidaClient;
@@ -248,12 +248,13 @@ fn layer_name(layer: CommandPipelineLayer) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::VidaCommandPipeline;
-    use crate::vida_client::{pass_response, VidaClient};
+    use crate::vida_client::{VidaClient, pass_response};
     use serde_json::json;
     use vida_contracts::{
-        operations, VidaClaimKind, VidaClientKind, VidaCommandEnvelope, VidaCommandResponse,
-        VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId, VidaResponseStatus,
-        VidaSessionId, VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
+        VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaApplyToken,
+        VidaClaimKind, VidaClientKind, VidaCommandEnvelope, VidaCommandResponse,
+        VidaIdempotencyKey, VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId,
+        VidaResponseStatus, VidaSessionId, operations,
     };
 
     #[derive(Debug, Clone)]
@@ -331,8 +332,8 @@ mod tests {
                 "owned_path": "unowned/admin/root.toml",
                 "owned_write_scopes": ["unowned"]
             }),
-            idempotency_key: Some("idem-1".to_string()),
-            apply_token: Some("apply-1".to_string()),
+            idempotency_key: Some(VidaIdempotencyKey("idem-1".to_string())),
+            apply_token: Some(VidaApplyToken("apply-1".to_string())),
             ..service_status_envelope(operations::SERVICE_STATUS)
         });
 

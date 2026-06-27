@@ -26703,6 +26703,10 @@ async fn persist_prelaunch_blocked_dispatch_state(
     Ok(())
 }
 
+fn run_graph_mutation_not_owned_error(error: &str) -> bool {
+    error.contains("current session does not own run")
+}
+
 pub(crate) async fn execute_and_record_dispatch_receipt(
     state_root: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -26728,8 +26732,24 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         persist_prelaunch_blocked_dispatch_state(state_root, run_graph_bootstrap, receipt).await?;
         return Ok(());
     }
-    record_dispatch_execution_started(state_root, role_selection, run_graph_bootstrap, receipt)
-        .await?;
+    let internal_host_handoff =
+        dispatch_handoff_uses_internal_host(project_root.as_ref(), role_selection, receipt);
+    match record_dispatch_execution_started(
+        state_root,
+        role_selection,
+        run_graph_bootstrap,
+        receipt,
+    )
+    .await
+    {
+        Ok(()) => {}
+        Err(error) if internal_host_handoff && run_graph_mutation_not_owned_error(&error) => {
+            eprintln!(
+                "Deferred run-graph execution-started coordination for internal host bridge dispatch: {error}"
+            );
+        }
+        Err(error) => return Err(error),
+    }
     let handoff_timeout_seconds =
         dispatch_execution_timeout_seconds(project_root.as_ref(), role_selection, receipt);
     let execution_result = if dispatch_handoff_requires_outer_timeout(
@@ -26872,14 +26892,18 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     )
     .await?;
     if receipt.dispatch_status == "bridge_request_pending" {
-        store
-            .record_run_graph_dispatch_receipt(receipt)
-            .await
-            .map_err(|error| {
-                format!(
-                    "Failed to persist host bridge pending dispatch receipt before projection refresh: {error}"
-                )
-            })?;
+        if let Err(error) = store.record_run_graph_dispatch_receipt(receipt).await {
+            let error = format!(
+                "Failed to persist host bridge pending dispatch receipt before projection refresh: {error}"
+            );
+            if run_graph_mutation_not_owned_error(&error) {
+                eprintln!(
+                    "Deferred host bridge pending receipt persistence for current session: {error}"
+                );
+                return Ok(());
+            }
+            return Err(error);
+        }
     }
     tokio::time::timeout(
         std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
