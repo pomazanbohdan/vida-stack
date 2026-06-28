@@ -4409,10 +4409,24 @@ fn materialize_host_bridge_completion_evidence(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let result_verdict = host_bridge_result_verdict_fields_for_gate(
+        dispatch_target,
+        &blocker_codes,
+        supplied_rework_target,
+    );
+    let supplied_rework_requested = [supplied_decision, supplied_verdict]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .any(host_bridge_completion_result_value_is_rework_alias)
+        || requested_allowed_next_node == Some(result_verdict.allowed_next_node.as_str());
     if let (Some(requested), Some(persisted)) =
         (requested_allowed_next_node, persisted_allowed_next_node)
     {
-        if requested != persisted {
+        let authorized_rework_override = !blocker_codes.is_empty()
+            && supplied_rework_requested
+            && requested == result_verdict.allowed_next_node;
+        if requested != persisted && !authorized_rework_override {
             return Err(format!(
                 "Host bridge completion allowed_next_node `{requested}` does not match persisted downstream route `{persisted}`."
             ));
@@ -4437,13 +4451,14 @@ fn materialize_host_bridge_completion_evidence(
         &blocker_codes,
         pass_allowed_next_node,
     );
-    let result_allowed_next_node = if !authority_decision
+    let result_allowed_next_node = if authority_decision
         .effect_intents
         .contains(&HostBridgeCompletionEffectIntent::PlanNextStepPacket)
+        || (!blocker_codes.is_empty() && supplied_rework_requested)
     {
-        None
-    } else {
         Some(result_verdict.allowed_next_node.clone())
+    } else {
+        None
     };
     let result_decision = if supplied_completion_blocked {
         supplied_decision
@@ -15110,6 +15125,104 @@ mod tests {
         );
         assert!(!result_path.exists());
         assert!(!receipt_path.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_completion_accepts_quality_gate_rework_over_stale_persisted_route() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-rework-route-{}-{nanos}",
+            std::process::id()
+        ));
+        let request_path = root.join("host-tool-bridge/requests/run-rework.json");
+        let result_path = root.join("host-tool-bridge/results/run-rework.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/run-rework.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        let packet_path = root.join("runtime-consumption/dispatch-packets/run-rework.json");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "run-rework",
+                "run_id": "run-rework",
+                "dispatch_target": "coach_implementation_gate",
+                "task_class": "coach",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/run-rework-activation.json");
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation parent");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = "run-rework".to_string();
+        receipt.dispatch_target = "coach_implementation_gate".to_string();
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+        receipt.downstream_dispatch_target = Some("tester".to_string());
+
+        let supplied_blockers = vec!["coach_rework_required".to_string()];
+        let evidence = materialize_host_bridge_completion_evidence(
+            &root,
+            request_path.to_str().expect("utf8 request path"),
+            "run-rework",
+            "coach_implementation_gate",
+            &receipt,
+            "receipt-rework",
+            Some("agent-1"),
+            Some("coach requires implementation rework"),
+            Some("developer_rework"),
+            Some("rework_required"),
+            Some("rework_required"),
+            Some("developer"),
+            &supplied_blockers,
+            true,
+            false,
+            HostBridgeTaskflowImplementationEvidence::default(),
+            &[],
+            false,
+            false,
+        )
+        .expect("quality gate rework route should override stale persisted route");
+
+        assert_eq!(evidence.execution_state, "blocked");
+        assert_eq!(evidence.allowed_next_node, None);
+        let result: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&result_path).expect("result should be readable"),
+        )
+        .expect("result should decode");
+        assert_eq!(result["decision"], "rework_required");
+        assert_eq!(result["verdict"], "rework_required");
+        assert_eq!(result["rework_target"], "developer");
+        assert_eq!(result["allowed_next_node"], "developer_rework");
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
