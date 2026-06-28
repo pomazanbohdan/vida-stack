@@ -65,6 +65,14 @@ pub struct CliContractCase<'a> {
     pub args: &'a [&'a str],
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct CliOutputContractCase<'a> {
+    pub surface: &'a str,
+    pub args: &'a [&'a str],
+    pub required_stdout: &'a [&'a str],
+    pub forbidden_stdout: &'a [&'a str],
+}
+
 pub fn release1_operator_shape_error(value: &Value) -> Option<String> {
     let object = value.as_object()?;
     for key in [
@@ -125,6 +133,22 @@ pub fn assert_release1_operator_shape(surface: &str, value: &Value) {
     );
 }
 
+pub fn assert_release1_operator_status(surface: &str, value: &Value, expected_status: &str) {
+    assert_release1_operator_shape(surface, value);
+    assert_eq!(
+        value["status"], expected_status,
+        "{surface} release-1 status drifted: {value:#}"
+    );
+}
+
+pub fn assert_release1_operator_status_is_canonical(surface: &str, value: &Value) {
+    assert_release1_operator_shape(surface, value);
+    assert!(
+        matches!(value["status"].as_str(), Some("pass" | "blocked")),
+        "{surface} release-1 status must be canonical pass/blocked: {value:#}"
+    );
+}
+
 pub fn assert_cli_contract_matrix<'a>(
     cases: impl IntoIterator<Item = CliContractCase<'a>>,
     mut run_json: impl FnMut(&[&str]) -> Value,
@@ -132,6 +156,83 @@ pub fn assert_cli_contract_matrix<'a>(
     for case in cases {
         let value = run_json(case.args);
         assert_release1_operator_shape(case.surface, &value);
+    }
+}
+
+pub fn assert_cli_default_output_matrix<'a>(
+    cases: impl IntoIterator<Item = CliOutputContractCase<'a>>,
+    mut run_output: impl FnMut(&[&str]) -> Output,
+) {
+    for case in cases {
+        let output = run_output(case.args);
+        assert!(
+            output.status.success(),
+            "{} default output should succeed: stdout={} stderr={}",
+            case.surface,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.starts_with(&format!("{}\n", case.surface)),
+            "{} default output should start with its TOON section title: {stdout}",
+            case.surface
+        );
+        assert_non_json_human_output(case.surface, &stdout);
+        assert_required_and_forbidden_stdout(case, &stdout);
+    }
+}
+
+pub fn assert_cli_help_output_matrix<'a>(
+    cases: impl IntoIterator<Item = CliOutputContractCase<'a>>,
+    mut run_output: impl FnMut(&[&str]) -> Output,
+) {
+    for case in cases {
+        let output = run_output(case.args);
+        assert!(
+            output.status.success(),
+            "{} help output should succeed: stdout={} stderr={}",
+            case.surface,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(case.surface),
+            "{} help output should include command label: {stdout}",
+            case.surface
+        );
+        assert_required_and_forbidden_stdout(case, &stdout);
+    }
+}
+
+pub fn assert_non_json_human_output(surface: &str, stdout: &str) {
+    assert!(
+        serde_json::from_str::<Value>(stdout).is_err(),
+        "{surface} human output must not be JSON: {stdout}"
+    );
+    assert!(
+        !stdout.chars().any(|character| {
+            character.is_control() && !matches!(character, '\n' | '\r' | '\t')
+        }),
+        "{surface} human output must not contain raw terminal controls: {stdout:?}"
+    );
+}
+
+fn assert_required_and_forbidden_stdout(case: CliOutputContractCase<'_>, stdout: &str) {
+    for required in case.required_stdout {
+        assert!(
+            stdout.contains(required),
+            "{} output should contain `{required}`: {stdout}",
+            case.surface
+        );
+    }
+    for forbidden in case.forbidden_stdout {
+        assert!(
+            !stdout.contains(forbidden),
+            "{} output should not contain `{forbidden}`: {stdout}",
+            case.surface
+        );
     }
 }
 

@@ -943,35 +943,27 @@ fn status_and_doctor_default_human_output_is_compact_toon_with_explicit_json_par
         String::from_utf8_lossy(&boot.stderr)
     );
 
-    let status_plain = vida()
-        .arg("status")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("status default should run");
-    assert!(
-        status_plain.status.success(),
-        "status default should succeed: stderr={}",
-        String::from_utf8_lossy(&status_plain.stderr)
-    );
-    let status_stdout = String::from_utf8_lossy(&status_plain.stdout);
-    assert!(
-        status_stdout.starts_with("vida status\n"),
-        "status default should start with TOON section title: {status_stdout}"
-    );
-    assert!(
-        status_stdout.contains("state dir:"),
-        "status default should expose compact TOON field names: {status_stdout}"
-    );
-    assert!(
-        status_stdout.contains("runtime consumption:"),
-        "status default should expose compact runtime evidence: {status_stdout}"
-    );
-    assert!(
-        !status_stdout.contains("--json"),
-        "status default human output should not suggest explicit JSON commands: {status_stdout}"
-    );
-    assert_not_json_output("vida status", &status_stdout);
-    assert_no_raw_terminal_controls("vida status", &status_stdout);
+    let default_cases = [
+        vida_test_support::CliOutputContractCase {
+            surface: "vida status",
+            args: &["status"],
+            required_stdout: &["state dir:", "runtime consumption:"],
+            forbidden_stdout: &["--json"],
+        },
+        vida_test_support::CliOutputContractCase {
+            surface: "vida doctor",
+            args: &["doctor"],
+            required_stdout: &["storage metadata:", "runtime consumption:"],
+            forbidden_stdout: &[],
+        },
+    ];
+    vida_test_support::assert_cli_default_output_matrix(default_cases, |args| {
+        vida()
+            .args(args)
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("default command should run")
+    });
 
     let status_json = vida()
         .args(["status", "--json"])
@@ -985,37 +977,11 @@ fn status_and_doctor_default_human_output_is_compact_toon_with_explicit_json_par
     );
     let status_payload: serde_json::Value =
         serde_json::from_slice(&status_json.stdout).expect("status json should parse");
-    assert_eq!(status_payload["surface"], "vida status");
+    vida_test_support::assert_release1_operator_status_is_canonical("vida status", &status_payload);
     assert!(status_payload.get("operator_contracts").is_some());
     assert!(status_payload.get("blocker_codes").is_some());
     assert!(status_payload.get("next_actions").is_some());
     assert!(status_payload.get("artifact_refs").is_some());
-
-    let doctor_plain = vida()
-        .arg("doctor")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("doctor default should run");
-    assert!(
-        doctor_plain.status.success(),
-        "doctor default should succeed: stderr={}",
-        String::from_utf8_lossy(&doctor_plain.stderr)
-    );
-    let doctor_stdout = String::from_utf8_lossy(&doctor_plain.stdout);
-    assert!(
-        doctor_stdout.starts_with("vida doctor\n"),
-        "doctor default should start with TOON section title: {doctor_stdout}"
-    );
-    assert!(
-        doctor_stdout.contains("storage metadata:"),
-        "doctor default should expose compact TOON field names: {doctor_stdout}"
-    );
-    assert!(
-        doctor_stdout.contains("runtime consumption:"),
-        "doctor default should expose compact runtime evidence: {doctor_stdout}"
-    );
-    assert_not_json_output("vida doctor", &doctor_stdout);
-    assert_no_raw_terminal_controls("vida doctor", &doctor_stdout);
 
     let doctor_json = vida()
         .args(["doctor", "--json"])
@@ -1029,7 +995,7 @@ fn status_and_doctor_default_human_output_is_compact_toon_with_explicit_json_par
     );
     let doctor_payload: serde_json::Value =
         serde_json::from_slice(&doctor_json.stdout).expect("doctor json should parse");
-    assert_eq!(doctor_payload["surface"], "vida doctor");
+    vida_test_support::assert_release1_operator_status_is_canonical("vida doctor", &doctor_payload);
     assert!(doctor_payload.get("operator_contracts").is_some());
     assert!(doctor_payload.get("blocker_codes").is_some());
     assert!(doctor_payload.get("next_actions").is_some());
@@ -1205,36 +1171,23 @@ fn status_and_doctor_help_describe_default_toon_and_explicit_json() {
 
 #[test]
 fn status_and_orchestrator_init_help_describe_view_fields_and_json_options() {
-    for (args, surface) in [
-        (&["status", "--help"][..], "vida status"),
-        (
-            &["orchestrator-init", "--help"][..],
-            "vida orchestrator-init",
-        ),
-    ] {
-        let output = vida()
-            .args(args)
-            .output()
-            .unwrap_or_else(|error| panic!("{surface} help should execute: {error}"));
-        assert!(
-            output.status.success(),
-            "{surface} help should succeed: stderr={}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("--view"),
-            "{surface} help should document compact/full view selection: {stdout}"
-        );
-        assert!(
-            stdout.contains("--fields"),
-            "{surface} help should document field selection: {stdout}"
-        );
-        assert!(
-            stdout.contains("--json"),
-            "{surface} help should document explicit JSON output: {stdout}"
-        );
-    }
+    let cases = [
+        vida_test_support::CliOutputContractCase {
+            surface: "vida status",
+            args: &["status", "--help"],
+            required_stdout: &["--view", "--fields", "--json"],
+            forbidden_stdout: &[],
+        },
+        vida_test_support::CliOutputContractCase {
+            surface: "vida orchestrator-init",
+            args: &["orchestrator-init", "--help"],
+            required_stdout: &["--view", "--fields", "--json"],
+            forbidden_stdout: &[],
+        },
+    ];
+    vida_test_support::assert_cli_help_output_matrix(cases, |args| {
+        vida().args(args).output().expect("help command should run")
+    });
 }
 
 #[test]
