@@ -384,6 +384,153 @@ pub(crate) fn build_status_operator_contracts(
 #[cfg(test)]
 mod tests {
     use super::{build_status_operator_contracts, StatusOperatorContractInputs};
+    use std::fs;
+
+    fn protocol_binding_summary(
+        latest_receipt_id: Option<&str>,
+    ) -> crate::state_store::ProtocolBindingSummary {
+        crate::state_store::ProtocolBindingSummary {
+            active_bindings: 1,
+            blocking_issue_count: 0,
+            fully_runtime_bound_count: 1,
+            latest_receipt_id: latest_receipt_id.map(str::to_string),
+            latest_recorded_at: None,
+            latest_scenario: None,
+            primary_state_authority: None,
+            rust_bound_count: 0,
+            script_bound_count: 0,
+            total_bindings: 1,
+            total_receipts: usize::from(latest_receipt_id.is_some()),
+            unbound_count: 0,
+        }
+    }
+
+    fn ready_activation_truth() -> crate::project_activator_surface::ProjectActivationStatusTruth {
+        crate::project_activator_surface::ProjectActivationStatusTruth {
+            status: "ready_enough_for_normal_work".to_string(),
+            activation_pending: false,
+            next_steps: vec![],
+        }
+    }
+
+    fn empty_operator_session_projection() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": "operator-session-projection-v1",
+            "current_session": {"session_id": "session-current"},
+            "project_foreign_runs": [],
+            "project_foreign_blockers": [],
+            "global_blockers": [],
+            "claim_conflicts": [],
+        })
+    }
+
+    #[test]
+    fn bundle_check_retrieval_trust_signal_clears_missing_retrieval_trust_blockers() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-status-operator-bundle-check-trust-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+        let snapshot_path = runtime_dir.join("bundle-check-pass.json");
+        fs::write(
+            &snapshot_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume bundle check",
+                "check": { "ok": true },
+                "blocker_codes": [],
+                "operator_contracts": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "artifact_refs": {}
+                },
+                "bundle": {
+                    "cache_delivery_contract": {
+                        "retrieval_trust_evidence": {
+                            "source": crate::runtime_consumption_state::RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+                            "source_registry_ref": crate::runtime_consumption_state::RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
+                            "citation": "runtime-consumption/final-recorded.json",
+                            "freshness": "final",
+                            "freshness_posture": crate::runtime_consumption_state::RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
+                            "acl": "protocol-binding-current",
+                            "acl_context": "protocol_binding_receipt:protocol-binding-current",
+                            "acl_propagation": crate::runtime_consumption_state::RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("bundle-check snapshot should be writable");
+        let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
+            total_snapshots: 1,
+            bundle_snapshots: 0,
+            bundle_check_snapshots: 1,
+            final_snapshots: 0,
+            latest_kind: Some("bundle-check".to_string()),
+            latest_snapshot_path: Some(
+                crate::runtime_consumption_state::runtime_consumption_snapshot_path_string(
+                    &snapshot_path,
+                ),
+            ),
+        };
+        let protocol_binding = protocol_binding_summary(Some("protocol-binding-current"));
+        let truth = ready_activation_truth();
+        let operator_session_projection = empty_operator_session_projection();
+
+        let contracts = build_status_operator_contracts(StatusOperatorContractInputs {
+            boot_compatibility: None,
+            migration_state: None,
+            protocol_binding: &protocol_binding,
+            runtime_consumption: &runtime_consumption,
+            latest_final_snapshot_path: None,
+            latest_run_graph_status_run_id: Some("run-1"),
+            latest_run_graph_status_task_id: Some("task-1"),
+            latest_run_graph_status_run_id_source: Some("status"),
+            latest_run_graph_status_task_id_source: Some("status"),
+            latest_run_graph_dispatch_receipt_id: Some("run-1"),
+            latest_run_graph_dispatch_packet_path: Some("packet.json"),
+            latest_run_graph_gate_present: false,
+            latest_run_graph_dispatch_receipt_matches_status: true,
+            latest_run_graph_snapshot_inconsistent: false,
+            latest_run_graph_dispatch_receipt_signal_ambiguous: false,
+            latest_run_graph_dispatch_receipt_summary_inconsistent: false,
+            latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
+            closed_task_active_run_projection_mismatch: false,
+            continuation_binding_ambiguous: false,
+            incomplete_release_admission_operator_evidence: false,
+            activation_truth: Some(&truth),
+            project_activation_pending: false,
+            latest_task_reconciliation: None,
+            effective_bundle_receipt: None,
+            root_session_write_guard_status: "blocked_by_default",
+            root_local_write_allowed: false,
+            root_local_write_allowed_for_only_these_paths: &serde_json::json!([]),
+            activation_view_only_dispatch_blocker_active: false,
+            blocking_dispatch_blocker_code: None,
+            operator_session_projection: &operator_session_projection,
+        })
+        .expect("operator contracts should render");
+
+        let blockers = contracts["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should be an array");
+        assert!(!blockers
+            .iter()
+            .any(|value| value == "missing_retrieval_trust_source_operator_evidence"));
+        assert!(!blockers
+            .iter()
+            .any(|value| value == "missing_retrieval_trust_signal_operator_evidence"));
+        assert!(!blockers
+            .iter()
+            .any(|value| value == "missing_retrieval_trust_operator_evidence"));
+
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn activation_view_only_dispatch_blocks_local_takeover_in_operator_contracts() {

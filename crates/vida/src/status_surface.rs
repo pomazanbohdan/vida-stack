@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -1304,20 +1305,14 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             }
                         };
                     let incomplete_release_admission_operator_evidence =
-                        match if latest_release_admission_operator_evidence_snapshot_path.is_some()
-                        {
-                            Ok(false)
-                        } else if summary_only {
-                            crate::runtime_consumption_state::release_admission_operator_evidence_incomplete_from_latest_snapshot(
-                                runtime_consumption.latest_snapshot_path.as_deref(),
-                            )
-                        } else if latest_final_snapshot_path.is_some() {
-                            crate::runtime_consumption_state::release_admission_operator_evidence_incomplete(
-                                store.root(),
-                            )
-                        } else {
-                            Ok(true)
-                        } {
+                        match incomplete_release_admission_operator_evidence_for_status(
+                            store.root(),
+                            &runtime_consumption,
+                            latest_release_admission_operator_evidence_snapshot_path.as_deref(),
+                            latest_final_snapshot_path.as_deref(),
+                            protocol_binding.latest_receipt_id.as_deref(),
+                            summary_only,
+                        ) {
                             Ok(value) => value,
                             Err(error) => {
                                 eprintln!("Failed to evaluate release-admission evidence: {error}");
@@ -2641,6 +2636,36 @@ fn cached_projection_cache_contract(
     }
 }
 
+fn incomplete_release_admission_operator_evidence_for_status(
+    state_root: &Path,
+    runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
+    latest_release_admission_operator_evidence_snapshot_path: Option<&str>,
+    latest_final_snapshot_path: Option<&str>,
+    protocol_binding_latest_receipt_id: Option<&str>,
+    summary_only: bool,
+) -> Result<bool, String> {
+    if latest_release_admission_operator_evidence_snapshot_path.is_some()
+        || crate::runtime_consumption_state::latest_admissible_retrieval_trust_signal(
+            runtime_consumption,
+            latest_final_snapshot_path,
+            protocol_binding_latest_receipt_id,
+        )
+        .is_some()
+    {
+        return Ok(false);
+    }
+
+    if summary_only {
+        crate::runtime_consumption_state::release_admission_operator_evidence_incomplete_from_latest_snapshot(
+            runtime_consumption.latest_snapshot_path.as_deref(),
+        )
+    } else if latest_final_snapshot_path.is_some() {
+        crate::runtime_consumption_state::release_admission_operator_evidence_incomplete(state_root)
+    } else {
+        Ok(true)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2680,6 +2705,87 @@ mod tests {
             .expect("current dir")
             .join("target")
             .join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[test]
+    fn status_release_admission_accepts_current_bundle_check_retrieval_trust_signal() {
+        let root = unique_status_packet_test_root("vida-status-bundle-check-trust");
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+        let snapshot_path = runtime_dir.join("bundle-check-pass.json");
+        fs::write(
+            &snapshot_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume bundle check",
+                "check": { "ok": true },
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {
+                    "surface": "vida taskflow consume bundle check"
+                },
+                "operator_contracts": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {
+                        "surface": "vida taskflow consume bundle check"
+                    }
+                },
+                "bundle": {
+                    "cache_delivery_contract": {
+                        "retrieval_trust_evidence": {
+                            "source": crate::runtime_consumption_state::RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+                            "source_registry_ref": crate::runtime_consumption_state::RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
+                            "citation": "runtime-consumption/final-recorded.json",
+                            "freshness": "final",
+                            "freshness_posture": crate::runtime_consumption_state::RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
+                            "acl": "protocol-binding-current",
+                            "acl_context": "protocol_binding_receipt:protocol-binding-current",
+                            "acl_propagation": crate::runtime_consumption_state::RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("bundle-check snapshot should be writable");
+        let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
+            total_snapshots: 1,
+            bundle_snapshots: 0,
+            bundle_check_snapshots: 1,
+            final_snapshots: 0,
+            latest_kind: Some("bundle-check".to_string()),
+            latest_snapshot_path: Some(
+                crate::runtime_consumption_state::runtime_consumption_snapshot_path_string(
+                    &snapshot_path,
+                ),
+            ),
+        };
+
+        assert!(
+            !super::incomplete_release_admission_operator_evidence_for_status(
+                &root,
+                &runtime_consumption,
+                None,
+                None,
+                Some("protocol-binding-current"),
+                true,
+            )
+            .expect("release-admission evaluation should pass")
+        );
+        assert!(
+            super::incomplete_release_admission_operator_evidence_for_status(
+                &root,
+                &runtime_consumption,
+                None,
+                None,
+                Some("protocol-binding-stale"),
+                true,
+            )
+            .expect("release-admission evaluation should pass")
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
