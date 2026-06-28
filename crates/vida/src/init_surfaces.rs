@@ -2267,6 +2267,9 @@ fn agent_init_dispatch_mode(
         "selection_mode": selection["mode"].clone(),
         "activation_view_only": !args.execute_dispatch,
         "execution_dispatch": args.execute_dispatch,
+        "execution_dispatch_is_activation_view": false,
+        "may_return_host_bridge_handoff": args.execute_dispatch,
+        "does_not_guarantee_host_execution_completion": args.execute_dispatch,
         "activation_view_is_execution_evidence": false,
         "activation_view_completes_delegated_work": false,
         "execution_evidence_required_for_completion": true,
@@ -2887,6 +2890,37 @@ mod tests {
         assert!(
             agent_init_execute_dispatch_should_handoff(240, false),
             "external dispatch keeps the operator handoff path for long-running CLI work"
+        );
+    }
+
+    #[test]
+    fn agent_init_execute_dispatch_mode_names_host_bridge_handoff_semantics() {
+        let args = AgentInitArgs {
+            execute_dispatch: true,
+            dispatch_packet: Some("packet.json".to_string()),
+            ..AgentInitArgs::default()
+        };
+        let dispatch_mode =
+            agent_init_dispatch_mode(&args, &serde_json::json!({ "mode": "dispatch_packet" }));
+
+        assert_eq!(dispatch_mode["mode"], "execution_dispatch");
+        assert_eq!(dispatch_mode["activation_view_only"], false);
+        assert_eq!(
+            dispatch_mode["execution_dispatch_is_activation_view"],
+            false
+        );
+        assert_eq!(dispatch_mode["may_return_host_bridge_handoff"], true);
+        assert_eq!(
+            dispatch_mode["does_not_guarantee_host_execution_completion"],
+            true
+        );
+        assert_eq!(
+            dispatch_mode["activation_view_is_execution_evidence"],
+            false
+        );
+        assert_eq!(
+            dispatch_mode["activation_view_completes_delegated_work"],
+            false
         );
     }
 

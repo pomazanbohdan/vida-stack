@@ -448,7 +448,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         );
     }
 
-    if as_json && !selected_output {
+    if as_json && !selected_output && summary_only {
         if let Some(cached) = read_fresh_admissible_status_json_projection(&state_dir, summary_only)
         {
             if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {

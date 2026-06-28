@@ -626,6 +626,7 @@ pub(crate) async fn run_taskflow_protocol_binding(args: &[String]) -> ExitCode {
                             crate::operator_projection_cache::touch_state_mutation_marker(
                                 store.root(),
                             );
+                            store.close().await;
                             super::print_surface_header(
                                 super::RenderMode::Plain,
                                 "vida taskflow protocol-binding sync",
@@ -711,6 +712,7 @@ pub(crate) async fn run_taskflow_protocol_binding(args: &[String]) -> ExitCode {
                             crate::operator_projection_cache::touch_state_mutation_marker(
                                 store.root(),
                             );
+                            store.close().await;
                             println!(
                                 "{}",
                                 serde_json::to_string_pretty(&serde_json::json!({

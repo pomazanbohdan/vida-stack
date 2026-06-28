@@ -3526,7 +3526,7 @@ pub(crate) struct AgentInitArgs {
 
     #[arg(
         long = "execute-dispatch",
-        help = "Execute the packet handoff instead of rendering only an activation view"
+        help = "Resume the packet handoff path and return receipt-backed execution or host-bridge handoff state instead of rendering only an activation view"
     )]
     pub(crate) execute_dispatch: bool,
 
@@ -4616,7 +4616,8 @@ mod tests {
         let agent_init_help = agent_init_error.to_string();
         assert_help_has_no_blank_description_rows("agent-init", &agent_init_help);
         assert!(agent_init_help.contains("Optional request text"));
-        assert!(agent_init_help.contains("Execute the packet handoff"));
+        assert!(agent_init_help
+            .contains("return receipt-backed execution or host-bridge handoff state"));
         assert!(agent_init_help.contains("Default blocked output is compact TOON/plain"));
         assert!(agent_init_help.contains(
             "Use --json only when a machine-readable payload or full blocked evidence is required"
