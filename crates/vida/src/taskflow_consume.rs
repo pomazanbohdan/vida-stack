@@ -445,6 +445,40 @@ async fn consume_final_requested_owned_paths(
     owned_paths
 }
 
+async fn validate_consume_final_explicit_task_id(
+    store: &super::StateStore,
+    task_id: &str,
+) -> Result<(), String> {
+    store
+        .show_task(task_id)
+        .await
+        .map(|_| ())
+        .map_err(|error| {
+            format!(
+                "consume final explicit --task-id `{task_id}` does not resolve in the authoritative task store; refusing to create a stale run graph: {error}"
+            )
+        })
+}
+
+fn bind_consume_final_explicit_task_id(
+    role_selection: &mut crate::RuntimeConsumptionLaneSelection,
+    task_id: &str,
+) {
+    let task_id = task_id.trim();
+    if task_id.is_empty() {
+        return;
+    }
+    if !role_selection.execution_plan.is_object() {
+        role_selection.execution_plan = serde_json::json!({});
+    }
+    if let Some(plan) = role_selection.execution_plan.as_object_mut() {
+        plan.insert(
+            "runtime_consumption_explicit_task_id".to_string(),
+            serde_json::Value::String(task_id.to_string()),
+        );
+    }
+}
+
 fn apply_consume_final_downstream_dispatch_contract(
     dispatch_receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     direct_consumption_ready: bool,
@@ -599,65 +633,101 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
 
             let state_dir = super::taskflow_task_bridge::proxy_state_dir();
             match fail_fast_state_store_open(state_dir, "opening authoritative state store").await {
-                Ok(store) => match super::build_taskflow_consume_bundle_payload(&store).await {
-                    Ok(runtime_bundle) => {
-                        let bundle_check = super::taskflow_consume_bundle_check(&runtime_bundle);
-                        let (registry, check, readiness, proof, overview) =
-                            super::build_docflow_runtime_evidence();
-                        let docflow_receipt_evidence =
-                            crate::runtime_consumption_surface::build_docflow_receipt_evidence(
-                                &readiness, &proof,
+                Ok(store) => {
+                    let explicit_task_id = consume_final_args.task_id.as_deref();
+                    if let Some(task_id) = explicit_task_id {
+                        if let Err(error) =
+                            validate_consume_final_explicit_task_id(&store, task_id).await
+                        {
+                            if as_json {
+                                crate::print_json_pretty(&serde_json::json!({
+                                    "surface": "vida taskflow consume final",
+                                    "status": "blocked",
+                                    "blocker_codes": ["consume_final_explicit_task_id_missing"],
+                                    "next_actions": [
+                                        format!("Create or restore task `{task_id}` before rerunning consume final with --task-id.")
+                                    ],
+                                    "artifact_refs": {
+                                        "surface": "vida taskflow consume final",
+                                        "task_id": task_id,
+                                    },
+                                    "error": error,
+                                }));
+                            } else {
+                                eprintln!("{error}");
+                            }
+                            return ExitCode::from(1);
+                        }
+                    }
+                    match super::build_taskflow_consume_bundle_payload(&store).await {
+                        Ok(runtime_bundle) => {
+                            let bundle_check =
+                                super::taskflow_consume_bundle_check(&runtime_bundle);
+                            let (registry, check, readiness, proof, overview) =
+                                super::build_docflow_runtime_evidence();
+                            let docflow_receipt_evidence =
+                                crate::runtime_consumption_surface::build_docflow_receipt_evidence(
+                                    &readiness, &proof,
+                                );
+                            let mut docflow_verdict = super::build_docflow_runtime_verdict(
+                                &registry, &check, &readiness, &proof,
                             );
-                        let mut docflow_verdict = super::build_docflow_runtime_verdict(
-                            &registry, &check, &readiness, &proof,
-                        );
-                        let mut role_selection =
-                            match super::build_runtime_lane_selection_with_store(
-                                &store,
-                                &request_text,
-                            )
-                            .await
-                            {
-                                Ok(selection) => selection,
-                                Err(error) => {
-                                    if as_json {
-                                        let blocking_role_selection =
-                                            super::blocking_lane_selection(&request_text, &error);
-                                        let blocked_run_id = super::runtime_consumption_run_id(
-                                            &blocking_role_selection,
-                                        );
-                                        let blocked_status = crate::runtime_dispatch_status::blocking_runtime_consumption_run_graph_status(
+                            let mut role_selection =
+                                match super::build_runtime_lane_selection_with_store(
+                                    &store,
+                                    &request_text,
+                                )
+                                .await
+                                {
+                                    Ok(selection) => selection,
+                                    Err(error) => {
+                                        if as_json {
+                                            let mut blocking_role_selection =
+                                                super::blocking_lane_selection(
+                                                    &request_text,
+                                                    &error,
+                                                );
+                                            if let Some(task_id) = explicit_task_id {
+                                                bind_consume_final_explicit_task_id(
+                                                    &mut blocking_role_selection,
+                                                    task_id,
+                                                );
+                                            }
+                                            let blocked_run_id = super::runtime_consumption_run_id(
+                                                &blocking_role_selection,
+                                            );
+                                            let blocked_status = crate::runtime_dispatch_status::blocking_runtime_consumption_run_graph_status(
                                         &blocking_role_selection,
                                         &blocked_run_id,
                                     );
-                                        let blocked_status_json =
-                                            serde_json::to_value(&blocked_status)
-                                                .unwrap_or(serde_json::Value::Null);
-                                        let run_graph_bootstrap = serde_json::json!({
-                                            "status": "blocked",
-                                            "handoff_ready": false,
-                                            "reason": "unresolved_lane_selection",
-                                            "run_id": blocked_run_id,
-                                            "latest_status": blocked_status_json,
-                                        });
-                                        let dispatch_receipt = blocked_dispatch_receipt(
-                                            "unresolved_lane_selection",
-                                            &bundle_check,
-                                            &runtime_bundle,
-                                            Some(blocked_run_id.as_str()),
-                                        );
-                                        let mut closure_admission =
-                                            super::RuntimeConsumptionClosureAdmission {
-                                                status: "blocked".to_string(),
-                                                admitted: false,
-                                                blockers: vec![
-                                                    "unresolved_lane_selection".to_string()
-                                                ],
-                                                proof_surfaces: vec![
-                                                    "vida taskflow consume bundle check"
-                                                        .to_string(),
-                                                ],
-                                                evidence_table: vec![
+                                            let blocked_status_json =
+                                                serde_json::to_value(&blocked_status)
+                                                    .unwrap_or(serde_json::Value::Null);
+                                            let run_graph_bootstrap = serde_json::json!({
+                                                "status": "blocked",
+                                                "handoff_ready": false,
+                                                "reason": "unresolved_lane_selection",
+                                                "run_id": blocked_run_id,
+                                                "latest_status": blocked_status_json,
+                                            });
+                                            let dispatch_receipt = blocked_dispatch_receipt(
+                                                "unresolved_lane_selection",
+                                                &bundle_check,
+                                                &runtime_bundle,
+                                                Some(blocked_run_id.as_str()),
+                                            );
+                                            let mut closure_admission =
+                                                super::RuntimeConsumptionClosureAdmission {
+                                                    status: "blocked".to_string(),
+                                                    admitted: false,
+                                                    blockers: vec![
+                                                        "unresolved_lane_selection".to_string()
+                                                    ],
+                                                    proof_surfaces: vec![
+                                                        "vida taskflow consume bundle check"
+                                                            .to_string(),
+                                                    ],
+                                                    evidence_table: vec![
                                                     RuntimeConsumptionClosureAdmissionEvidence {
                                                         requirement: "lane_selection".to_string(),
                                                         status: "blocked".to_string(),
@@ -670,21 +740,21 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                                         ],
                                                     },
                                                 ],
-                                            };
-                                        normalize_runtime_consumption_statuses(
-                                            &mut docflow_verdict,
-                                            &mut closure_admission,
-                                        );
-                                        let generated_at = time::OffsetDateTime::now_utc()
-                                            .format(&super::Rfc3339)
-                                            .expect("rfc3339 timestamp should render");
-                                        let requested_owned_paths =
-                                            consume_final_requested_owned_paths(
-                                                &store,
-                                                &consume_final_args,
-                                            )
-                                            .await;
-                                        let mut payload = super::TaskflowDirectConsumptionPayload {
+                                                };
+                                            normalize_runtime_consumption_statuses(
+                                                &mut docflow_verdict,
+                                                &mut closure_admission,
+                                            );
+                                            let generated_at = time::OffsetDateTime::now_utc()
+                                                .format(&super::Rfc3339)
+                                                .expect("rfc3339 timestamp should render");
+                                            let requested_owned_paths =
+                                                consume_final_requested_owned_paths(
+                                                    &store,
+                                                    &consume_final_args,
+                                                )
+                                                .await;
+                                            let mut payload = super::TaskflowDirectConsumptionPayload {
                                         artifact_name: "taskflow_direct_runtime_consumption"
                                             .to_string(),
                                         artifact_type: "runtime_consumption".to_string(),
@@ -729,323 +799,329 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                         dispatch_receipt,
                                         dispatch_packet_preview: None,
                                     };
-                                        if should_record_blocked_dispatch_receipt(
-                                            consume_final_mode,
-                                        ) {
-                                            if let Err(error) =
-                                                persist_blocked_consume_final_resume_evidence(
-                                                    &store,
-                                                    &payload.role_selection,
-                                                    &blocked_status,
-                                                    &request_text,
-                                                    &payload.taskflow_handoff_plan,
-                                                    &payload.run_graph_bootstrap,
-                                                    &mut payload.dispatch_receipt,
-                                                )
-                                                .await
-                                            {
-                                                eprintln!(
+                                            if should_record_blocked_dispatch_receipt(
+                                                consume_final_mode,
+                                            ) {
+                                                if let Err(error) =
+                                                    persist_blocked_consume_final_resume_evidence(
+                                                        &store,
+                                                        &payload.role_selection,
+                                                        &blocked_status,
+                                                        &request_text,
+                                                        &payload.taskflow_handoff_plan,
+                                                        &payload.run_graph_bootstrap,
+                                                        &mut payload.dispatch_receipt,
+                                                    )
+                                                    .await
+                                                {
+                                                    eprintln!(
                                                 "Failed to record blocked consume-final resume evidence: {error}"
                                             );
+                                                }
                                             }
+                                            if let Err(snapshot_error) =
+                                                super::emit_taskflow_consume_final_json(
+                                                    &store, &payload,
+                                                )
+                                                .map(|_| ())
+                                            {
+                                                eprintln!("{snapshot_error}");
+                                            }
+                                            return ExitCode::from(1);
                                         }
-                                        if let Err(snapshot_error) =
-                                            super::emit_taskflow_consume_final_json(
-                                                &store, &payload,
-                                            )
-                                            .map(|_| ())
-                                        {
-                                            eprintln!("{snapshot_error}");
-                                        }
+                                        eprintln!("{error}");
                                         return ExitCode::from(1);
                                     }
-                                    eprintln!("{error}");
-                                    return ExitCode::from(1);
-                                }
-                            };
-                        let run_graph_bootstrap =
+                                };
+                            if let Some(task_id) = explicit_task_id {
+                                bind_consume_final_explicit_task_id(&mut role_selection, task_id);
+                            }
+                            let run_graph_bootstrap =
                             crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap(
                                 &store,
                                 &role_selection,
                             )
                             .await;
-                        if let Err(error) = crate::apply_run_graph_runtime_assignment_to_selection(
-                            &mut role_selection,
-                            &runtime_bundle.activation_bundle,
-                            &run_graph_bootstrap,
-                            "run-graph role selection execution_plan is not an object",
-                        ) {
-                            eprintln!("{error}");
-                            return ExitCode::from(1);
-                        }
-                        let taskflow_handoff_plan =
-                            super::build_taskflow_handoff_plan(&role_selection);
-                        let mut closure_admission = super::build_runtime_closure_admission(
-                            &bundle_check,
-                            &docflow_verdict,
-                            &role_selection,
-                        );
-                        normalize_runtime_consumption_statuses(
-                            &mut docflow_verdict,
-                            &mut closure_admission,
-                        );
-                        let execution_preparation_gate = build_execution_preparation_evidence_gate(
-                            &role_selection,
-                            &taskflow_handoff_plan,
-                            &run_graph_bootstrap,
-                        );
-                        let retrieval_policy_gate =
-                            build_retrieval_policy_decision_gate(&bundle_check);
-                        let approval_delegation_gate = build_approval_delegation_evidence_gate(
-                            &store,
-                            &role_selection,
-                            &run_graph_bootstrap,
-                        )
-                        .await;
-                        if let Some(blocker_code) = execution_preparation_gate.blocker_code() {
-                            if !closure_admission
-                                .blockers
-                                .iter()
-                                .any(|value| value == blocker_code)
+                            if let Err(error) =
+                                crate::apply_run_graph_runtime_assignment_to_selection(
+                                    &mut role_selection,
+                                    &runtime_bundle.activation_bundle,
+                                    &run_graph_bootstrap,
+                                    "run-graph role selection execution_plan is not an object",
+                                )
                             {
-                                closure_admission.blockers.push(blocker_code.to_string());
-                                closure_admission.blockers.sort();
-                                closure_admission.blockers.dedup();
+                                eprintln!("{error}");
+                                return ExitCode::from(1);
                             }
-                            closure_admission.status = "blocked".to_string();
-                            closure_admission.admitted = false;
-                        }
-                        if let Some(blocker_code) = retrieval_policy_gate.blocker_code() {
-                            if !closure_admission
-                                .blockers
-                                .iter()
-                                .any(|value| value == blocker_code)
-                            {
-                                closure_admission.blockers.push(blocker_code.to_string());
-                                closure_admission.blockers.sort();
-                                closure_admission.blockers.dedup();
-                            }
-                            closure_admission.status = "blocked".to_string();
-                            closure_admission.admitted = false;
-                        }
-                        if let Some(blocker_code) = approval_delegation_gate.blocker_code() {
-                            if !closure_admission
-                                .blockers
-                                .iter()
-                                .any(|value| value == blocker_code)
-                            {
-                                closure_admission.blockers.push(blocker_code.to_string());
-                                closure_admission.blockers.sort();
-                                closure_admission.blockers.dedup();
-                            }
-                            closure_admission.status = "blocked".to_string();
-                            closure_admission.admitted = false;
-                        }
-                        let mut dispatch_receipt = build_runtime_consumption_dispatch_receipt(
-                            &role_selection,
-                            &run_graph_bootstrap,
-                        );
-                        if let Some(blocker_code) = execution_preparation_gate.blocker_code() {
-                            dispatch_receipt.dispatch_status = "blocked".to_string();
-                            dispatch_receipt.blocker_code = Some(blocker_code.to_string());
-                            dispatch_receipt.downstream_dispatch_ready = false;
-                            if !dispatch_receipt
-                                .downstream_dispatch_blockers
-                                .iter()
-                                .any(|value| value == blocker_code)
-                            {
-                                dispatch_receipt
-                                    .downstream_dispatch_blockers
-                                    .insert(0, blocker_code.to_string());
-                            }
-                        }
-                        if let Some(blocker_code) = retrieval_policy_gate.blocker_code() {
-                            dispatch_receipt.dispatch_status = "blocked".to_string();
-                            dispatch_receipt.blocker_code = Some(blocker_code.to_string());
-                            dispatch_receipt.downstream_dispatch_ready = false;
-                            if !dispatch_receipt
-                                .downstream_dispatch_blockers
-                                .iter()
-                                .any(|value| value == blocker_code)
-                            {
-                                dispatch_receipt
-                                    .downstream_dispatch_blockers
-                                    .insert(0, blocker_code.to_string());
-                            }
-                        }
-                        if let Some(blocker_code) = approval_delegation_gate.blocker_code() {
-                            dispatch_receipt.dispatch_status = "blocked".to_string();
-                            dispatch_receipt.blocker_code = Some(blocker_code.to_string());
-                            dispatch_receipt.downstream_dispatch_ready = false;
-                            if !dispatch_receipt
-                                .downstream_dispatch_blockers
-                                .iter()
-                                .any(|value| value == blocker_code)
-                            {
-                                dispatch_receipt
-                                    .downstream_dispatch_blockers
-                                    .insert(0, blocker_code.to_string());
-                            }
-                        }
-                        dispatch_receipt.dispatch_command =
-                            super::runtime_dispatch_command_for_target(
+                            let taskflow_handoff_plan =
+                                super::build_taskflow_handoff_plan(&role_selection);
+                            let mut closure_admission = super::build_runtime_closure_admission(
+                                &bundle_check,
+                                &docflow_verdict,
                                 &role_selection,
-                                &dispatch_receipt.dispatch_target,
                             );
-                        let downstream_preview_result = if consume_final_mode.is_read_only() {
-                            super::preview_downstream_dispatch_receipt(
-                                &store,
-                                &role_selection,
-                                &mut dispatch_receipt,
-                            )
-                            .await
-                        } else {
-                            super::refresh_downstream_dispatch_preview(
+                            normalize_runtime_consumption_statuses(
+                                &mut docflow_verdict,
+                                &mut closure_admission,
+                            );
+                            let execution_preparation_gate =
+                                build_execution_preparation_evidence_gate(
+                                    &role_selection,
+                                    &taskflow_handoff_plan,
+                                    &run_graph_bootstrap,
+                                );
+                            let retrieval_policy_gate =
+                                build_retrieval_policy_decision_gate(&bundle_check);
+                            let approval_delegation_gate = build_approval_delegation_evidence_gate(
                                 &store,
                                 &role_selection,
                                 &run_graph_bootstrap,
-                                &mut dispatch_receipt,
-                            )
-                            .await
-                        };
-                        if let Err(error) = downstream_preview_result {
-                            eprintln!(
-                                "Failed to write downstream runtime dispatch packet: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                        let dispatch_packet_preview = {
-                            let owned_paths_override = consume_final_owned_paths_override(
-                                &store,
-                                &role_selection,
-                                &dispatch_receipt,
-                                &consume_final_args,
                             )
                             .await;
-                            let ctx = crate::RuntimeDispatchPacketContext::new(
-                                store.root(),
+                            if let Some(blocker_code) = execution_preparation_gate.blocker_code() {
+                                if !closure_admission
+                                    .blockers
+                                    .iter()
+                                    .any(|value| value == blocker_code)
+                                {
+                                    closure_admission.blockers.push(blocker_code.to_string());
+                                    closure_admission.blockers.sort();
+                                    closure_admission.blockers.dedup();
+                                }
+                                closure_admission.status = "blocked".to_string();
+                                closure_admission.admitted = false;
+                            }
+                            if let Some(blocker_code) = retrieval_policy_gate.blocker_code() {
+                                if !closure_admission
+                                    .blockers
+                                    .iter()
+                                    .any(|value| value == blocker_code)
+                                {
+                                    closure_admission.blockers.push(blocker_code.to_string());
+                                    closure_admission.blockers.sort();
+                                    closure_admission.blockers.dedup();
+                                }
+                                closure_admission.status = "blocked".to_string();
+                                closure_admission.admitted = false;
+                            }
+                            if let Some(blocker_code) = approval_delegation_gate.blocker_code() {
+                                if !closure_admission
+                                    .blockers
+                                    .iter()
+                                    .any(|value| value == blocker_code)
+                                {
+                                    closure_admission.blockers.push(blocker_code.to_string());
+                                    closure_admission.blockers.sort();
+                                    closure_admission.blockers.dedup();
+                                }
+                                closure_admission.status = "blocked".to_string();
+                                closure_admission.admitted = false;
+                            }
+                            let mut dispatch_receipt = build_runtime_consumption_dispatch_receipt(
                                 &role_selection,
-                                &dispatch_receipt,
-                                &taskflow_handoff_plan,
                                 &run_graph_bootstrap,
-                            )
-                            .with_owned_paths_override(owned_paths_override);
-                            match super::runtime_dispatch_packet_preview(&ctx) {
-                                Ok(preview) => Some(preview),
-                                Err(error) => {
-                                    eprintln!(
-                                        "Failed to build runtime dispatch packet preview: {error}"
-                                    );
-                                    return ExitCode::from(1);
+                            );
+                            if let Some(blocker_code) = execution_preparation_gate.blocker_code() {
+                                dispatch_receipt.dispatch_status = "blocked".to_string();
+                                dispatch_receipt.blocker_code = Some(blocker_code.to_string());
+                                dispatch_receipt.downstream_dispatch_ready = false;
+                                if !dispatch_receipt
+                                    .downstream_dispatch_blockers
+                                    .iter()
+                                    .any(|value| value == blocker_code)
+                                {
+                                    dispatch_receipt
+                                        .downstream_dispatch_blockers
+                                        .insert(0, blocker_code.to_string());
                                 }
                             }
-                        };
-                        let pending_design_packet =
-                            super::blocker_code_str(super::BlockerCode::PendingDesignPacket);
-                        let pending_execution_preparation_evidence = super::blocker_code_str(
-                            super::BlockerCode::PendingExecutionPreparationEvidence,
-                        );
-                        let direct_consumption_ready = bundle_check.ok
-                            && docflow_verdict.ready
-                            && closure_admission.admitted
-                            && !closure_admission.blockers.iter().any(|row| {
-                                row == pending_design_packet
-                                    || row == pending_execution_preparation_evidence
-                            })
-                            && dispatch_packet_preview
-                                .as_ref()
-                                .and_then(|preview| preview.get("status"))
-                                .and_then(serde_json::Value::as_str)
-                                != Some("blocked");
-                        let consume_final_blocker_code = if !direct_consumption_ready {
-                            dispatch_packet_preview
-                                .as_ref()
-                                .and_then(|preview| preview.get("status"))
-                                .and_then(serde_json::Value::as_str)
-                                .filter(|status| *status == "blocked")
-                                .map(|_| {
-                                    super::blocker_code_str(
-                                        super::BlockerCode::MissingExecutionPreparationContract,
-                                    )
-                                    .to_string()
+                            if let Some(blocker_code) = retrieval_policy_gate.blocker_code() {
+                                dispatch_receipt.dispatch_status = "blocked".to_string();
+                                dispatch_receipt.blocker_code = Some(blocker_code.to_string());
+                                dispatch_receipt.downstream_dispatch_ready = false;
+                                if !dispatch_receipt
+                                    .downstream_dispatch_blockers
+                                    .iter()
+                                    .any(|value| value == blocker_code)
+                                {
+                                    dispatch_receipt
+                                        .downstream_dispatch_blockers
+                                        .insert(0, blocker_code.to_string());
+                                }
+                            }
+                            if let Some(blocker_code) = approval_delegation_gate.blocker_code() {
+                                dispatch_receipt.dispatch_status = "blocked".to_string();
+                                dispatch_receipt.blocker_code = Some(blocker_code.to_string());
+                                dispatch_receipt.downstream_dispatch_ready = false;
+                                if !dispatch_receipt
+                                    .downstream_dispatch_blockers
+                                    .iter()
+                                    .any(|value| value == blocker_code)
+                                {
+                                    dispatch_receipt
+                                        .downstream_dispatch_blockers
+                                        .insert(0, blocker_code.to_string());
+                                }
+                            }
+                            dispatch_receipt.dispatch_command =
+                                super::runtime_dispatch_command_for_target(
+                                    &role_selection,
+                                    &dispatch_receipt.dispatch_target,
+                                );
+                            let downstream_preview_result = if consume_final_mode.is_read_only() {
+                                super::preview_downstream_dispatch_receipt(
+                                    &store,
+                                    &role_selection,
+                                    &mut dispatch_receipt,
+                                )
+                                .await
+                            } else {
+                                super::refresh_downstream_dispatch_preview(
+                                    &store,
+                                    &role_selection,
+                                    &run_graph_bootstrap,
+                                    &mut dispatch_receipt,
+                                )
+                                .await
+                            };
+                            if let Err(error) = downstream_preview_result {
+                                eprintln!(
+                                    "Failed to write downstream runtime dispatch packet: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                            let dispatch_packet_preview = {
+                                let owned_paths_override = consume_final_owned_paths_override(
+                                    &store,
+                                    &role_selection,
+                                    &dispatch_receipt,
+                                    &consume_final_args,
+                                )
+                                .await;
+                                let ctx = crate::RuntimeDispatchPacketContext::new(
+                                    store.root(),
+                                    &role_selection,
+                                    &dispatch_receipt,
+                                    &taskflow_handoff_plan,
+                                    &run_graph_bootstrap,
+                                )
+                                .with_owned_paths_override(owned_paths_override);
+                                match super::runtime_dispatch_packet_preview(&ctx) {
+                                    Ok(preview) => Some(preview),
+                                    Err(error) => {
+                                        eprintln!(
+                                        "Failed to build runtime dispatch packet preview: {error}"
+                                    );
+                                        return ExitCode::from(1);
+                                    }
+                                }
+                            };
+                            let pending_design_packet =
+                                super::blocker_code_str(super::BlockerCode::PendingDesignPacket);
+                            let pending_execution_preparation_evidence = super::blocker_code_str(
+                                super::BlockerCode::PendingExecutionPreparationEvidence,
+                            );
+                            let direct_consumption_ready = bundle_check.ok
+                                && docflow_verdict.ready
+                                && closure_admission.admitted
+                                && !closure_admission.blockers.iter().any(|row| {
+                                    row == pending_design_packet
+                                        || row == pending_execution_preparation_evidence
                                 })
-                                .or_else(|| closure_admission.blockers.first().cloned())
-                                .or_else(|| docflow_verdict.blockers.first().cloned())
-                                .or_else(|| bundle_check.blockers.first().cloned())
-                                .or_else(|| {
-                                    Some(
+                                && dispatch_packet_preview
+                                    .as_ref()
+                                    .and_then(|preview| preview.get("status"))
+                                    .and_then(serde_json::Value::as_str)
+                                    != Some("blocked");
+                            let consume_final_blocker_code = if !direct_consumption_ready {
+                                dispatch_packet_preview
+                                    .as_ref()
+                                    .and_then(|preview| preview.get("status"))
+                                    .and_then(serde_json::Value::as_str)
+                                    .filter(|status| *status == "blocked")
+                                    .map(|_| {
+                                        super::blocker_code_str(
+                                            super::BlockerCode::MissingExecutionPreparationContract,
+                                        )
+                                        .to_string()
+                                    })
+                                    .or_else(|| closure_admission.blockers.first().cloned())
+                                    .or_else(|| docflow_verdict.blockers.first().cloned())
+                                    .or_else(|| bundle_check.blockers.first().cloned())
+                                    .or_else(|| {
+                                        Some(
                                         super::blocker_code_str(
                                             super::BlockerCode::PendingExecutionPreparationEvidence,
                                         )
                                         .to_string(),
                                     )
-                                })
-                        } else {
-                            None
-                        };
-                        if let Some(blocker_code) = consume_final_blocker_code.clone() {
-                            dispatch_receipt.dispatch_status = "blocked".to_string();
-                            dispatch_receipt.lane_status =
-                                super::LaneStatus::LaneBlocked.as_str().to_string();
-                            dispatch_receipt.blocker_code = Some(blocker_code);
-                        }
-                        apply_consume_final_downstream_dispatch_contract(
-                            &mut dispatch_receipt,
-                            direct_consumption_ready,
-                            docflow_verdict.ready,
-                            role_selection.conversational_mode.is_some(),
-                            consume_final_blocker_code.as_deref(),
-                        );
-                        if !consume_final_mode.is_read_only() {
-                            let owned_paths_override = consume_final_owned_paths_override(
-                                &store,
-                                &role_selection,
-                                &dispatch_receipt,
-                                &consume_final_args,
-                            )
-                            .await;
-                            let ctx = crate::RuntimeDispatchPacketContext::new(
-                                store.root(),
-                                &role_selection,
-                                &dispatch_receipt,
-                                &taskflow_handoff_plan,
-                                &run_graph_bootstrap,
-                            )
-                            .with_owned_paths_override(owned_paths_override);
-                            let dispatch_packet_path =
-                                match super::write_runtime_dispatch_packet(&ctx) {
-                                    Ok(path) => path,
-                                    Err(error) => {
-                                        eprintln!(
-                                            "Failed to write runtime dispatch packet: {error}"
-                                        );
-                                        return ExitCode::from(1);
-                                    }
-                                };
-                            dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path);
-                        }
-                        if let Some(project_root) =
-                            super::taskflow_task_bridge::infer_project_root_from_state_root(
-                                store.root(),
-                            )
-                        {
-                            if let Some(fallback_backend) =
-                                super::fallback_backend_for_blocked_primary_dispatch_receipt(
-                                    &project_root,
+                                    })
+                            } else {
+                                None
+                            };
+                            if let Some(blocker_code) = consume_final_blocker_code.clone() {
+                                dispatch_receipt.dispatch_status = "blocked".to_string();
+                                dispatch_receipt.lane_status =
+                                    super::LaneStatus::LaneBlocked.as_str().to_string();
+                                dispatch_receipt.blocker_code = Some(blocker_code);
+                            }
+                            apply_consume_final_downstream_dispatch_contract(
+                                &mut dispatch_receipt,
+                                direct_consumption_ready,
+                                docflow_verdict.ready,
+                                role_selection.conversational_mode.is_some(),
+                                consume_final_blocker_code.as_deref(),
+                            );
+                            if !consume_final_mode.is_read_only() {
+                                let owned_paths_override = consume_final_owned_paths_override(
+                                    &store,
                                     &role_selection,
                                     &dispatch_receipt,
+                                    &consume_final_args,
+                                )
+                                .await;
+                                let ctx = crate::RuntimeDispatchPacketContext::new(
+                                    store.root(),
+                                    &role_selection,
+                                    &dispatch_receipt,
+                                    &taskflow_handoff_plan,
+                                    &run_graph_bootstrap,
+                                )
+                                .with_owned_paths_override(owned_paths_override);
+                                let dispatch_packet_path =
+                                    match super::write_runtime_dispatch_packet(&ctx) {
+                                        Ok(path) => path,
+                                        Err(error) => {
+                                            eprintln!(
+                                                "Failed to write runtime dispatch packet: {error}"
+                                            );
+                                            return ExitCode::from(1);
+                                        }
+                                    };
+                                dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path);
+                            }
+                            if let Some(project_root) =
+                                super::taskflow_task_bridge::infer_project_root_from_state_root(
+                                    store.root(),
                                 )
                             {
-                                dispatch_receipt.selected_backend = Some(fallback_backend);
+                                if let Some(fallback_backend) =
+                                    super::fallback_backend_for_blocked_primary_dispatch_receipt(
+                                        &project_root,
+                                        &role_selection,
+                                        &dispatch_receipt,
+                                    )
+                                {
+                                    dispatch_receipt.selected_backend = Some(fallback_backend);
+                                }
                             }
-                        }
-                        let allow_taskflow_pack_execution = dispatch_receipt.dispatch_kind
-                            != "taskflow_pack"
-                            || super::taskflow_task_bridge::infer_project_root_from_state_root(
-                                store.root(),
-                            )
-                            .is_some();
-                        let allow_automatic_dispatch_execution =
+                            let allow_taskflow_pack_execution = dispatch_receipt.dispatch_kind
+                                != "taskflow_pack"
+                                || super::taskflow_task_bridge::infer_project_root_from_state_root(
+                                    store.root(),
+                                )
+                                .is_some();
+                            let allow_automatic_dispatch_execution =
                             super::taskflow_task_bridge::infer_project_root_from_state_root(
                                 store.root(),
                             )
@@ -1053,79 +1129,81 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 super::runtime_dispatch_state::runtime_host_execution_contract_allows_automatic_dispatch_execution(&project_root)
                             })
                             .unwrap_or(true);
-                        let state_root = store.root().to_path_buf();
-                        drop(store);
-                        if !consume_final_mode.is_read_only()
-                            && direct_consumption_ready
-                            && dispatch_receipt.dispatch_status == "routed"
-                            && allow_taskflow_pack_execution
-                            && allow_automatic_dispatch_execution
-                        {
-                            if let Err(error) = super::execute_and_record_dispatch_receipt(
-                                &state_root,
-                                &role_selection,
-                                &run_graph_bootstrap,
-                                &mut dispatch_receipt,
-                            )
-                            .await
+                            let state_root = store.root().to_path_buf();
+                            drop(store);
+                            if !consume_final_mode.is_read_only()
+                                && direct_consumption_ready
+                                && dispatch_receipt.dispatch_status == "routed"
+                                && allow_taskflow_pack_execution
+                                && allow_automatic_dispatch_execution
                             {
-                                super::taskflow_consume_resume::emit_consume_continue_resume_error(
+                                if let Err(error) = super::execute_and_record_dispatch_receipt(
+                                    &state_root,
+                                    &role_selection,
+                                    &run_graph_bootstrap,
+                                    &mut dispatch_receipt,
+                                )
+                                .await
+                                {
+                                    super::taskflow_consume_resume::emit_consume_continue_resume_error(
                                     &error,
                                     "vida taskflow consume final",
                                     as_json,
                                 );
-                                return ExitCode::from(1);
+                                    return ExitCode::from(1);
+                                }
                             }
-                        }
-                        if !consume_final_mode.is_read_only() && direct_consumption_ready {
-                            if let Err(error) = super::execute_downstream_dispatch_chain(
-                                &state_root,
-                                &role_selection,
-                                &run_graph_bootstrap,
-                                &mut dispatch_receipt,
+                            if !consume_final_mode.is_read_only() && direct_consumption_ready {
+                                if let Err(error) = super::execute_downstream_dispatch_chain(
+                                    &state_root,
+                                    &role_selection,
+                                    &run_graph_bootstrap,
+                                    &mut dispatch_receipt,
+                                )
+                                .await
+                                {
+                                    eprintln!("{error}");
+                                    return ExitCode::from(1);
+                                }
+                            }
+                            let store = match fail_fast_state_store_open(
+                                state_root.clone(),
+                                "reopening authoritative state store before receipt persistence",
                             )
                             .await
                             {
-                                eprintln!("{error}");
-                                return ExitCode::from(1);
-                            }
-                        }
-                        let store = match fail_fast_state_store_open(
-                            state_root.clone(),
-                            "reopening authoritative state store before receipt persistence",
-                        )
-                        .await
-                        {
-                            Ok(store) => store,
-                            Err(error) => {
-                                eprintln!(
+                                Ok(store) => store,
+                                Err(error) => {
+                                    eprintln!(
                                     "Failed to reopen authoritative state store before receipt persistence: {error}"
                                 );
-                                return ExitCode::from(1);
+                                    return ExitCode::from(1);
+                                }
+                            };
+                            if !consume_final_mode.is_read_only() {
+                                if let Err(error) = store
+                                    .record_run_graph_dispatch_receipt(&dispatch_receipt)
+                                    .await
+                                {
+                                    eprintln!(
+                                        "Failed to record run-graph dispatch receipt: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
                             }
-                        };
-                        if !consume_final_mode.is_read_only() {
-                            if let Err(error) = store
-                                .record_run_graph_dispatch_receipt(&dispatch_receipt)
-                                .await
-                            {
-                                eprintln!("Failed to record run-graph dispatch receipt: {error}");
-                                return ExitCode::from(1);
-                            }
-                        }
-                        // Re-sync continuation binding after downstream dispatch chain advances the run-graph.
-                        // Downstream execution inside execute_downstream_dispatch_chain updates run-graph status
-                        // via execute_and_record_dispatch_receipt, but the root-level continuation binding must
-                        // be refreshed after the final receipt is persisted so reconciled status sees blocked
-                        // downstream truth rather than stale upstream status.
-                        if !consume_final_mode.is_read_only() && direct_consumption_ready {
-                            if let Some(run_id) = run_graph_bootstrap
-                                .get("run_id")
-                                .and_then(serde_json::Value::as_str)
-                                .filter(|value| !value.is_empty())
-                            {
-                                if let Ok(status) = store.run_graph_status(run_id).await {
-                                    if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                            // Re-sync continuation binding after downstream dispatch chain advances the run-graph.
+                            // Downstream execution inside execute_downstream_dispatch_chain updates run-graph status
+                            // via execute_and_record_dispatch_receipt, but the root-level continuation binding must
+                            // be refreshed after the final receipt is persisted so reconciled status sees blocked
+                            // downstream truth rather than stale upstream status.
+                            if !consume_final_mode.is_read_only() && direct_consumption_ready {
+                                if let Some(run_id) = run_graph_bootstrap
+                                    .get("run_id")
+                                    .and_then(serde_json::Value::as_str)
+                                    .filter(|value| !value.is_empty())
+                                {
+                                    if let Ok(status) = store.run_graph_status(run_id).await {
+                                        if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
                                         &store,
                                         &status,
                                         crate::taskflow_continuation::CONSUME_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE,
@@ -1135,17 +1213,18 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                         eprintln!("Failed to re-sync continuation binding after downstream dispatch chain: {error}");
                                         return ExitCode::from(1);
                                     }
+                                    }
                                 }
                             }
-                        }
-                        let dispatch_receipt_json = serde_json::to_value(&dispatch_receipt)
-                            .unwrap_or(serde_json::Value::Null);
-                        let generated_at = time::OffsetDateTime::now_utc()
-                            .format(&super::Rfc3339)
-                            .expect("rfc3339 timestamp should render");
-                        let requested_owned_paths =
-                            consume_final_requested_owned_paths(&store, &consume_final_args).await;
-                        let payload = super::TaskflowDirectConsumptionPayload {
+                            let dispatch_receipt_json = serde_json::to_value(&dispatch_receipt)
+                                .unwrap_or(serde_json::Value::Null);
+                            let generated_at = time::OffsetDateTime::now_utc()
+                                .format(&super::Rfc3339)
+                                .expect("rfc3339 timestamp should render");
+                            let requested_owned_paths =
+                                consume_final_requested_owned_paths(&store, &consume_final_args)
+                                    .await;
+                            let payload = super::TaskflowDirectConsumptionPayload {
                             artifact_name: "taskflow_direct_runtime_consumption".to_string(),
                             artifact_type: "runtime_consumption".to_string(),
                             generated_at: generated_at.clone(),
@@ -1184,74 +1263,75 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             dispatch_receipt: dispatch_receipt_json,
                             dispatch_packet_preview,
                         };
-                        if as_json {
-                            let snapshot_path =
-                                match super::emit_taskflow_consume_final_json(&store, &payload) {
-                                    Ok(snapshot_path) => snapshot_path,
+                            if as_json {
+                                let snapshot_path =
+                                    match super::emit_taskflow_consume_final_json(&store, &payload)
+                                    {
+                                        Ok(snapshot_path) => snapshot_path,
+                                        Err(error) => {
+                                            eprintln!("{error}");
+                                            return ExitCode::from(1);
+                                        }
+                                    };
+                                if let Err(error) =
+                                    ensure_runtime_consumption_final_task_reconciliation_summary(
+                                        &store,
+                                        Some(snapshot_path),
+                                    )
+                                    .await
+                                {
+                                    eprintln!("{error}");
+                                    return ExitCode::from(1);
+                                }
+                            } else {
+                                let snapshot = serde_json::json!({
+                                    "surface": "vida taskflow consume final",
+                                    "payload": &payload,
+                                });
+                                let snapshot_path = match super::write_runtime_consumption_snapshot(
+                                    store.root(),
+                                    "final",
+                                    &snapshot,
+                                ) {
+                                    Ok(path) => path,
                                     Err(error) => {
                                         eprintln!("{error}");
                                         return ExitCode::from(1);
                                     }
                                 };
-                            if let Err(error) =
-                                ensure_runtime_consumption_final_task_reconciliation_summary(
-                                    &store,
-                                    Some(snapshot_path),
-                                )
-                                .await
-                            {
-                                eprintln!("{error}");
-                                return ExitCode::from(1);
-                            }
-                        } else {
-                            let snapshot = serde_json::json!({
-                                "surface": "vida taskflow consume final",
-                                "payload": &payload,
-                            });
-                            let snapshot_path = match super::write_runtime_consumption_snapshot(
-                                store.root(),
-                                "final",
-                                &snapshot,
-                            ) {
-                                Ok(path) => path,
-                                Err(error) => {
+                                if let Err(error) =
+                                    ensure_runtime_consumption_final_task_reconciliation_summary(
+                                        &store,
+                                        Some(snapshot_path.clone()),
+                                    )
+                                    .await
+                                {
                                     eprintln!("{error}");
                                     return ExitCode::from(1);
                                 }
-                            };
-                            if let Err(error) =
-                                ensure_runtime_consumption_final_task_reconciliation_summary(
-                                    &store,
-                                    Some(snapshot_path.clone()),
-                                )
-                                .await
-                            {
-                                eprintln!("{error}");
-                                return ExitCode::from(1);
+                                println!("{}", consume_final_toon_text(&payload, &snapshot_path));
                             }
-                            println!("{}", consume_final_toon_text(&payload, &snapshot_path));
-                        }
 
-                        match consume_final_mode {
-                            ConsumeFinalMode::Preview => ExitCode::SUCCESS,
-                            ConsumeFinalMode::Execute | ConsumeFinalMode::ValidateOnly => {
-                                if payload.closure_admission.admitted {
-                                    ExitCode::SUCCESS
-                                } else {
-                                    ExitCode::from(1)
+                            match consume_final_mode {
+                                ConsumeFinalMode::Preview => ExitCode::SUCCESS,
+                                ConsumeFinalMode::Execute | ConsumeFinalMode::ValidateOnly => {
+                                    if payload.closure_admission.admitted {
+                                        ExitCode::SUCCESS
+                                    } else {
+                                        ExitCode::from(1)
+                                    }
                                 }
                             }
                         }
-                    }
-                    Err(error) => {
-                        if as_json {
-                            let runtime_bundle = super::blocking_runtime_bundle(&error);
-                            let bundle_check =
-                                super::taskflow_consume_bundle_check(&runtime_bundle);
-                            let mut docflow_verdict = super::RuntimeConsumptionDocflowVerdict {
-                                status: "blocked".to_string(),
-                                ready: false,
-                                blockers: vec![
+                        Err(error) => {
+                            if as_json {
+                                let runtime_bundle = super::blocking_runtime_bundle(&error);
+                                let bundle_check =
+                                    super::taskflow_consume_bundle_check(&runtime_bundle);
+                                let mut docflow_verdict = super::RuntimeConsumptionDocflowVerdict {
+                                    status: "blocked".to_string(),
+                                    ready: false,
+                                    blockers: vec![
                                     crate::release_contract_adapters::blocker_code(
                                         BlockerCode::MissingDocflowActivation,
                                     )
@@ -1269,37 +1349,43 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     )
                                     .expect("missing proof verdict blocker should be canonical"),
                                 ],
-                                proof_surfaces: vec![],
-                            };
-                            let role_selection =
-                                super::blocking_lane_selection(&request_text, &error);
-                            let run_graph_bootstrap =
+                                    proof_surfaces: vec![],
+                                };
+                                let mut role_selection =
+                                    super::blocking_lane_selection(&request_text, &error);
+                                if let Some(task_id) = explicit_task_id {
+                                    bind_consume_final_explicit_task_id(
+                                        &mut role_selection,
+                                        task_id,
+                                    );
+                                }
+                                let run_graph_bootstrap =
                                 crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap(
                                     &store,
                                     &role_selection,
                                 )
                                 .await;
-                            let mut closure_admission = super::build_runtime_closure_admission(
-                                &bundle_check,
-                                &docflow_verdict,
-                                &role_selection,
-                            );
-                            normalize_runtime_consumption_statuses(
-                                &mut docflow_verdict,
-                                &mut closure_admission,
-                            );
-                            let readiness = super::RuntimeConsumptionEvidence {
-                                surface: "vida docflow readiness-check --profile active-canon"
-                                    .to_string(),
-                                ok: false,
-                                row_count: 0,
-                                verdict: Some("blocked".to_string()),
-                                artifact_path: Some(
-                                    "vida/config/docflow-readiness.current.jsonl".to_string(),
-                                ),
-                                output: error.clone(),
-                            };
-                            let proof = super::RuntimeConsumptionEvidence {
+                                let mut closure_admission = super::build_runtime_closure_admission(
+                                    &bundle_check,
+                                    &docflow_verdict,
+                                    &role_selection,
+                                );
+                                normalize_runtime_consumption_statuses(
+                                    &mut docflow_verdict,
+                                    &mut closure_admission,
+                                );
+                                let readiness = super::RuntimeConsumptionEvidence {
+                                    surface: "vida docflow readiness-check --profile active-canon"
+                                        .to_string(),
+                                    ok: false,
+                                    row_count: 0,
+                                    verdict: Some("blocked".to_string()),
+                                    artifact_path: Some(
+                                        "vida/config/docflow-readiness.current.jsonl".to_string(),
+                                    ),
+                                    output: error.clone(),
+                                };
+                                let proof = super::RuntimeConsumptionEvidence {
                                 surface: "vida docflow proofcheck --profile active-canon"
                                     .to_string(),
                                 ok: false,
@@ -1311,50 +1397,54 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 ),
                                 output: error.clone(),
                             };
-                            let docflow_receipt_evidence =
+                                let docflow_receipt_evidence =
                                 crate::runtime_consumption_surface::build_docflow_receipt_evidence(
                                     &readiness, &proof,
                                 );
-                            let blocked_run_id =
-                                super::json_string(run_graph_bootstrap.get("run_id"))
-                                    .unwrap_or_else(|| {
-                                        super::runtime_consumption_run_id(&role_selection)
-                                    });
-                            let dispatch_receipt = blocked_dispatch_receipt(
-                                "docflow_activation_failed",
-                                &bundle_check,
-                                &runtime_bundle,
-                                Some(blocked_run_id.as_str()),
-                            );
-                            if should_record_blocked_dispatch_receipt(consume_final_mode) {
-                                if let Ok(receipt) =
-                                    serde_json::from_value::<
+                                let blocked_run_id =
+                                    super::json_string(run_graph_bootstrap.get("run_id"))
+                                        .unwrap_or_else(|| {
+                                            super::runtime_consumption_run_id(&role_selection)
+                                        });
+                                let dispatch_receipt = blocked_dispatch_receipt(
+                                    "docflow_activation_failed",
+                                    &bundle_check,
+                                    &runtime_bundle,
+                                    Some(blocked_run_id.as_str()),
+                                );
+                                if should_record_blocked_dispatch_receipt(consume_final_mode) {
+                                    if let Ok(receipt) = serde_json::from_value::<
                                         crate::state_store::RunGraphDispatchReceipt,
-                                    >(dispatch_receipt.clone())
-                                {
-                                    if let Err(error) =
-                                        store.record_run_graph_dispatch_receipt(&receipt).await
-                                    {
-                                        eprintln!(
+                                    >(
+                                        dispatch_receipt.clone()
+                                    ) {
+                                        if let Err(error) =
+                                            store.record_run_graph_dispatch_receipt(&receipt).await
+                                        {
+                                            eprintln!(
                                             "Failed to record blocked run-graph dispatch receipt: {error}"
                                         );
+                                        }
                                     }
                                 }
-                            }
-                            let mut docflow_activation = super::blocking_docflow_activation(&error);
-                            if let Some(evidence) = docflow_activation.evidence.as_object_mut() {
-                                evidence.insert(
-                                    "receipt_evidence".to_string(),
-                                    docflow_receipt_evidence,
-                                );
-                            }
-                            let generated_at = time::OffsetDateTime::now_utc()
-                                .format(&super::Rfc3339)
-                                .expect("rfc3339 timestamp should render");
-                            let requested_owned_paths =
-                                consume_final_requested_owned_paths(&store, &consume_final_args)
-                                    .await;
-                            let payload = super::TaskflowDirectConsumptionPayload {
+                                let mut docflow_activation =
+                                    super::blocking_docflow_activation(&error);
+                                if let Some(evidence) = docflow_activation.evidence.as_object_mut()
+                                {
+                                    evidence.insert(
+                                        "receipt_evidence".to_string(),
+                                        docflow_receipt_evidence,
+                                    );
+                                }
+                                let generated_at = time::OffsetDateTime::now_utc()
+                                    .format(&super::Rfc3339)
+                                    .expect("rfc3339 timestamp should render");
+                                let requested_owned_paths = consume_final_requested_owned_paths(
+                                    &store,
+                                    &consume_final_args,
+                                )
+                                .await;
+                                let payload = super::TaskflowDirectConsumptionPayload {
                                 artifact_name: "taskflow_direct_runtime_consumption".to_string(),
                                 artifact_type: "runtime_consumption".to_string(),
                                 generated_at: generated_at.clone(),
@@ -1385,19 +1475,20 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 dispatch_packet_preview: None,
                                 direct_consumption_ready: false,
                             };
-                            if let Err(snapshot_error) =
-                                super::emit_taskflow_consume_final_json(&store, &payload)
-                                    .map(|_| ())
-                            {
-                                eprintln!("{snapshot_error}");
+                                if let Err(snapshot_error) =
+                                    super::emit_taskflow_consume_final_json(&store, &payload)
+                                        .map(|_| ())
+                                {
+                                    eprintln!("{snapshot_error}");
+                                    return ExitCode::from(1);
+                                }
                                 return ExitCode::from(1);
                             }
-                            return ExitCode::from(1);
+                            eprintln!("{error}");
+                            ExitCode::from(1)
                         }
-                        eprintln!("{error}");
-                        ExitCode::from(1)
                     }
-                },
+                }
                 Err(error) => {
                     eprintln!("Failed to open authoritative state store: {error}");
                     ExitCode::from(1)
@@ -3443,6 +3534,66 @@ mod tests {
                 "test/features/menu/menu_route_registry_test.dart".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn consume_final_explicit_task_id_binding_overrides_request_slug_run_identity() {
+        let mut selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Use meeting specific event fields when".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::Value::Null,
+            reason: "test".to_string(),
+        };
+
+        super::bind_consume_final_explicit_task_id(
+            &mut selection,
+            "activity-meeting-event-form-fields",
+        );
+
+        assert_eq!(
+            selection.execution_plan["runtime_consumption_explicit_task_id"],
+            "activity-meeting-event-form-fields"
+        );
+        assert_eq!(
+            crate::runtime_consumption_run_id(&selection),
+            "activity-meeting-event-form-fields"
+        );
+    }
+
+    #[test]
+    fn consume_final_explicit_task_id_validation_fails_before_stale_run_creation() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-final-missing-task-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ));
+        let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(root.clone())
+                .await
+                .expect("open store");
+            let error =
+                super::validate_consume_final_explicit_task_id(&store, "missing-task-run").await;
+            assert!(error
+                .expect_err("missing explicit task id should fail")
+                .contains("refusing to create a stale run graph"));
+            store.close().await;
+        });
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -22850,6 +22850,107 @@ fn status_and_doctor_block_on_current_session_run_graph_snapshot_inconsistency()
 }
 
 #[test]
+fn consume_final_explicit_task_id_uses_task_identity_and_fails_closed_when_missing() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let (missing, missing_success) = run_command_json_allow_failure(
+        &[
+            "taskflow",
+            "consume",
+            "final",
+            "Use meeting specific event fields when",
+            "--task-id",
+            "missing-explicit-task-id",
+            "--from-task-metadata",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(
+        !missing_success,
+        "missing explicit task id must fail before stale run creation: {missing}"
+    );
+    assert_eq!(missing["status"], "blocked");
+    assert!(missing["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should be an array")
+        .iter()
+        .any(|code| code.as_str() == Some("consume_final_explicit_task_id_missing")));
+    assert_eq!(
+        missing["artifact_refs"]["task_id"],
+        "missing-explicit-task-id"
+    );
+    let runtime_consumption_root = format!("{state_dir}/runtime-consumption");
+    assert!(
+        !std::path::Path::new(&format!("{runtime_consumption_root}/dispatch-packets")).exists(),
+        "missing explicit task id must not create dispatch packets"
+    );
+    assert!(
+        !std::path::Path::new(&runtime_consumption_root).exists(),
+        "missing explicit task id must fail before runtime-consumption artifacts"
+    );
+
+    let _epic = run_command_json(
+        &[
+            "task",
+            "create",
+            "consume-final-explicit-task-id-epic",
+            "Consume final explicit task id epic",
+            "--type",
+            "epic",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let task_id = "activity-meeting-event-form-fields";
+    let _task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Activity meeting event form fields",
+            "--description",
+            "Use meeting specific event fields when",
+            "--parent-id",
+            "consume-final-explicit-task-id-epic",
+            "--owned-path",
+            "lib/activity/meeting_event_form.dart",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let (final_output, _) = run_command_json_allow_failure(
+        &[
+            "taskflow",
+            "consume",
+            "final",
+            "Use meeting specific event fields when",
+            "--task-id",
+            task_id,
+            "--from-task-metadata",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(final_output["surface"], "vida taskflow consume final");
+
+    let packet_root = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    let packet_path = fs::read_dir(&packet_root)
+        .expect("dispatch-packets directory should exist")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .expect("consume final should create a persisted dispatch packet");
+    let packet: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&packet_path).expect("read packet"))
+            .expect("parse packet");
+    assert_eq!(packet["run_id"], task_id);
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn consume_continue_json_classifies_persisted_packet_contract_invalid_with_artifacts() {
     let (project_root, state_dir) = project_bound_state_dir();
     run_and_assert_success(&["boot"], &state_dir);

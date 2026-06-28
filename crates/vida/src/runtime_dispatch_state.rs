@@ -1058,6 +1058,12 @@ fn taskflow_execution_preparation_artifacts(
 pub(crate) fn runtime_consumption_run_id(
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> String {
+    if let Some(task_id) = role_selection.execution_plan["runtime_consumption_explicit_task_id"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+    {
+        return task_id.to_string();
+    }
     if let Some(task_id) = role_selection.execution_plan["tracked_flow_bootstrap"]["spec_task"]
         ["task_id"]
         .as_str()
@@ -1123,6 +1129,19 @@ mod runtime_consumption_run_id_tests {
         assert_eq!(
             runtime_consumption_run_id(&selection),
             "runtime-ship-dispatch-evidence"
+        );
+    }
+
+    #[test]
+    fn runtime_consumption_run_id_prefers_explicit_task_id_binding() {
+        let mut selection = selection_with_request("Use meeting specific event fields when");
+        selection.execution_plan = serde_json::json!({
+            "runtime_consumption_explicit_task_id": "activity-meeting-event-form-fields",
+        });
+
+        assert_eq!(
+            runtime_consumption_run_id(&selection),
+            "activity-meeting-event-form-fields"
         );
     }
 }
