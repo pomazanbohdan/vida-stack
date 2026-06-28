@@ -514,9 +514,13 @@ impl StateStore {
         }
 
         let archive_path = if root.exists() {
-            if state_reset_dir_has_existing_datastore_payload(&root)? {
-                validate_state_reset_existing_root(&root)?;
-            }
+            let _authoritative_open_guard =
+                if state_reset_dir_has_existing_datastore_payload(&root)? {
+                    validate_state_reset_existing_root(&root)?;
+                    Some(state_store_open::AuthoritativeOpenGuard::acquire(&root).await?)
+                } else {
+                    None
+                };
             let archive_path = Self::next_state_archive_path(&root);
             fs::rename(&root, &archive_path)?;
             Some(archive_path)
@@ -768,7 +772,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn state_reset_archives_corrupted_datastore_without_opening_it_first() {
+    async fn state_reset_archives_corrupted_datastore_after_acquiring_authoritative_guard() {
         let root = std::env::temp_dir().join(format!(
             "vida-state-reset-corrupted-datastore-{}-{}",
             std::process::id(),
@@ -819,6 +823,56 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(archive_path);
+    }
+
+    #[tokio::test]
+    async fn state_reset_refuses_to_archive_datastore_when_authoritative_guard_is_locked() {
+        use fs2::FileExt;
+        use std::fs::OpenOptions;
+
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-reset-live-guard-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+        fs::create_dir_all(root.join("manifest")).expect("create manifest dir");
+        fs::create_dir_all(root.join("sstables")).expect("create sstables dir");
+        fs::create_dir_all(root.join("vlog")).expect("create vlog dir");
+        fs::create_dir_all(root.join("wal")).expect("create wal dir");
+        let guard_path = root.join(".vida-authoritative-open.guard");
+        fs::write(&guard_path, "").expect("write guard");
+        fs::write(
+            root.join("wal").join("00000000000000000003.wal"),
+            "held live",
+        )
+        .expect("write wal stand-in");
+
+        let guard_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&guard_path)
+            .expect("open guard");
+        guard_file
+            .try_lock_exclusive()
+            .expect("hold authoritative guard");
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            StateStore::archive_and_reinit_state_root(root.clone(), true, true),
+        )
+        .await;
+
+        assert!(result.is_err(), "locked live datastore should not archive");
+        assert!(root.join("wal").join("00000000000000000003.wal").exists());
+        assert!(fs::read_dir(root.parent().expect("temp parent"))
+            .expect("read temp parent")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .all(|name| !name.starts_with("vida-state-reset-live-guard-")
+                || !name.contains(".archive.")));
+
+        guard_file.unlock().expect("unlock guard");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
