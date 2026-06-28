@@ -332,6 +332,9 @@ pub(crate) fn dispatch_rework_route_from_result(
 }
 
 fn dispatch_result_has_rework_verdict(result: &serde_json::Value) -> bool {
+    if dispatch_result_has_authoritative_pass_verdict(result) {
+        return false;
+    }
     dispatch_result_field_is_rework_verdict(result.get("decision"))
         || dispatch_result_field_is_rework_verdict(result.get("verdict"))
         || dispatch_result_field_is_rework_verdict(result.get("completion_verdict"))
@@ -340,6 +343,34 @@ fn dispatch_result_has_rework_verdict(result: &serde_json::Value) -> bool {
                 || dispatch_result_field_is_rework_verdict(evidence.get("verdict"))
                 || dispatch_result_field_is_rework_verdict(evidence.get("completion_verdict"))
         })
+}
+
+fn dispatch_result_has_authoritative_pass_verdict(result: &serde_json::Value) -> bool {
+    let status = result
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let execution_state = result
+        .get("execution_state")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let decision = result
+        .get("decision")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let verdict = result
+        .get("verdict")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let blocker_codes_empty = result
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .is_none_or(Vec::is_empty);
+    status == Some("pass")
+        && execution_state == Some("executed")
+        && decision == Some("approve")
+        && verdict == Some("pass")
+        && blocker_codes_empty
 }
 
 fn dispatch_result_field_is_rework_verdict(value: Option<&serde_json::Value>) -> bool {
@@ -496,6 +527,28 @@ mod tests {
             "completion_verdict": "pass",
             "rework_target": "developer",
             "allowed_next_node": "developer_rework"
+        });
+
+        assert!(dispatch_rework_route_from_result(&result).is_none());
+    }
+
+    #[test]
+    fn dispatch_rework_route_rejects_stale_nested_rework_when_top_level_passes() {
+        let result = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "decision": "approve",
+            "verdict": "pass",
+            "blocker_codes": [],
+            "completion_verdict": "pass",
+            "rework_target": null,
+            "allowed_next_node": "designer",
+            "execution_evidence": {
+                "receipt_backed": true,
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "completion_verdict": "rework_required"
+            }
         });
 
         assert!(dispatch_rework_route_from_result(&result).is_none());

@@ -5657,6 +5657,100 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn pass_downstream_completion_result_ignores_stale_nested_rework_evidence() {
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-analyst-pass-route".to_string();
+        status.task_id = "analyst-pass-designer-routing".to_string();
+        status.active_node = "analyst".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "analyst_blocked".to_string();
+        status.recovery_ready = false;
+
+        let root = temp_run_graph_root("analyst-pass-stale-rework");
+        let result_path =
+            root.join(".vida/data/state/runtime-consumption/dispatch-results/analyst-pass.json");
+        fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create result parent");
+        fs::write(
+            &result_path,
+            serde_json::to_string(&serde_json::json!({
+                "status": "pass",
+                "execution_state": "executed",
+                "decision": "approve",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "allowed_next_node": "designer",
+                "completion_verdict": "pass",
+                "execution_evidence": {
+                    "decision": "rework_required",
+                    "verdict": "rework_required",
+                    "completion_verdict": "rework_required"
+                }
+            }))
+            .expect("serialize result"),
+        )
+        .expect("write result");
+        let packet_path = root.join(
+            ".vida/data/state/runtime-consumption/downstream-dispatch-packets/analyst-pass.json",
+        );
+        fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        fs::write(
+            &packet_path,
+            serde_json::to_string(&serde_json::json!({
+                "source_dispatch_target": "analyst",
+                "source_dispatch_status": "executed",
+                "downstream_dispatch_result_path": result_path.display().to_string(),
+                "role_selection_full": {
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "lane_catalog": {
+                                    "analyst": {
+                                        "dispatch_target": "analyst",
+                                        "task_class": "analysis"
+                                    },
+                                    "designer": {
+                                        "dispatch_target": "designer",
+                                        "task_class": "design"
+                                    },
+                                    "developer": {
+                                        "dispatch_target": "developer",
+                                        "task_class": "implementation"
+                                    }
+                                },
+                                "execution_lane_sequence": ["analyst", "designer", "developer"]
+                            }
+                        }
+                    }
+                }
+            }))
+            .expect("serialize packet"),
+        )
+        .expect("write packet");
+
+        let mut receipt = sample_dispatch_receipt(&status.run_id);
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+        receipt.blocker_code = None;
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
+
+        let stored_receipt = RunGraphDispatchReceiptStored::from(receipt);
+        let projected =
+            reconcile_run_graph_status_with_dispatch_receipt(status, Some(&stored_receipt))
+                .expect("pass route should reconcile without rework");
+
+        assert_ne!(projected.next_node.as_deref(), Some("developer_rework"));
+        assert_ne!(projected.policy_gate, "host_bridge_completion_blocked");
+        assert_eq!(projected.active_node, "analyst");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     fn reconciled_pack_dispatch_receipt_for_path(packet_path: String) -> RunGraphDispatchReceipt {
         let mut receipt = sample_dispatch_receipt("run-reconciled-pack-context");
         receipt.dispatch_packet_path = Some(packet_path);
