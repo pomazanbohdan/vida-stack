@@ -702,6 +702,40 @@ fn has_failure_state_artifact_language(normalized: &str) -> bool {
     .any(|phrase| normalized.contains(phrase))
 }
 
+fn has_active_blocker_action_language(normalized: &str) -> bool {
+    let mentions_blocker = ["blocked", "blocker", "approval_wait", "awaiting_approval"]
+        .iter()
+        .any(|keyword| normalized.contains(keyword));
+    if !mentions_blocker {
+        return false;
+    }
+
+    [
+        "blocker requires",
+        "blocker require",
+        "blocker prevents",
+        "blocker prevent",
+        "blocked requires",
+        "blocked require",
+        "requires operator",
+        "requires approval",
+        "requires signoff",
+        "requires sign-off",
+        "prevents closure",
+        "prevents close",
+        "prevents closing",
+        "prevents progress",
+        "prevents task",
+        "preventing closure",
+        "preventing close",
+        "preventing closing",
+        "preventing progress",
+        "preventing task",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
+}
+
 fn has_current_failure_outcome_language(normalized: &str) -> bool {
     let trimmed = normalized.trim_start_matches(['"', '\'', '`', ' ']);
     let starts_with_failure_state = [
@@ -726,6 +760,7 @@ fn has_current_failure_outcome_language(normalized: &str) -> bool {
         || trimmed.contains("current blocked")
         || trimmed.contains("currently blocked")
         || trimmed.contains("currently failing")
+        || has_active_blocker_action_language(trimmed)
         || has_contrastive_blocker_clause(trimmed)
 }
 
@@ -867,6 +902,7 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
             if has_blocker_keyword
                 && has_meta_keyword
                 && !starts_with_blocked_status
+                && !has_current_failure_outcome_language(&normalized)
                 && !has_contrastive_blocker_clause(&normalized)
                 && !has_concrete_canonical_close_phrase(&normalized)
             {
@@ -885,7 +921,9 @@ pub(crate) fn canonical_close_status_from_reason(
     for phrase in ignored_canonical_close_historical_context(reason) {
         normalized = normalized.replace(&phrase, " canonical_close_context_language ");
     }
-    if has_concrete_canonical_close_field_label(&normalized) {
+    if has_concrete_canonical_close_field_label(&normalized)
+        || has_current_failure_outcome_language(&normalized)
+    {
         return Some(("blocked", "blocked"));
     }
     for phrase in ignored_canonical_close_meta_language(reason) {
@@ -2125,6 +2163,35 @@ mod tests {
                 .iter()
                 .any(|phrase| phrase == expected_ignored_phrase));
         }
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_smoke_blocker_requires_signoff() {
+        let reason = "Smoke test blocker requires operator signoff";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+        assert!(
+            super::ignored_canonical_close_meta_language(reason).is_empty(),
+            "active smoke-test blocker wording must not be stripped as meta language"
+        );
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_status_gate_prevents_blocker_reason() {
+        let reason =
+            "status/gate now prevents closure because blocker evidence requires operator approval";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+        assert!(
+            super::ignored_canonical_close_meta_language(reason).is_empty(),
+            "active status/gate blocker wording must not be stripped as meta language"
+        );
     }
 
     #[test]
