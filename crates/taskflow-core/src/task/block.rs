@@ -53,7 +53,7 @@ fn canonical_task_blocker_code_segment(value: &str) -> Option<String> {
 pub fn append_task_block_note_with_timestamp(
     existing_notes: Option<&str>,
     reason: &str,
-    evidence: Option<&str>,
+    evidence: &[String],
     blocker_codes: &[String],
     next_actions: &[String],
     recorded_at_unix_nanos: i128,
@@ -62,9 +62,20 @@ pub fn append_task_block_note_with_timestamp(
         "task_block:\n  recorded_at_unix_nanos: {recorded_at_unix_nanos}\n  reason: {}",
         reason.trim()
     );
-    if let Some(evidence) = evidence.map(str::trim).filter(|value| !value.is_empty()) {
+    let evidence = evidence
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if evidence.len() == 1 {
         note.push_str("\n  evidence: ");
-        note.push_str(evidence);
+        note.push_str(evidence[0]);
+    } else if !evidence.is_empty() {
+        note.push_str("\n  evidence:");
+        for item in evidence {
+            note.push_str("\n    - ");
+            note.push_str(item);
+        }
     }
     if !blocker_codes.is_empty() {
         note.push_str("\n  blocker_codes: ");
@@ -91,7 +102,7 @@ pub fn append_task_block_note_with_timestamp(
 pub fn append_task_block_note(
     existing_notes: Option<&str>,
     reason: &str,
-    evidence: Option<&str>,
+    evidence: &[String],
     blocker_codes: &[String],
     next_actions: &[String],
 ) -> String {
@@ -142,7 +153,7 @@ mod tests {
         let note = append_task_block_note_with_timestamp(
             Some("existing"),
             " bridge unavailable ",
-            Some(" dispatch receipt "),
+            &[" dispatch receipt ".to_string()],
             &["open_delegated_cycle".to_string()],
             &["inspect lane".to_string(), "retry dispatch".to_string()],
             42,
@@ -152,6 +163,27 @@ mod tests {
             note,
             "existing\n\n\
 task_block:\n  recorded_at_unix_nanos: 42\n  reason: bridge unavailable\n  evidence: dispatch receipt\n  blocker_codes: open_delegated_cycle\n  next_actions:\n    - inspect lane\n    - retry dispatch"
+        );
+    }
+
+    #[test]
+    fn block_note_preserves_repeated_evidence_as_list() {
+        let note = append_task_block_note_with_timestamp(
+            None,
+            "bridge unavailable",
+            &[
+                " receipt-a ".to_string(),
+                "receipt-b".to_string(),
+                " ".to_string(),
+            ],
+            &[],
+            &[],
+            42,
+        );
+
+        assert_eq!(
+            note,
+            "task_block:\n  recorded_at_unix_nanos: 42\n  reason: bridge unavailable\n  evidence:\n    - receipt-a\n    - receipt-b"
         );
     }
 }

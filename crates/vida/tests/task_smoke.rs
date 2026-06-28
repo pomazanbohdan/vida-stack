@@ -2459,6 +2459,52 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
 }
 
 #[test]
+fn task_block_json_receipt_preserves_repeated_evidence_via_binary_surface() {
+    let state_dir = unique_state_dir();
+    let jsonl_path = format!("{state_dir}/issues.jsonl");
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    sample_jsonl(&jsonl_path);
+
+    let import_stdout =
+        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
+    assert_json_status_pass(&import_stdout);
+
+    let block_stdout = run_and_assert_success(
+        &[
+            "task",
+            "block",
+            "vida-a",
+            "--reason",
+            "runtime bridge unavailable",
+            "--evidence",
+            "agent-init receipt path",
+            "--evidence",
+            "dispatch result path",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let block_json: Value =
+        serde_json::from_str(&block_stdout).expect("task block json should parse");
+    assert_eq!(
+        block_json["evidence"],
+        serde_json::json!(["agent-init receipt path", "dispatch result path"])
+    );
+
+    let show_stdout = run_and_assert_success(&["task", "show", "vida-a", "--json"], &state_dir);
+    let show_json: Value = serde_json::from_str(&show_stdout).expect("task show json should parse");
+    let notes = show_json["task"]["notes"]
+        .as_str()
+        .expect("task notes should be a string");
+    assert!(
+        notes.contains("evidence:\n    - agent-init receipt path\n    - dispatch result path"),
+        "{notes}"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_close_spec_first_feature_keeps_parent_open_before_work_pool_exists_via_cli() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

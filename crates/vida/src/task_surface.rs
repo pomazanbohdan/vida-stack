@@ -1158,7 +1158,7 @@ struct TaskBlockReceipt {
     closed: bool,
     previous_status: String,
     reason: String,
-    evidence: Option<String>,
+    evidence: Vec<String>,
     notes_appended: bool,
     task: state_store::TaskRecord,
 }
@@ -12738,9 +12738,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             }
             let evidence = command
                 .evidence
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
             let blocker_codes = normalize_task_block_list(&command.blockers);
             let next_actions = command
                 .next_actions
@@ -12777,7 +12779,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             closed: true,
                             previous_status,
                             reason: reason.to_string(),
-                            evidence: evidence.map(str::to_string),
+                            evidence: evidence.clone(),
                             notes_appended: false,
                             task: existing,
                         };
@@ -12788,7 +12790,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     let notes = append_task_block_note(
                         existing.notes.as_deref(),
                         reason,
-                        evidence,
+                        &evidence,
                         &blocker_codes,
                         &next_actions,
                     );
@@ -12831,7 +12833,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 ),
                                 previous_status,
                                 reason: reason.to_string(),
-                                evidence: evidence.map(str::to_string),
+                                evidence,
                                 notes_appended: true,
                                 task,
                             };
@@ -15515,6 +15517,8 @@ mod tests {
             "runtime bridge unavailable",
             "--evidence",
             "agent-init receipt path",
+            "--evidence",
+            "dispatch result path",
             "--blocker",
             "host_tool_capability_missing,bridge_request_pending",
             "--next-action",
@@ -15532,7 +15536,13 @@ mod tests {
 
         assert_eq!(command.task_id, "task-1");
         assert_eq!(command.reason, "runtime bridge unavailable");
-        assert_eq!(command.evidence.as_deref(), Some("agent-init receipt path"));
+        assert_eq!(
+            command.evidence,
+            vec![
+                "agent-init receipt path".to_string(),
+                "dispatch result path".to_string()
+            ]
+        );
         assert_eq!(
             command.blockers,
             vec![
@@ -15796,7 +15806,10 @@ mod tests {
                 command: crate::TaskCommand::Block(crate::TaskBlockArgs {
                     task_id: "blocked-task".to_string(),
                     reason: "runtime bridge unavailable".to_string(),
-                    evidence: Some("agent-init returned host_tool_capability_missing".to_string()),
+                    evidence: vec![
+                        "agent-init returned host_tool_capability_missing".to_string(),
+                        "dispatch result path".to_string(),
+                    ],
                     blockers: vec![
                         "Host-Tool-Capability-Missing, bridge request pending".to_string()
                     ],
@@ -15824,6 +15837,8 @@ mod tests {
             assert!(notes.contains("existing note"));
             assert!(notes.contains("task_block:"));
             assert!(notes.contains("runtime bridge unavailable"));
+            assert!(notes.contains("agent-init returned host_tool_capability_missing"));
+            assert!(notes.contains("dispatch result path"));
             assert!(notes.contains("host_tool_capability_missing"));
             assert!(notes.contains("bridge_request_pending"));
             assert!(!notes.contains("Host-Tool-Capability-Missing"));
@@ -15872,7 +15887,7 @@ mod tests {
                 command: crate::TaskCommand::Block(crate::TaskBlockArgs {
                     task_id: "closed-task".to_string(),
                     reason: "runtime bridge unavailable".to_string(),
-                    evidence: Some("receipt path".to_string()),
+                    evidence: vec!["receipt path".to_string()],
                     blockers: Vec::new(),
                     next_actions: Vec::new(),
                     state_dir: Some(harness.path().to_path_buf()),
