@@ -27,3 +27,15 @@ The pilot is limited to `consume::resume_state_machine` and models local resume 
 This decision does not authorize replacing TaskFlow authority, run-graph scheduling, closure law, or state-store transitions with an external FSM crate.
 
 Further adoption requires a separate task with public-surface parity proof.
+
+-----
+artifact_path: product/spec/runtime-library-fsm-pilot-decision
+artifact_type: product_spec
+artifact_version: '1'
+artifact_revision: '2026-06-21'
+schema_version: '1'
+status: canonical
+source_path: docs/product/spec/runtime-library-fsm-pilot-decision.md
+created_at: '2026-06-21T00:00:00+03:00'
+updated_at: '2026-06-28T01:16:18Z'
+changelog_ref: runtime-library-fsm-pilot-decision.changelog.jsonl
