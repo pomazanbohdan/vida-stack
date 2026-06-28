@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #![allow(dead_code, unused_imports)]
 
 mod activation_status;
