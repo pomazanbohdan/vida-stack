@@ -1,9 +1,41 @@
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn vida() -> Command {
+    vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
+}
+
+fn unique_lane_state_root(prefix: &str) -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+}
+
+fn run_vida_json_with_state(
+    args: &[&str],
+    state_root: &std::path::Path,
+) -> (serde_json::Value, bool) {
+    let output = vida()
+        .args(args)
+        .env("VIDA_STATE_DIR", state_root)
+        .output()
+        .expect("vida command should launch");
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "json output should parse for args {args:?}: {error}\nstatus: {:?}\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    (payload, output.status.success())
+}
+
 #[test]
 fn host_bridge_missing_request_json_parse_error_is_machine_readable() {
-    let output = Command::new(env!("CARGO_BIN_EXE_vida"))
+    let output = vida()
         .arg("agent")
         .arg("host-bridge")
         .arg("--complete")
@@ -38,7 +70,7 @@ fn host_bridge_missing_request_json_parse_error_is_machine_readable() {
 
 #[test]
 fn lane_exception_takeover_json_parse_error_is_machine_readable() {
-    let output = Command::new(env!("CARGO_BIN_EXE_vida"))
+    let output = vida()
         .arg("lane")
         .arg("exception-takeover")
         .arg("ldr-032")
@@ -127,7 +159,7 @@ fn host_bridge_completion_command_resolves_packet_next_target() {
     )
     .expect("write request");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_vida"))
+    let output = vida()
         .arg("agent")
         .arg("host-bridge")
         .arg("--request")
@@ -218,7 +250,7 @@ fn host_bridge_completion_command_does_not_read_packet_outside_state_root() {
     )
     .expect("write request");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_vida"))
+    let output = vida()
         .arg("agent")
         .arg("host-bridge")
         .arg("--request")
@@ -242,4 +274,61 @@ fn host_bridge_completion_command_does_not_read_packet_outside_state_root() {
     assert!(!command.contains("--allowed-next-node"));
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn lane_public_surface_matrix_fails_closed_with_json_contracts() {
+    let root = unique_lane_state_root("vida-lane-surface-matrix");
+    let state_root = root.join(".vida/data/state");
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_root)
+        .output()
+        .expect("boot should launch");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&boot.stdout),
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    for (label, args, expected_surface, expected_blocker) in [
+        (
+            "run_lane root",
+            vec!["lane", "--json"],
+            "vida lane",
+            "unsupported_blocker_code",
+        ),
+        (
+            "run_lane show missing run",
+            vec!["lane", "show", "matrix-missing-run", "--json"],
+            "vida lane show",
+            "missing_lane_receipt",
+        ),
+        (
+            "run_lane takeover-ready missing run",
+            vec!["lane", "takeover-ready", "matrix-missing-run", "--json"],
+            "vida lane takeover-ready",
+            "missing_lane_receipt",
+        ),
+    ] {
+        let (payload, success) = run_vida_json_with_state(&args, &state_root);
+        assert!(!success, "{label} should fail closed: {payload}");
+        assert_eq!(
+            payload["surface"].as_str(),
+            Some(expected_surface),
+            "{label}"
+        );
+        assert_eq!(payload["status"].as_str(), Some("blocked"), "{label}");
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .expect("blocker_codes should be an array")
+                .iter()
+                .any(|code| code.as_str() == Some(expected_blocker)),
+            "{label} should expose {expected_blocker}: {payload}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(root);
 }

@@ -459,6 +459,36 @@ fn run_command_json_allow_failure(args: &[&str], state_dir: &str) -> (serde_json
     (json, output.status.success())
 }
 
+fn assert_public_surface_matrix_json_case(
+    label: &str,
+    args: &[&str],
+    state_dir: &str,
+    expected_surface: Option<&str>,
+) -> serde_json::Value {
+    let (json, _success) = run_command_json_allow_failure(args, state_dir);
+    let status = json["status"]
+        .as_str()
+        .or_else(|| json["init"]["status"].as_str())
+        .unwrap_or_else(|| panic!("{label} must expose status: {json}"));
+    assert!(
+        matches!(
+            status,
+            "pass" | "blocked" | "pending" | "ready" | "not_requested"
+        ),
+        "{label} returned non-canonical status `{status}`: {json}"
+    );
+    if status == "blocked" {
+        assert!(
+            json["blocker_codes"].as_array().is_some(),
+            "{label} blocked output must expose blocker_codes: {json}"
+        );
+    }
+    if let Some(surface) = expected_surface {
+        assert_eq!(json["surface"].as_str(), Some(surface), "{label}: {json}");
+    }
+    json
+}
+
 fn run_command_json_allow_failure_in_cwd(
     args: &[&str],
     state_dir: &str,
@@ -2686,6 +2716,66 @@ fn critical_operator_default_toon_golden_matrix_keeps_json_explicit() {
     let import_stdout =
         run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
     assert_json_status_pass(&import_stdout);
+
+    for (surface, args, required) in [
+        (
+            "vida task",
+            &["task", "--help"][..],
+            &["Commands:", "ready", "reset"][..],
+        ),
+        (
+            "vida status",
+            &["status", "--help"][..],
+            &["compact TOON", "--json"][..],
+        ),
+        (
+            "vida doctor",
+            &["doctor", "--help"][..],
+            &["compact TOON", "--json"][..],
+        ),
+        (
+            "vida taskflow recovery",
+            &["taskflow", "recovery", "--help"][..],
+            &["recovery status", "recovery latest"][..],
+        ),
+        (
+            "vida taskflow consume",
+            &["taskflow", "consume", "--help"][..],
+            &["continue", "--json"][..],
+        ),
+        (
+            "vida taskflow scheduler",
+            &["taskflow", "scheduler", "--help"][..],
+            &["scheduler dispatch", "reservations"][..],
+        ),
+        (
+            "vida taskflow run-graph",
+            &["taskflow", "run-graph", "--help"][..],
+            &["dispatch-init", "status <run-id>"][..],
+        ),
+        (
+            "vida agent-init",
+            &["agent-init", "--help"][..],
+            &["--execute-dispatch", "--json"][..],
+        ),
+        (
+            "vida lane",
+            &["lane", "exception-takeover", "--help"][..],
+            &["takeover-ready", "--owned-write-scope"][..],
+        ),
+    ] {
+        let stdout = run_and_assert_success(args, &state_dir);
+        for required_text in required {
+            assert!(
+                stdout.contains(required_text),
+                "{surface} public surface help should contain `{required_text}`: {stdout}"
+            );
+        }
+        assert!(
+            !stdout.contains("\u{1b}["),
+            "{surface} help should not leak terminal controls: {stdout}"
+        );
+    }
 
     for (surface, args, required) in [
         (
@@ -25172,4 +25262,133 @@ fn multi_session_closure_without_override_fails_on_validation_repeat_b() {
     assert_eq!(close_result["status"], "pass");
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn top_hotspot_public_json_surfaces_have_matrix_contracts() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&boot.stdout),
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let parent_id = unique_test_id("matrix-parent");
+    let task_id = unique_test_id("matrix-task");
+    assert_public_surface_matrix_json_case(
+        "run_task create parent",
+        &[
+            "task",
+            "create",
+            &parent_id,
+            "Matrix parent",
+            "--type",
+            "epic",
+            "--json",
+        ],
+        &state_dir,
+        Some("vida task create"),
+    );
+    assert_public_surface_matrix_json_case(
+        "run_task create task",
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Matrix task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            &parent_id,
+            "--owned-path",
+            "crates/vida/src/task_surface.rs",
+            "--proof-target",
+            "cargo test -p vida --test task_smoke -- --test-threads=1",
+            "--acceptance-target",
+            "public surface matrix remains parseable",
+            "--json",
+        ],
+        &state_dir,
+        Some("vida task create"),
+    );
+    assert_public_surface_matrix_json_case(
+        "run_task show",
+        &["task", "show", &task_id, "--json"],
+        &state_dir,
+        Some("vida task show"),
+    );
+
+    assert_public_surface_matrix_json_case(
+        "run_status",
+        &["status", "--json"],
+        &state_dir,
+        Some("vida status"),
+    );
+    assert_public_surface_matrix_json_case(
+        "run_doctor",
+        &["doctor", "--json"],
+        &state_dir,
+        Some("vida doctor"),
+    );
+    assert_public_surface_matrix_json_case(
+        "run_agent_init",
+        &["agent-init", "--role", "worker", &task_id, "--json"],
+        &state_dir,
+        Some("vida agent-init"),
+    );
+
+    let run_id = unique_test_id("matrix-run");
+    let init = run_command_capture(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            &run_id,
+            "worker",
+            "analysis",
+        ],
+        &state_dir,
+    );
+    assert!(
+        init.status.success(),
+        "run_graph init should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&init.stdout),
+        String::from_utf8_lossy(&init.stderr)
+    );
+    assert_public_surface_matrix_json_case(
+        "run_taskflow_run_graph status",
+        &["taskflow", "run-graph", "status", &run_id, "--json"],
+        &state_dir,
+        Some("vida taskflow run-graph status"),
+    );
+    assert_public_surface_matrix_json_case(
+        "run_taskflow_recovery status",
+        &["taskflow", "recovery", "status", &run_id, "--json"],
+        &state_dir,
+        Some("vida taskflow recovery status"),
+    );
+    assert_public_surface_matrix_json_case(
+        "run_taskflow_consume_resume_command",
+        &[
+            "taskflow", "consume", "continue", "--run-id", &run_id, "--json",
+        ],
+        &state_dir,
+        Some("vida taskflow consume continue"),
+    );
+    assert_public_surface_matrix_json_case(
+        "run_taskflow_scheduler_surface dispatch",
+        &["taskflow", "scheduler", "dispatch", "--dry-run", "--json"],
+        &state_dir,
+        Some("vida taskflow scheduler dispatch"),
+    );
+
+    let _ = fs::remove_dir_all(project_root);
 }

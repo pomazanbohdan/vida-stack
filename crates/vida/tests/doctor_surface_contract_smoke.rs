@@ -501,6 +501,51 @@ fn doctor_json_emits_operator_contract_fields() {
 }
 
 #[test]
+fn doctor_and_status_public_surface_matrix_preserves_default_and_json_contracts() {
+    let state_dir = unique_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+
+    for (surface, args) in [
+        ("vida doctor", vec!["doctor", "--json"]),
+        ("vida status", vec!["status", "--json"]),
+    ] {
+        let output = vida()
+            .args(args)
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("json surface should run");
+        assert_success(&output, surface);
+        let payload: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("json surface output should parse");
+        vida_test_support::assert_release1_operator_shape(surface, &payload);
+    }
+
+    for (surface, args) in [
+        ("vida doctor", vec!["doctor"]),
+        ("vida status", vec!["status"]),
+    ] {
+        let output = vida()
+            .args(args)
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("default surface should run");
+        assert_success(&output, surface);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_not_json_output(surface, &stdout);
+        assert_no_raw_terminal_controls(surface, &stdout);
+        assert!(
+            stdout.contains("status"),
+            "{surface} default output should expose operator status: {stdout}"
+        );
+    }
+}
+
+#[test]
 fn taskflow_consume_continue_fails_closed_without_execution_preparation_contract() {
     let state_dir = unique_state_dir();
     let boot = vida()
