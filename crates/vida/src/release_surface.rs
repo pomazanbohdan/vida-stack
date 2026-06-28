@@ -882,16 +882,34 @@ pub(crate) fn release_install_root(install_root: Option<&Path>) -> Option<PathBu
 }
 
 pub(crate) fn default_release_install_root() -> Option<PathBuf> {
-    if let Some(vida_home) = non_empty_env_var("VIDA_HOME") {
+    default_release_install_root_from_values(
+        std::env::var_os("VIDA_HOME"),
+        std::env::var_os("LOCALAPPDATA"),
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+        std::env::var_os("HOMEDRIVE"),
+        std::env::var_os("HOMEPATH"),
+    )
+}
+
+fn default_release_install_root_from_values(
+    vida_home: Option<OsString>,
+    local_app_data: Option<OsString>,
+    home: Option<OsString>,
+    userprofile: Option<OsString>,
+    homedrive: Option<OsString>,
+    homepath: Option<OsString>,
+) -> Option<PathBuf> {
+    if let Some(vida_home) = non_empty_env_path_value(vida_home) {
         return Some(PathBuf::from(vida_home));
     }
     #[cfg(windows)]
     {
-        if let Some(local_app_data) = non_empty_env_var("LOCALAPPDATA") {
+        if let Some(local_app_data) = non_empty_env_path_value(local_app_data) {
             return Some(PathBuf::from(local_app_data).join("vida-stack"));
         }
     }
-    user_home_dir().map(|home| {
+    user_home_dir_from_values(home, userprofile, homedrive, homepath).map(|home| {
         if cfg!(windows) {
             home.join("AppData").join("Local").join("vida-stack")
         } else {
@@ -909,11 +927,25 @@ fn release_env_file_name() -> &'static str {
 }
 
 fn user_home_dir() -> Option<PathBuf> {
-    non_empty_env_var("HOME")
-        .or_else(|| non_empty_env_var("USERPROFILE"))
+    user_home_dir_from_values(
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+        std::env::var_os("HOMEDRIVE"),
+        std::env::var_os("HOMEPATH"),
+    )
+}
+
+fn user_home_dir_from_values(
+    home: Option<OsString>,
+    userprofile: Option<OsString>,
+    homedrive: Option<OsString>,
+    homepath: Option<OsString>,
+) -> Option<PathBuf> {
+    non_empty_env_path_value(home)
+        .or_else(|| non_empty_env_path_value(userprofile))
         .or_else(|| {
-            let drive = non_empty_env_var("HOMEDRIVE")?;
-            let path = non_empty_env_var("HOMEPATH")?;
+            let drive = non_empty_env_path_value(homedrive)?;
+            let path = non_empty_env_path_value(homepath)?;
             let mut combined = std::ffi::OsString::from(drive);
             combined.push(path);
             Some(combined)
@@ -921,12 +953,37 @@ fn user_home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn non_empty_env_var(name: &str) -> Option<OsString> {
-    non_empty_os_string(std::env::var_os(name))
+fn non_empty_env_path_value(value: Option<OsString>) -> Option<OsString> {
+    let value = non_empty_os_string(value)?;
+    if has_unexpanded_windows_env_placeholder(&value) {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn non_empty_os_string(value: Option<OsString>) -> Option<OsString> {
     value.filter(|value| !value.is_empty())
+}
+
+fn has_unexpanded_windows_env_placeholder(value: &std::ffi::OsStr) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    let text = value.to_string_lossy();
+    let mut remainder = text.as_ref();
+    while let Some(start) = remainder.find('%') {
+        let after_start = &remainder[start + 1..];
+        if let Some(end) = after_start.find('%') {
+            if end > 0 {
+                return true;
+            }
+            remainder = &after_start[end + 1..];
+        } else {
+            return false;
+        }
+    }
+    false
 }
 
 fn unresolved_install_target() -> BlockedRelease {
@@ -1599,6 +1656,50 @@ mod tests {
             super::non_empty_os_string(Some(std::ffi::OsString::from("configured"))),
             Some(std::ffi::OsString::from("configured"))
         );
+    }
+
+    #[test]
+    fn release_install_env_path_helpers_ignore_unexpanded_windows_placeholders() {
+        let placeholder = std::ffi::OsString::from(r"%SystemDrive%\ProgramData");
+        let sanitized = super::non_empty_env_path_value(Some(placeholder.clone()));
+        if cfg!(windows) {
+            assert_eq!(sanitized, None);
+        } else {
+            assert_eq!(sanitized, Some(placeholder));
+        }
+    }
+
+    #[test]
+    fn release_install_default_root_skips_placeholder_env_paths() {
+        let fallback_home = std::ffi::OsString::from(if cfg!(windows) {
+            r"C:\Users\vida-test"
+        } else {
+            "/home/vida-test"
+        });
+        let root = super::default_release_install_root_from_values(
+            Some(std::ffi::OsString::from(
+                r"%SystemDrive%\ProgramData\vida-stack",
+            )),
+            Some(std::ffi::OsString::from(r"%SystemDrive%\ProgramData")),
+            Some(fallback_home.clone()),
+            None,
+            None,
+            None,
+        )
+        .expect("fallback home should produce install root");
+
+        if cfg!(windows) {
+            assert!(!root.to_string_lossy().contains("%SystemDrive%"));
+            assert_eq!(
+                root,
+                PathBuf::from(fallback_home)
+                    .join("AppData")
+                    .join("Local")
+                    .join("vida-stack")
+            );
+        } else {
+            assert_eq!(root, PathBuf::from(r"%SystemDrive%\ProgramData\vida-stack"));
+        }
     }
 
     #[test]
