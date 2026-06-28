@@ -895,10 +895,13 @@ async fn run_task_prune_closed_epics(command: TaskPruneClosedEpicsArgs) -> ExitC
             print_task_prune_closed_epics_receipt(command.render, &plan.receipt, command.json);
             ExitCode::SUCCESS
         }
-        Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            ExitCode::from(1)
-        }
+        Err(error) => emit_task_state_store_open_error(
+            "vida task prune-closed-epics",
+            &state_dir,
+            command.render,
+            command.json,
+            &error,
+        ),
     }
 }
 
@@ -2566,6 +2569,65 @@ async fn open_task_store(
     } else {
         StateStore::open(state_dir).await
     }
+}
+
+fn emit_task_state_store_open_error(
+    surface: &str,
+    state_dir: &std::path::Path,
+    render: RenderMode,
+    as_json: bool,
+    error: &state_store::StateStoreError,
+) -> ExitCode {
+    let Some(diagnostic) = error.open_diagnostic(state_dir) else {
+        eprintln!("Failed to open authoritative state store: {error}");
+        return ExitCode::from(1);
+    };
+    let payload = crate::release1_operator_output::build_release1_operator_output_payload(
+        surface,
+        vec![diagnostic.blocker_code.clone()],
+        vec![diagnostic.recovery_guidance.clone()],
+        serde_json::json!({
+            "state_dir": diagnostic.state_dir,
+            "suspected_wal_or_sst_hint": diagnostic.suspected_wal_or_sst_hint,
+        }),
+        serde_json::json!({
+            "state_access": {
+                "mode": "blocked_storage_corruption",
+                "state_dir": diagnostic.state_dir,
+                "corruption_state": diagnostic.corruption_state,
+                "suspected_wal_or_sst_hint": diagnostic.suspected_wal_or_sst_hint,
+                "recovery_guidance": diagnostic.recovery_guidance,
+                "silent_delete_allowed": diagnostic.silent_delete_allowed,
+                "error": error.to_string(),
+            },
+        }),
+    )
+    .expect("task state-store diagnostic payload should preserve release-1 operator contract");
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else if matches!(render, RenderMode::Plain) {
+        operator_output::toon_report::print(
+            surface,
+            vec![
+                operator_output::toon_report::OperatorToonField::text("status", "blocked"),
+                operator_output::toon_report::OperatorToonField::value(
+                    "blocker_codes",
+                    payload["blocker_codes"].clone(),
+                ),
+                operator_output::toon_report::OperatorToonField::value(
+                    "state_access",
+                    payload["state_access"].clone(),
+                ),
+                operator_output::toon_report::OperatorToonField::value(
+                    "next_actions",
+                    payload["next_actions"].clone(),
+                ),
+            ],
+        );
+    } else {
+        eprintln!("Failed to open authoritative state store: {error}");
+    }
+    ExitCode::from(1)
 }
 
 pub(crate) async fn open_read_only_task_store(
@@ -5241,6 +5303,15 @@ async fn run_task_bulk_import(command: TaskBulkImportArgs) -> ExitCode {
     let store = match open_task_store(state_dir.clone()).await {
         Ok(store) => store,
         Err(error) => {
+            if error.open_diagnostic(&state_dir).is_some() {
+                return emit_task_state_store_open_error(
+                    TASK_BULK_IMPORT_SURFACE,
+                    &state_dir,
+                    command.render,
+                    command.json,
+                    &error,
+                );
+            }
             let result = task_bulk_import_blocked_result(&command, error.to_string(), "state_dir");
             print_task_bulk_import_result(command.render, &result, command.json);
             return ExitCode::from(1);
@@ -6426,11 +6497,16 @@ async fn run_task_split_like(command: TaskSplitArgs, surface: &str) -> ExitCode 
             return ExitCode::from(2);
         }
     };
-    let store = match open_task_store(state_dir).await {
+    let store = match open_task_store(state_dir.clone()).await {
         Ok(store) => store,
         Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            return ExitCode::from(1);
+            return emit_task_state_store_open_error(
+                surface,
+                &state_dir,
+                command.render,
+                command.json,
+                &error,
+            );
         }
     };
     let source = match store.show_task(&command.task_id).await {
@@ -6525,11 +6601,16 @@ async fn run_task_spawn_blocker_like(command: TaskSpawnBlockerArgs, surface: &st
         .state_dir
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
-    let store = match open_task_store(state_dir).await {
+    let store = match open_task_store(state_dir.clone()).await {
         Ok(store) => store,
         Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            return ExitCode::from(1);
+            return emit_task_state_store_open_error(
+                surface,
+                &state_dir,
+                command.render,
+                command.json,
+                &error,
+            );
         }
     };
     let source = match store.show_task(&command.task_id).await {
@@ -7013,10 +7094,17 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                 }
             }
         }
-        Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            ExitCode::from(1)
-        }
+        Err(error) => emit_task_state_store_open_error(
+            if ensure_existing {
+                "vida task ensure"
+            } else {
+                "vida task create"
+            },
+            &state_dir,
+            command.render,
+            command.json,
+            &error,
+        ),
     }
 }
 
@@ -10583,11 +10671,16 @@ async fn run_task_reset(command: crate::TaskResetArgs) -> ExitCode {
         .state_dir
         .clone()
         .unwrap_or_else(state_store::default_state_dir);
-    let store = match StateStore::open_existing(state_dir).await {
+    let store = match StateStore::open_existing(state_dir.clone()).await {
         Ok(store) => store,
         Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
-            return ExitCode::from(1);
+            return emit_task_state_store_open_error(
+                "vida task reset",
+                &state_dir,
+                command.render,
+                command.json,
+                &error,
+            );
         }
     };
     let tasks = match store.all_tasks().await {
@@ -20129,6 +20222,56 @@ mod tests {
             canonical_json_string_array_entries(&serde_json::json!(["   "])),
             None
         );
+    }
+
+    #[test]
+    fn task_state_store_open_diagnostic_payload_exposes_wal_replay_guidance() {
+        let state_dir = std::path::Path::new("C:/project/vida_mobile/.vida/data/state");
+        let error = state_store::StateStoreError::InvalidStorageMetadata {
+            reason: "failed to open bounded SurrealKV datastore: Failed to flush memtable to SST table_id=4: Keys are not in order".to_string(),
+        };
+        let diagnostic = error
+            .open_diagnostic(state_dir)
+            .expect("WAL replay corruption should classify");
+        let payload = crate::release1_operator_output::build_release1_operator_output_payload(
+            "vida task reset",
+            vec![diagnostic.blocker_code.clone()],
+            vec![diagnostic.recovery_guidance.clone()],
+            serde_json::json!({
+                "state_dir": diagnostic.state_dir,
+                "suspected_wal_or_sst_hint": diagnostic.suspected_wal_or_sst_hint,
+            }),
+            serde_json::json!({
+                "state_access": {
+                    "mode": "blocked_storage_corruption",
+                    "state_dir": diagnostic.state_dir,
+                    "corruption_state": diagnostic.corruption_state,
+                    "suspected_wal_or_sst_hint": diagnostic.suspected_wal_or_sst_hint,
+                    "recovery_guidance": diagnostic.recovery_guidance,
+                    "silent_delete_allowed": diagnostic.silent_delete_allowed,
+                    "error": error.to_string(),
+                },
+            }),
+        )
+        .expect("diagnostic payload should preserve release-1 contract");
+
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["state_store_surrealkv_wal_replay_corruption"])
+        );
+        assert_eq!(
+            payload["state_access"]["state_dir"],
+            state_dir.display().to_string()
+        );
+        assert_eq!(payload["state_access"]["silent_delete_allowed"], false);
+        assert!(payload["state_access"]["suspected_wal_or_sst_hint"]
+            .as_str()
+            .expect("hint should be text")
+            .contains("WAL/SST files are suspects"));
+        assert!(payload["state_access"]["recovery_guidance"]
+            .as_str()
+            .expect("guidance should be text")
+            .contains("Create a backup copy of the whole state directory first"));
     }
 
     #[test]

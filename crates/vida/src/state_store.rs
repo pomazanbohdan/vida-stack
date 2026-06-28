@@ -166,6 +166,8 @@ use time::OffsetDateTime;
 
 const DEFAULT_STATE_DIR: &str = ".vida/data/state";
 const STATE_STORE_RECOVERY_HINT: &str = "hint: use VIDA_STATE_DIR=<temp-dir> for a fresh proof run, or reinitialize the long-lived local state root instead of deleting datastore subdirectories by hand";
+const SURREALKV_WAL_REPLAY_CORRUPTION_BLOCKER: &str = "state_store_surrealkv_wal_replay_corruption";
+const SURREALKV_WAL_REPLAY_CORRUPTION_GUIDANCE: &str = "Create a backup copy of the whole state directory first, then recover from a known-good state snapshot or reinitialize the local state root through VIDA recovery tooling; do not delete WAL, SST, or SurrealKV subdirectories in place.";
 pub const STATE_NAMESPACE: &str = "vida";
 pub const STATE_DATABASE: &str = "primary";
 pub const DEFAULT_INSTRUCTION_SOURCE_ROOT: &str =
@@ -202,6 +204,9 @@ DEFINE TABLE task_attempt SCHEMALESS;
 "#;
 
 fn state_store_recovery_hint_for_message(message: &str) -> Option<&'static str> {
+    if state_store_message_is_surrealkv_wal_replay_corruption(message) {
+        return Some(SURREALKV_WAL_REPLAY_CORRUPTION_GUIDANCE);
+    }
     if message.contains("Failed to load manifest")
         || message.contains("authoritative state spine manifest")
         || message.contains("No such file or directory")
@@ -214,6 +219,15 @@ fn state_store_recovery_hint_for_message(message: &str) -> Option<&'static str> 
         );
     }
     None
+}
+
+fn state_store_message_is_surrealkv_wal_replay_corruption(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("surrealkv")
+        && (lower.contains("wal") || lower.contains("memtable") || lower.contains("sst"))
+        && (lower.contains("keys are not in order")
+            || lower.contains("failed to flush memtable")
+            || lower.contains("wal replay"))
 }
 
 #[path = "state_store_task_reconciliation.rs"]
@@ -241,6 +255,16 @@ pub struct StateResetSummary {
     pub reinitialized: bool,
     pub task_count: usize,
     pub state_spine_manifest_present: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StateStoreOpenDiagnostic {
+    pub blocker_code: String,
+    pub state_dir: String,
+    pub corruption_state: String,
+    pub suspected_wal_or_sst_hint: String,
+    pub recovery_guidance: String,
+    pub silent_delete_allowed: bool,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
@@ -348,6 +372,25 @@ pub enum StateStoreError {
     },
 }
 
+impl StateStoreError {
+    pub fn open_diagnostic(&self, state_dir: &Path) -> Option<StateStoreOpenDiagnostic> {
+        let message = self.to_string();
+        if !state_store_message_is_surrealkv_wal_replay_corruption(&message) {
+            return None;
+        }
+        Some(StateStoreOpenDiagnostic {
+            blocker_code: SURREALKV_WAL_REPLAY_CORRUPTION_BLOCKER.to_string(),
+            state_dir: state_dir.display().to_string(),
+            corruption_state: "surrealkv_wal_replay_or_memtable_flush_key_order_corruption"
+                .to_string(),
+            suspected_wal_or_sst_hint: "SurrealKV open failed while replaying WAL or flushing a memtable into SST; WAL/SST files are suspects, but this command will not delete them."
+                .to_string(),
+            recovery_guidance: SURREALKV_WAL_REPLAY_CORRUPTION_GUIDANCE.to_string(),
+            silent_delete_allowed: false,
+        })
+    }
+}
+
 impl std::fmt::Display for StateStoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -383,7 +426,11 @@ impl std::fmt::Display for StateStoreError {
             Self::InvalidTaskRecord { reason } => write!(f, "invalid task record: {reason}"),
             Self::MissingSourceTreeConfig => write!(f, "source tree config record is missing"),
             Self::InvalidStorageMetadata { reason } => {
-                write!(f, "storage metadata record is invalid: {reason}")
+                write!(f, "storage metadata record is invalid: {reason}")?;
+                if let Some(hint) = state_store_recovery_hint_for_message(reason) {
+                    write!(f, "; {hint}")?;
+                }
+                Ok(())
             }
             Self::MissingStateSpineManifest => {
                 write!(
@@ -2573,6 +2620,36 @@ hierarchy: framework,contracts
         let rendered = StateStoreError::MissingStateSpineManifest.to_string();
         assert!(rendered.contains("authoritative state spine manifest is missing"));
         assert!(rendered.contains("VIDA_STATE_DIR=<temp-dir>"));
+    }
+
+    #[test]
+    fn surrealkv_wal_replay_corruption_error_includes_backup_first_guidance() {
+        let rendered = StateStoreError::InvalidStorageMetadata {
+            reason: "failed to open bounded SurrealKV datastore: Failed to flush memtable to SST table_id=4: Keys are not in order".to_string(),
+        }
+        .to_string();
+        assert!(rendered.contains("Create a backup copy of the whole state directory first"));
+        assert!(rendered.contains("do not delete WAL, SST, or SurrealKV subdirectories in place"));
+    }
+
+    #[test]
+    fn surrealkv_wal_replay_corruption_diagnostic_exposes_operator_fields() {
+        let state_dir = std::path::Path::new("C:/project/vida_mobile/.vida/data/state");
+        let error = StateStoreError::InvalidStorageMetadata {
+            reason: "failed to open bounded SurrealKV datastore: failed during WAL replay: Keys are not in order".to_string(),
+        };
+        let diagnostic = error
+            .open_diagnostic(state_dir)
+            .expect("WAL replay key-order error should be classified");
+        assert_eq!(
+            diagnostic.blocker_code,
+            "state_store_surrealkv_wal_replay_corruption"
+        );
+        assert_eq!(diagnostic.state_dir, state_dir.display().to_string());
+        assert!(!diagnostic.silent_delete_allowed);
+        assert!(diagnostic
+            .suspected_wal_or_sst_hint
+            .contains("WAL/SST files are suspects"));
     }
 
     #[tokio::test]

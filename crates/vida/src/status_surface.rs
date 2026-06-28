@@ -210,6 +210,88 @@ pub(crate) fn degraded_read_lock_payload(
     .expect("degraded read-lock payload should preserve release-1 operator contract")
 }
 
+fn state_store_open_diagnostic_payload(
+    surface: &str,
+    error: &state_store::StateStoreError,
+    diagnostic: state_store::StateStoreOpenDiagnostic,
+) -> serde_json::Value {
+    let blocker_code = diagnostic.blocker_code.clone();
+    crate::release1_operator_output::build_release1_operator_output_payload(
+        surface,
+        vec![blocker_code],
+        vec![diagnostic.recovery_guidance.clone()],
+        serde_json::json!({
+            "state_dir": diagnostic.state_dir,
+            "suspected_wal_or_sst_hint": diagnostic.suspected_wal_or_sst_hint,
+        }),
+        serde_json::json!({
+            "degraded": false,
+            "state_access": {
+                "mode": "blocked_storage_corruption",
+                "degraded": false,
+                "state_dir": diagnostic.state_dir,
+                "corruption_state": diagnostic.corruption_state,
+                "suspected_wal_or_sst_hint": diagnostic.suspected_wal_or_sst_hint,
+                "recovery_guidance": diagnostic.recovery_guidance,
+                "silent_delete_allowed": diagnostic.silent_delete_allowed,
+                "error": error.to_string(),
+            },
+        }),
+    )
+    .expect("state-store diagnostic payload should preserve release-1 operator contract")
+}
+
+fn emit_state_store_open_diagnostic_surface(
+    surface: &str,
+    render: crate::RenderMode,
+    as_json: bool,
+    error: &state_store::StateStoreError,
+    diagnostic: state_store::StateStoreOpenDiagnostic,
+) -> ExitCode {
+    let payload = state_store_open_diagnostic_payload(surface, error, diagnostic);
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else if matches!(render, crate::RenderMode::Plain) {
+        operator_output::toon_report::print(
+            surface,
+            vec![
+                operator_output::toon_report::OperatorToonField::text("status", "blocked"),
+                operator_output::toon_report::OperatorToonField::value(
+                    "blocker_codes",
+                    payload["blocker_codes"].clone(),
+                ),
+                operator_output::toon_report::OperatorToonField::value(
+                    "state_access",
+                    payload["state_access"].clone(),
+                ),
+                operator_output::toon_report::OperatorToonField::value(
+                    "next_actions",
+                    payload["next_actions"].clone(),
+                ),
+            ],
+        );
+    } else {
+        crate::print_surface_header(render, surface);
+        crate::print_surface_line(render, "status", "blocked");
+        crate::print_surface_line(
+            render,
+            "blocker",
+            payload["blocker_codes"][0]
+                .as_str()
+                .unwrap_or("state_store_open_failed"),
+        );
+        crate::print_surface_line(
+            render,
+            "state dir",
+            payload["state_access"]["state_dir"]
+                .as_str()
+                .unwrap_or_default(),
+        );
+        crate::print_surface_line(render, "delete", "no silent WAL/SST delete");
+    }
+    ExitCode::from(1)
+}
+
 pub(crate) fn emit_degraded_read_lock_surface(
     surface: &str,
     state_dir: &std::path::Path,
@@ -1457,6 +1539,15 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     render,
                     as_json,
                     &error.to_string(),
+                );
+            }
+            if let Some(diagnostic) = error.open_diagnostic(&state_dir) {
+                return emit_state_store_open_diagnostic_surface(
+                    "vida status",
+                    render,
+                    as_json,
+                    &error,
+                    diagnostic,
                 );
             }
             eprintln!("Failed to open authoritative state store: {error}");

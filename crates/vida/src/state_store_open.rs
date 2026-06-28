@@ -183,15 +183,11 @@ impl StateStore {
             .await
             .map_err(|error| Self::bounded_surrealkv_open_error("open", error.to_string()))?;
         datastore.check_version().await.map_err(|error| {
-            StateStoreError::InvalidStorageMetadata {
-                reason: format!("failed to check SurrealKV datastore version: {error}"),
-            }
+            Self::bounded_surrealkv_open_error("check version for", error.to_string())
         })?;
         if bootstrap {
             datastore.bootstrap().await.map_err(|error| {
-                StateStoreError::InvalidStorageMetadata {
-                    reason: format!("failed to bootstrap bounded SurrealKV datastore: {error}"),
-                }
+                Self::bounded_surrealkv_open_error("bootstrap", error.to_string())
             })?;
         }
         Surreal::<Db>::unstable_from_datastore(

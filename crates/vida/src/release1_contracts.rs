@@ -1714,6 +1714,7 @@ const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
     "stage_attempt_policy_attempts_missing",
     "stage_attempt_policy_consolidator_missing",
     "state_store_read_lock_contention",
+    "state_store_surrealkv_wal_replay_corruption",
     "task_metadata_missing_owned_paths",
     "task_metadata_missing_proof_or_acceptance_targets",
     "task_metadata_not_found",
