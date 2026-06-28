@@ -563,12 +563,24 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
         &["taskflow", "run-graph", "status", "workflow-task", "--json"],
     );
     assert_eq!(run_graph["run_id"], "workflow-task");
+    assert_eq!(run_graph["task_identity"]["run_id"], "workflow-task");
+    assert_eq!(
+        run_graph["task_identity"]["feature_epic_id"],
+        "workflow-epic"
+    );
+    assert_eq!(run_graph["task_identity"]["dev_task_id"], "workflow-task");
 
     let recovery = run_json(
         &fixture,
         &["taskflow", "recovery", "status", "workflow-task", "--json"],
     );
     assert_eq!(recovery["run_id"], "workflow-task");
+    assert_eq!(recovery["task_identity"]["run_id"], "workflow-task");
+    assert_eq!(
+        recovery["task_identity"]["feature_epic_id"],
+        "workflow-epic"
+    );
+    assert_eq!(recovery["task_identity"]["dev_task_id"], "workflow-task");
     assert!(recovery["status"].is_string());
 
     run_json_success(

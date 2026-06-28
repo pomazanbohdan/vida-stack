@@ -27,6 +27,7 @@ const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS: u64 = 60;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER: &str = "run_graph_dispatch_init_timeout";
 const TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 const DISPATCH_INIT_FAST_CACHE_SCHEMA_VERSION: u64 = 5;
+const DISPATCH_INIT_IDENTITY_BACKFILL_OPEN_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn projection_component(value: &str) -> String {
     value
@@ -1757,6 +1758,58 @@ fn derive_run_graph_task_identity_from_task(
     )
 }
 
+fn dispatch_init_task_identity_from_task(
+    run_id: &str,
+    task: &crate::state_store::TaskRecord,
+) -> RunGraphDispatchTaskIdentity {
+    RunGraphDispatchTaskIdentity {
+        run_id: run_id.to_string(),
+        feature_epic_id: parent_id_for_task(task),
+        spec_task_id: None,
+        work_pool_task_id: None,
+        dev_task_id: Some(task.id.clone()),
+        source: "dispatch_init_existing_task".to_string(),
+        updated_at: time::OffsetDateTime::now_utc()
+            .unix_timestamp_nanos()
+            .to_string(),
+    }
+}
+
+async fn ensure_dispatch_init_task_identity(
+    store: &StateStore,
+    run_id: &str,
+) -> Result<Option<RunGraphDispatchTaskIdentity>, String> {
+    if let Some(identity) = store
+        .run_graph_dispatch_task_identity(run_id)
+        .await
+        .map_err(|error| format!("Failed to read dispatch-init task identity: {error}"))?
+    {
+        return Ok(Some(identity));
+    }
+    let task = match store.show_task(run_id).await {
+        Ok(task) => task,
+        Err(_) => return Ok(None),
+    };
+    let identity = dispatch_init_task_identity_from_task(run_id, &task);
+    store
+        .record_run_graph_dispatch_task_identity(&identity)
+        .await
+        .map_err(|error| format!("Failed to record dispatch-init task identity: {error}"))?;
+    Ok(Some(identity))
+}
+
+async fn try_backfill_dispatch_init_task_identity(state_dir: &std::path::Path, run_id: &str) {
+    if let Ok(store) = StateStore::open_existing_with_timeout(
+        state_dir.to_path_buf(),
+        DISPATCH_INIT_IDENTITY_BACKFILL_OPEN_TIMEOUT,
+    )
+    .await
+    {
+        let _ = ensure_dispatch_init_task_identity(&store, run_id).await;
+        store.close().await;
+    }
+}
+
 fn seed_run_graph_task_identity_from_options(
     tasks: &[crate::state_store::TaskRecord],
     run_id: &str,
@@ -1975,6 +2028,7 @@ struct PreparedRunGraphDispatchInit {
     dispatch_receipt: crate::state_store::RunGraphDispatchReceipt,
     dispatch_packet_path: String,
     seed_payload: Option<TaskflowRunGraphSeedPayload>,
+    task_identity: Option<RunGraphDispatchTaskIdentity>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -9056,9 +9110,12 @@ async fn preview_run_graph_dispatch_init_artifacts(
             }
         }
     }
-    if let Ok(task) = store.show_task(&effective_run_id).await {
+    let task_identity = if let Ok(task) = store.show_task(&effective_run_id).await {
         inject_task_planner_metadata(&mut role_selection, &task.planner_metadata);
-    }
+        ensure_dispatch_init_task_identity(store, &effective_run_id).await?
+    } else {
+        None
+    };
     let mut dispatch_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
         &role_selection,
         &run_graph_bootstrap,
@@ -9103,6 +9160,7 @@ async fn preview_run_graph_dispatch_init_artifacts(
             dispatch_receipt,
             dispatch_packet_path,
             seed_payload,
+            task_identity,
         },
     ))
 }
@@ -9116,6 +9174,7 @@ async fn commit_previewed_run_graph_dispatch_init_artifacts(
             let requested_run_id = artifacts.requested_run_id.clone();
             let run_id = artifacts.run_id.clone();
             let payload = artifacts.into_json_payload();
+            try_backfill_dispatch_init_task_identity(state_dir, &run_id).await;
             write_run_graph_dispatch_init_fast_cache(
                 state_dir,
                 &requested_run_id,
@@ -9161,6 +9220,7 @@ async fn commit_previewed_run_graph_dispatch_init_artifacts(
                     .map_err(|error| {
                         format!("Failed to record seeded dispatch receipt: {error}")
                     })?;
+                ensure_dispatch_init_task_identity(&store, &prepared.run_id).await?;
                 crate::taskflow_continuation::sync_run_graph_continuation_binding(
                     &store,
                     &prepared.status,
@@ -9215,6 +9275,7 @@ pub(crate) async fn prepare_run_graph_dispatch_init_artifacts(
                 .record_run_graph_dispatch_receipt(&prepared.dispatch_receipt)
                 .await
                 .map_err(|error| format!("Failed to record seeded dispatch receipt: {error}"))?;
+            ensure_dispatch_init_task_identity(store, &prepared.run_id).await?;
             crate::taskflow_continuation::sync_run_graph_continuation_binding(
                 store,
                 &prepared.status,
@@ -9771,6 +9832,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
             if head == "run-graph" && subcommand == "dispatch-init" && flag == "--json" =>
         {
             if let Some(payload) = read_run_graph_dispatch_init_fast_cache(&state_dir, run_id) {
+                try_backfill_dispatch_init_task_identity(&state_dir, run_id).await;
                 crate::print_json_pretty(&payload);
                 return ExitCode::SUCCESS;
             }
@@ -9778,6 +9840,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
         }
         [head, subcommand, run_id] if head == "run-graph" && subcommand == "dispatch-init" => {
             if let Some(payload) = read_run_graph_dispatch_init_fast_cache(&state_dir, run_id) {
+                try_backfill_dispatch_init_task_identity(&state_dir, run_id).await;
                 print_surface_header(RenderMode::Plain, "vida taskflow run-graph dispatch-init");
                 print_surface_line(RenderMode::Plain, "run", run_id);
                 print_surface_line(
@@ -14549,6 +14612,24 @@ agent_system:
         let store = StateStore::open(harness.path().to_path_buf())
             .await
             .expect("open store");
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "task-1",
+                title: "Task 1",
+                display_id: None,
+                description: "dispatch-init identity backing task",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create backing task");
         let status = RunGraphStatus {
             run_id: "task-1".to_string(),
             task_id: "task-1".to_string(),
@@ -14653,6 +14734,74 @@ agent_system:
         assert_eq!(receipt.dispatch_target, "implementer");
         assert!(receipt.dispatch_packet_path.is_some());
         assert!(payload["dispatch_packet_path"].as_str().is_some());
+        let identity = store
+            .run_graph_dispatch_task_identity("task-1")
+            .await
+            .expect("read dispatch task identity")
+            .expect("non-cli dispatch-init should record task identity");
+        assert_eq!(identity.run_id, "task-1");
+        assert_eq!(identity.dev_task_id.as_deref(), Some("task-1"));
+        assert_eq!(identity.source, "dispatch_init_existing_task");
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_fast_cache_backfill_helper_records_missing_task_identity() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "cache-epic",
+                title: "Cache Epic",
+                display_id: None,
+                description: "identity parent",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent epic");
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "cache-task",
+                title: "Cache Task",
+                display_id: None,
+                description: "identity child",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("cache-epic"),
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create child task");
+        store.close().await;
+
+        try_backfill_dispatch_init_task_identity(harness.path(), "cache-task").await;
+        let store = StateStore::open_existing(harness.path().to_path_buf())
+            .await
+            .expect("reopen store");
+        let identity = store
+            .run_graph_dispatch_task_identity("cache-task")
+            .await
+            .expect("read dispatch task identity")
+            .expect("backfill helper should persist identity");
+        assert_eq!(identity.run_id, "cache-task");
+        assert_eq!(identity.feature_epic_id.as_deref(), Some("cache-epic"));
+        assert_eq!(identity.dev_task_id.as_deref(), Some("cache-task"));
+        assert_eq!(identity.source, "dispatch_init_existing_task");
+        store.close().await;
     }
 
     #[tokio::test]
@@ -14777,6 +14926,20 @@ agent_system:
             })
             .await
             .expect("record dispatch context");
+        store
+            .record_run_graph_dispatch_task_identity(
+                &crate::state_store::RunGraphDispatchTaskIdentity {
+                    run_id: "task-writer-planner-scope".to_string(),
+                    feature_epic_id: Some("feature-writer".to_string()),
+                    spec_task_id: Some("feature-writer-spec".to_string()),
+                    work_pool_task_id: Some("feature-writer-work-pool".to_string()),
+                    dev_task_id: Some("feature-writer-dev-pack".to_string()),
+                    source: "seeded_richer_identity".to_string(),
+                    updated_at: "2026-06-05T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("seed richer identity");
 
         let artifacts =
             prepare_run_graph_dispatch_init_artifacts(&store, "task-writer-planner-scope")
@@ -14807,6 +14970,24 @@ agent_system:
             packet["implementation_isolation"]["owned_paths"],
             packet["delivery_task_packet"]["owned_paths"]
         );
+        let identity = store
+            .run_graph_dispatch_task_identity("task-writer-planner-scope")
+            .await
+            .expect("read preserved dispatch task identity")
+            .expect("richer identity should remain present");
+        assert_eq!(
+            identity.spec_task_id.as_deref(),
+            Some("feature-writer-spec")
+        );
+        assert_eq!(
+            identity.work_pool_task_id.as_deref(),
+            Some("feature-writer-work-pool")
+        );
+        assert_eq!(
+            identity.dev_task_id.as_deref(),
+            Some("feature-writer-dev-pack")
+        );
+        assert_eq!(identity.source, "seeded_richer_identity");
     }
 
     #[tokio::test]
