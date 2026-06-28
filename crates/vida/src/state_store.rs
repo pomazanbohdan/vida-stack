@@ -251,6 +251,7 @@ pub struct StateResetSummary {
     pub status: &'static str,
     pub state_dir: PathBuf,
     pub archive_path: Option<PathBuf>,
+    pub recovery_receipt_path: Option<PathBuf>,
     pub archive_created: bool,
     pub reinitialized: bool,
     pub task_count: usize,
@@ -529,6 +530,7 @@ impl StateStore {
             state_dir: root.clone(),
             archive_created: archive_path.is_some(),
             archive_path,
+            recovery_receipt_path: None,
             reinitialized: false,
             task_count: 0,
             state_spine_manifest_present: false,
@@ -542,6 +544,10 @@ impl StateStore {
             summary.task_count = task_store.total_count;
             summary.state_spine_manifest_present = true;
             store.close().await;
+        }
+
+        if summary.archive_created || summary.reinitialized {
+            summary.recovery_receipt_path = Some(write_state_reset_recovery_receipt(&summary)?);
         }
 
         Ok(summary)
@@ -571,6 +577,60 @@ impl StateStore {
             std::process::id()
         ))
     }
+}
+
+fn write_state_reset_recovery_receipt(
+    summary: &StateResetSummary,
+) -> Result<PathBuf, StateStoreError> {
+    let receipt_root = if summary.reinitialized {
+        summary.state_dir.clone()
+    } else {
+        summary
+            .archive_path
+            .clone()
+            .unwrap_or_else(|| summary.state_dir.clone())
+    };
+    let receipt_dir = receipt_root.join("recovery").join("state-reset-receipts");
+    fs::create_dir_all(&receipt_dir)?;
+    let receipt_path = receipt_dir.join(format!("state-reset-{}.json", unix_timestamp_nanos()));
+    let recorded_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| unix_timestamp_nanos().to_string());
+    let recovery_action = if summary.reinitialized {
+        "archive_existing_state_root_then_reinitialize_authoritative_spine"
+    } else {
+        "archive_existing_state_root_without_reinitialize"
+    };
+    let receipt = serde_json::json!({
+        "artifact_kind": "state_reset_recovery_receipt",
+        "schema_version": 1,
+        "surface": summary.surface,
+        "status": summary.status,
+        "recorded_at": recorded_at,
+        "state_dir": summary.state_dir,
+        "archive_path": summary.archive_path,
+        "archive_created": summary.archive_created,
+        "reinitialized": summary.reinitialized,
+        "task_count": summary.task_count,
+        "state_spine_manifest_present": summary.state_spine_manifest_present,
+        "recovery_action": recovery_action,
+        "backup_requirement": SURREALKV_WAL_REPLAY_CORRUPTION_GUIDANCE,
+        "silent_delete_allowed": false,
+        "result": {
+            "state_root_archived": summary.archive_created,
+            "authoritative_spine_reinitialized": summary.reinitialized,
+            "authoritative_state_opened_after_reinit": summary.state_spine_manifest_present
+        }
+    });
+    fs::write(
+        &receipt_path,
+        serde_json::to_vec_pretty(&receipt).map_err(|error| {
+            StateStoreError::InvalidStateReset {
+                reason: format!("failed to serialize state reset recovery receipt: {error}"),
+            }
+        })?,
+    )?;
+    Ok(receipt_path)
 }
 
 fn validate_state_reset_existing_root(root: &Path) -> Result<(), StateStoreError> {
@@ -667,6 +727,11 @@ mod tests {
         assert!(summary.reinitialized);
         assert_eq!(summary.task_count, 0);
         assert!(summary.state_spine_manifest_present);
+        let receipt_path = summary
+            .recovery_receipt_path
+            .as_ref()
+            .expect("recovery receipt should be recorded");
+        assert!(receipt_path.exists());
 
         let _ = fs::remove_dir_all(&root);
         if let Some(archive_path) = summary.archive_path {
@@ -690,6 +755,10 @@ mod tests {
         assert!(summary.archive_created);
         assert!(summary.reinitialized);
         assert!(summary.state_spine_manifest_present);
+        assert!(summary
+            .recovery_receipt_path
+            .as_ref()
+            .is_some_and(|path| path.exists()));
         assert!(root.exists());
 
         let _ = fs::remove_dir_all(&root);
@@ -732,8 +801,65 @@ mod tests {
         assert!(summary.reinitialized);
         assert!(summary.state_spine_manifest_present);
         assert!(root.join("wal").exists());
+        let receipt_path = summary
+            .recovery_receipt_path
+            .as_ref()
+            .expect("recovery receipt should be recorded");
+        let receipt: serde_json::Value = serde_json::from_slice(
+            &fs::read(receipt_path).expect("recovery receipt should be readable"),
+        )
+        .expect("recovery receipt should be json");
+        assert_eq!(receipt["artifact_kind"], "state_reset_recovery_receipt");
+        assert_eq!(
+            receipt["recovery_action"],
+            "archive_existing_state_root_then_reinitialize_authoritative_spine"
+        );
+        assert_eq!(receipt["silent_delete_allowed"], false);
+        assert_eq!(receipt["archive_path"], archive_path.display().to_string());
 
         let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(archive_path);
+    }
+
+    #[tokio::test]
+    async fn state_reset_archive_only_records_receipt_without_recreating_state_dir() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-reset-archive-only-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store.close().await;
+
+        let summary = StateStore::archive_and_reinit_state_root(root.clone(), true, false)
+            .await
+            .expect("archive-only state reset should pass");
+
+        assert!(summary.archive_created);
+        assert!(!summary.reinitialized);
+        assert!(!root.exists());
+        let archive_path = summary
+            .archive_path
+            .as_ref()
+            .expect("archive path should be recorded");
+        assert!(archive_path.exists());
+        let receipt_path = summary
+            .recovery_receipt_path
+            .as_ref()
+            .expect("recovery receipt should be recorded");
+        assert!(receipt_path.exists());
+        assert!(receipt_path.starts_with(archive_path));
+        let receipt: serde_json::Value = serde_json::from_slice(
+            &fs::read(receipt_path).expect("recovery receipt should be readable"),
+        )
+        .expect("recovery receipt should be json");
+        assert_eq!(
+            receipt["recovery_action"],
+            "archive_existing_state_root_without_reinitialize"
+        );
+        assert_eq!(receipt["reinitialized"], false);
+
         let _ = fs::remove_dir_all(archive_path);
     }
 

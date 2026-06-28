@@ -134,18 +134,7 @@ async fn run_state_reset(command: StateResetArgs) -> ExitCode {
             if command.json {
                 crate::print_json_pretty(&state_reset_operator_payload(&summary));
             } else {
-                println!("status: pass");
-                println!("state_dir: {}", summary.state_dir.display());
-                println!("archive_created: {}", summary.archive_created);
-                if let Some(path) = &summary.archive_path {
-                    println!("archive_path: {}", path.display());
-                }
-                println!("reinitialized: {}", summary.reinitialized);
-                println!("task_count: {}", summary.task_count);
-                println!(
-                    "state_spine_manifest_present: {}",
-                    summary.state_spine_manifest_present
-                );
+                print!("{}", state_reset_plain_output(&summary));
             }
             ExitCode::SUCCESS
         }
@@ -169,6 +158,7 @@ fn state_reset_operator_payload(
         "surface": "vida state reset",
         "state_dir": summary.state_dir.display().to_string(),
         "archive_path": summary.archive_path.as_ref().map(|path| path.display().to_string()),
+        "recovery_receipt_path": summary.recovery_receipt_path.as_ref().map(|path| path.display().to_string()),
     });
     crate::release1_operator_output::build_release1_operator_output_payload(
         "vida state reset",
@@ -178,6 +168,30 @@ fn state_reset_operator_payload(
         summary_payload,
     )
     .expect("state reset operator payload should keep release-1 shape")
+}
+
+fn state_reset_plain_output(summary: &crate::state_store::StateResetSummary) -> String {
+    let mut lines = vec![
+        "status: pass".to_string(),
+        format!("state_dir: {}", summary.state_dir.display()),
+        format!("archive_created: {}", summary.archive_created),
+    ];
+    if let Some(path) = &summary.archive_path {
+        lines.push(format!("archive_path: {}", path.display()));
+    }
+    if let Some(path) = &summary.recovery_receipt_path {
+        lines.push(format!("recovery_receipt_path: {}", path.display()));
+    }
+    lines.extend([
+        format!("reinitialized: {}", summary.reinitialized),
+        format!("task_count: {}", summary.task_count),
+        format!(
+            "state_spine_manifest_present: {}",
+            summary.state_spine_manifest_present
+        ),
+    ]);
+    lines.push(String::new());
+    lines.join("\n")
 }
 
 fn state_reset_error_operator_payload(
@@ -743,7 +757,8 @@ mod tests {
     use super::{
         command_needs_project_root_state_dir, generic_service_client_command_metrics,
         normalize_runtime_state_dir_env_for_parse, prepare_runtime_state_dir,
-        prepare_runtime_state_dir_for_parse, Cli,
+        prepare_runtime_state_dir_for_parse, state_reset_operator_payload,
+        state_reset_plain_output, Cli,
     };
     use crate::temp_state::TempStateHarness;
     use crate::Command;
@@ -773,6 +788,46 @@ mod tests {
             .workflows
             .iter()
             .all(|workflow| workflow.canonical_option_count < workflow.legacy_option_count));
+    }
+
+    #[test]
+    fn state_reset_output_exposes_recovery_receipt_path_in_plain_and_json_contracts() {
+        let summary = crate::state_store::StateResetSummary {
+            surface: "vida state reset",
+            status: "pass",
+            state_dir: std::path::PathBuf::from("C:/tmp/vida/state"),
+            archive_path: Some(std::path::PathBuf::from("C:/tmp/vida/state.archive.1")),
+            recovery_receipt_path: Some(std::path::PathBuf::from(
+                "C:/tmp/vida/state/recovery/state-reset-receipts/state-reset-1.json",
+            )),
+            archive_created: true,
+            reinitialized: true,
+            task_count: 3,
+            state_spine_manifest_present: true,
+        };
+
+        let plain = state_reset_plain_output(&summary);
+        assert!(plain.contains(
+            "recovery_receipt_path: C:/tmp/vida/state/recovery/state-reset-receipts/state-reset-1.json"
+        ));
+
+        let payload = state_reset_operator_payload(&summary);
+        assert_eq!(
+            payload["recovery_receipt_path"],
+            "C:/tmp/vida/state/recovery/state-reset-receipts/state-reset-1.json"
+        );
+        assert_eq!(
+            payload["artifact_refs"]["recovery_receipt_path"],
+            "C:/tmp/vida/state/recovery/state-reset-receipts/state-reset-1.json"
+        );
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"]["recovery_receipt_path"],
+            "C:/tmp/vida/state/recovery/state-reset-receipts/state-reset-1.json"
+        );
+        assert_eq!(
+            payload["operator_contracts"]["artifact_refs"]["recovery_receipt_path"],
+            "C:/tmp/vida/state/recovery/state-reset-receipts/state-reset-1.json"
+        );
     }
 
     struct EnvVarGuard {
