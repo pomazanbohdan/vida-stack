@@ -647,15 +647,28 @@ impl StateStore {
         task_id: &str,
         stage_id: &str,
     ) -> Result<Option<String>, StateStoreError> {
-        let mut response = self
+        let mut response = match self
             .db
             .query(format!(
                 "SELECT task_id, receipt_id, created_at FROM task_stage_consolidation_receipt WHERE task_id = '{}' AND stage_id = '{}' ORDER BY created_at DESC LIMIT 1;",
                 escape_surql_literal(task_id),
                 escape_surql_literal(stage_id)
             ))
-            .await?;
-        let rows: Vec<TaskRuntimeConsolidationReferenceRow> = response.take(0)?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) if task_runtime_reference_missing_optional_table(&error.to_string()) => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let rows: Vec<TaskRuntimeConsolidationReferenceRow> = match response.take(0) {
+            Ok(rows) => rows,
+            Err(error) if task_runtime_reference_missing_optional_table(&error.to_string()) => {
+                Vec::new()
+            }
+            Err(error) => return Err(error.into()),
+        };
         Ok(rows.into_iter().next().map(|row| row.receipt_id))
     }
 

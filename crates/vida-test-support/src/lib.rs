@@ -9,6 +9,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde_json::Value;
+
 pub mod domain_conformance;
 pub mod engine_conformance;
 pub mod failure_injection;
@@ -55,6 +57,82 @@ pub fn temp_fixture_dir() -> assert_fs::TempDir {
 
 pub fn assert_text_snapshot(actual: impl AsRef<str>, expected: &str) {
     snapbox::Assert::new().eq(actual.as_ref(), expected);
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CliContractCase<'a> {
+    pub surface: &'a str,
+    pub args: &'a [&'a str],
+}
+
+pub fn release1_operator_shape_error(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    for key in [
+        "surface",
+        "status",
+        "blocker_codes",
+        "next_actions",
+        "artifact_refs",
+        "shared_fields",
+        "operator_contracts",
+    ] {
+        if !object.contains_key(key) {
+            return Some(format!("missing {key}"));
+        }
+    }
+    if !value["surface"].is_string() {
+        return Some("surface must be a string".to_string());
+    }
+    if !value["status"].is_string() {
+        return Some("status must be a string".to_string());
+    }
+    if !value["blocker_codes"].is_array() {
+        return Some("blocker_codes must be an array".to_string());
+    }
+    if !value["next_actions"].is_array() {
+        return Some("next_actions must be an array".to_string());
+    }
+    if !value["artifact_refs"].is_object() {
+        return Some("artifact_refs must be an object".to_string());
+    }
+
+    let shared_fields = &value["shared_fields"];
+    let operator_contracts = &value["operator_contracts"];
+    for mirrored in ["status", "blocker_codes", "next_actions", "artifact_refs"] {
+        if value[mirrored] != shared_fields[mirrored] {
+            return Some(format!("shared_fields.{mirrored} drifted"));
+        }
+        if value[mirrored] != operator_contracts[mirrored] {
+            return Some(format!("operator_contracts.{mirrored} drifted"));
+        }
+    }
+    if operator_contracts["contract_id"] != "release-1-operator-contracts" {
+        return Some("operator_contracts.contract_id drifted".to_string());
+    }
+    if operator_contracts["schema_version"] != "release-1-v1" {
+        return Some("operator_contracts.schema_version drifted".to_string());
+    }
+    None
+}
+
+pub fn assert_release1_operator_shape(surface: &str, value: &Value) {
+    assert_eq!(value["surface"], surface);
+    let error = release1_operator_shape_error(value);
+    assert!(
+        error.is_none(),
+        "{surface} must keep release-1 JSON shape: {} got: {value:#}",
+        error.unwrap_or_default()
+    );
+}
+
+pub fn assert_cli_contract_matrix<'a>(
+    cases: impl IntoIterator<Item = CliContractCase<'a>>,
+    mut run_json: impl FnMut(&[&str]) -> Value,
+) {
+    for case in cases {
+        let value = run_json(case.args);
+        assert_release1_operator_shape(case.surface, &value);
+    }
 }
 
 #[cfg(unix)]

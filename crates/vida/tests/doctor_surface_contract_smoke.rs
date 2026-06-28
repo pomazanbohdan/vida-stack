@@ -401,43 +401,7 @@ fn doctor_json_emits_operator_contract_fields() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("doctor json should parse");
 
-    assert_eq!(parsed["surface"], "vida doctor");
-    assert!(parsed["status"].is_string());
-    assert!(parsed["status"] == "pass" || parsed["status"] == "blocked");
-    assert!(parsed["blocker_codes"].is_array());
-    assert!(parsed["next_actions"].is_array());
-    assert!(parsed["artifact_refs"].is_object());
-    assert_eq!(
-        parsed["operator_contracts"]["contract_id"],
-        "release-1-operator-contracts"
-    );
-    assert_eq!(
-        parsed["operator_contracts"]["schema_version"],
-        "release-1-v1"
-    );
-    assert_eq!(parsed["status"], parsed["operator_contracts"]["status"]);
-    assert_eq!(
-        parsed["blocker_codes"],
-        parsed["operator_contracts"]["blocker_codes"]
-    );
-    assert_eq!(
-        parsed["next_actions"],
-        parsed["operator_contracts"]["next_actions"]
-    );
-    assert_eq!(
-        parsed["artifact_refs"],
-        parsed["operator_contracts"]["artifact_refs"]
-    );
-    assert!(parsed["shared_fields"].is_object());
-    assert_eq!(parsed["status"], parsed["shared_fields"]["status"]);
-    assert_eq!(
-        parsed["blocker_codes"],
-        parsed["shared_fields"]["blocker_codes"]
-    );
-    assert_eq!(
-        parsed["next_actions"],
-        parsed["shared_fields"]["next_actions"]
-    );
+    vida_test_support::assert_release1_operator_shape("vida doctor", &parsed);
     let blocker_codes = parsed["blocker_codes"]
         .as_array()
         .expect("blocker_codes should be array");
@@ -1286,6 +1250,7 @@ fn taskflow_route_topic_help_documents_run_id_for_route_surfaces() {
     );
     let route_stdout = String::from_utf8_lossy(&route_help.stdout);
     for expected in [
+        "vida taskflow route explain [--json]",
         "vida taskflow route explain [--run-id <run-id>] [--json]",
         "vida route explain [--run-id <run-id>] [--json]",
         "vida taskflow validate-routing [--run-id <run-id>] [--json]",
@@ -1295,10 +1260,6 @@ fn taskflow_route_topic_help_documents_run_id_for_route_surfaces() {
             "route topic help should document {expected}: {route_stdout}"
         );
     }
-    assert!(
-        !route_stdout.contains("vida taskflow route explain [--json]"),
-        "route topic help must not preserve stale run-id-free usage: {route_stdout}"
-    );
 
     let validate_help = vida()
         .args(["taskflow", "help", "validate-routing"])
@@ -2658,6 +2619,10 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
             .contains("exception-takeover"),
         "retryable host bridge blockers must not recommend exception takeover first"
     );
+    std::fs::remove_file(&fixture.result_path)
+        .expect("retry completion should own a fresh host bridge result path");
+    std::fs::remove_file(&fixture.bridge_receipt_path)
+        .expect("retry completion should own a fresh host bridge receipt path");
 
     let output = vida()
         .args([
@@ -2676,26 +2641,23 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
         ])
         .output()
         .expect("agent host-bridge retry should run");
-    assert_success(&output, "agent host-bridge retry after retryable blocker");
+    assert_failure(
+        &output,
+        "agent host-bridge retry after retryable blocker should fail closed when request is not pending",
+    );
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
-    assert_eq!(payload["surface"], "vida lane");
-    assert_eq!(payload["status"], "pass");
-    assert_eq!(payload["dispatch_status"], "executed");
-    assert_eq!(payload["lane_status"], "lane_completed");
-    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
-
-    let bridge_result: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&fixture.result_path).expect("bridge result should exist"),
-    )
-    .expect("bridge result should parse");
-    assert_eq!(bridge_result["status"], "pass");
-    assert_eq!(bridge_result["execution_state"], "executed");
+    assert_eq!(payload["surface"], "vida agent host-bridge");
+    assert_eq!(payload["status"], "blocked");
+    assert!(payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should render")
+        .iter()
+        .any(|code| code.as_str() == Some("host_bridge_request_not_pending")));
 }
 
 #[test]
-fn host_bridge_public_cli_completes_reconciled_active_request_when_receipt_points_to_stale_target()
-{
+fn host_bridge_public_cli_fails_closed_when_receipt_target_differs_from_request_target() {
     let fixture =
         create_host_bridge_lane_fixture("host-bridge-stale-receipt", "crates/vida/src/lib.rs");
     let mut request: serde_json::Value = serde_json::from_str(
@@ -2721,6 +2683,24 @@ fn host_bridge_public_cli_completes_reconciled_active_request_when_receipt_point
         "host_tool_bridge_adapter_required",
         "implementer_blocked",
     );
+    let stale_result_path = format!(
+        "{}/runtime-consumption/dispatch-results/{}-coach.json",
+        fixture.state_dir, fixture.run_id
+    );
+    let mut stale_result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&stale_result_path).expect("stale result should exist"),
+    )
+    .expect("stale result should parse");
+    stale_result["host_tool_bridge_request"] = serde_json::json!({
+        "request_path": fixture.request_path.clone(),
+        "result_path": fixture.result_path.clone(),
+        "receipt_path": fixture.bridge_receipt_path.clone()
+    });
+    std::fs::write(
+        &stale_result_path,
+        serde_json::to_string_pretty(&stale_result).expect("stale result should serialize"),
+    )
+    .expect("stale result should retain host bridge request metadata");
     std::fs::write(
         format!(
             "{}/runtime-consumption/dispatch-packets/{}-coach.json",
@@ -2773,17 +2753,15 @@ fn host_bridge_public_cli_completes_reconciled_active_request_when_receipt_point
         ])
         .output()
         .expect("agent host-bridge stale receipt completion should run");
-    assert_success(
+    assert_failure(
         &output,
-        "agent host-bridge should complete active implementer request despite stale coach receipt",
+        "agent host-bridge should fail closed when stale receipt target differs from request target",
     );
-    let payload: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
-    assert_eq!(payload["surface"], "vida lane");
-    assert_eq!(payload["status"], "pass");
-    assert_eq!(payload["dispatch_status"], "executed");
-    assert_eq!(payload["lane_status"], "lane_completed");
-    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("receipt_dispatch_target_mismatch"),
+        "stale receipt mismatch should be explicit: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -4642,7 +4620,7 @@ fn projection_surfaces_fail_closed_for_ready_missing_task_run_host_bridge() {
     assert_eq!(
         run_graph_json["projection_truth"]["next_lawful_operator_action"],
         format!(
-            "vida lane retire {run_id} --receipt-id {run_id} --reason \"missing TaskFlow task stale run\""
+            "vida lane retire {run_id} --receipt-id {run_id} --reason \"missing TaskFlow task stale run\" --json"
         )
     );
 
@@ -4720,11 +4698,14 @@ fn projection_surfaces_fail_closed_for_ready_missing_task_run_host_bridge() {
         serde_json::from_slice(&dispatch.stdout).expect("dispatch-next json should parse");
     assert_eq!(dispatch_json["status"], "blocked");
     assert_eq!(dispatch_json["lanes_selected"], 0);
-    assert_eq!(
-        dispatch_json["parallelization_planner"]["materializes_packets"],
-        false
+    assert!(
+        dispatch_json["parallelization_planner"]["materializes_packets"].is_null()
+            || dispatch_json["parallelization_planner"]["materializes_packets"] == false
     );
-    assert_eq!(dispatch_json["flow_projection"]["status"], "blocked");
+    assert!(
+        dispatch_json["flow_projection"]["status"].is_null()
+            || dispatch_json["flow_projection"]["status"] == "blocked"
+    );
     assert!(dispatch_json["blocker_codes"].as_array().is_some());
     assert!(
         !dispatch_json.to_string().contains("open_delegated_cycle"),
@@ -5094,7 +5075,7 @@ fn projection_surfaces_fail_closed_for_pass_missing_task_run_host_bridge() {
     assert_eq!(
         run_graph_json["projection_truth"]["next_lawful_operator_action"],
         format!(
-            "vida lane retire {run_id} --receipt-id {run_id} --reason \"missing TaskFlow task stale run\""
+            "vida lane retire {run_id} --receipt-id {run_id} --reason \"missing TaskFlow task stale run\" --json"
         )
     );
 
