@@ -1,128 +1,37 @@
 use serde_json::Value;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::Path;
 
-use vida_test_support as support;
+#[path = "support/runtime_consumption.rs"]
+mod runtime_consumption_support;
 
-fn vida() -> Command {
-    support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
+use runtime_consumption_support::PersistentRuntimeFixture;
+
+fn enable_parallel_scheduler(fixture: &PersistentRuntimeFixture, max_parallel_agents: u32) {
+    fixture.write_project_config(format!(
+        "project_id: test\nagent_system:\n  max_parallel_agents: {max_parallel_agents}\n"
+    ));
 }
 
-static UNIQUE_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn unique_project_root(label: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let counter = UNIQUE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-    PathBuf::from("/tmp").join(format!(
-        "vida-{label}-{}-{nanos}-{counter}",
-        std::process::id()
-    ))
+fn run_success(fixture: &PersistentRuntimeFixture, state_dir: Option<&Path>, args: &[&str]) {
+    fixture.output_success_with_state_dir(args, state_dir);
 }
 
-fn default_state_dir(project_root: &Path) -> PathBuf {
-    project_root.join(".vida").join("data").join("state")
+fn run_json_success(
+    fixture: &PersistentRuntimeFixture,
+    state_dir: Option<&Path>,
+    args: &[&str],
+) -> Value {
+    fixture.json_success_with_state_dir(args, state_dir)
 }
 
-fn create_project_root(project_root: &Path) {
-    std::fs::create_dir_all(project_root.join(".vida").join("config"))
-        .expect("project config dir should exist");
-    std::fs::create_dir_all(project_root.join(".vida").join("db"))
-        .expect("project db dir should exist");
-    std::fs::create_dir_all(project_root.join(".vida").join("project"))
-        .expect("project marker dir should exist");
-    std::fs::write(project_root.join("AGENTS.md"), "# Test agents\n")
-        .expect("AGENTS.md should be written");
-    std::fs::write(project_root.join("vida.config.yaml"), "project_id: test\n")
-        .expect("vida.config.yaml should be written");
-}
-
-fn enable_parallel_scheduler(project_root: &Path, max_parallel_agents: u32) {
-    std::fs::write(
-        project_root.join("vida.config.yaml"),
-        format!("project_id: test\nagent_system:\n  max_parallel_agents: {max_parallel_agents}\n"),
-    )
-    .expect("vida.config.yaml should enable parallel scheduler");
-}
-
-fn run_with_retry<F>(mut build: F) -> Output
-where
-    F: FnMut() -> Command,
-{
-    let mut last_output = None;
-    for attempt in 0..6 {
-        let output = build()
-            .output()
-            .unwrap_or_else(|error| panic!("vida command should run: {error}"));
-        if !is_state_lock_error(&output) {
-            return output;
-        }
-        last_output = Some(output);
-        thread::sleep(Duration::from_millis(150 * (attempt + 1)));
-    }
-    last_output.expect("state lock retry should record output")
-}
-
-fn is_state_lock_error(output: &Output) -> bool {
-    if output.status.success() {
-        return false;
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stderr.contains("timed out while waiting for authoritative datastore lock")
-        || stdout.contains("timed out while waiting for authoritative datastore lock")
-        || stderr.contains("authoritative_state_required_for_mutation")
-        || stdout.contains("authoritative_state_required_for_mutation")
-}
-
-fn run_success(project_root: &Path, state_dir: Option<&Path>, args: &[&str]) -> Output {
-    let output = run_with_retry(|| {
-        let mut command = vida();
-        command
-            .args(args)
-            .current_dir(project_root)
-            .env_remove("VIDA_STATE_DIR");
-        if let Some(state_dir) = state_dir {
-            command.env("VIDA_STATE_DIR", state_dir);
-        }
-        command
-    });
-    assert!(
-        output.status.success(),
-        "{} should succeed: stdout={}; stderr={}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output
-}
-
-fn run_json_success(project_root: &Path, state_dir: Option<&Path>, args: &[&str]) -> Value {
-    let output = run_success(project_root, state_dir, args);
-    assert!(
-        !output.stdout.is_empty(),
-        "{} should emit JSON on stdout; stderr={}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "{} stdout should parse as JSON: {error}\nstdout={}\nstderr={}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })
-}
-
-fn create_epic_and_task(project_root: &Path, epic_id: &str, task_id: &str, task_title: &str) {
+fn create_epic_and_task(
+    fixture: &PersistentRuntimeFixture,
+    epic_id: &str,
+    task_id: &str,
+    task_title: &str,
+) {
     run_json_success(
-        project_root,
+        fixture,
         None,
         &[
             "task",
@@ -137,7 +46,7 @@ fn create_epic_and_task(project_root: &Path, epic_id: &str, task_id: &str, task_
         ],
     );
     run_json_success(
-        project_root,
+        fixture,
         None,
         &[
             "task",
@@ -154,7 +63,7 @@ fn create_epic_and_task(project_root: &Path, epic_id: &str, task_id: &str, task_
 }
 
 fn create_parallel_task(
-    project_root: &Path,
+    fixture: &PersistentRuntimeFixture,
     epic_id: &str,
     task_id: &str,
     title: &str,
@@ -162,7 +71,7 @@ fn create_parallel_task(
     conflict_domain: &str,
 ) {
     run_json_success(
-        project_root,
+        fixture,
         None,
         &[
             "task",
@@ -237,53 +146,47 @@ fn assert_task_visible_only(value: &Value, present: &str, absent: &str) {
 
 #[test]
 fn state_dir_env_explicit_and_default_roots_do_not_leak_tasks() {
-    let root_a = unique_project_root("state-dir-a");
-    let root_b = unique_project_root("state-dir-b");
-    create_project_root(&root_a);
-    create_project_root(&root_b);
+    let fixture_a = PersistentRuntimeFixture::project_shell("state-dir-a");
+    let fixture_b = PersistentRuntimeFixture::project_shell("state-dir-b");
 
-    create_epic_and_task(&root_a, "a-epic", "a-task", "A isolated task");
-    create_epic_and_task(&root_b, "b-epic", "b-task", "B isolated task");
+    create_epic_and_task(&fixture_a, "a-epic", "a-task", "A isolated task");
+    create_epic_and_task(&fixture_b, "b-epic", "b-task", "B isolated task");
 
-    let state_a = default_state_dir(&root_a);
-    let state_b = default_state_dir(&root_b);
+    let state_a = fixture_a.state_dir();
+    let state_b = fixture_b.state_dir();
     assert!(state_a.exists(), "root a default state should exist");
     assert!(state_b.exists(), "root b default state should exist");
 
-    let root_a_default = run_json_success(&root_a, None, &["task", "list", "--json"]);
+    let root_a_default = run_json_success(&fixture_a, None, &["task", "list", "--json"]);
     assert_task_visible_only(&root_a_default, "a-task", "b-task");
-    let root_b_default = run_json_success(&root_b, None, &["task", "list", "--json"]);
+    let root_b_default = run_json_success(&fixture_b, None, &["task", "list", "--json"]);
     assert_task_visible_only(&root_b_default, "b-task", "a-task");
 
     let state_a_arg = state_a.to_str().expect("state a path should be utf8");
     let state_b_arg = state_b.to_str().expect("state b path should be utf8");
     let root_b_explicit_a = run_json_success(
-        &root_b,
+        &fixture_b,
         None,
         &["task", "list", "--state-dir", state_a_arg, "--json"],
     );
     assert_task_visible_only(&root_b_explicit_a, "a-task", "b-task");
     let root_a_explicit_b = run_json_success(
-        &root_a,
+        &fixture_a,
         None,
         &["task", "list", "--state-dir", state_b_arg, "--json"],
     );
     assert_task_visible_only(&root_a_explicit_b, "b-task", "a-task");
 
-    let root_b_env_a = run_json_success(&root_b, Some(&state_a), &["task", "list", "--json"]);
+    let root_b_env_a = run_json_success(&fixture_b, Some(state_a), &["task", "list", "--json"]);
     assert_task_visible_only(&root_b_env_a, "a-task", "b-task");
-    let root_a_env_b = run_json_success(&root_a, Some(&state_b), &["task", "list", "--json"]);
+    let root_a_env_b = run_json_success(&fixture_a, Some(state_b), &["task", "list", "--json"]);
     assert_task_visible_only(&root_a_env_b, "b-task", "a-task");
-
-    let _ = std::fs::remove_dir_all(&root_a);
-    let _ = std::fs::remove_dir_all(&root_b);
 }
 
 #[test]
 fn help_and_version_do_not_require_or_create_state() {
-    let root = unique_project_root("no-state-help");
-    create_project_root(&root);
-    let state_dir = default_state_dir(&root);
+    let fixture = PersistentRuntimeFixture::project_shell("no-state-help");
+    let state_dir = fixture.state_dir();
 
     for args in [
         vec!["--help"],
@@ -292,7 +195,7 @@ fn help_and_version_do_not_require_or_create_state() {
         vec!["taskflow", "--help"],
         vec!["recovery", "--help"],
     ] {
-        run_success(&root, None, &args);
+        run_success(&fixture, None, &args);
         assert!(
             !state_dir.exists(),
             "{} should not create state at {}",
@@ -300,46 +203,37 @@ fn help_and_version_do_not_require_or_create_state() {
             state_dir.display()
         );
     }
-
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn taskflow_proxy_and_root_task_surfaces_share_default_state_root() {
-    let root_a = unique_project_root("proxy-root-a");
-    let root_b = unique_project_root("proxy-root-b");
-    create_project_root(&root_a);
-    create_project_root(&root_b);
+    let fixture_a = PersistentRuntimeFixture::project_shell("proxy-root-a");
+    let fixture_b = PersistentRuntimeFixture::project_shell("proxy-root-b");
 
-    create_epic_and_task(&root_a, "proxy-a-epic", "proxy-a-task", "Proxy A task");
-    create_epic_and_task(&root_b, "proxy-b-epic", "proxy-b-task", "Proxy B task");
+    create_epic_and_task(&fixture_a, "proxy-a-epic", "proxy-a-task", "Proxy A task");
+    create_epic_and_task(&fixture_b, "proxy-b-epic", "proxy-b-task", "Proxy B task");
 
-    let ready = run_json_success(&root_a, None, &["task", "ready", "--json"]);
+    let ready = run_json_success(&fixture_a, None, &["task", "ready", "--json"]);
     assert_task_visible_only(&ready, "proxy-a-task", "proxy-b-task");
 
-    let graph = run_json_success(&root_a, None, &["taskflow", "graph-summary", "--json"]);
+    let graph = run_json_success(&fixture_a, None, &["taskflow", "graph-summary", "--json"]);
     assert_eq!(graph["surface"], "vida taskflow graph-summary");
     assert_eq!(
         graph["primary_ready_task"]["task"]["id"], "proxy-a-task",
         "taskflow proxy should read the same default state root as root task surfaces: {graph:#}"
     );
     assert_ne!(graph["primary_ready_task"]["task"]["id"], "proxy-b-task");
-
-    let _ = std::fs::remove_dir_all(&root_a);
-    let _ = std::fs::remove_dir_all(&root_b);
 }
 
 #[test]
 fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overlap() {
-    let root_a = unique_project_root("team-worktree-a");
-    let root_b = unique_project_root("team-worktree-b");
-    create_project_root(&root_a);
-    create_project_root(&root_b);
-    enable_parallel_scheduler(&root_a, 3);
-    enable_parallel_scheduler(&root_b, 3);
+    let fixture_a = PersistentRuntimeFixture::project_shell("team-worktree-a");
+    let fixture_b = PersistentRuntimeFixture::project_shell("team-worktree-b");
+    enable_parallel_scheduler(&fixture_a, 3);
+    enable_parallel_scheduler(&fixture_b, 3);
 
     run_json_success(
-        &root_a,
+        &fixture_a,
         None,
         &[
             "task",
@@ -354,7 +248,7 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
         ],
     );
     create_parallel_task(
-        &root_a,
+        &fixture_a,
         "team-a",
         "a-primary",
         "A primary",
@@ -362,7 +256,7 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
         "domain-a",
     );
     create_parallel_task(
-        &root_a,
+        &fixture_a,
         "team-a",
         "a-disjoint",
         "A disjoint",
@@ -370,7 +264,7 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
         "domain-b",
     );
     create_parallel_task(
-        &root_a,
+        &fixture_a,
         "team-a",
         "a-overlap",
         "A overlap",
@@ -379,7 +273,7 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
     );
 
     run_json_success(
-        &root_b,
+        &fixture_b,
         None,
         &[
             "task",
@@ -394,7 +288,7 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
         ],
     );
     create_parallel_task(
-        &root_b,
+        &fixture_b,
         "team-b",
         "b-primary",
         "B primary",
@@ -402,7 +296,7 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
         "domain-d",
     );
     create_parallel_task(
-        &root_b,
+        &fixture_b,
         "team-b",
         "b-disjoint",
         "B disjoint",
@@ -410,7 +304,7 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
         "domain-e",
     );
 
-    let graph_a = run_json_success(&root_a, None, &["taskflow", "graph-summary", "--json"]);
+    let graph_a = run_json_success(&fixture_a, None, &["taskflow", "graph-summary", "--json"]);
     assert_eq!(graph_a["surface"], "vida taskflow graph-summary");
     assert_eq!(graph_a["status"], "pass");
     let graph_a_text = graph_a.to_string();
@@ -418,7 +312,7 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
     assert!(!graph_a_text.contains("b-primary"));
 
     let dispatch_a = run_json_success(
-        &root_a,
+        &fixture_a,
         None,
         &[
             "taskflow",
@@ -449,7 +343,7 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
     );
 
     let dispatch_b = run_json_success(
-        &root_b,
+        &fixture_b,
         None,
         &[
             "taskflow",
@@ -468,7 +362,4 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
     let selected_b = json_string_array(&dispatch_b, "selected_task_ids");
     assert_eq!(selected_b, vec!["b-primary", "b-disjoint"]);
     assert!(!selected_b.iter().any(|task_id| task_id == "a-primary"));
-
-    let _ = std::fs::remove_dir_all(&root_a);
-    let _ = std::fs::remove_dir_all(&root_b);
 }

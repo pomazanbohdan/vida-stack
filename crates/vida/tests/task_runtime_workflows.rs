@@ -1,60 +1,23 @@
-use std::process::{Command, Output};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::Output;
 
 use serde_json::Value;
-use vida_test_support as support;
 
-fn vida() -> Command {
-    support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
+#[path = "support/runtime_consumption.rs"]
+mod runtime_consumption_support;
+
+use runtime_consumption_support::PersistentRuntimeFixture;
+
+fn run_json(fixture: &PersistentRuntimeFixture, args: &[&str]) -> Value {
+    let (json, _) = fixture.json_allow_failure(args);
+    json
 }
 
-static UNIQUE_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn unique_state_dir(label: &str) -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let counter = UNIQUE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!(
-        "{}/vida-{label}-{}-{nanos}-{counter}",
-        std::env::temp_dir().display(),
-        std::process::id()
-    )
+fn run_json_success(fixture: &PersistentRuntimeFixture, args: &[&str]) -> Value {
+    fixture.json_success(args)
 }
 
-fn run_json(state_dir: &str, args: &[&str]) -> Value {
-    let output = vida()
-        .args(args)
-        .env("VIDA_STATE_DIR", state_dir)
-        .output()
-        .unwrap_or_else(|error| panic!("{} should run: {error}", args.join(" ")));
-    parse_json(args, &output)
-}
-
-fn run_json_success(state_dir: &str, args: &[&str]) -> Value {
-    let output = vida()
-        .args(args)
-        .env("VIDA_STATE_DIR", state_dir)
-        .output()
-        .unwrap_or_else(|error| panic!("{} should run: {error}", args.join(" ")));
-    assert!(
-        output.status.success(),
-        "{} should succeed: stdout={}; stderr={}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    parse_json(args, &output)
-}
-
-fn run_failure(state_dir: &str, args: &[&str]) -> Output {
-    let output = vida()
-        .args(args)
-        .env("VIDA_STATE_DIR", state_dir)
-        .output()
-        .unwrap_or_else(|error| panic!("{} should run: {error}", args.join(" ")));
+fn run_failure(fixture: &PersistentRuntimeFixture, args: &[&str]) -> Output {
+    let output = fixture.capture(args);
     assert!(
         !output.status.success(),
         "{} should fail: stdout={}; stderr={}",
@@ -65,43 +28,13 @@ fn run_failure(state_dir: &str, args: &[&str]) -> Output {
     output
 }
 
-fn parse_json(args: &[&str], output: &Output) -> Value {
-    assert!(
-        !output.stdout.is_empty(),
-        "{} should emit JSON on stdout; stderr={}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-        panic!(
-            "{} stdout should parse as JSON: {error}\nstdout={}\nstderr={}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })
-}
-
-fn boot_state(state_dir: &str) {
-    let boot = vida()
-        .arg("boot")
-        .env("VIDA_STATE_DIR", state_dir)
-        .output()
-        .expect("boot should run");
-    assert!(
-        boot.status.success(),
-        "boot should succeed: {}",
-        String::from_utf8_lossy(&boot.stderr)
-    );
-}
-
 #[test]
 fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item() {
-    let state_dir = unique_state_dir("step-subtask-workflow");
-    boot_state(&state_dir);
+    let fixture = PersistentRuntimeFixture::state_only("step-subtask-workflow");
+    fixture.boot();
 
     run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "create",
@@ -115,7 +48,7 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
         ],
     );
     run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "create",
@@ -129,7 +62,7 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
         ],
     );
     let subtask = run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "create",
@@ -149,7 +82,7 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
     assert_eq!(subtask["task"]["work_item_kind"]["flow_bindable"], true);
 
     let step = run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "create",
@@ -169,7 +102,7 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
     assert_eq!(step["task"]["work_item_kind"]["flow_bindable"], false);
 
     let todo_alias = run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "create",
@@ -191,7 +124,7 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
     );
 
     let invalid_subtask = run_failure(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "create",
@@ -211,7 +144,7 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
     );
     assert!(invalid_text.contains("invalid_parent_child_kind"));
 
-    let ready = run_json_success(&state_dir, &["task", "ready", "--json"]);
+    let ready = run_json_success(&fixture, &["task", "ready", "--json"]);
     let ready_ids = ready["tasks"]
         .as_array()
         .expect("ready tasks should be array")
@@ -222,7 +155,7 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
     assert!(!ready_ids.contains(&"workflow-step"));
     assert!(!ready_ids.contains(&"workflow-todo-alias"));
 
-    let progress = run_json_success(&state_dir, &["task", "progress", "workflow-task", "--json"]);
+    let progress = run_json_success(&fixture, &["task", "progress", "workflow-task", "--json"]);
     assert_eq!(progress["progress"]["descendant_count"], 1);
     assert_eq!(progress["progress"]["open_count"], 1);
     assert_eq!(progress["progress"]["closed_count"], 0);
@@ -231,12 +164,12 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
         serde_json::json!(1)
     );
 
-    let status = run_json_success(&state_dir, &["status", "--json"]);
+    let status = run_json_success(&fixture, &["status", "--json"]);
     assert_eq!(status["taskflow_counts"]["total_count"], 3);
     assert_eq!(status["taskflow_counts"]["open_count"], 3);
     assert_eq!(status["taskflow_counts"]["ready_count"], 2);
 
-    let import_path = std::path::Path::new(&state_dir).join("taxonomy-alias-import.jsonl");
+    let import_path = fixture.state_dir().join("taxonomy-alias-import.jsonl");
     let imported_todo = serde_json::json!({
         "id": "workflow-import-todo-alias",
         "title": "Workflow Imported Todo Alias",
@@ -281,7 +214,7 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
     )
     .expect("write taxonomy alias import");
     run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "import-jsonl",
@@ -290,33 +223,33 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
         ],
     );
     let imported_todo_show = run_json_success(
-        &state_dir,
+        &fixture,
         &["task", "show", "workflow-import-todo-alias", "--json"],
     );
     assert_eq!(imported_todo_show["task"]["issue_type"], "step");
     let imported_subtask_show = run_json_success(
-        &state_dir,
+        &fixture,
         &["task", "show", "workflow-import-subtask-alias", "--json"],
     );
     assert_eq!(imported_subtask_show["task"]["issue_type"], "subtask");
 
     let progress_after_import =
-        run_json_success(&state_dir, &["task", "progress", "workflow-task", "--json"]);
+        run_json_success(&fixture, &["task", "progress", "workflow-task", "--json"]);
     assert_eq!(progress_after_import["progress"]["descendant_count"], 2);
     assert_eq!(progress_after_import["progress"]["open_count"], 1);
     assert_eq!(progress_after_import["progress"]["closed_count"], 1);
 
-    let graph = run_json_success(&state_dir, &["task", "validate-graph", "--json"]);
+    let graph = run_json_success(&fixture, &["task", "validate-graph", "--json"]);
     assert_eq!(graph["status"], "pass");
 }
 
 #[test]
 fn task_runtime_workflows_preserve_literal_metadata_values() {
-    let state_dir = unique_state_dir("literal-metadata-workflow");
-    boot_state(&state_dir);
+    let fixture = PersistentRuntimeFixture::state_only("literal-metadata-workflow");
+    fixture.boot();
 
     run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "create",
@@ -330,7 +263,7 @@ fn task_runtime_workflows_preserve_literal_metadata_values() {
         ],
     );
     let created = run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "create",
@@ -371,7 +304,7 @@ fn task_runtime_workflows_preserve_literal_metadata_values() {
     );
 
     let updated = run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "update",
@@ -399,7 +332,7 @@ fn task_runtime_workflows_preserve_literal_metadata_values() {
     );
 
     let clear_conflict = run_failure(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "update",
@@ -417,7 +350,7 @@ fn task_runtime_workflows_preserve_literal_metadata_values() {
     );
     assert!(clear_conflict_text.contains("--proof-target-literal"));
 
-    let import_path = std::path::Path::new(&state_dir).join("literal-metadata-import.json");
+    let import_path = fixture.state_dir().join("literal-metadata-import.json");
     let import_payload = serde_json::json!({
         "tasks": [{
             "id": "literal-import-task",
@@ -437,7 +370,7 @@ fn task_runtime_workflows_preserve_literal_metadata_values() {
     )
     .expect("write literal metadata import");
     run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "import",
@@ -446,10 +379,7 @@ fn task_runtime_workflows_preserve_literal_metadata_values() {
             "--json",
         ],
     );
-    let imported = run_json_success(
-        &state_dir,
-        &["task", "show", "literal-import-task", "--json"],
-    );
+    let imported = run_json_success(&fixture, &["task", "show", "literal-import-task", "--json"]);
     assert_eq!(
         imported["task"]["planner_metadata"]["owned_paths"],
         serde_json::json!(["docs/import,path.md"])
@@ -466,11 +396,11 @@ fn task_runtime_workflows_preserve_literal_metadata_values() {
 
 #[test]
 fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
-    let state_dir = unique_state_dir("runtime-workflow");
-    boot_state(&state_dir);
+    let fixture = PersistentRuntimeFixture::state_only("runtime-workflow");
+    fixture.boot();
 
     run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "create",
@@ -484,7 +414,7 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
         ],
     );
     run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "create",
@@ -508,7 +438,7 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
         ],
     );
     let update = run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "update",
@@ -522,7 +452,7 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
     );
     assert_eq!(update["task"]["priority"], 1);
 
-    let ready = run_json_success(&state_dir, &["task", "ready", "--json"]);
+    let ready = run_json_success(&fixture, &["task", "ready", "--json"]);
     let ready_ids = ready["tasks"]
         .as_array()
         .expect("ready tasks should be array")
@@ -531,7 +461,7 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
         .collect::<Vec<_>>();
     assert!(ready_ids.contains(&"workflow-task"));
 
-    let scheduler = run_json(&state_dir, &["taskflow", "scheduler", "dispatch", "--json"]);
+    let scheduler = run_json(&fixture, &["taskflow", "scheduler", "dispatch", "--json"]);
     assert_eq!(scheduler["surface"], "vida taskflow scheduler dispatch");
     assert!(
         scheduler["selected_task_ids"]
@@ -543,7 +473,7 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
     );
 
     let attempt = run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "attempt",
@@ -570,7 +500,7 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
     assert_eq!(attempt["attempt"]["attempt_id"], "workflow-attempt-1");
 
     let attempt_status = run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "attempt",
@@ -584,7 +514,7 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
     assert_eq!(attempt_status["status"], "pass");
 
     let verify = run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "verify",
@@ -600,7 +530,7 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
     assert_eq!(verify["tests_green"], true);
 
     run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "proof",
@@ -617,7 +547,7 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
     );
 
     let dispatch_init = run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "taskflow",
             "run-graph",
@@ -629,20 +559,20 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
     assert_eq!(dispatch_init["run_id"], "workflow-task");
 
     let run_graph = run_json_success(
-        &state_dir,
+        &fixture,
         &["taskflow", "run-graph", "status", "workflow-task", "--json"],
     );
     assert_eq!(run_graph["run_id"], "workflow-task");
 
     let recovery = run_json(
-        &state_dir,
+        &fixture,
         &["taskflow", "recovery", "status", "workflow-task", "--json"],
     );
     assert_eq!(recovery["run_id"], "workflow-task");
     assert!(recovery["status"].is_string());
 
     run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "close",
@@ -653,9 +583,9 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
         ],
     );
 
-    let export_path = std::path::Path::new(&state_dir).join("workflow-export.jsonl");
+    let export_path = fixture.state_dir().join("workflow-export.jsonl");
     run_json_success(
-        &state_dir,
+        &fixture,
         &[
             "task",
             "export-jsonl",
@@ -665,10 +595,10 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
     );
     assert!(export_path.exists());
 
-    let import_state_dir = unique_state_dir("runtime-workflow-import");
-    boot_state(&import_state_dir);
+    let import_fixture = PersistentRuntimeFixture::state_only("runtime-workflow-import");
+    import_fixture.boot();
     run_json_success(
-        &import_state_dir,
+        &import_fixture,
         &[
             "task",
             "import-jsonl",
@@ -677,7 +607,7 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
         ],
     );
     let imported = run_json_success(
-        &import_state_dir,
+        &import_fixture,
         &["task", "show", "workflow-task", "--json"],
     );
     assert_eq!(imported["task"]["status"], "closed");

@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use surrealdb::engine::local::{Db, SurrealKv};
@@ -52,6 +54,387 @@ pub(crate) const RUN_GRAPH_DELETE_TABLE_ENV: &str = "VIDA_BOOT_SMOKE_RUN_GRAPH_D
 pub(crate) const RUN_GRAPH_DELETE_RUN_ID_ENV: &str = "VIDA_BOOT_SMOKE_RUN_GRAPH_DELETE_RUN_ID";
 
 const MAX_OPEN_RETRIES: usize = 20;
+static UNIQUE_FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) struct RuntimeReceiptFixture {
+    pub(crate) state_dir: String,
+    pub(crate) run_id: String,
+    pub(crate) dispatch_target: String,
+    pub(crate) active_node: Option<String>,
+    pub(crate) dispatch_packet_path: String,
+    pub(crate) downstream_target: String,
+    pub(crate) downstream_packet_path: String,
+    pub(crate) result_path: String,
+    pub(crate) downstream_ready: bool,
+    pub(crate) downstream_status: String,
+    pub(crate) downstream_blockers: Vec<String>,
+    pub(crate) dispatch_status: String,
+    pub(crate) lane_status: String,
+    pub(crate) blocker_code: Option<String>,
+    pub(crate) dispatch_surface: String,
+    pub(crate) dispatch_command: String,
+    pub(crate) task_class: String,
+    pub(crate) lifecycle_stage: String,
+    pub(crate) handoff_state: String,
+    pub(crate) resume_target: String,
+}
+
+impl RuntimeReceiptFixture {
+    pub(crate) fn ready_downstream(
+        state_dir: impl Into<String>,
+        run_id: impl Into<String>,
+        dispatch_target: impl Into<String>,
+        downstream_target: impl Into<String>,
+    ) -> Self {
+        let run_id = run_id.into();
+        let dispatch_target = dispatch_target.into();
+        let downstream_target = downstream_target.into();
+        let dispatch_packet_path = format!("runtime-consumption/dispatch-packets/{run_id}.json");
+        let downstream_packet_path =
+            format!("runtime-consumption/dispatch-packets/{run_id}-{downstream_target}.json");
+        let result_path = format!("runtime-consumption/dispatch-results/{run_id}.json");
+        Self {
+            state_dir: state_dir.into(),
+            run_id,
+            dispatch_target: dispatch_target.clone(),
+            active_node: None,
+            dispatch_packet_path,
+            downstream_target: downstream_target.clone(),
+            downstream_packet_path,
+            result_path,
+            downstream_ready: true,
+            downstream_status: "packet_ready".to_string(),
+            downstream_blockers: Vec::new(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            blocker_code: None,
+            dispatch_surface: "vida agent-init".to_string(),
+            dispatch_command: "vida agent-init".to_string(),
+            task_class: dispatch_target.clone(),
+            lifecycle_stage: format!("{dispatch_target}_active"),
+            handoff_state: format!("awaiting_{downstream_target}"),
+            resume_target: format!("dispatch.{dispatch_target}"),
+        }
+    }
+
+    pub(crate) fn from_env() -> Self {
+        let state_dir = std::env::var(RECEIPT_HELPER_STATE_DIR_ENV)
+            .expect("runtime receipt helper state dir should be set");
+        let run_id = std::env::var(RECEIPT_HELPER_RUN_ID_ENV)
+            .expect("runtime receipt helper run id should be set");
+        let dispatch_target = std::env::var(RECEIPT_HELPER_DISPATCH_TARGET_ENV)
+            .expect("runtime receipt helper dispatch target should be set");
+        let downstream_target = std::env::var(RECEIPT_HELPER_DOWNSTREAM_TARGET_ENV)
+            .expect("runtime receipt helper downstream target should be set");
+        let mut fixture =
+            Self::ready_downstream(state_dir, run_id, dispatch_target, downstream_target);
+        fixture.dispatch_packet_path = std::env::var(RECEIPT_HELPER_DISPATCH_PACKET_PATH_ENV)
+            .expect("runtime receipt helper dispatch packet path should be set");
+        fixture.downstream_packet_path = std::env::var(RECEIPT_HELPER_DOWNSTREAM_PACKET_PATH_ENV)
+            .expect("runtime receipt helper downstream packet path should be set");
+        fixture.result_path = std::env::var(RECEIPT_HELPER_RESULT_PATH_ENV)
+            .expect("runtime receipt helper result path should be set");
+        fixture.active_node = std::env::var(RECEIPT_HELPER_ACTIVE_NODE_ENV)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        fixture.downstream_ready = std::env::var(RECEIPT_HELPER_DOWNSTREAM_READY_ENV)
+            .map(|value| value == "true")
+            .unwrap_or(true);
+        fixture.downstream_status = std::env::var(RECEIPT_HELPER_DOWNSTREAM_STATUS_ENV)
+            .unwrap_or_else(|_| "packet_ready".to_string());
+        fixture.downstream_blockers = std::env::var(RECEIPT_HELPER_DOWNSTREAM_BLOCKERS_ENV)
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        fixture.dispatch_status = std::env::var(RECEIPT_HELPER_DISPATCH_STATUS_ENV)
+            .unwrap_or_else(|_| "executed".to_string());
+        fixture.lane_status = std::env::var(RECEIPT_HELPER_LANE_STATUS_ENV)
+            .unwrap_or_else(|_| "lane_completed".to_string());
+        fixture.blocker_code = std::env::var(RECEIPT_HELPER_BLOCKER_CODE_ENV)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        fixture.dispatch_surface = std::env::var(RECEIPT_HELPER_DISPATCH_SURFACE_ENV)
+            .unwrap_or_else(|_| "vida agent-init".to_string());
+        fixture.dispatch_command = std::env::var(RECEIPT_HELPER_DISPATCH_COMMAND_ENV)
+            .unwrap_or_else(|_| "vida agent-init".to_string());
+        fixture.task_class = std::env::var(RECEIPT_HELPER_TASK_CLASS_ENV)
+            .unwrap_or_else(|_| fixture.dispatch_target.clone());
+        fixture.lifecycle_stage = std::env::var(RECEIPT_HELPER_LIFECYCLE_STAGE_ENV)
+            .unwrap_or_else(|_| format!("{}_active", fixture.dispatch_target));
+        fixture.handoff_state = std::env::var(RECEIPT_HELPER_HANDOFF_STATE_ENV)
+            .unwrap_or_else(|_| format!("awaiting_{}", fixture.downstream_target));
+        fixture.resume_target = std::env::var(RECEIPT_HELPER_RESUME_TARGET_ENV)
+            .unwrap_or_else(|_| format!("dispatch.{}", fixture.dispatch_target));
+        fixture
+    }
+
+    pub(crate) fn persist(&self) {
+        persist_ready_downstream_receipt(
+            &self.state_dir,
+            &self.run_id,
+            &self.dispatch_target,
+            &self.dispatch_packet_path,
+            &self.downstream_target,
+            &self.downstream_packet_path,
+            &self.result_path,
+            &self.dispatch_status,
+            &self.lane_status,
+            self.blocker_code.clone(),
+            &self.dispatch_surface,
+            &self.dispatch_command,
+            &self.task_class,
+            self.active_node.as_deref(),
+            &self.lifecycle_stage,
+            &self.handoff_state,
+            &self.resume_target,
+            self.downstream_ready,
+            &self.downstream_status,
+            self.downstream_blockers.clone(),
+        );
+    }
+}
+
+pub(crate) struct PersistentRuntimeFixture {
+    project_root: Option<PathBuf>,
+    state_dir: PathBuf,
+}
+
+impl PersistentRuntimeFixture {
+    pub(crate) fn state_only(label: &str) -> Self {
+        let state_dir = unique_fixture_path(label);
+        std::fs::create_dir_all(&state_dir).expect("runtime fixture state dir should exist");
+        Self {
+            project_root: None,
+            state_dir,
+        }
+    }
+
+    pub(crate) fn project_bound(label: &str) -> Self {
+        let project_root = unique_fixture_path(label);
+        let state_dir = project_root.join(".vida").join("data").join("state");
+        std::fs::create_dir_all(&state_dir).expect("runtime fixture state dir should exist");
+        write_project_files(&project_root);
+        Self {
+            project_root: Some(project_root),
+            state_dir,
+        }
+    }
+
+    pub(crate) fn project_shell(label: &str) -> Self {
+        let project_root = unique_fixture_path(label);
+        let state_dir = project_root.join(".vida").join("data").join("state");
+        write_project_files(&project_root);
+        Self {
+            project_root: Some(project_root),
+            state_dir,
+        }
+    }
+
+    pub(crate) fn state_dir(&self) -> &Path {
+        &self.state_dir
+    }
+
+    pub(crate) fn state_dir_string(&self) -> String {
+        self.state_dir.display().to_string()
+    }
+
+    pub(crate) fn project_root(&self) -> Option<&Path> {
+        self.project_root.as_deref()
+    }
+
+    pub(crate) fn boot(&self) {
+        let output = self.capture(&["boot"]);
+        assert!(
+            output.status.success(),
+            "boot should succeed: stdout={}; stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    pub(crate) fn cmd(&self, args: &[&str]) -> Command {
+        let mut command = vida_command();
+        command.args(args).env("VIDA_STATE_DIR", &self.state_dir);
+        if let Some(project_root) = &self.project_root {
+            command.current_dir(project_root);
+        }
+        command
+    }
+
+    pub(crate) fn capture(&self, args: &[&str]) -> Output {
+        run_with_state_lock_retry(|| self.cmd(args))
+    }
+
+    pub(crate) fn capture_with_state_dir(&self, args: &[&str], state_dir: Option<&Path>) -> Output {
+        let project_root = self
+            .project_root
+            .as_ref()
+            .expect("runtime fixture project root should exist");
+        run_with_state_lock_retry(|| {
+            let mut command = vida_command();
+            command
+                .args(args)
+                .current_dir(project_root)
+                .env_remove("VIDA_STATE_DIR");
+            if let Some(state_dir) = state_dir {
+                command.env("VIDA_STATE_DIR", state_dir);
+            }
+            command
+        })
+    }
+
+    pub(crate) fn json_success(&self, args: &[&str]) -> serde_json::Value {
+        let output = self.capture(args);
+        assert!(
+            output.status.success(),
+            "{} should succeed: stdout={}; stderr={}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        parse_json_output(args, &output)
+    }
+
+    pub(crate) fn json_allow_failure(&self, args: &[&str]) -> (serde_json::Value, bool) {
+        let output = self.capture(args);
+        (parse_json_output(args, &output), output.status.success())
+    }
+
+    pub(crate) fn json_success_with_state_dir(
+        &self,
+        args: &[&str],
+        state_dir: Option<&Path>,
+    ) -> serde_json::Value {
+        let output = self.capture_with_state_dir(args, state_dir);
+        assert!(
+            output.status.success(),
+            "{} should succeed: stdout={}; stderr={}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        parse_json_output(args, &output)
+    }
+
+    pub(crate) fn output_success_with_state_dir(
+        &self,
+        args: &[&str],
+        state_dir: Option<&Path>,
+    ) -> Output {
+        let output = self.capture_with_state_dir(args, state_dir);
+        assert!(
+            output.status.success(),
+            "{} should succeed: stdout={}; stderr={}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    pub(crate) fn write_project_config(&self, contents: impl AsRef<str>) {
+        let project_root = self
+            .project_root
+            .as_ref()
+            .expect("runtime fixture project root should exist");
+        std::fs::write(project_root.join("vida.config.yaml"), contents.as_ref())
+            .expect("runtime fixture vida.config.yaml should be written");
+    }
+
+    pub(crate) fn create_epic_parent(&self, epic_id: &str, title: &str) -> serde_json::Value {
+        self.json_success(&["task", "create", epic_id, title, "--type", "epic", "--json"])
+    }
+
+    pub(crate) fn create_task(
+        &self,
+        task_id: &str,
+        title: &str,
+        parent_id: &str,
+    ) -> serde_json::Value {
+        self.json_success(&[
+            "task",
+            "create",
+            task_id,
+            title,
+            "--parent-id",
+            parent_id,
+            "--json",
+        ])
+    }
+
+    pub(crate) fn create_run_graph_backing_task(&self, run_id: &str) {
+        let epic_id = format!("{run_id}-epic");
+        self.create_epic_parent(&epic_id, &format!("{run_id} epic"));
+        self.create_task(run_id, &format!("{run_id} task"), &epic_id);
+    }
+
+    pub(crate) fn runtime_consumption_path(&self, kind: &str, name: &str) -> PathBuf {
+        self.state_dir
+            .join("runtime-consumption")
+            .join(kind)
+            .join(name)
+    }
+
+    pub(crate) fn write_runtime_json(
+        &self,
+        kind: &str,
+        name: &str,
+        value: &serde_json::Value,
+    ) -> PathBuf {
+        let path = self.runtime_consumption_path(kind, name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("runtime fixture artifact dir should exist");
+        }
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(value).expect("runtime fixture json should serialize"),
+        )
+        .expect("runtime fixture json should be written");
+        path
+    }
+
+    pub(crate) fn receipt(
+        &self,
+        run_id: &str,
+        dispatch_target: &str,
+        downstream_target: &str,
+    ) -> RuntimeReceiptFixture {
+        RuntimeReceiptFixture::ready_downstream(
+            self.state_dir_string(),
+            run_id,
+            dispatch_target,
+            downstream_target,
+        )
+    }
+
+    pub(crate) fn persist_receipt(&self, fixture: &RuntimeReceiptFixture) {
+        fixture.persist();
+    }
+
+    pub(crate) fn delete_row(&self, table: &str, id: &str) {
+        delete_run_graph_row(&self.state_dir_string(), table, id);
+    }
+}
+
+impl Drop for PersistentRuntimeFixture {
+    fn drop(&mut self) {
+        let root = self
+            .project_root
+            .as_ref()
+            .unwrap_or(&self.state_dir)
+            .to_path_buf();
+        let _ = std::fs::remove_dir_all(root);
+    }
+}
 
 #[allow(dead_code)]
 #[derive(serde::Serialize, serde::Deserialize, SurrealValue)]
@@ -126,78 +509,7 @@ struct TestResumabilityCapsuleRow {
 }
 
 pub(crate) fn persist_ready_downstream_receipt_from_env() {
-    let state_dir = std::env::var(RECEIPT_HELPER_STATE_DIR_ENV)
-        .expect("runtime receipt helper state dir should be set");
-    let run_id = std::env::var(RECEIPT_HELPER_RUN_ID_ENV)
-        .expect("runtime receipt helper run id should be set");
-    let dispatch_target = std::env::var(RECEIPT_HELPER_DISPATCH_TARGET_ENV)
-        .expect("runtime receipt helper dispatch target should be set");
-    let dispatch_packet_path = std::env::var(RECEIPT_HELPER_DISPATCH_PACKET_PATH_ENV)
-        .expect("runtime receipt helper dispatch packet path should be set");
-    let downstream_target = std::env::var(RECEIPT_HELPER_DOWNSTREAM_TARGET_ENV)
-        .expect("runtime receipt helper downstream target should be set");
-    let downstream_packet_path = std::env::var(RECEIPT_HELPER_DOWNSTREAM_PACKET_PATH_ENV)
-        .expect("runtime receipt helper downstream packet path should be set");
-    let result_path = std::env::var(RECEIPT_HELPER_RESULT_PATH_ENV)
-        .expect("runtime receipt helper result path should be set");
-    let downstream_ready = std::env::var(RECEIPT_HELPER_DOWNSTREAM_READY_ENV)
-        .map(|value| value == "true")
-        .unwrap_or(true);
-    let downstream_status = std::env::var(RECEIPT_HELPER_DOWNSTREAM_STATUS_ENV)
-        .unwrap_or_else(|_| "packet_ready".to_string());
-    let downstream_blockers = std::env::var(RECEIPT_HELPER_DOWNSTREAM_BLOCKERS_ENV)
-        .ok()
-        .map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let dispatch_status = std::env::var(RECEIPT_HELPER_DISPATCH_STATUS_ENV)
-        .unwrap_or_else(|_| "executed".to_string());
-    let lane_status = std::env::var(RECEIPT_HELPER_LANE_STATUS_ENV)
-        .unwrap_or_else(|_| "lane_completed".to_string());
-    let blocker_code = std::env::var(RECEIPT_HELPER_BLOCKER_CODE_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let dispatch_surface = std::env::var(RECEIPT_HELPER_DISPATCH_SURFACE_ENV)
-        .unwrap_or_else(|_| "vida agent-init".to_string());
-    let dispatch_command = std::env::var(RECEIPT_HELPER_DISPATCH_COMMAND_ENV)
-        .unwrap_or_else(|_| "vida agent-init".to_string());
-    let task_class =
-        std::env::var(RECEIPT_HELPER_TASK_CLASS_ENV).unwrap_or_else(|_| dispatch_target.clone());
-    let lifecycle_stage = std::env::var(RECEIPT_HELPER_LIFECYCLE_STAGE_ENV)
-        .unwrap_or_else(|_| format!("{dispatch_target}_active"));
-    let handoff_state = std::env::var(RECEIPT_HELPER_HANDOFF_STATE_ENV)
-        .unwrap_or_else(|_| format!("awaiting_{downstream_target}"));
-    let resume_target = std::env::var(RECEIPT_HELPER_RESUME_TARGET_ENV)
-        .unwrap_or_else(|_| format!("dispatch.{dispatch_target}"));
-
-    persist_ready_downstream_receipt(
-        &state_dir,
-        &run_id,
-        &dispatch_target,
-        &dispatch_packet_path,
-        &downstream_target,
-        &downstream_packet_path,
-        &result_path,
-        &dispatch_status,
-        &lane_status,
-        blocker_code,
-        &dispatch_surface,
-        &dispatch_command,
-        &task_class,
-        &lifecycle_stage,
-        &handoff_state,
-        &resume_target,
-        downstream_ready,
-        &downstream_status,
-        downstream_blockers,
-    );
+    RuntimeReceiptFixture::from_env().persist();
 }
 
 pub(crate) fn clear_protocol_binding_receipts_from_env() {
@@ -255,6 +567,7 @@ fn persist_ready_downstream_receipt(
     dispatch_surface: &str,
     dispatch_command: &str,
     task_class: &str,
+    active_node: Option<&str>,
     lifecycle_stage: &str,
     handoff_state: &str,
     resume_target: &str,
@@ -305,18 +618,13 @@ fn persist_ready_downstream_receipt(
             })
             .await
             .expect("runtime receipt helper should persist resumability capsule");
-        let active_node = std::env::var(RECEIPT_HELPER_ACTIVE_NODE_ENV)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| dispatch_target.to_string());
         let _: Option<TestExecutionPlanStateRow> = db
             .upsert(("execution_plan_state", run_id))
             .content(TestExecutionPlanStateRow {
                 run_id: run_id.to_string(),
                 task_id: run_id.to_string(),
                 task_class: task_class.to_string(),
-                active_node,
+                active_node: active_node.unwrap_or(dispatch_target).to_string(),
                 next_node: Some(downstream_target.to_string()),
                 status: status_label.to_string(),
                 updated_at,
@@ -401,4 +709,82 @@ fn is_lock_error(message: &str) -> bool {
 fn backoff_delay(attempt: usize) -> Duration {
     let millis = 25_u64.saturating_mul((attempt as u64).saturating_add(1));
     Duration::from_millis(millis.min(250))
+}
+
+fn unique_fixture_path(label: &str) -> PathBuf {
+    let counter = UNIQUE_FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "vida-{label}-{}-{nanos}-{counter}",
+        std::process::id()
+    ))
+}
+
+fn write_project_files(project_root: &Path) {
+    std::fs::create_dir_all(project_root.join(".vida").join("config"))
+        .expect("runtime fixture project config dir should exist");
+    std::fs::create_dir_all(project_root.join(".vida").join("db"))
+        .expect("runtime fixture project db dir should exist");
+    std::fs::create_dir_all(project_root.join(".vida").join("project"))
+        .expect("runtime fixture project marker dir should exist");
+    std::fs::write(project_root.join("AGENTS.md"), "# Test agents\n")
+        .expect("runtime fixture AGENTS.md should be written");
+    std::fs::write(project_root.join("AGENTS.sidecar.md"), "# Test sidecar\n")
+        .expect("runtime fixture AGENTS.sidecar.md should be written");
+    std::fs::write(project_root.join("vida.config.yaml"), "project_id: test\n")
+        .expect("runtime fixture vida.config.yaml should be written");
+}
+
+fn vida_command() -> Command {
+    vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
+}
+
+fn run_with_state_lock_retry<F>(mut build: F) -> Output
+where
+    F: FnMut() -> Command,
+{
+    let mut last_output = None;
+    for attempt in 0..6 {
+        let output = build()
+            .output()
+            .unwrap_or_else(|error| panic!("vida command should run: {error}"));
+        if !is_state_lock_output(&output) {
+            return output;
+        }
+        last_output = Some(output);
+        std::thread::sleep(Duration::from_millis(150 * (attempt + 1)));
+    }
+    last_output.expect("state lock retry should record output")
+}
+
+fn is_state_lock_output(output: &Output) -> bool {
+    if output.status.success() {
+        return false;
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stderr.contains("timed out while waiting for authoritative datastore lock")
+        || stdout.contains("timed out while waiting for authoritative datastore lock")
+        || stderr.contains("authoritative_state_required_for_mutation")
+        || stdout.contains("authoritative_state_required_for_mutation")
+}
+
+fn parse_json_output(args: &[&str], output: &Output) -> serde_json::Value {
+    assert!(
+        !output.stdout.is_empty(),
+        "{} should emit JSON on stdout; stderr={}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "{} stdout should parse as JSON: {error}\nstdout={}\nstderr={}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
 }
