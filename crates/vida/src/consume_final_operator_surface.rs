@@ -62,8 +62,11 @@ pub(crate) fn emit_taskflow_consume_final_json(
         "failure_control_evidence": failure_control_evidence.clone(),
         "payload": payload_json,
     });
-    let snapshot_path =
-        crate::write_runtime_consumption_snapshot(store.root(), "final", &snapshot)?;
+    let snapshot_path = crate::write_runtime_consumption_snapshot(
+        store.root(),
+        crate::taskflow_consume::consume_final_snapshot_prefix(&payload.consume_final_mode),
+        &snapshot,
+    )?;
     let mut snapshot_with_operator_contracts = build_release1_operator_output_payload(
         "vida taskflow consume final",
         consume_final_blocker_codes,
@@ -104,18 +107,25 @@ pub(crate) fn emit_taskflow_consume_final_json(
             .map_err(|error| format!("Failed to encode runtime-consumption snapshot: {error}"))?,
     )
     .map_err(|error| format!("Failed to write runtime-consumption snapshot: {error}"))?;
-    let runtime_consumption = crate::runtime_consumption_summary(store.root())?;
-    let latest_final_snapshot_path =
-        crate::latest_final_runtime_consumption_snapshot_path(store.root())?;
     let protocol_binding_latest_receipt_id =
         crate::block_on_state_store(store.latest_protocol_binding_receipt())?
             .map(|receipt| receipt.receipt_id);
-    let retrieval_trust_signal = crate::latest_admissible_retrieval_trust_signal(
-        &runtime_consumption,
-        latest_final_snapshot_path.as_deref(),
-        protocol_binding_latest_receipt_id.as_deref(),
-    )
-    .unwrap_or_else(|| serde_json::json!({}));
+    let retrieval_trust_signal =
+        if crate::taskflow_consume::consume_final_mode_publishes_final_evidence(
+            &payload.consume_final_mode,
+        ) {
+            let runtime_consumption = crate::runtime_consumption_summary(store.root())?;
+            let latest_final_snapshot_path =
+                crate::latest_final_runtime_consumption_snapshot_path(store.root())?;
+            crate::latest_admissible_retrieval_trust_signal(
+                &runtime_consumption,
+                latest_final_snapshot_path.as_deref(),
+                protocol_binding_latest_receipt_id.as_deref(),
+            )
+            .unwrap_or_else(|| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
     let mut artifact_refs = snapshot_with_operator_contracts["artifact_refs"].clone();
     artifact_refs["retrieval_trust_signal"] = retrieval_trust_signal.clone();
     artifact_refs["protocol_binding_latest_receipt_id"] = protocol_binding_latest_receipt_id

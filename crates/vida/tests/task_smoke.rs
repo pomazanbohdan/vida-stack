@@ -22438,6 +22438,83 @@ fn protocol_binding_operator_contract_parity() {
 }
 
 #[test]
+fn consume_final_readonly_modes_do_not_publish_final_snapshots() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let (preview_json, preview_success) = run_command_json_allow_failure(
+        &[
+            "taskflow",
+            "consume",
+            "final",
+            "probe",
+            "--preview",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let (validate_json, validate_success) = run_command_json_allow_failure(
+        &[
+            "taskflow",
+            "consume",
+            "final",
+            "probe",
+            "--validate-only",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(
+        preview_success, validate_success,
+        "preview and validate-only must share the same read-only admission outcome"
+    );
+    assert!(
+        !preview_success,
+        "blocked read-only admission should fail consistently for preview and validate-only"
+    );
+    assert!(
+        preview_json["snapshot_path"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("consume-final-preview-"),
+        "preview snapshot must stay outside the final evidence index: {preview_json}"
+    );
+    assert!(
+        validate_json["snapshot_path"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("consume-final-validate-"),
+        "validate-only snapshot must stay outside the final evidence index: {validate_json}"
+    );
+    for output in [&preview_json, &validate_json] {
+        assert_eq!(
+            output["artifact_refs"]["retrieval_trust_signal"],
+            serde_json::json!({}),
+            "read-only consume-final output must not publish final retrieval-trust evidence: {output}"
+        );
+        assert_eq!(
+            output["payload"]["runtime_bundle"]["retrieval_trust_evidence"],
+            serde_json::json!({}),
+            "read-only consume-final payload must not carry final retrieval-trust evidence: {output}"
+        );
+    }
+    let runtime_consumption_dir = std::path::Path::new(&state_dir).join("runtime-consumption");
+    let final_snapshot_count = fs::read_dir(&runtime_consumption_dir)
+        .expect("runtime-consumption dir should exist")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("final-"))
+        .count();
+    assert_eq!(
+        final_snapshot_count, 0,
+        "read-only consume-final modes must not publish final-* snapshots"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn protocol_binding_check_statuses_are_canonical() {
     let state_dir = unique_state_dir();
     run_and_assert_success(&["boot"], &state_dir);

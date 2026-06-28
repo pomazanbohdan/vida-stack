@@ -51,6 +51,19 @@ impl ConsumeFinalMode {
     }
 }
 
+pub(crate) fn consume_final_snapshot_prefix(mode: &str) -> &'static str {
+    match mode {
+        "execute" => "final",
+        "preview" => "consume-final-preview",
+        "validate_only" => "consume-final-validate",
+        _ => "consume-final-readonly",
+    }
+}
+
+pub(crate) fn consume_final_mode_publishes_final_evidence(mode: &str) -> bool {
+    mode == ConsumeFinalMode::Execute.as_str()
+}
+
 pub(crate) fn consume_final_command_usage() -> &'static str {
     "vida taskflow consume final <request_text> [--task-id <task-id>] [--owned-path <path>] [--from-task-metadata] [--preview | --validate-only] [--json]"
 }
@@ -1290,7 +1303,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 });
                                 let snapshot_path = match super::write_runtime_consumption_snapshot(
                                     store.root(),
-                                    "final",
+                                    consume_final_snapshot_prefix(consume_final_mode.as_str()),
                                     &snapshot,
                                 ) {
                                     Ok(path) => path,
@@ -1312,15 +1325,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 println!("{}", consume_final_toon_text(&payload, &snapshot_path));
                             }
 
-                            match consume_final_mode {
-                                ConsumeFinalMode::Preview => ExitCode::SUCCESS,
-                                ConsumeFinalMode::Execute | ConsumeFinalMode::ValidateOnly => {
-                                    if payload.closure_admission.admitted {
-                                        ExitCode::SUCCESS
-                                    } else {
-                                        ExitCode::from(1)
-                                    }
-                                }
+                            if payload.closure_admission.admitted {
+                                ExitCode::SUCCESS
+                            } else {
+                                ExitCode::from(1)
                             }
                         }
                         Err(error) => {
@@ -2267,6 +2275,27 @@ mod tests {
         assert!(validate_error.contains("--preview conflicts with --validate-only"));
         assert!(preview_error.contains(consume_final_command_usage()));
         assert!(validate_error.contains(consume_final_command_usage()));
+    }
+
+    #[test]
+    fn consume_final_snapshot_prefix_keeps_readonly_modes_out_of_final_index() {
+        assert_eq!(
+            super::consume_final_snapshot_prefix(ConsumeFinalMode::Execute.as_str()),
+            "final"
+        );
+        assert!(super::consume_final_mode_publishes_final_evidence(
+            ConsumeFinalMode::Execute.as_str()
+        ));
+        for mode in [ConsumeFinalMode::Preview, ConsumeFinalMode::ValidateOnly] {
+            let prefix = super::consume_final_snapshot_prefix(mode.as_str());
+            assert!(
+                !format!("{prefix}-2026-06-28T00-00-00Z.json").starts_with("final-"),
+                "{prefix} must not be selected by final runtime-consumption snapshot readers"
+            );
+            assert!(!super::consume_final_mode_publishes_final_evidence(
+                mode.as_str()
+            ));
+        }
     }
 
     #[test]
