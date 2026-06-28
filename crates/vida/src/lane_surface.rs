@@ -3276,6 +3276,31 @@ fn supplied_host_bridge_completion_result_is_blocked(
         || !supplied_host_bridge_completion_result_blocker_codes(args, Some(result)).is_empty()
 }
 
+fn host_bridge_completion_authorizes_rework_route_override(
+    dispatch_target: &str,
+    blocker_codes: &[String],
+    supplied_decision: Option<&str>,
+    supplied_verdict: Option<&str>,
+    supplied_rework_target: Option<&str>,
+    requested_allowed_next_node: &str,
+) -> bool {
+    let result_verdict = host_bridge_result_verdict_fields_for_gate(
+        dispatch_target,
+        blocker_codes,
+        supplied_rework_target,
+    );
+    let supplied_rework_requested = [supplied_decision, supplied_verdict]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .any(host_bridge_completion_result_value_is_rework_alias)
+        || requested_allowed_next_node == result_verdict.allowed_next_node;
+
+    !blocker_codes.is_empty()
+        && supplied_rework_requested
+        && requested_allowed_next_node == result_verdict.allowed_next_node
+}
+
 struct HostBridgeReceiptPaths {
     request_path: PathBuf,
     packet_path: Option<PathBuf>,
@@ -4409,24 +4434,20 @@ fn materialize_host_bridge_completion_evidence(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let result_verdict = host_bridge_result_verdict_fields_for_gate(
-        dispatch_target,
-        &blocker_codes,
-        supplied_rework_target,
-    );
-    let supplied_rework_requested = [supplied_decision, supplied_verdict]
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .any(host_bridge_completion_result_value_is_rework_alias)
-        || requested_allowed_next_node == Some(result_verdict.allowed_next_node.as_str());
+    let supplied_rework_requested = requested_allowed_next_node.is_some_and(|requested| {
+        host_bridge_completion_authorizes_rework_route_override(
+            dispatch_target,
+            &blocker_codes,
+            supplied_decision,
+            supplied_verdict,
+            supplied_rework_target,
+            requested,
+        )
+    });
     if let (Some(requested), Some(persisted)) =
         (requested_allowed_next_node, persisted_allowed_next_node)
     {
-        let authorized_rework_override = !blocker_codes.is_empty()
-            && supplied_rework_requested
-            && requested == result_verdict.allowed_next_node;
-        if requested != persisted && !authorized_rework_override {
+        if requested != persisted && !supplied_rework_requested {
             return Err(format!(
                 "Host bridge completion allowed_next_node `{requested}` does not match persisted downstream route `{persisted}`."
             ));
@@ -5488,6 +5509,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 );
                 return ExitCode::from(1);
             }
+            let mut downstream_completion_blockers = host_bridge_evidence
+                .as_ref()
+                .map(|evidence| evidence.blocker_codes.clone())
+                .unwrap_or_default();
+            downstream_completion_blockers.extend(supplied_completion_blocker_codes.clone());
+            downstream_completion_blockers.sort();
+            downstream_completion_blockers.dedup();
             if let (Some(effective), Some(persisted)) = (
                 effective_allowed_next_node.as_deref(),
                 receipt
@@ -5496,20 +5524,22 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     .map(str::trim)
                     .filter(|value| !value.is_empty()),
             ) {
-                if effective != persisted {
+                let authorized_rework_override =
+                    host_bridge_completion_authorizes_rework_route_override(
+                        receipt.dispatch_target.as_str(),
+                        &downstream_completion_blockers,
+                        decision,
+                        verdict,
+                        rework_target,
+                        effective,
+                    );
+                if effective != persisted && !authorized_rework_override {
                     eprintln!(
                         "Lane completion allowed_next_node `{effective}` does not match persisted downstream route `{persisted}`."
                     );
                     return ExitCode::from(1);
                 }
             }
-            let mut downstream_completion_blockers = host_bridge_evidence
-                .as_ref()
-                .map(|evidence| evidence.blocker_codes.clone())
-                .unwrap_or_default();
-            downstream_completion_blockers.extend(supplied_completion_blocker_codes.clone());
-            downstream_completion_blockers.sort();
-            downstream_completion_blockers.dedup();
             let completion_result_path =
                 match crate::runtime_dispatch_lane_completion::write_runtime_lane_completion_result_with_summary_next_and_blockers(
                     store.root(),

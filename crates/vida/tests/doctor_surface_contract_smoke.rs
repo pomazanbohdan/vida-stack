@@ -2326,6 +2326,8 @@ fn host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions(
                 "rework_required",
                 "--verdict",
                 "rework_required",
+                "--allowed-next-node",
+                allowed_next_node,
                 "--blocker-code",
                 blocker_code.expect("blocked case should name blocker code"),
                 "--rework-target",
