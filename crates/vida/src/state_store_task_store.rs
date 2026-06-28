@@ -4605,7 +4605,7 @@ mod tests {
             .await
             .expect("normalized epic kind should be parent optional");
 
-        assert_eq!(task.issue_type, "Epic");
+        assert_eq!(task.issue_type, "epic");
         close_store_and_remove_root(store, root).await;
     }
 
@@ -4862,7 +4862,7 @@ mod tests {
                 title: "Still open child",
                 display_id: None,
                 description: "",
-                issue_type: "todo",
+                issue_type: "task",
                 status: "open",
                 priority: 1,
                 parent_id: Some("parent-with-open-child"),
@@ -5723,7 +5723,7 @@ mod tests {
             (
                 "run-graph-child",
                 "Run graph child",
-                "todo",
+                "task",
                 Some("run-graph-parent"),
             ),
         ] {
@@ -5810,7 +5810,7 @@ mod tests {
             (
                 "close-run-graph-child",
                 "Close run graph child",
-                "todo",
+                "task",
                 Some("close-run-graph-parent"),
             ),
         ] {

@@ -2458,7 +2458,8 @@ fn validate_agent_init_auto_dispatch_active_unit_ids(
 ) -> Result<(), AgentInitAutoDispatchActiveUnitError> {
     match active_task_ids.as_slice() {
         [] => Err(AgentInitAutoDispatchActiveUnitError {
-            blocker_code: "auto_dispatch_packet_active_unit_missing",
+            blocker_code: taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitMissing
+                .as_str(),
             detail: "`--auto-dispatch-packet` requires one active non-container task.".to_string(),
             active_task_id: None,
             resolved_run_id: resolved_run_id.to_string(),
@@ -2472,7 +2473,9 @@ fn validate_agent_init_auto_dispatch_active_unit_ids(
                 Ok(())
             } else {
                 Err(AgentInitAutoDispatchActiveUnitError {
-                    blocker_code: "auto_dispatch_packet_active_unit_mismatch",
+                    blocker_code:
+                        taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitMismatch
+                            .as_str(),
                     detail: format!(
                         "`--auto-dispatch-packet` resolved run `{resolved_run_id}` but active bounded unit is `{active_task_id}`."
                     ),
@@ -2483,7 +2486,8 @@ fn validate_agent_init_auto_dispatch_active_unit_ids(
             }
         }
         _ => Err(AgentInitAutoDispatchActiveUnitError {
-            blocker_code: "auto_dispatch_packet_active_unit_ambiguous",
+            blocker_code: taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitAmbiguous
+                .as_str(),
             detail: "`--auto-dispatch-packet` requires exactly one active non-container task."
                 .to_string(),
             active_task_id: None,
@@ -2498,7 +2502,8 @@ fn require_single_agent_init_auto_dispatch_active_unit(
 ) -> Result<AgentInitAutoDispatchActiveUnit, AgentInitAutoDispatchActiveUnitError> {
     match active_units.as_slice() {
         [] => Err(AgentInitAutoDispatchActiveUnitError {
-            blocker_code: "auto_dispatch_packet_active_unit_missing",
+            blocker_code: taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitMissing
+                .as_str(),
             detail: "`--auto-dispatch-packet` requires one active non-container task.".to_string(),
             active_task_id: None,
             resolved_run_id: String::new(),
@@ -2506,7 +2511,8 @@ fn require_single_agent_init_auto_dispatch_active_unit(
         }),
         [active_unit] => Ok(active_unit.clone()),
         _ => Err(AgentInitAutoDispatchActiveUnitError {
-            blocker_code: "auto_dispatch_packet_active_unit_ambiguous",
+            blocker_code: taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitAmbiguous
+                .as_str(),
             detail: "`--auto-dispatch-packet` requires exactly one active non-container task."
                 .to_string(),
             active_task_id: None,
@@ -2523,7 +2529,8 @@ async fn validate_agent_init_auto_dispatch_active_unit(
     let active_task_ids = agent_init_auto_dispatch_active_task_ids(store)
         .await
         .map_err(|error| AgentInitAutoDispatchActiveUnitError {
-            blocker_code: "auto_dispatch_packet_active_unit_unavailable",
+            blocker_code: taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitUnavailable
+                .as_str(),
             detail: error,
             active_task_id: None,
             resolved_run_id: resume_inputs.dispatch_receipt.run_id.clone(),
@@ -2542,7 +2549,8 @@ async fn resolve_agent_init_auto_dispatch_resume_inputs(
     let active_units = agent_init_auto_dispatch_active_units(store)
         .await
         .map_err(|error| AgentInitAutoDispatchActiveUnitError {
-            blocker_code: "auto_dispatch_packet_active_unit_unavailable",
+            blocker_code: taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitUnavailable
+                .as_str(),
             detail: error,
             active_task_id: None,
             resolved_run_id: String::new(),
@@ -2557,7 +2565,8 @@ async fn resolve_agent_init_auto_dispatch_resume_inputs(
     )
     .await
     .map_err(|error| AgentInitAutoDispatchActiveUnitError {
-        blocker_code: "auto_dispatch_packet_active_unit_packet_missing",
+        blocker_code: taskflow_contracts::BlockerCode::AutoDispatchPacketActiveUnitPacketMissing
+            .as_str(),
         detail: format!(
             "`--auto-dispatch-packet` resolved active bounded unit `{}` on run `{}` but could not resolve a materialized dispatch packet for that run: {error}. Materialize a dispatch packet for the active unit before retrying auto-dispatch.",
             active_unit.task_id, active_unit.run_id

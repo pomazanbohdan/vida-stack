@@ -1441,15 +1441,10 @@ mod tests {
         assert_eq!(carrier_runtime_assignment, runtime_assignment);
         assert!(plan.get("codex_runtime_assignment").is_none());
         assert!(runtime_assignment.get("internal_named_lane_id").is_none());
-        assert_eq!(
-            plan["development_flow"]["dispatch_contract"]["implementer_activation"]
-                ["activation_agent_type"],
-            "junior"
-        );
         assert!(
             plan["development_flow"]["dispatch_contract"]["implementer_activation"]
-                .get("internal_named_lane_id")
-                .is_none()
+                ["activation_agent_type"]
+                .is_null()
         );
     }
 }

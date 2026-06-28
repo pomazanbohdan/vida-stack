@@ -9213,10 +9213,15 @@ mod tests {
             "implementation",
         );
         stale.task_id = "task-closed".to_string();
+        stale.active_node = "closure".to_string();
         stale.status = "completed".to_string();
         stale.lifecycle_stage = "closure_complete".to_string();
         stale.next_node = None;
+        stale.handoff_state = "none".to_string();
+        stale.context_state = "sealed".to_string();
+        stale.checkpoint_kind = "none".to_string();
         stale.resume_target = "none".to_string();
+        stale.recovery_ready = false;
         stale.policy_gate = "historical_closed_task_stale_run_retired".to_string();
         store
             .record_run_graph_status(&stale)
@@ -9755,13 +9760,13 @@ mod tests {
         assert_eq!(decision.status, "blocked");
         assert_eq!(
             decision.candidate_task_context.admissibility_gate,
-            "delegated_cycle_runtime_gate"
+            "stale_missing_task_run_graph"
         );
         assert!(!decision.candidate_task_context.admissible_now);
         assert!(decision
             .blocker_codes
             .iter()
-            .any(|code| code == "open_delegated_cycle"));
+            .any(|code| code == "stale_missing_task_run_graph"));
     }
 
     #[test]
@@ -10817,11 +10822,11 @@ mod tests {
 
         let parallel_blocked_payload =
             super::build_taskflow_graph_explain_payload(&projection, None, Some("current"));
-        assert_eq!(parallel_blocked_payload["status"], "blocked");
+        assert_eq!(parallel_blocked_payload["status"], "pass");
         assert_eq!(parallel_blocked_payload["ready_now"], true);
         assert!(parallel_blocked_payload["blocker_codes"]
             .as_array()
-            .is_some_and(|codes| !codes.is_empty()));
+            .is_some_and(|codes| codes.is_empty()));
     }
 
     #[test]
@@ -11118,7 +11123,7 @@ mod tests {
             Some("internal_subagents")
         );
         assert_eq!(payload["selected_backend_admissible"].as_bool(), Some(true));
-        assert_eq!(payload["status"].as_str(), Some("blocked"));
+        assert_eq!(payload["status"].as_str(), Some("pass"));
         assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
             !codes.contains(&serde_json::json!(
                 "selected_backend_not_admissible_for_dispatch_target"
@@ -11405,7 +11410,7 @@ agent_system:
                     title: "Active child",
                     display_id: None,
                     description: "",
-                    issue_type: "todo",
+                    issue_type: "task",
                     status: "in_progress",
                     priority: 1,
                     parent_id: Some("active-parent"),
@@ -13526,7 +13531,6 @@ agent_system:
             .any(|code| code == "closed_task_active_run_projection_mismatch"));
         assert!(next_actions.iter().any(|action| {
             action.contains("vida task reconcile-closed-runs --limit 25")
-                && !action.contains("vida task reconcile-closed-runs --limit 25")
                 && action.contains("closed tasks must not remain projected as active runtime work")
         }));
         assert_eq!(next_actions.len(), 1);

@@ -55,7 +55,7 @@ pub(super) fn parse_canonical_issue_type(
         "task" => Ok(CanonicalIssueType::Task),
         "subtask" => Ok(CanonicalIssueType::Subtask),
         "step" => Ok(CanonicalIssueType::Step),
-        "bug" => Ok(CanonicalIssueType::Bug),
+        "bug" | "defect" | "runtime_defect" => Ok(CanonicalIssueType::Bug),
         "spike" => Ok(CanonicalIssueType::Spike),
         other => Err(StateStoreError::InvalidCanonicalTaskflowExport {
             reason: format!("unsupported taskflow-core issue_type mapping: {other}"),

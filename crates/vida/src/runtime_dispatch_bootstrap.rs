@@ -254,14 +254,9 @@ mod tests {
             .as_str()
             .is_some_and(|value| value.contains("seed_failed")));
 
-        let latest_status = store
-            .latest_run_graph_status()
-            .await
-            .expect("load latest run graph status")
-            .expect("latest run graph status should exist");
-        assert_eq!(latest_status.status, "blocked");
-        assert!(!latest_status.recovery_ready);
-        assert_eq!(latest_status.context_state, "open");
+        assert_eq!(bootstrap["latest_status"]["status"], "blocked");
+        assert_eq!(bootstrap["latest_status"]["recovery_ready"], false);
+        assert_eq!(bootstrap["latest_status"]["context_state"], "open");
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&cwd);

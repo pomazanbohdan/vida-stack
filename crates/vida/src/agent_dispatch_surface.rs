@@ -4558,7 +4558,11 @@ async fn run_agent_status(command: AgentStatusArgs) -> ExitCode {
                 .as_ref()
                 .and_then(|receipt| receipt.blocker_code.clone())
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| "blocked_dispatch".to_string()),
+                .unwrap_or_else(|| {
+                    taskflow_contracts::BlockerCode::BlockedDispatch
+                        .as_str()
+                        .to_string()
+                }),
         );
     }
     if current_runtime_task_missing {

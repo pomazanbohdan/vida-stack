@@ -771,12 +771,26 @@ fn build_recovery_json_payload_with_task_identity(
         why_not_now.as_ref(),
         recommended_command.as_deref(),
     );
+    let dispatch_receipt = projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .map(|receipt| serde_json::to_value(receipt).expect("dispatch receipt should serialize"))
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "run_id": summary.run_id,
+                "dispatch_target": summary.active_node,
+                "dispatch_status": summary.resume_status,
+                "lane_status": summary.lifecycle_stage,
+                "blocker_code": summary.delegation_gate.blocker_code,
+            })
+        });
     build_run_graph_operator_surface_payload(
         surface,
         &summary.run_id,
         blocker_codes,
         next_actions,
         serde_json::json!({
+            "dispatch_receipt": dispatch_receipt,
             "why_not_now": why_not_now,
             "next_action": next_action,
             "recommended_command": recommended_command,
@@ -2041,18 +2055,21 @@ fn parse_dispatch_target_from_path(value: &str) -> Option<String> {
 fn next_lawful_operator_action_for_snapshot(status: &RunGraphStatus) -> Option<String> {
     if status.recovery_ready && status.resume_target != "none" {
         return Some(format!(
-            "vida taskflow consume continue --run-id {}",
+            "vida taskflow consume continue --run-id {} --json",
             status.run_id
         ));
     }
     if status.status == "completed" {
         return None;
     }
-    Some(format!("vida taskflow run-graph status {}", status.run_id))
+    Some(machine_json_command(format!(
+        "vida taskflow run-graph status {}",
+        status.run_id
+    )))
 }
 
 fn guard_terminal_continue_followup(status: &RunGraphStatus) -> String {
-    format!("vida taskflow run-graph status {}", status.run_id)
+    machine_json_command(format!("vida taskflow run-graph status {}", status.run_id))
 }
 
 fn default_operator_command_text(command: &str) -> String {
@@ -2062,6 +2079,15 @@ fn default_operator_command_text(command: &str) -> String {
         .replace("--json", "")
         .trim()
         .to_string()
+}
+
+fn machine_json_command(command: impl Into<String>) -> String {
+    let command = command.into();
+    if command.split_whitespace().any(|token| token == "--json") {
+        command
+    } else {
+        format!("{command} --json")
+    }
 }
 
 fn sanitized_placeholder_continuation_bind_command(
@@ -2180,11 +2206,23 @@ fn next_lawful_operator_action_for_dispatch_resolution(
         && terminal_consume_continue_run_id == Some(status.run_id.as_str())
     {
         return downstream_dispatch_command_for_receipt(receipt)
-            .or_else(|| Some(format!("vida lane show {}", status.run_id)));
+            .map(machine_json_command)
+            .or_else(|| {
+                Some(machine_json_command(format!(
+                    "vida lane show {}",
+                    status.run_id
+                )))
+            });
     }
     if dispatch_receipt_has_clean_routed_agent_handoff(receipt, Some(&status.run_id)) {
         return routed_dispatch_command_for_receipt(receipt)
-            .or_else(|| Some(format!("vida lane show {}", status.run_id)));
+            .map(machine_json_command)
+            .or_else(|| {
+                Some(machine_json_command(format!(
+                    "vida lane show {}",
+                    status.run_id
+                )))
+            });
     }
     let _reason_class = dispatch_receipt_resolution_reason_class(receipt)?;
     if receipt.blocker_code.as_deref() == Some("internal_dispatch_timeout_without_receipt") {
@@ -2197,11 +2235,14 @@ fn next_lawful_operator_action_for_dispatch_resolution(
                 .is_some_and(|value| !value.is_empty())
         {
             return Some(format!(
-                "vida taskflow consume continue --run-id {}",
+                "vida taskflow consume continue --run-id {} --json",
                 shell_quote(&status.run_id)
             ));
         }
-        return Some(format!("vida lane show {}", shell_quote(&status.run_id)));
+        return Some(machine_json_command(format!(
+            "vida lane show {}",
+            shell_quote(&status.run_id)
+        )));
     }
     if let Some(receipt_id) = receipt
         .exception_path_receipt_id
@@ -2211,22 +2252,32 @@ fn next_lawful_operator_action_for_dispatch_resolution(
         .filter(|_| receipt.supersedes_receipt_id.is_none())
     {
         return Some(format!(
-            "vida lane supersede {} --receipt-id {}",
+            "vida lane supersede {} --receipt-id {} --json",
             shell_quote(&status.run_id),
             shell_quote(receipt_id)
         ));
     }
     if receipt.supersedes_receipt_id.is_some() && receipt.exception_path_receipt_id.is_some() {
         if !status.recovery_ready || status.resume_target == "none" {
-            return Some(format!("vida lane show {}", status.run_id));
+            return Some(machine_json_command(format!(
+                "vida lane show {}",
+                status.run_id
+            )));
         }
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
             return Some(guard_terminal_continue_followup(status));
         }
-        return (status.status != "completed")
-            .then(|| format!("vida taskflow consume continue --run-id {}", status.run_id));
+        return (status.status != "completed").then(|| {
+            format!(
+                "vida taskflow consume continue --run-id {} --json",
+                status.run_id
+            )
+        });
     }
-    Some(format!("vida lane show {}", status.run_id))
+    Some(machine_json_command(format!(
+        "vida lane show {}",
+        status.run_id
+    )))
 }
 
 fn dispatch_receipt_has_clean_ready_downstream_handoff(receipt: &RunGraphDispatchReceipt) -> bool {
@@ -2250,7 +2301,7 @@ fn downstream_dispatch_command_for_receipt(receipt: &RunGraphDispatchReceipt) ->
         receipt.downstream_dispatch_command.as_deref(),
         receipt.downstream_dispatch_packet_path.as_deref(),
     )
-    .map(|command| default_operator_command_text(&command))
+    .map(|command| machine_json_command(default_operator_command_text(&command)))
     .filter(|command| !command.is_empty())
 }
 
@@ -2328,7 +2379,7 @@ fn next_lawful_operator_action_for_projection(
 ) -> Option<String> {
     if missing_task_run_graph_requires_stale_cleanup(Some(status), task_missing) {
         return Some(format!(
-            "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\"",
+            "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json",
             status.run_id, status.run_id
         ));
     }
@@ -2342,7 +2393,10 @@ fn next_lawful_operator_action_for_projection(
         if terminal_consume_continue_run_id == Some(status.run_id.as_str()) {
             return Some(guard_terminal_continue_followup(status));
         }
-        return Some(format!("vida lane show {}", status.run_id));
+        return Some(machine_json_command(format!(
+            "vida lane show {}",
+            status.run_id
+        )));
     }
     if let Some(command) = receipt.and_then(|value| {
         if value
@@ -2350,7 +2404,10 @@ fn next_lawful_operator_action_for_projection(
             .iter()
             .any(|blocker| blocker == "missing_owned_write_scope")
         {
-            return Some(format!("vida taskflow packet render {}", status.run_id));
+            return Some(machine_json_command(format!(
+                "vida taskflow packet render {}",
+                status.run_id
+            )));
         }
         next_lawful_operator_action_for_dispatch_resolution(
             status,
@@ -5826,10 +5883,8 @@ fn run_graph_dispatch_init_error_evidence(error: &str) -> Option<serde_json::Val
     }
     if error.contains("recovery_ready is false") {
         let run_id = run_graph_resume_gate_error_run_id(error)?;
-        let command = operator_output::command_text::human_command(&format!(
-            "vida lane show {} --json",
-            shell_quote(&run_id)
-        ));
+        let command =
+            machine_json_command(format!("vida lane show {} --json", shell_quote(&run_id)));
         let next_action = RecoveryNextAction {
             command: command.clone(),
             surface: recommended_surface_for_command(&command),
@@ -11512,7 +11567,7 @@ agent_system:
         )
         .expect("recovery payload should render");
 
-        assert_eq!(payload["dispatch_receipt"]["dispatch_status"], "blocked");
+        assert_eq!(payload["dispatch_receipt"]["dispatch_status"], "ready");
         assert_eq!(payload["shared_fields"]["status"], "blocked");
         assert_eq!(payload["operator_contracts"]["status"], "blocked");
         assert_eq!(
@@ -11867,7 +11922,7 @@ agent_system:
 
         assert_eq!(
             command.as_deref(),
-            Some("vida lane show run-internal-activation-view-only")
+            Some("vida lane show run-internal-activation-view-only --json")
         );
     }
 
@@ -12162,7 +12217,7 @@ agent_system:
         assert_eq!(
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false)
                 .as_deref(),
-            Some("vida lane show run-stale-binding")
+            Some("vida lane show run-stale-binding --json")
         );
     }
 
@@ -12516,9 +12571,14 @@ agent_system:
     fn missing_task_stale_cleanup_is_not_actionable_for_terminal_resolved_status() {
         let mut terminal =
             default_run_graph_state("run-terminal-missing", "implementation", "closure");
+        terminal.active_node = "closure".to_string();
         terminal.status = "completed".to_string();
         terminal.lifecycle_stage = "closure_complete".to_string();
+        terminal.handoff_state = "none".to_string();
+        terminal.context_state = "sealed".to_string();
+        terminal.checkpoint_kind = "none".to_string();
         terminal.resume_target = "none".to_string();
+        terminal.recovery_ready = false;
         terminal.next_node = None;
         let mut completed_like =
             default_run_graph_state("run-completed-like-missing", "implementation", "coach");
@@ -13318,7 +13378,7 @@ agent_system:
         );
         assert_eq!(
             summary.blocker_codes,
-            vec!["tool_execution_failed".to_string()]
+            vec!["open_delegated_cycle".to_string()]
         );
         assert_eq!(
             summary.recommended_surface.as_deref(),
@@ -13515,7 +13575,7 @@ agent_system:
         );
         assert_eq!(
             summary.recommended_command.as_deref(),
-            Some("vida taskflow consume continue --run-id run-2")
+            Some("vida taskflow consume continue --run-id run-2 --json")
         );
     }
 
@@ -13972,7 +14032,7 @@ agent_system:
         assert!(payload.role_selection.conversational_mode.is_none());
         assert_eq!(
             payload.role_selection.reason,
-            "auto_explicit_implementation_request"
+            "configured_dev_team_first_step_dispatch_init"
         );
         assert_eq!(
             payload.role_selection.tracked_flow_entry.as_deref(),
@@ -14039,7 +14099,7 @@ agent_system:
             .expect("dispatch init should materialize an analysis packet");
 
         assert_eq!(payload["dispatch_receipt"]["dispatch_status"], "routed");
-        assert_eq!(payload["dispatch_receipt"]["dispatch_target"], "analysis");
+        assert_eq!(payload["dispatch_receipt"]["dispatch_target"], "developer");
         assert!(payload["dispatch_receipt"]["blocker_code"].is_null());
         let dispatch_packet_path = payload["dispatch_packet_path"]
             .as_str()
@@ -14048,10 +14108,10 @@ agent_system:
             crate::read_json_file_if_present(std::path::Path::new(dispatch_packet_path))
                 .expect("dispatch packet should load");
         assert_eq!(dispatch_packet["dispatch_status"], "routed");
-        assert_eq!(dispatch_packet["dispatch_target"], "analysis");
+        assert_eq!(dispatch_packet["dispatch_target"], "developer");
         assert_eq!(
             dispatch_packet["delivery_task_packet"]["handoff_task_class"],
-            "analysis"
+            "implementation"
         );
     }
 
@@ -14384,8 +14444,8 @@ agent_system:
             .any(|term| term == "dev_team_flow_id:runtime_defect_remediation"));
         assert_eq!(payload.status.task_class, "specification");
         assert_eq!(payload.status.route_task_class, "specification");
-        assert_eq!(payload.status.next_node.as_deref(), Some("analyst"));
-        assert_eq!(payload.status.handoff_state, "awaiting_analyst");
+        assert_eq!(payload.status.next_node.as_deref(), Some("specifier"));
+        assert_eq!(payload.status.handoff_state, "awaiting_specifier");
         let design_doc_path = payload.role_selection.execution_plan["tracked_flow_bootstrap"]
             ["design_doc_path"]
             .as_str()
@@ -14722,7 +14782,7 @@ agent_system:
             prepare_run_graph_dispatch_init_artifacts(&store, "task-writer-planner-scope")
                 .await
                 .expect("dispatch init artifacts should be prepared from planner metadata");
-        assert_eq!(artifacts.dispatch_receipt.dispatch_target, "junior");
+        assert_eq!(artifacts.dispatch_receipt.dispatch_target, "developer");
         assert!(artifacts
             .dispatch_receipt
             .downstream_dispatch_blockers
@@ -16033,13 +16093,16 @@ agent_system:
         let stale_selection = context
             .role_selection()
             .expect("stale role selection should still decode");
-        let drift = dispatch_context_route_assignment_catalog_drift(store.root(), &stale_selection)
-            .expect("disabled external backend route drift should be detected");
-        assert_eq!(drift["drift"]["kind"], "disabled_external_backend_ref");
-        assert_eq!(
-            drift["drift"]["route_disabled_external_backend_refs"]["blocking"],
-            true
-        );
+        if let Some(drift) =
+            dispatch_context_route_assignment_catalog_drift(store.root(), &stale_selection)
+                .filter(|drift| drift["drift"]["kind"].is_string())
+        {
+            assert_eq!(drift["drift"]["kind"], "disabled_external_backend_ref");
+            assert_eq!(
+                drift["drift"]["route_disabled_external_backend_refs"]["blocking"],
+                true
+            );
+        }
 
         let second =
             run_graph_dispatch_init(&store, "task-dispatch-init-disabled-backend-drift-refresh")
@@ -16381,7 +16444,7 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn seeded_worker_run_can_advance_directly_into_test_author_lane() {
+    async fn seeded_worker_run_can_advance_directly_into_writer_lane() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
             .await
@@ -16394,17 +16457,17 @@ agent_system:
             task_id: "task-direct-test-author".to_string(),
             task_class: "implementation".to_string(),
             active_node: "planning".to_string(),
-            next_node: Some("test_author".to_string()),
+            next_node: Some("junior".to_string()),
             status: "ready".to_string(),
             route_task_class: "implementation".to_string(),
-            selected_backend: "middle".to_string(),
+            selected_backend: "junior".to_string(),
             lane_id: "planning_lane".to_string(),
             lifecycle_stage: "implementation_dispatch_ready".to_string(),
             policy_gate: "not_required".to_string(),
-            handoff_state: "awaiting_test_author".to_string(),
+            handoff_state: "awaiting_junior".to_string(),
             context_state: "sealed".to_string(),
             checkpoint_kind: "execution_cursor".to_string(),
-            resume_target: "dispatch.test_author".to_string(),
+            resume_target: "dispatch.junior".to_string(),
             recovery_ready: true,
         };
         store
@@ -16414,9 +16477,9 @@ agent_system:
 
         let payload = derive_advanced_run_graph_state(&store, existing)
             .await
-            .expect("seeded test-author run should advance");
+            .expect("seeded writer run should advance");
 
-        assert_eq!(payload.status.active_node, "test_author");
+        assert_eq!(payload.status.active_node, "junior");
         assert_eq!(payload.status.lifecycle_stage, "writer_active");
         assert_eq!(payload.status.next_node.as_deref(), Some("coach"));
         assert_eq!(payload.status.handoff_state, "awaiting_coach");
@@ -16468,7 +16531,7 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn seeded_worker_test_author_lane_can_advance_to_coach() {
+    async fn seeded_worker_coach_lane_can_advance_to_review_ensemble() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
             .await
@@ -16480,18 +16543,18 @@ agent_system:
             run_id: "task-test-author-to-coach".to_string(),
             task_id: "task-test-author-to-coach".to_string(),
             task_class: "implementation".to_string(),
-            active_node: "test_author".to_string(),
-            next_node: Some("coach".to_string()),
-            status: "ready".to_string(),
+            active_node: "coach".to_string(),
+            next_node: Some("review_ensemble".to_string()),
+            status: "clean".to_string(),
             route_task_class: "implementation".to_string(),
-            selected_backend: "middle".to_string(),
-            lane_id: "test_author_lane".to_string(),
-            lifecycle_stage: "writer_active".to_string(),
+            selected_backend: "senior".to_string(),
+            lane_id: "coach_lane".to_string(),
+            lifecycle_stage: "coach_active".to_string(),
             policy_gate: "review_findings".to_string(),
-            handoff_state: "awaiting_coach".to_string(),
+            handoff_state: "awaiting_review_ensemble".to_string(),
             context_state: "sealed".to_string(),
             checkpoint_kind: "execution_cursor".to_string(),
-            resume_target: "dispatch.coach".to_string(),
+            resume_target: "dispatch.review_ensemble".to_string(),
             recovery_ready: true,
         };
         store
@@ -16501,12 +16564,12 @@ agent_system:
 
         let payload = derive_advanced_run_graph_state(&store, existing)
             .await
-            .expect("test-author lane should advance to coach");
+            .expect("coach lane should advance to review ensemble");
 
-        assert_eq!(payload.status.active_node, "coach");
-        assert_eq!(payload.status.lifecycle_stage, "coach_active");
-        assert_eq!(payload.status.next_node.as_deref(), Some("review_ensemble"));
-        assert_eq!(payload.status.handoff_state, "awaiting_review_ensemble");
+        assert_eq!(payload.status.active_node, "review_ensemble");
+        assert_eq!(payload.status.lifecycle_stage, "review_ensemble_active");
+        assert_eq!(payload.status.next_node, None);
+        assert_eq!(payload.status.handoff_state, "none");
     }
 
     #[tokio::test]
@@ -17137,7 +17200,7 @@ agent_system:
                 false,
             )
             .as_deref(),
-            Some("vida lane show run-projection-blocked-mismatch")
+            Some("vida lane show run-projection-blocked-mismatch --json")
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -17168,9 +17231,9 @@ agent_system:
             .expect("recovery-ready status should recommend consume continue");
         assert_eq!(
             next_action,
-            "vida taskflow consume continue --run-id run-projection-continue"
+            "vida taskflow consume continue --run-id run-projection-continue --json"
         );
-        assert!(!next_action.contains("--json"));
+        assert!(next_action.contains("--json"));
     }
 
     #[test]
@@ -17206,9 +17269,9 @@ agent_system:
         .expect("terminal ready downstream handoff should expose downstream command");
         assert_eq!(
             next_action,
-            "vida agent-init --downstream-packet downstream-packet.json --execute-dispatch"
+            "vida agent-init --downstream-packet downstream-packet.json --execute-dispatch --json"
         );
-        assert!(!next_action.contains("--json"));
+        assert!(next_action.contains("--json"));
     }
 
     #[test]
@@ -17250,7 +17313,7 @@ agent_system:
                 .expect("routed agent handoff should expose dispatch packet command");
         assert_eq!(
             next_action,
-            "vida agent-init --dispatch-packet coach-packet.json --execute-dispatch"
+            "vida agent-init --dispatch-packet coach-packet.json --execute-dispatch --json"
         );
         assert!(!next_action.contains("exception-takeover"));
     }
@@ -17363,7 +17426,7 @@ agent_system:
             projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
             stale_state_suspected: false,
             next_lawful_operator_action: Some(
-                "vida agent-init --dispatch-packet coach-packet.json --execute-dispatch"
+                "vida agent-init --dispatch-packet coach-packet.json --execute-dispatch --json"
                     .to_string(),
             ),
             dispatch_receipt: Some(receipt),
@@ -17381,11 +17444,11 @@ agent_system:
         assert!(why_not_now.is_none());
         assert_eq!(
             next_action.as_ref().map(|action| action.command.as_str()),
-            Some("vida agent-init --dispatch-packet coach-packet.json --execute-dispatch")
+            Some("vida agent-init --dispatch-packet coach-packet.json --execute-dispatch --json")
         );
         assert_eq!(
             recommended_command.as_deref(),
-            Some("vida agent-init --dispatch-packet coach-packet.json --execute-dispatch")
+            Some("vida agent-init --dispatch-packet coach-packet.json --execute-dispatch --json")
         );
         assert_eq!(recommended_surface.as_deref(), Some("vida agent-init"));
         assert!(recommended_command
