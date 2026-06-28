@@ -534,6 +534,7 @@ fn has_resolved_failure_artifact_action_context(
         "guards ",
         "prevented ",
         "prevents ",
+        "preventing ",
         "denied ",
         "denies ",
         "disallowed ",
@@ -556,6 +557,13 @@ fn has_resolved_failure_artifact_action_context(
         "materialization-only",
         "dispatch packet",
         "run-graph",
+        "status",
+        "blocker",
+        "blockers",
+        "diagnostic",
+        "diagnostics",
+        "evidence",
+        "gate",
     ]
     .iter()
     .any(|phrase| segment_normalized.contains(phrase));
@@ -822,6 +830,7 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "canonical",
         "integration coverage",
         "coverage for",
+        "smoke",
         "wording",
         "artifact/status/blocker/action",
         "cargo ",
@@ -1946,6 +1955,28 @@ mod tests {
             .any(|phrase| phrase.as_str().is_some_and(
                 |value| value.contains("previous task close output quoted blocker details")
             )));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_verified_status_blocker_fix_reason() {
+        let reason = "Implemented status retrieval-trust refresh: status release-admission gate now treats current admissible retrieval-trust signal as sufficient evidence, preventing stale incomplete_release_admission_operator_evidence after a passing bundle-check signal. Added regression coverage for release-admission status helper and operator-contract missing_retrieval_trust_* blockers. Proof: cargo fmt --check; targeted status/retrieval-trust tests; cargo check -p vida; live vida status retrieval blocker smoke.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "implementation");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 82);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase.as_str().is_some_and(|value| {
+                value.contains("operator-contract missing_retrieval_trust_* blockers")
+            })));
     }
 
     #[test]
