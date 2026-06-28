@@ -2677,6 +2677,91 @@ fn task_list_fields_and_default_toon_shape_are_binary_visible() {
 }
 
 #[test]
+fn critical_operator_default_toon_golden_matrix_keeps_json_explicit() {
+    let state_dir = unique_state_dir();
+    let jsonl_path = format!("{state_dir}/issues.jsonl");
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    sample_jsonl(&jsonl_path);
+
+    let import_stdout =
+        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
+    assert_json_status_pass(&import_stdout);
+
+    for (surface, args, required) in [
+        (
+            "vida task ready",
+            &["task", "ready"][..],
+            &["task_count:", "tasks["][..],
+        ),
+        (
+            "vida task show",
+            &["task", "show", "vida-a"][..],
+            &["task:", "title: Task A"][..],
+        ),
+        (
+            "vida task progress",
+            &["task", "progress", "vida-a"][..],
+            &["counts:", "percent_closed:"][..],
+        ),
+        (
+            "vida taskflow graph-summary",
+            &["taskflow", "graph-summary"][..],
+            &["ready_count:", "critical_path_length:"][..],
+        ),
+    ] {
+        let stdout = run_and_assert_success(args, &state_dir);
+        assert!(
+            stdout.starts_with(&format!("{surface}\n")),
+            "{surface} default output should start with compact TOON title: {stdout}"
+        );
+        vida_test_support::assert_non_json_human_output(surface, &stdout);
+        for required_text in required {
+            assert!(
+                stdout.contains(required_text),
+                "{surface} default output should contain `{required_text}`: {stdout}"
+            );
+        }
+        assert!(
+            !stdout.contains("--json"),
+            "{surface} default output must not bias operators toward JSON: {stdout}"
+        );
+
+        let mut json_args = args.to_vec();
+        json_args.push("--json");
+        let json = run_command_json(&json_args, &state_dir);
+        assert_eq!(json["surface"], surface);
+        assert!(json["status"].is_string());
+    }
+
+    let consume_default = run_command_capture(&["taskflow", "consume", "continue"], &state_dir);
+    assert!(
+        !consume_default.stdout.is_empty(),
+        "consume continue default should emit operator output: stderr={}",
+        String::from_utf8_lossy(&consume_default.stderr)
+    );
+    let consume_stdout = String::from_utf8_lossy(&consume_default.stdout);
+    assert!(
+        consume_stdout.starts_with("vida taskflow consume continue\n"),
+        "consume continue default output should start with compact TOON title: {consume_stdout}"
+    );
+    vida_test_support::assert_non_json_human_output(
+        "vida taskflow consume continue",
+        &consume_stdout,
+    );
+    assert!(consume_stdout.contains("blocker_codes"));
+    assert!(
+        !consume_stdout.contains("--json"),
+        "consume continue default output must not bias operators toward JSON: {consume_stdout}"
+    );
+    let (consume_json, _success) =
+        run_command_json_allow_failure(&["taskflow", "consume", "continue", "--json"], &state_dir);
+    assert_eq!(consume_json["surface"], "vida taskflow consume continue");
+    assert!(consume_json["status"].is_string());
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_list_status_closed_includes_closed_rows_by_default() {
     let state_dir = unique_state_dir();
     let jsonl_path = format!("{state_dir}/closed-issues.jsonl");
