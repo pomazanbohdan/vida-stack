@@ -515,12 +515,6 @@ impl StateStore {
         let archive_path = if root.exists() {
             if state_reset_dir_has_existing_datastore_payload(&root)? {
                 validate_state_reset_existing_root(&root)?;
-                let store = Self::open_existing_with_timeout(
-                    root.clone(),
-                    std::time::Duration::from_secs(10),
-                )
-                .await?;
-                store.close().await;
             }
             let archive_path = Self::next_state_archive_path(&root);
             fs::rename(&root, &archive_path)?;
@@ -702,6 +696,45 @@ mod tests {
         if let Some(archive_path) = summary.archive_path {
             let _ = fs::remove_dir_all(archive_path);
         }
+    }
+
+    #[tokio::test]
+    async fn state_reset_archives_corrupted_datastore_without_opening_it_first() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-reset-corrupted-datastore-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+        fs::create_dir_all(root.join("manifest")).expect("create manifest dir");
+        fs::create_dir_all(root.join("sstables")).expect("create sstables dir");
+        fs::create_dir_all(root.join("vlog")).expect("create vlog dir");
+        fs::create_dir_all(root.join("wal")).expect("create wal dir");
+        fs::write(root.join(".vida-authoritative-open.guard"), "").expect("write guard");
+        fs::write(
+            root.join("wal").join("00000000000000000003.wal"),
+            "not a valid wal",
+        )
+        .expect("write corrupted wal stand-in");
+
+        let summary = StateStore::archive_and_reinit_state_root(root.clone(), true, true)
+            .await
+            .expect("corrupted datastore layout should archive before reinit");
+
+        assert!(summary.archive_created);
+        let archive_path = summary
+            .archive_path
+            .clone()
+            .expect("archive path should be recorded");
+        assert!(archive_path
+            .join("wal")
+            .join("00000000000000000003.wal")
+            .exists());
+        assert!(summary.reinitialized);
+        assert!(summary.state_spine_manifest_present);
+        assert!(root.join("wal").exists());
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(archive_path);
     }
 
     #[tokio::test]
