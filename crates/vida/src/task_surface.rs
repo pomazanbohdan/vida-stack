@@ -14174,7 +14174,7 @@ mod tests {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
 
-        runtime.block_on(async {
+        runtime.block_on(Box::pin(async {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
@@ -14209,7 +14209,7 @@ mod tests {
                 Some("feature-subtask"),
             )
             .await;
-        });
+        }));
 
         assert_eq!(
             runtime.block_on(super::run_task(crate::TaskArgs {
@@ -14222,7 +14222,7 @@ mod tests {
             ExitCode::SUCCESS
         );
 
-        runtime.block_on(async {
+        runtime.block_on(Box::pin(async {
             let store = crate::StateStore::open_existing(harness.path().to_path_buf())
                 .await
                 .expect("state store should reopen");
@@ -14246,7 +14246,7 @@ mod tests {
                 store.show_task("feature-step").await.expect("step").status,
                 "closed"
             );
-        });
+        }));
     }
 
     #[test]
@@ -14254,7 +14254,7 @@ mod tests {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
 
-        runtime.block_on(async {
+        runtime.block_on(Box::pin(async {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
@@ -14279,7 +14279,7 @@ mod tests {
                 Some("task-1"),
             )
             .await;
-        });
+        }));
 
         assert_eq!(
             runtime.block_on(super::run_task(crate::TaskArgs {
@@ -14293,7 +14293,7 @@ mod tests {
             ExitCode::SUCCESS
         );
 
-        runtime.block_on(async {
+        runtime.block_on(Box::pin(async {
             let store = crate::StateStore::open_existing(harness.path().to_path_buf())
                 .await
                 .expect("state store should reopen");
@@ -14301,7 +14301,7 @@ mod tests {
             assert_eq!(step.status, "open");
             assert_eq!(step.closed_at, None);
             assert_eq!(step.close_reason, None);
-        });
+        }));
     }
 
     #[test]
@@ -15591,7 +15591,7 @@ mod tests {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
 
-        runtime.block_on(async {
+        runtime.block_on(Box::pin(async {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
@@ -15615,7 +15615,7 @@ mod tests {
                 Some("parent-epic"),
             )
             .await;
-        });
+        }));
 
         assert_eq!(
             runtime.block_on(super::run_task(crate::TaskArgs {
@@ -15634,7 +15634,7 @@ mod tests {
             ExitCode::SUCCESS
         );
 
-        runtime.block_on(async {
+        runtime.block_on(Box::pin(async {
             let store = crate::StateStore::open_existing(harness.path().to_path_buf())
                 .await
                 .expect("state store should reopen");
@@ -15670,7 +15670,7 @@ mod tests {
                 .expect("progress should compute");
             assert!(progress.proof_blocked_by_runtime);
             assert!(progress.blocked_by_runtime);
-        });
+        }));
     }
 
     #[test]
@@ -21102,7 +21102,7 @@ mod tests {
         let _cwd = guard_current_dir(harness.path());
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
 
-        runtime.block_on(async {
+        runtime.block_on(Box::pin(async {
             let store = crate::StateStore::open(harness.path().to_path_buf())
                 .await
                 .expect("state store should open");
@@ -21117,7 +21117,7 @@ mod tests {
                 Some("parent-epic"),
             )
             .await;
-        });
+        }));
 
         assert_eq!(
             runtime.block_on(Box::pin(crate::taskflow_proxy::run_taskflow_proxy(
@@ -21141,7 +21141,7 @@ mod tests {
             ExitCode::SUCCESS
         );
 
-        runtime.block_on(async {
+        runtime.block_on(Box::pin(async {
             let store = crate::StateStore::open_existing(harness.path().to_path_buf())
                 .await
                 .expect("state store should reopen");
@@ -21153,6 +21153,6 @@ mod tests {
                 store.show_task("source-task-b").await,
                 Err(crate::state_store::StateStoreError::MissingTask { .. })
             ));
-        });
+        }));
     }
 }

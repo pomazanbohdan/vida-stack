@@ -1,6 +1,11 @@
 use super::*;
 use fs2::FileExt;
 use std::fs::OpenOptions;
+use std::sync::Arc;
+use surrealdb_core::cnf::ConfigMap;
+use surrealdb_core::kvs::Datastore;
+use surrealdb_core::options::EngineOptions;
+use tokio_util::sync::CancellationToken;
 
 const AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS: u64 = 25;
 const AUTHORITATIVE_DATASTORE_LOCK_MAX_WAIT_MS: u64 = 30_000;
@@ -17,6 +22,9 @@ const STALE_LOCK_MARKER_REMOVE_RETRY_COUNT: usize = 20;
 const STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS: u64 = 25;
 const FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_COUNT: usize = 8;
 const FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_DELAY_MS: u64 = DATASTORE_CLOSE_SETTLE_MS;
+const VIDA_SURREALKV_MAX_MEMTABLE_SIZE_BYTES: usize = 16 * 1024 * 1024;
+const VIDA_SURREALKV_BLOCK_CACHE_CAPACITY_BYTES: u64 = 16 * 1024 * 1024;
+const VIDA_SURREALKV_VLOG_MAX_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 
 struct AuthoritativeOpenGuard {
     file: std::fs::File,
@@ -148,6 +156,63 @@ pub(super) fn state_schema_document() -> &'static str {
 }
 
 impl StateStore {
+    fn bounded_surrealkv_config() -> ConfigMap {
+        ConfigMap::empty()
+            .with_key_value(
+                "surrealkv_max_memtable_size",
+                VIDA_SURREALKV_MAX_MEMTABLE_SIZE_BYTES.to_string(),
+            )
+            .with_key_value(
+                "surrealkv_block_cache_capacity",
+                VIDA_SURREALKV_BLOCK_CACHE_CAPACITY_BYTES.to_string(),
+            )
+            .with_key_value(
+                "surrealkv_vlog_max_file_size",
+                VIDA_SURREALKV_VLOG_MAX_FILE_SIZE_BYTES.to_string(),
+            )
+    }
+
+    async fn open_bounded_surrealkv(
+        root: &Path,
+        bootstrap: bool,
+    ) -> Result<Surreal<Db>, StateStoreError> {
+        let endpoint = format!("surrealkv://{}", root.display());
+        let datastore = Datastore::builder()
+            .with_config(Self::bounded_surrealkv_config())
+            .build_with_path(&endpoint)
+            .await
+            .map_err(|error| Self::bounded_surrealkv_open_error("open", error.to_string()))?;
+        datastore.check_version().await.map_err(|error| {
+            StateStoreError::InvalidStorageMetadata {
+                reason: format!("failed to check SurrealKV datastore version: {error}"),
+            }
+        })?;
+        if bootstrap {
+            datastore.bootstrap().await.map_err(|error| {
+                StateStoreError::InvalidStorageMetadata {
+                    reason: format!("failed to bootstrap bounded SurrealKV datastore: {error}"),
+                }
+            })?;
+        }
+        Surreal::<Db>::unstable_from_datastore(
+            CancellationToken::new(),
+            Arc::new(datastore),
+            None,
+            EngineOptions::default(),
+        )
+        .await
+        .map_err(StateStoreError::from)
+    }
+
+    fn bounded_surrealkv_open_error(action: &str, error: String) -> StateStoreError {
+        let reason = format!("failed to {action} bounded SurrealKV datastore: {error}");
+        if Self::message_is_lock_contention(&reason) {
+            StateStoreError::Io(std::io::Error::new(std::io::ErrorKind::WouldBlock, reason))
+        } else {
+            StateStoreError::InvalidStorageMetadata { reason }
+        }
+    }
+
     fn effective_read_only_open_timeout(timeout: std::time::Duration) -> std::time::Duration {
         timeout.max(std::time::Duration::from_millis(
             READ_ONLY_OPEN_MIN_TIMEOUT_MS,
@@ -366,12 +431,20 @@ impl StateStore {
     }
 
     pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
+        Box::pin(Self::open_impl(root)).await
+    }
+
+    async fn open_impl(root: PathBuf) -> Result<Self, StateStoreError> {
         fs::create_dir_all(&root)?;
         let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
         Self::open_with_authoritative_lock_retry(root, Self::open_once).await
     }
 
     pub async fn open_existing(root: PathBuf) -> Result<Self, StateStoreError> {
+        Box::pin(Self::open_existing_impl(root)).await
+    }
+
+    async fn open_existing_impl(root: PathBuf) -> Result<Self, StateStoreError> {
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));
         }
@@ -383,6 +456,13 @@ impl StateStore {
     }
 
     pub async fn open_existing_with_timeout(
+        root: PathBuf,
+        timeout: std::time::Duration,
+    ) -> Result<Self, StateStoreError> {
+        Box::pin(Self::open_existing_with_timeout_impl(root, timeout)).await
+    }
+
+    async fn open_existing_with_timeout_impl(
         root: PathBuf,
         timeout: std::time::Duration,
     ) -> Result<Self, StateStoreError> {
@@ -399,6 +479,10 @@ impl StateStore {
     }
 
     pub async fn open_existing_read_only(root: PathBuf) -> Result<Self, StateStoreError> {
+        Box::pin(Self::open_existing_read_only_impl(root)).await
+    }
+
+    async fn open_existing_read_only_impl(root: PathBuf) -> Result<Self, StateStoreError> {
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));
         }
@@ -431,6 +515,16 @@ impl StateStore {
         root: PathBuf,
         timeout: std::time::Duration,
     ) -> Result<Self, StateStoreError> {
+        Box::pin(Self::open_existing_read_only_with_timeout_impl(
+            root, timeout,
+        ))
+        .await
+    }
+
+    async fn open_existing_read_only_with_timeout_impl(
+        root: PathBuf,
+        timeout: std::time::Duration,
+    ) -> Result<Self, StateStoreError> {
         let timeout = Self::effective_read_only_open_timeout(timeout);
         Self::open_existing_read_only_with_resolved_timeout(root, timeout).await
     }
@@ -439,11 +533,31 @@ impl StateStore {
         root: PathBuf,
         timeout: std::time::Duration,
     ) -> Result<Self, StateStoreError> {
+        Box::pin(Self::open_existing_read_only_with_strict_timeout_impl(
+            root, timeout,
+        ))
+        .await
+    }
+
+    async fn open_existing_read_only_with_strict_timeout_impl(
+        root: PathBuf,
+        timeout: std::time::Duration,
+    ) -> Result<Self, StateStoreError> {
         let timeout = Self::strict_read_only_open_timeout(timeout);
         Self::open_existing_read_only_with_resolved_timeout(root, timeout).await
     }
 
     pub async fn open_existing_structural_read_only_with_timeout(
+        root: PathBuf,
+        timeout: std::time::Duration,
+    ) -> Result<Self, StateStoreError> {
+        Box::pin(Self::open_existing_structural_read_only_with_timeout_impl(
+            root, timeout,
+        ))
+        .await
+    }
+
+    async fn open_existing_structural_read_only_with_timeout_impl(
         root: PathBuf,
         timeout: std::time::Duration,
     ) -> Result<Self, StateStoreError> {
@@ -508,14 +622,14 @@ impl StateStore {
     }
 
     async fn open_existing_once(root: PathBuf) -> Result<Self, StateStoreError> {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
+        let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
         db.query(state_schema_document()).await?;
         Ok(Self { db, root })
     }
 
     async fn open_existing_read_only_once(root: PathBuf) -> Result<Self, StateStoreError> {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
+        let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
         db.query(state_schema_document()).await?;
         Ok(Self { db, root })
@@ -524,13 +638,13 @@ impl StateStore {
     async fn open_existing_structural_read_only_once(
         root: PathBuf,
     ) -> Result<Self, StateStoreError> {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
+        let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, false)).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
         Ok(Self { db, root })
     }
 
     async fn open_once(root: PathBuf) -> Result<Self, StateStoreError> {
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
+        let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
         db.query(state_schema_document()).await?;
 
@@ -708,6 +822,17 @@ mod tests {
             StateStore::strict_read_only_open_timeout(std::time::Duration::ZERO),
             std::time::Duration::from_millis(1)
         );
+    }
+
+    #[test]
+    fn bounded_surrealkv_config_sets_memory_caps() {
+        let rendered = format!("{:?}", StateStore::bounded_surrealkv_config());
+
+        assert!(rendered.contains("surrealkv_max_memtable_size"));
+        assert!(rendered.contains("16777216"));
+        assert!(rendered.contains("surrealkv_block_cache_capacity"));
+        assert!(rendered.contains("surrealkv_vlog_max_file_size"));
+        assert!(rendered.contains("67108864"));
     }
 
     #[test]

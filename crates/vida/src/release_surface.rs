@@ -901,7 +901,11 @@ pub(crate) fn default_release_install_root() -> Option<PathBuf> {
 }
 
 fn release_env_file_name() -> &'static str {
-    if cfg!(windows) { "env.ps1" } else { "env.sh" }
+    if cfg!(windows) {
+        "env.ps1"
+    } else {
+        "env.sh"
+    }
 }
 
 fn user_home_dir() -> Option<PathBuf> {
@@ -1501,25 +1505,19 @@ mod tests {
         assert_eq!(latest["progress_path"], progress_path);
         assert_eq!(receipt.io_error, None);
         assert_eq!(receipt.asset_update.status, "refreshed");
-        assert!(
-            receipt
-                .asset_update
-                .refreshed_paths
-                .iter()
-                .any(|path| path == "vida/config")
-        );
-        assert!(
-            harness
-                .path()
-                .join("install-root/current/vida/config/instructions/bundles/framework-source")
-                .is_dir()
-        );
-        assert!(
-            harness
-                .path()
-                .join("install-root/current/install/assets/feature-design-document.template.md")
-                .is_file()
-        );
+        assert!(receipt
+            .asset_update
+            .refreshed_paths
+            .iter()
+            .any(|path| path == "vida/config"));
+        assert!(harness
+            .path()
+            .join("install-root/current/vida/config/instructions/bundles/framework-source")
+            .is_dir());
+        assert!(harness
+            .path()
+            .join("install-root/current/install/assets/feature-design-document.template.md")
+            .is_file());
         assert_eq!(receipt.installed_targets.len(), 1);
         assert_eq!(receipt.installed_targets[0].target, "current");
         assert_eq!(
@@ -1584,11 +1582,9 @@ mod tests {
                 .display()
                 .to_string()
         );
-        assert!(
-            layout
-                .env_file
-                .ends_with(if cfg!(windows) { "env.ps1" } else { "env.sh" })
-        );
+        assert!(layout
+            .env_file
+            .ends_with(if cfg!(windows) { "env.ps1" } else { "env.sh" }));
         assert_eq!(layout.platform, std::env::consts::OS);
     }
 

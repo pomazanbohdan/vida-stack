@@ -382,8 +382,11 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         effective_latest_run_graph_status,
         effective_latest_run_graph_recovery,
     );
-    let closed_task_active_run_projection_mismatch = !latest_recovery_is_terminal_retired_runtime_run
-        && (latest_run_graph_task_closed || global_closed_run_is_current || terminal_closed_run_is_current);
+    let closed_task_active_run_projection_mismatch =
+        !latest_recovery_is_terminal_retired_runtime_run
+            && (latest_run_graph_task_closed
+                || global_closed_run_is_current
+                || terminal_closed_run_is_current);
     let continuation_binding = if closed_task_active_run_projection_mismatch {
         crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
             continuation_binding,

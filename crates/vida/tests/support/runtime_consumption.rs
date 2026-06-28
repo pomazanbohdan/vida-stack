@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
+use surrealdb::Surreal;
 
 pub(crate) const RECEIPT_HELPER_STATE_DIR_ENV: &str = "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_STATE_DIR";
 pub(crate) const RECEIPT_HELPER_RUN_ID_ENV: &str = "VIDA_BOOT_SMOKE_RUNTIME_RECEIPT_RUN_ID";

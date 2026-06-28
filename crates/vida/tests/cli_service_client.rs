@@ -179,7 +179,12 @@ fn cli_service_first_families_emit_vida_client_operations() {
             "vida.wizard.session.diff",
             "pass",
         ),
-        (&["job", "status", "--json"][..], "job", "vida.jobs.get", "pass"),
+        (
+            &["job", "status", "--json"][..],
+            "job",
+            "vida.jobs.get",
+            "pass",
+        ),
         (
             &["receipt", "get", "--project", "vida-stack", "--json"][..],
             "receipt",

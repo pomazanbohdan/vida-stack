@@ -13991,7 +13991,16 @@ agent_system:
     }
 }
 
-pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
+pub(crate) fn run_taskflow_proxy(
+    args: ProxyArgs,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ExitCode> + Send>> {
+    if matches!(args.args.first().map(String::as_str), Some("replan")) {
+        return Box::pin(async move { run_taskflow_replan_surface(&args.args).await });
+    }
+    Box::pin(run_taskflow_proxy_impl(args))
+}
+
+async fn run_taskflow_proxy_impl(args: ProxyArgs) -> ExitCode {
     if matches!(args.args.first().map(String::as_str), Some("query")) {
         return run_taskflow_query(&args.args);
     }

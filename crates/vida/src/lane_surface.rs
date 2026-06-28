@@ -15653,8 +15653,8 @@ mod tests {
             .expect("persist run graph status");
 
         let mut role_selection = lane_complete_role_selection(run_id);
-        role_selection.execution_plan["development_flow"]["dispatch_contract"]["execution_lane_sequence"] =
-            serde_json::json!(["designer", "developer"]);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]
+            ["execution_lane_sequence"] = serde_json::json!(["designer", "developer"]);
         role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
             "designer": {
                 "dispatch_target": "designer",
