@@ -3161,21 +3161,36 @@ fn read_supplied_host_bridge_completion_result(
         .filter(|value| !value.is_empty())
     {
         let request = read_host_bridge_request(state_root, request_path)?;
-        let expected_result_path = host_bridge_path_string(&request, "result_path")?;
-        let normalized_expected_result_path =
-            crate::runtime_dispatch_state::normalize_persisted_runtime_path(expected_result_path);
-        let canonical_expected_result_path = canonicalize_existing_state_path(
-            state_root,
-            Path::new(&normalized_expected_result_path),
-            "host bridge result",
-        )?;
-        if canonical_path != canonical_expected_result_path {
-            return Err(format!(
-                "Host bridge result file `{}` does not match request result_path `{}`.",
-                canonical_path.display(),
-                canonical_expected_result_path.display()
-            ));
+        let result = read_host_bridge_json_artifact_at_path(&canonical_path)?;
+        for field in ["run_id", "request_id", "dispatch_target"] {
+            let request_value = request
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let result_value = result
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if request_value.is_some() && result_value.is_none() {
+                return Err(format!(
+                    "Host bridge result file `{}` is missing {field} required by request binding.",
+                    canonical_path.display()
+                ));
+            }
+            if let (Some(request_value), Some(result_value)) = (request_value, result_value) {
+                if request_value != result_value {
+                    return Err(format!(
+                        "Host bridge result file `{}` has {field} `{}` but request has `{}`.",
+                        canonical_path.display(),
+                        result_value,
+                        request_value
+                    ));
+                }
+            }
         }
+        return Ok(Some(result));
     }
 
     read_host_bridge_json_artifact_at_path(&canonical_path).map(Some)
@@ -12725,7 +12740,7 @@ mod tests {
     }
 
     #[test]
-    fn supplied_host_bridge_result_must_match_request_result_path() {
+    fn lane_complete_host_bridge_result_file_honors_staged_path() {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -12738,8 +12753,16 @@ mod tests {
         ));
         let request_path = root.join("host-tool-bridge/requests/request.json");
         let expected_result_path = root.join("host-tool-bridge/results/request-owned.json");
-        let forged_result_path = root.join("host-tool-bridge/results/forged.json");
-        for path in [&request_path, &expected_result_path, &forged_result_path] {
+        let staged_result_path = root.join("host-tool-bridge/staged-results/staged.json");
+        let forged_result_path = root.join("host-tool-bridge/staged-results/forged.json");
+        let missing_identity_result_path =
+            root.join("host-tool-bridge/staged-results/missing-identity.json");
+        for path in [
+            &request_path,
+            &staged_result_path,
+            &forged_result_path,
+            &missing_identity_result_path,
+        ] {
             std::fs::create_dir_all(path.parent().expect("host bridge test path parent"))
                 .expect("create host bridge test parent");
         }
@@ -12762,9 +12785,16 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
+        assert!(
+            !expected_result_path.exists(),
+            "canonical request result_path is intentionally absent to prove staged submission works"
+        );
         std::fs::write(
-            &expected_result_path,
+            &staged_result_path,
             serde_json::json!({
+                "request_id": "result-binding",
+                "run_id": "run-result-binding",
+                "dispatch_target": "verification",
                 "decision": "pass",
                 "verdict": "pass",
                 "blocker_codes": [],
@@ -12773,40 +12803,64 @@ mod tests {
             })
             .to_string(),
         )
-        .expect("write expected result");
+        .expect("write staged result");
         std::fs::write(
             &forged_result_path,
             serde_json::json!({
+                "request_id": "result-binding",
+                "run_id": "wrong-run",
+                "dispatch_target": "verification",
                 "decision": "pass",
-                "verdict": "pass",
-                "blocker_codes": [],
-                "rework_target": "none",
-                "allowed_next_node": "closure"
+                "verdict": "pass"
             })
             .to_string(),
         )
         .expect("write forged result");
+        std::fs::write(
+            &missing_identity_result_path,
+            serde_json::json!({
+                "request_id": "result-binding",
+                "dispatch_target": "verification",
+                "decision": "pass",
+                "verdict": "pass"
+            })
+            .to_string(),
+        )
+        .expect("write missing identity result");
 
         let request_path_string = request_path.display().to_string();
+        let missing_identity_result_path_string =
+            missing_identity_result_path.display().to_string();
+        let error = read_supplied_host_bridge_completion_result(
+            &root,
+            Some(&missing_identity_result_path_string),
+            Some(&request_path_string),
+        )
+        .expect_err("missing result identity must be rejected");
+        assert!(
+            error.contains("is missing run_id required by request binding"),
+            "unexpected error: {error}"
+        );
+
         let forged_result_path_string = forged_result_path.display().to_string();
         let error = read_supplied_host_bridge_completion_result(
             &root,
             Some(&forged_result_path_string),
             Some(&request_path_string),
         )
-        .expect_err("forged result path must be rejected");
+        .expect_err("forged identity must be rejected");
         assert!(
-            error.contains("does not match request result_path"),
+            error.contains("has run_id `wrong-run` but request has `run-result-binding`"),
             "unexpected error: {error}"
         );
 
-        let expected_result_path_string = expected_result_path.display().to_string();
+        let expected_result_path_string = staged_result_path.display().to_string();
         let result = read_supplied_host_bridge_completion_result(
             &root,
             Some(&expected_result_path_string),
             Some(&request_path_string),
         )
-        .expect("request-owned result path should be accepted")
+        .expect("staged result path should be accepted")
         .expect("result should be present");
         assert_eq!(result["allowed_next_node"], "closure");
 

@@ -58,6 +58,24 @@ fn release1_blocked_status() -> &'static str {
     taskflow_contracts::Release1ContractStatus::Blocked.as_str()
 }
 
+fn agent_dispatch_assignment_blockers(selected_lanes: &[AgentDispatchLanePreview]) -> Vec<String> {
+    selected_lanes
+        .iter()
+        .flat_map(|lane| selection_truth_guard_blockers(&lane.selection_truth))
+        .collect()
+}
+
+fn agent_dispatch_contract_status(
+    blocker_codes: &[String],
+    assignment_blockers: &[String],
+) -> &'static str {
+    release1_contract_status_value(blocker_codes.is_empty() && assignment_blockers.is_empty())
+}
+
+fn agent_dispatch_status_from_blockers(blocker_codes: &[String]) -> &'static str {
+    agent_dispatch_contract_status(blocker_codes, &[])
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct AgentDispatchLaneSelectionTruth {
     selected_carrier: String,
@@ -1996,12 +2014,9 @@ fn agent_dispatch_fanout_guard_from_projection(
         .iter()
         .filter(|candidate| candidate.ready_now && !candidate.ready_parallel_safe)
         .count();
-    let assignment_blockers = selected_lanes
-        .iter()
-        .flat_map(|lane| selection_truth_guard_blockers(&lane.selection_truth))
-        .collect::<Vec<_>>();
+    let assignment_blockers = agent_dispatch_assignment_blockers(selected_lanes);
     serde_json::json!({
-        "status": release1_contract_status_value(blocker_codes.is_empty() && assignment_blockers.is_empty()),
+        "status": agent_dispatch_contract_status(blocker_codes, &assignment_blockers),
         "configured_max_parallel_agents": configured_max_parallel_agents.max(1),
         "lanes_requested": lanes_requested,
         "effective_max_parallel_agents": effective_max_parallel_agents,
@@ -2024,14 +2039,12 @@ fn agent_dispatch_fanout_guard_from_scheduler_plan(
 ) -> serde_json::Value {
     let mut guard = plan.fanout_guard.clone();
     if let Some(object) = guard.as_object_mut() {
-        let assignment_blocker_codes = selected_lanes
-            .iter()
-            .flat_map(|lane| selection_truth_guard_blockers(&lane.selection_truth))
-            .collect::<Vec<_>>();
+        let assignment_blocker_codes = agent_dispatch_assignment_blockers(selected_lanes);
         object.insert(
             "status".to_string(),
-            serde_json::json!(release1_contract_status_value(
-                blocker_codes.is_empty() && assignment_blocker_codes.is_empty()
+            serde_json::json!(agent_dispatch_contract_status(
+                blocker_codes,
+                &assignment_blocker_codes
             )),
         );
         object.insert(
@@ -2450,7 +2463,7 @@ fn build_agent_dispatch_next_preview_standard(
         );
     }
 
-    let status = release1_contract_status_value(blocker_codes.is_empty());
+    let status = agent_dispatch_status_from_blockers(&blocker_codes);
     let fanout_guard = maybe_build_fanout_guard_from_projection(
         include_diagnostics,
         projection,
@@ -2856,7 +2869,7 @@ fn build_agent_dispatch_next_preview_dev_team(
         );
     }
 
-    let status = release1_contract_status_value(blocker_codes.is_empty());
+    let status = agent_dispatch_status_from_blockers(&blocker_codes);
     let flow_projection = if include_diagnostics && current_task_absent_from_scheduler {
         suppressed_current_task_flow_projection(&blocker_codes)
     } else if include_diagnostics {
@@ -3094,7 +3107,7 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan_with_diagnostics(
         selected_lanes.clear();
     }
 
-    let status = release1_contract_status_value(blocker_codes.is_empty()).to_string();
+    let status = agent_dispatch_status_from_blockers(&blocker_codes).to_string();
     let configured_parallel =
         usize::try_from(plan.configured_max_parallel_agents).unwrap_or(usize::MAX);
     let effective_parallel = if lanes_requested == 0 {
@@ -5387,13 +5400,13 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_dispatch_existing_packet_fast_path_payload, agent_dispatch_materialization_lanes,
-        agent_dispatch_next_bound_current_task_id, agent_dispatch_next_compact_payload,
-        agent_dispatch_next_effective_materialize_packets,
+        agent_dispatch_contract_status, agent_dispatch_existing_packet_fast_path_payload,
+        agent_dispatch_materialization_lanes, agent_dispatch_next_bound_current_task_id,
+        agent_dispatch_next_compact_payload, agent_dispatch_next_effective_materialize_packets,
         agent_dispatch_next_preserve_current_task_id, agent_dispatch_next_projection_name,
-        agent_status_runtime_task_stale_code, apply_configured_lane_runtime_assignment,
-        apply_continuation_dispatch_gate_to_preview, build_agent_dispatch_next_preview,
-        canonical_host_bridge_request_path,
+        agent_dispatch_status_from_blockers, agent_status_runtime_task_stale_code,
+        apply_configured_lane_runtime_assignment, apply_continuation_dispatch_gate_to_preview,
+        build_agent_dispatch_next_preview, canonical_host_bridge_request_path,
         completed_host_bridge_completion_request_for_state_root,
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
         dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
@@ -5417,6 +5430,36 @@ mod tests {
     use crate::test_cli_support::{cli, guard_current_dir, EnvVarGuard};
     use crate::{AgentDispatchNextArgs, AgentHostBridgeArgs};
     use std::process::ExitCode;
+
+    #[test]
+    fn agent_dispatch_contract_status_is_table_driven_by_preview_and_assignment_blockers() {
+        let cases = [
+            (Vec::<String>::new(), Vec::<String>::new(), "pass"),
+            (
+                vec!["no_ready_task_candidates".to_string()],
+                Vec::<String>::new(),
+                "blocked",
+            ),
+            (
+                Vec::<String>::new(),
+                vec!["selected_model_profile_not_ready".to_string()],
+                "blocked",
+            ),
+        ];
+
+        for (preview_blockers, assignment_blockers, expected) in cases {
+            assert_eq!(
+                agent_dispatch_contract_status(&preview_blockers, &assignment_blockers),
+                expected
+            );
+            if assignment_blockers.is_empty() {
+                assert_eq!(
+                    agent_dispatch_status_from_blockers(&preview_blockers),
+                    expected
+                );
+            }
+        }
+    }
 
     #[test]
     fn completed_host_bridge_completion_request_rejects_forged_result_without_provenance() {
@@ -6734,8 +6777,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_bridge_submit_result_uses_lane_completion_when_only_dispatch_receipt_preflight_is_missing(
-    ) {
+    async fn host_bridge_submit_result_uses_operator_staged_result_file() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -6789,12 +6831,14 @@ mod tests {
         let request_path = root.join("host-tool-bridge/requests/request.json");
         let receipt_packet_path =
             root.join("runtime-consumption/downstream-dispatch-packets/run.json");
-        let result_path = root.join("host-tool-bridge/results/result.json");
+        let canonical_result_path = root.join("host-tool-bridge/results/result.json");
+        let staged_result_path = root.join("host-tool-bridge/staged-results/result.json");
         let receipt_path = root.join("host-tool-bridge/receipts/receipt.json");
         for path in [
             &request_path,
             &receipt_packet_path,
-            &result_path,
+            &canonical_result_path,
+            &staged_result_path,
             &receipt_path,
         ] {
             std::fs::create_dir_all(path.parent().expect("artifact parent"))
@@ -6842,7 +6886,7 @@ mod tests {
             "adapter_kind": "codex_host_tools",
             "adapter_capability_id": "codex.multi_agent_v1",
             "request_path": request_path.display().to_string(),
-            "result_path": result_path.display().to_string(),
+            "result_path": canonical_result_path.display().to_string(),
             "receipt_path": receipt_path.display().to_string(),
             "allowed_next_node": "developer"
         });
@@ -6851,8 +6895,12 @@ mod tests {
             serde_json::to_vec_pretty(&request).expect("request should serialize"),
         )
         .expect("write request");
+        assert!(
+            !canonical_result_path.exists(),
+            "canonical request result path is absent to prove --submit-result honors the staged result file"
+        );
         std::fs::write(
-            &result_path,
+            &staged_result_path,
             serde_json::to_vec_pretty(&serde_json::json!({
                 "artifact_kind": "host_tool_bridge_result",
                 "schema_version": 1,
@@ -6931,7 +6979,7 @@ mod tests {
             blocker_codes: None,
             blocker_code: Vec::new(),
             rework_target: None,
-            submit_result: Some(result_path.clone()),
+            submit_result: Some(staged_result_path.clone()),
             result_file: None,
             receipt_id: Some("host-bridge-wrapper-complete-1".to_string()),
             json: true,
