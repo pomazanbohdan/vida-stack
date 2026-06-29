@@ -8607,40 +8607,93 @@ fn inject_configured_dev_team_route_into_execution_plan(
     let Some(dispatch_contract) = dispatch_contract.as_object_mut() else {
         return;
     };
+    let sequence = if route.sequence.is_empty() {
+        vec![crate::dev_team_sequence_contract::DevTeamSequenceStep {
+            role_label: route.dispatch_target.clone(),
+            runtime_role: route.runtime_role.clone(),
+            task_class: route.task_class.clone(),
+            packet_template_kind: None,
+            closure_class: None,
+            stage: None,
+            completion_blocker: None,
+            inclusion_rule: None,
+            requires_task: true,
+            requires_user_approval: false,
+            approval_policy: serde_json::Value::Null,
+            lifecycle_hook_templates: serde_json::Value::Null,
+            resume_transitions: serde_json::Value::Null,
+            rework_transitions: serde_json::Value::Null,
+        }]
+    } else {
+        route.sequence.clone()
+    };
+    let lane_sequence = sequence
+        .iter()
+        .map(|step| step.role_label.trim())
+        .filter(|target| !target.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if !lane_sequence.is_empty() {
+        dispatch_contract.insert(
+            "lane_sequence".to_string(),
+            serde_json::json!(lane_sequence.clone()),
+        );
+        dispatch_contract.insert(
+            "execution_lane_sequence".to_string(),
+            serde_json::json!(lane_sequence),
+        );
+    }
     let lane_catalog = dispatch_contract
         .entry("lane_catalog".to_string())
         .or_insert_with(|| serde_json::json!({}));
     let Some(lane_catalog) = lane_catalog.as_object_mut() else {
         return;
     };
-    lane_catalog.insert(
-        route.dispatch_target.clone(),
-        serde_json::json!({
-            "dispatch_target": route.dispatch_target,
-            "runtime_role": route.runtime_role,
-            "task_class": route.task_class,
-            "runtime_assignment": {
-                "enabled": true,
-                "runtime_role": route.runtime_role,
-                "task_class": route.task_class,
-                "activation_runtime_role": route.runtime_role,
-                "selected_backend_id": "internal_subagents",
-                "selected_dispatch_backend_id": "internal_subagents",
-            },
-            "carrier_runtime_assignment": {
-                "enabled": true,
-                "runtime_role": route.runtime_role,
-                "task_class": route.task_class,
-                "activation_runtime_role": route.runtime_role,
-                "selected_backend_id": "internal_subagents",
-                "selected_dispatch_backend_id": "internal_subagents",
-            },
-            "activation": {
-                "activation_runtime_role": route.runtime_role,
-                "task_class": route.task_class,
-            },
-        }),
-    );
+    for step in sequence {
+        let dispatch_target = step.role_label.trim();
+        if dispatch_target.is_empty() {
+            continue;
+        }
+        lane_catalog.insert(
+            dispatch_target.to_string(),
+            serde_json::json!({
+                "dispatch_target": dispatch_target,
+                "runtime_role": step.runtime_role,
+                "task_class": step.task_class,
+                "packet_template_kind": step.packet_template_kind,
+                "closure_class": step.closure_class,
+                "stage": step.stage,
+                "completion_blocker": step.completion_blocker,
+                "inclusion_rule": step.inclusion_rule,
+                "requires_task": step.requires_task,
+                "requires_user_approval": step.requires_user_approval,
+                "approval_policy": step.approval_policy,
+                "lifecycle_hook_templates": step.lifecycle_hook_templates,
+                "resume_transitions": step.resume_transitions,
+                "rework_transitions": step.rework_transitions,
+                "runtime_assignment": {
+                    "enabled": true,
+                    "runtime_role": step.runtime_role,
+                    "task_class": step.task_class,
+                    "activation_runtime_role": step.runtime_role,
+                    "selected_backend_id": "internal_subagents",
+                    "selected_dispatch_backend_id": "internal_subagents",
+                },
+                "carrier_runtime_assignment": {
+                    "enabled": true,
+                    "runtime_role": step.runtime_role,
+                    "task_class": step.task_class,
+                    "activation_runtime_role": step.runtime_role,
+                    "selected_backend_id": "internal_subagents",
+                    "selected_dispatch_backend_id": "internal_subagents",
+                },
+                "activation": {
+                    "activation_runtime_role": step.runtime_role,
+                    "task_class": step.task_class,
+                },
+            }),
+        );
+    }
 }
 
 fn apply_configured_dev_team_route_to_state(
@@ -10454,6 +10507,93 @@ mod tests {
         assert_eq!(
             recommended_surface_for_command("vida custom surface --json --details"),
             "vida custom surface --details"
+        );
+    }
+
+    fn dev_team_step(
+        role_label: &str,
+        runtime_role: &str,
+        task_class: &str,
+    ) -> crate::dev_team_sequence_contract::DevTeamSequenceStep {
+        crate::dev_team_sequence_contract::DevTeamSequenceStep {
+            role_label: role_label.to_string(),
+            runtime_role: runtime_role.to_string(),
+            task_class: task_class.to_string(),
+            packet_template_kind: None,
+            closure_class: None,
+            stage: None,
+            completion_blocker: None,
+            inclusion_rule: None,
+            requires_task: true,
+            requires_user_approval: false,
+            approval_policy: serde_json::Value::Null,
+            lifecycle_hook_templates: serde_json::Value::Null,
+            resume_transitions: serde_json::Value::Null,
+            rework_transitions: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn configured_dev_team_route_injects_full_sequence_into_dispatch_contract() {
+        let mut execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_sequence": ["analyst", "developer"],
+                    "execution_lane_sequence": ["analyst", "developer"],
+                    "lane_catalog": {
+                        "analyst": {
+                            "dispatch_target": "analyst",
+                            "runtime_role": "business_analyst",
+                            "task_class": "specification"
+                        }
+                    }
+                }
+            }
+        });
+        let route = crate::dev_team_sequence_contract::ConfiguredDevTeamTaskRoute {
+            flow_id: Some("meeting_event_form_flow".to_string()),
+            role_label: "analyst".to_string(),
+            runtime_role: "business_analyst".to_string(),
+            task_class: "specification".to_string(),
+            dispatch_target: "analyst".to_string(),
+            sequence: vec![
+                dev_team_step("analyst", "business_analyst", "specification"),
+                dev_team_step("designer", "designer", "design"),
+                dev_team_step("autotester", "tester", "verification"),
+            ],
+        };
+
+        inject_configured_dev_team_route_into_execution_plan(&mut execution_plan, &route);
+
+        let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
+        assert_eq!(
+            crate::taskflow_routing::dispatch_contract_allowed_next_lane_sequence(
+                dispatch_contract
+            ),
+            vec![
+                "analyst".to_string(),
+                "designer".to_string(),
+                "autotester".to_string(),
+            ]
+        );
+        assert_eq!(
+            crate::taskflow_routing::dispatch_contract_execution_lane_sequence(dispatch_contract),
+            vec![
+                "analyst".to_string(),
+                "designer".to_string(),
+                "autotester".to_string(),
+            ]
+        );
+        let designer = crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
+            &execution_plan,
+            "designer",
+        )
+        .expect("designer should resolve from configured flow lane catalog");
+        assert_eq!(designer.dispatch_target, "designer");
+        assert_eq!(
+            execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]["designer"]
+                ["runtime_assignment"]["selected_backend_id"],
+            "internal_subagents"
         );
     }
 

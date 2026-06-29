@@ -25,6 +25,7 @@ pub(crate) struct ConfiguredDevTeamTaskRoute {
     pub(crate) runtime_role: String,
     pub(crate) task_class: String,
     pub(crate) dispatch_target: String,
+    pub(crate) sequence: Vec<DevTeamSequenceStep>,
 }
 
 pub(crate) fn configured_dev_team_first_step_for_task(
@@ -43,6 +44,7 @@ pub(crate) fn configured_dev_team_first_step_for_task(
         role_label: step.role_label,
         runtime_role: step.runtime_role,
         task_class: step.task_class,
+        sequence,
     })
 }
 
