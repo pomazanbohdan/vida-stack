@@ -48,6 +48,8 @@ This map does not cover extracted secondary bundles by default.
      - compact project-owned runbook for runtime development environment alignment, project-local skills, GitHub issue processing, and operator-efficiency follow-up
 17. `docs/process/runtime-defect-function-option-matrix-protocol.md`
      - project-owned runtime defect matrix schema for command surfaces, CLI options, owning functions, output contracts, fixtures, and proof tests
+18. `docs/process/zombie-d-test-writing-protocol.md`
+     - project-owned ZOMBIE-D test-writing protocol for agents before writing or updating tests
 
 ## Activation Triggers
 
@@ -95,6 +97,8 @@ Do not use this map as the default route for extracted bundles unless the task e
      - continue to `docs/process/vida-runtime-development-environment.md`
 15. Runtime defect function/option matrix or command-surface proof matrix questions:
      - continue to `docs/process/runtime-defect-function-option-matrix-protocol.md`
+16. Test-writing, test-update, fixture/golden, coverage-gate, runtime defect proof test, or test-task planning questions:
+     - continue to `docs/process/zombie-d-test-writing-protocol.md`
 
 ## Boundary Rule
 

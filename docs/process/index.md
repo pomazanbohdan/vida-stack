@@ -80,6 +80,8 @@ Canonical entrypoints:
     - project-owned matrix protocol for runtime defect invariants, command surfaces, CLI options, output contracts, owning functions, fixtures, and proof tests
 33. `docs/process/vida-runtime-hardening-release-readiness-guide.md`
     - project-owned operator guide for final `VIDA-RUNTIME-HARDENING` release-readiness closure, quality gates, release-install proof, and close sequence
+34. `docs/process/zombie-d-test-writing-protocol.md`
+    - project-owned ZOMBIE-D protocol for planning Rust, CLI, fixture/golden, coverage-gate, runtime defect proof, and test-task batches before writing or updating tests
 
 -----
 artifact_path: process/index

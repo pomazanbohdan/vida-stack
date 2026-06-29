@@ -43,6 +43,8 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 14. Project-local TaskFlow runtime state and operator surfaces:
     - `.vida/data/state/`
     - `vida taskflow help`
+15. Project ZOMBIE-D test-writing protocol:
+    - `docs/process/zombie-d-test-writing-protocol.md`
 ## Bootstrap Read Path
 
 1. After `AGENTS.md`, read this sidecar immediately.
@@ -86,7 +88,9 @@ Purpose: provide the project-level agent instruction overlay for the repository 
     or task-completion checklists, continue early to:
    - `docs/process/project-orchestrator-operating-protocol.md`
    - `docs/process/team-development-and-orchestration-protocol.md`
-23. This path set is mandatory bootstrap context, not an optional later lookup.
+23. For Rust test, CLI smoke/integration test, fixture/golden test, coverage-gate test, runtime defect proof test, or test-task planning work, continue early to:
+   - `docs/process/zombie-d-test-writing-protocol.md`
+24. This path set is mandatory bootstrap context, not an optional later lookup.
 
 Project-routing rule:
 
