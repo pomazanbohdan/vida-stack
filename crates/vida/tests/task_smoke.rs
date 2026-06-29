@@ -824,6 +824,9 @@ fn quality_gate_prepush_help_documents_advisor_output_modes() {
     assert!(help.contains("--prepush"));
     assert!(help.contains("--advise"));
     assert!(help.contains("--coverage-file"));
+    assert!(help.contains("--crap-file"));
+    assert!(help.contains("--crap-baseline-file"));
+    assert!(help.contains("--task-exception-note"));
     assert!(help.contains("--coverage-threshold"));
     assert!(help.contains("Default output is compact TOON/plain"));
 }
@@ -932,6 +935,157 @@ fn quality_gate_prepush_json_advise_reports_codegen_and_coverage_remediation() {
     assert!(payload["suggested_action"]
         .as_str()
         .is_some_and(|action| action.contains("git add")));
+
+    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn quality_gate_prepush_json_reports_crap_hotspot_blockers() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let project_root = unique_state_dir();
+    init_git_repo(&project_root);
+    let source_dir = format!("{project_root}/crates/vida/src");
+    fs::create_dir_all(&source_dir).expect("create source dir");
+    let hot_path = format!("{source_dir}/hot.rs");
+    fs::write(&hot_path, "pub fn hot() {}\n").expect("write source");
+    let crap_path = format!("{project_root}/workspace-crap.json");
+    fs::write(
+        &crap_path,
+        r#"{"entries":[{"file":"crates/vida/src/hot.rs","function":"hot","line":7,"crate":"vida","crap":1200.0,"cyclomatic":80.0,"coverage":12.5}]}"#,
+    )
+    .expect("write crap json");
+
+    let (payload, success) = run_command_json_allow_failure(
+        &[
+            "quality",
+            "gate",
+            "--prepush",
+            "--json",
+            "--project-root",
+            &project_root,
+            "--crap-file",
+            &crap_path,
+        ],
+        &state_dir,
+    );
+
+    assert!(!success, "touched high-CRAP functions should fail closed");
+    assert_eq!(payload["status"], "blocked");
+    assert!(payload["blocker_codes"]
+        .as_array()
+        .is_some_and(|codes| codes.contains(&serde_json::json!(
+            "touched_crap_hotspots_without_exception"
+        ))));
+    assert_eq!(payload["crap"]["count_gt_1000"], 1);
+    assert_eq!(payload["crap"]["touched_hotspots"][0]["function"], "hot");
+    assert_eq!(payload["artifact_refs"]["crap_file"], crap_path);
+
+    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn quality_gate_prepush_json_reports_crap_baseline_growth_blocker() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let project_root = unique_state_dir();
+    init_git_repo(&project_root);
+    let source_dir = format!("{project_root}/crates/vida/src");
+    fs::create_dir_all(&source_dir).expect("create source dir");
+    let hot_path = format!("{source_dir}/hot.rs");
+    fs::write(&hot_path, "pub fn hot() {}\n").expect("write source");
+    let crap_path = format!("{project_root}/workspace-crap.json");
+    let baseline_path = format!("{project_root}/workspace-crap-baseline.json");
+    fs::write(
+        &crap_path,
+        r#"{"entries":[{"file":"crates/vida/src/hot.rs","function":"hot","line":7,"crate":"vida","crap":1200.0,"cyclomatic":80.0,"coverage":12.5}]}"#,
+    )
+    .expect("write crap json");
+    fs::write(
+        &baseline_path,
+        r#"{"entries":[{"file":"crates/vida/src/hot.rs","function":"hot","line":7,"crate":"vida","crap":950.0,"cyclomatic":80.0,"coverage":12.5}]}"#,
+    )
+    .expect("write baseline json");
+
+    let (payload, success) = run_command_json_allow_failure(
+        &[
+            "quality",
+            "gate",
+            "--prepush",
+            "--json",
+            "--project-root",
+            &project_root,
+            "--crap-file",
+            &crap_path,
+            "--crap-baseline-file",
+            &baseline_path,
+            "--task-exception-note",
+            "reviewed-exception-for-touched-hotspot",
+        ],
+        &state_dir,
+    );
+
+    assert!(!success, "worsened CRAP>1000 should fail closed");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["crap_gt_1000_growth"])
+    );
+    assert_eq!(payload["crap"]["worsened_hotspots"][0]["function"], "hot");
+    assert_eq!(
+        payload["crap"]["worsened_hotspots"][0]["previous_crap"],
+        950.0
+    );
+    assert_eq!(
+        payload["artifact_refs"]["crap_baseline_file"],
+        baseline_path
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
+fn quality_gate_prepush_default_output_names_crap_hotspot_and_remediation() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let project_root = unique_state_dir();
+    init_git_repo(&project_root);
+    let source_dir = format!("{project_root}/crates/vida/src");
+    fs::create_dir_all(&source_dir).expect("create source dir");
+    let hot_path = format!("{source_dir}/hot.rs");
+    fs::write(&hot_path, "pub fn hot() {}\n").expect("write source");
+    let crap_path = format!("{project_root}/workspace-crap.json");
+    fs::write(
+        &crap_path,
+        r#"{"entries":[{"file":"crates/vida/src/hot.rs","function":"hot","line":7,"crate":"vida","crap":1200.0,"cyclomatic":80.0,"coverage":12.5}]}"#,
+    )
+    .expect("write crap json");
+
+    let (stdout, stderr) = run_and_assert_failure(
+        &[
+            "quality",
+            "gate",
+            "--prepush",
+            "--project-root",
+            &project_root,
+            "--crap-file",
+            &crap_path,
+        ],
+        &state_dir,
+    );
+
+    assert!(
+        stderr.is_empty(),
+        "quality gate should report on stdout: {stderr}"
+    );
+    assert!(stdout.starts_with("vida quality gate\n"));
+    assert!(stdout.contains("touched_crap_hotspots_without_exception"));
+    assert!(stdout.contains("touched_hotspots[1]{file,function,line,crate,crap"));
+    assert!(stdout.contains("crates/vida/src/hot.rs,hot,7,vida,1200"));
+    assert!(stdout.contains("--task-exception-note"));
 
     let _ = fs::remove_dir_all(&state_dir);
     let _ = fs::remove_dir_all(&project_root);

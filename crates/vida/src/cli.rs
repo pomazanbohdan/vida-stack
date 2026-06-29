@@ -27,7 +27,7 @@ const JOB_AFTER_HELP: &str = "Job operations:\n  vida job status\n  vida job sta
 const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get --json\n\nOptions:\n  --json    Emit machine-readable JSON output";
 const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route <route> --expect <text> --json\n\nBrowser proof options:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output";
 const SESSION_AFTER_HELP: &str = "Session operations:\n  vida session triage\n  vida session triage --task <task-id>\n  vida session triage --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
-const QUALITY_AFTER_HELP: &str = "Quality operations:\n  vida quality gate --prepush\n  vida quality gate --prepush --advise\n  vida quality gate --prepush --json --advise\n\nOptions:\n  --prepush                        Evaluate the pre-push quality gate advisor\n  --advise                         Include remediation guidance\n  --coverage-file <path>           Read LCOV coverage evidence from this file\n  --coverage-threshold <percent>   Coverage threshold used for covered-line deficit math\n  --project-root <path>            Repository root used for git dirty/changed file evidence\n  --json                           Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
+const QUALITY_AFTER_HELP: &str = "Quality operations:\n  vida quality gate --prepush\n  vida quality gate --prepush --advise\n  vida quality gate --prepush --json --advise\n\nOptions:\n  --prepush                        Evaluate the pre-push quality gate advisor\n  --advise                         Include remediation guidance\n  --coverage-file <path>           Read LCOV coverage evidence from this file\n  --crap-file <path>               Read cargo-crap JSON evidence from this file\n  --crap-baseline-file <path>      Optional previous cargo-crap JSON baseline used to detect CRAP>1000 growth\n  --task-exception-note <note>     TaskFlow exception note allowing touched high-CRAP functions for this push\n  --coverage-threshold <percent>   Coverage threshold used for covered-line deficit math\n  --project-root <path>            Repository root used for git dirty/changed file evidence\n  --json                           Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const PACK_AFTER_HELP: &str = "Pack operations:\n  vida pack list\n  vida pack list --json\n  vida pack show spec-four-pack\n  vida pack show spec-four-pack --json\n  vida pack validate\n  vida pack validate --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive --reinit\n  vida state reset --archive --reinit --json\n  vida state reset --archive --reinit --state-dir <path> --json\n\nOptions:\n  --archive             Rename the current state root to a timestamped sibling archive before reset\n  --reinit              Recreate the authoritative state spine after archive\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output\n\nOutput:\n  Default output is compact plain text for operators.\n  Use --json for machine-readable automation.";
 const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
@@ -336,6 +336,24 @@ pub(crate) struct QualityGateArgs {
         help = "Read LCOV coverage evidence from this file"
     )]
     pub(crate) coverage_file: Option<PathBuf>,
+
+    #[arg(
+        long = "crap-file",
+        help = "Read cargo-crap JSON evidence from this file"
+    )]
+    pub(crate) crap_file: Option<PathBuf>,
+
+    #[arg(
+        long = "crap-baseline-file",
+        help = "Optional previous cargo-crap JSON baseline used to detect CRAP>1000 growth"
+    )]
+    pub(crate) crap_baseline_file: Option<PathBuf>,
+
+    #[arg(
+        long = "task-exception-note",
+        help = "TaskFlow exception note allowing touched high-CRAP functions for this push"
+    )]
+    pub(crate) task_exception_note: Vec<String>,
 
     #[arg(
         long = "coverage-threshold",

@@ -16,6 +16,7 @@ param(
     [int]$Jobs = 0,
     [switch]$SkipBuild,
     [switch]$Windows,
+    [switch]$RefreshCoverage,
     [switch]$CoverageIgnoreRunFail,
     [switch]$Json,
     [Alias("h")]
@@ -205,6 +206,10 @@ function Test-ModeNeedsWindowsBuildEnvironment {
 function Test-ModeNeedsBuildConcurrencyGuard {
     param([string]$ModeName)
 
+    if ($ModeName -eq "coverage") {
+        return [bool]$RefreshCoverage
+    }
+
     return $ModeName -in @(
         "quick",
         "focused-nextest",
@@ -213,7 +218,6 @@ function Test-ModeNeedsBuildConcurrencyGuard {
         "doc-test",
         "build-debug",
         "runtime-smoke",
-        "coverage",
         "release-package",
         "release-install"
     )
@@ -261,7 +265,7 @@ Modes:
   doc-test          Workspace Rust doc tests.
   build-debug       Debug build of supported runtime entrypoints.
   runtime-smoke     Build debug vida and run status from the effective target dir.
-  coverage          Default test coverage gate: cargo llvm-cov LCOV, cargo-crap JSON, vida quality gate.
+  coverage          Bounded coverage gate over existing LCOV/CRAP artifacts; use -RefreshCoverage to regenerate.
   release-package   Build release archives with native PowerShell scripts/build-release.ps1.
   release-install   Installed launcher proof through vida release install.
   release-install-status
@@ -273,7 +277,8 @@ Notes:
   Cargo modes set CARGO_TARGET_DIR unless the caller already provided it.
   proof-scheduler accepts -ProofCommandJson '["cmd1","cmd2","cargo --version"]' from any host shell.
   proof-scheduler also accepts -ProofCommand array values when invoked from an already-running PowerShell script.
-  coverage runs cargo llvm-cov nextest, writes LCOV to -CoverageOutputPath (default .vida/tmp/operator-output.lcov), and writes CRAP JSON to -CrapOutputPath (default .vida/tmp/workspace-crap.json).
+  coverage reuses -CoverageOutputPath (default .vida/tmp/operator-output.lcov) and -CrapOutputPath (default .vida/tmp/workspace-crap.json) by default, then runs vida quality gate.
+  coverage with -RefreshCoverage runs cargo llvm-cov nextest and cargo-crap before admission.
   coverage fails on test failure unless -CoverageIgnoreRunFail is set, then still generates LCOV when cargo-llvm-cov can report it.
   release-package accepts explicit -SkipBuild, -Windows, -ReleaseBinDir, -ReleaseVersion, and -ReleaseSuffix flags for packaging already-built release binaries.
   release-package also honors VIDA_RELEASE_SKIP_BUILD=1, VIDA_RELEASE_BIN_DIR=<dir>, and VIDA_RELEASE_SUFFIX=<suffix> for compatibility.
@@ -1481,34 +1486,68 @@ function Invoke-CoverageGate {
     $crapPath = Resolve-RepoOutputFilePath $CrapOutputPath
     $thresholdText = $CoverageThreshold.ToString([System.Globalization.CultureInfo]::InvariantCulture)
 
-    $llvmCovCommand = New-Object System.Collections.Generic.List[string]
-    $llvmCovCommand.Add("cargo")
-    $llvmCovCommand.Add("llvm-cov")
-    $llvmCovCommand.Add("nextest")
-    $llvmCovCommand.Add("--workspace")
-    $llvmCovCommand.Add("--lcov")
-    $llvmCovCommand.Add("--output-path")
-    $llvmCovCommand.Add($coveragePath)
-    if ($CoverageIgnoreRunFail) {
-        $llvmCovCommand.Add("--ignore-run-fail")
+    if (-not $RefreshCoverage) {
+        $missingArtifacts = @()
+        if (-not (Test-Path -LiteralPath $coveragePath)) {
+            $missingArtifacts += $coveragePath
+        }
+        if (-not (Test-Path -LiteralPath $crapPath)) {
+            $missingArtifacts += $crapPath
+        }
+        if ($missingArtifacts.Count -gt 0) {
+            $Records.Add([pscustomobject]@{
+                operation_id = "coverage-artifact-admission"
+                command_or_surface = "existing coverage artifacts required; pass -RefreshCoverage to regenerate"
+                cwd_or_context = $RootDir
+                started_at = (Get-Date).ToString("o")
+                duration_ms = 0
+                exit_status = "blocked"
+                classification = "fast"
+                target_dir_policy = $CargoTargetDirState.target_dir_policy
+                effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+                artifact_refs = $missingArtifacts
+            })
+            [Console]::Error.WriteLine("coverage mode requires existing artifacts by default: {0}. Pass -RefreshCoverage to regenerate." -f ($missingArtifacts -join ", "))
+            exit 2
+        }
     }
-    Invoke-Timed "cargo-llvm-cov-nextest-workspace-lcov" $llvmCovCommand.ToArray()
 
-    $crapCommand = New-Object System.Collections.Generic.List[string]
-    $crapCommand.Add("cargo")
-    $crapCommand.Add("crap")
-    $crapCommand.Add("--workspace")
-    $crapCommand.Add("--lcov")
-    $crapCommand.Add($coveragePath)
-    $crapCommand.Add("--format")
-    $crapCommand.Add("json")
-    $crapCommand.Add("--output")
-    $crapCommand.Add($crapPath)
-    if ($Jobs -gt 0) {
-        $crapCommand.Add("--jobs")
-        $crapCommand.Add([string]$Jobs)
+    if ($RefreshCoverage) {
+        $llvmCovCommand = New-Object System.Collections.Generic.List[string]
+        $llvmCovCommand.Add("cargo")
+        $llvmCovCommand.Add("llvm-cov")
+        $llvmCovCommand.Add("nextest")
+        $llvmCovCommand.Add("--workspace")
+        $llvmCovCommand.Add("--lcov")
+        $llvmCovCommand.Add("--output-path")
+        $llvmCovCommand.Add($coveragePath)
+        if ($CoverageIgnoreRunFail) {
+            $llvmCovCommand.Add("--ignore-run-fail")
+        }
+        Invoke-Timed "cargo-llvm-cov-nextest-workspace-lcov" $llvmCovCommand.ToArray()
+    } else {
+        Add-SkippedRecord "cargo-llvm-cov-nextest-workspace-lcov" "existing LCOV artifact reused; pass -RefreshCoverage to regenerate"
     }
-    Invoke-Timed "cargo-crap-workspace-json" $crapCommand.ToArray()
+
+    if ($RefreshCoverage) {
+        $crapCommand = New-Object System.Collections.Generic.List[string]
+        $crapCommand.Add("cargo")
+        $crapCommand.Add("crap")
+        $crapCommand.Add("--workspace")
+        $crapCommand.Add("--lcov")
+        $crapCommand.Add($coveragePath)
+        $crapCommand.Add("--format")
+        $crapCommand.Add("json")
+        $crapCommand.Add("--output")
+        $crapCommand.Add($crapPath)
+        if ($Jobs -gt 0) {
+            $crapCommand.Add("--jobs")
+            $crapCommand.Add([string]$Jobs)
+        }
+        Invoke-Timed "cargo-crap-workspace-json" $crapCommand.ToArray()
+    } else {
+        Add-SkippedRecord "cargo-crap-workspace-json" "existing cargo-crap artifact reused; pass -RefreshCoverage to regenerate"
+    }
 
     Invoke-Timed "vida-quality-gate-coverage" @(
         (Resolve-InstalledVidaPath),
@@ -1517,6 +1556,8 @@ function Invoke-CoverageGate {
         "--prepush",
         "--coverage-file",
         $coveragePath,
+        "--crap-file",
+        $crapPath,
         "--coverage-threshold",
         $thresholdText,
         "--advise",

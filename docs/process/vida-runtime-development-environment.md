@@ -171,11 +171,19 @@ systems:
 pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode coverage -Json
 ```
 
-   The gate writes `.vida/tmp/operator-output.lcov`, writes
-   `.vida/tmp/workspace-crap.json`, and then runs
-   `vida quality gate --prepush --coverage-file .vida/tmp/operator-output.lcov --coverage-threshold 80 --advise --json`.
-   A below-threshold result is a coverage blocker, not a script failure to
-   ignore.
+   By default the gate reuses existing `.vida/tmp/operator-output.lcov` and
+   `.vida/tmp/workspace-crap.json` artifacts so local CRAP/coverage admission is
+   bounded and does not depend on unrelated full-workspace test stability. Pass
+   `-RefreshCoverage` when the task explicitly requires regenerating both
+   artifacts through `cargo llvm-cov nextest --workspace` and `cargo crap`. The
+   admission step then runs
+   `vida quality gate --prepush --coverage-file .vida/tmp/operator-output.lcov --crap-file .vida/tmp/workspace-crap.json --coverage-threshold 80 --advise --json`.
+   The quality gate reports CRAP `>30`, `>100`, and `>1000` buckets, names the
+   exact hottest functions, blocks touched `CRAP>1000` functions unless a
+   reviewed TaskFlow exception is supplied with `--task-exception-note`, and can
+   compare against `--crap-baseline-file` to reject worsening `CRAP>1000`
+   hotspots. A below-threshold result is a coverage blocker, not a script
+   failure to ignore.
 6. `sccache` is the preferred optional compiler cache when it is installed and
    validated on the host. Do not set `RUSTC_WRAPPER` in project config until
    `sccache --show-stats` and a local compile proof show that it improves this
