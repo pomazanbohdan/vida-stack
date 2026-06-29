@@ -38,14 +38,20 @@ const DOCUMENTED_LOCAL_OPERATOR_BLOCKER_CODES: &[&str] = &[
     "untrusted_create_notes_file",
 ];
 
+fn local_operator_blocker_code_is_documented(normalized: &str) -> bool {
+    DOCUMENTED_LOCAL_OPERATOR_BLOCKER_CODES
+        .iter()
+        .any(|code| *code == normalized)
+        || crate::release1_contracts::run_graph_operator_blocker_code_strings()
+            .iter()
+            .any(|code| *code == normalized)
+}
+
 fn canonical_release1_operator_blocker_codes(entries: &[String]) -> Vec<String> {
     let mut canonical = crate::contract_profile_adapter::canonical_blocker_codes(entries);
     for entry in entries {
         let normalized = entry.trim().to_ascii_lowercase();
-        if DOCUMENTED_LOCAL_OPERATOR_BLOCKER_CODES
-            .iter()
-            .any(|code| *code == normalized.as_str())
-        {
+        if local_operator_blocker_code_is_documented(normalized.as_str()) {
             canonical.push(normalized);
         }
     }
@@ -364,7 +370,7 @@ pub(crate) fn shared_operator_output_contract_parity_error(
 mod tests {
     use super::{
         build_release1_operator_output_payload, canonical_release1_blocker_code_entries,
-        canonical_release1_operator_contract_status,
+        canonical_release1_operator_blocker_codes, canonical_release1_operator_contract_status,
         finalize_release1_operator_surface_verdict_with_status, finalize_release1_operator_truth,
         release1_operator_contracts_consistency_error,
         shared_operator_output_contract_parity_error, Release1OperatorOutputBuilder,
@@ -492,6 +498,29 @@ mod tests {
 
         assert_eq!(verdict.status, "blocked");
         assert_eq!(verdict.blocker_codes, vec!["unsupported_blocker_code"]);
+    }
+
+    #[test]
+    fn run_graph_operator_blocker_codes_are_registry_backed() {
+        let entries = crate::release1_contracts::run_graph_operator_blocker_code_strings()
+            .iter()
+            .map(|code| format!(" {code} "))
+            .collect::<Vec<_>>();
+        let normalized = canonical_release1_operator_blocker_codes(&entries);
+
+        assert_eq!(
+            normalized,
+            crate::release1_contracts::run_graph_operator_blocker_code_strings()
+                .iter()
+                .map(|code| (*code).to_string())
+                .collect::<Vec<_>>()
+        );
+        for code in crate::release1_contracts::run_graph_operator_blocker_code_strings() {
+            assert_eq!(
+                canonical_release1_blocker_code_entries(&json!([code])),
+                Some(vec![(*code).to_string()])
+            );
+        }
     }
 
     #[test]

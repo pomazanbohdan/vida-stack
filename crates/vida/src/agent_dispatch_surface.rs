@@ -6790,6 +6790,8 @@ mod tests {
             .await
             .expect("open store");
         let run_id = "run-host-bridge-complete-missing-preflight";
+        let session_id = format!("host-bridge-submit-result-session-{nanos}");
+        let _session_env = EnvVarGuard::set("VIDA_SESSION_ID", &session_id);
         store
             .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: run_id,
@@ -6808,6 +6810,28 @@ mod tests {
             })
             .await
             .expect("create task");
+        store
+            .acquire_orchestrator_claim(crate::state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "host-bridge-submit-result-owner".to_string(),
+                state_root_id: root.display().to_string(),
+                worktree_environment_id: std::env::current_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                    .display()
+                    .to_string(),
+                orchestrator_session_id: session_id,
+                process_id: Some(std::process::id()),
+                task_id: Some(run_id.to_string()),
+                run_id: Some(run_id.to_string()),
+                lane_id: Some("analyst".to_string()),
+                claim_kind: "write".to_string(),
+                conflict_domain: Some(format!("run:{run_id}")),
+                owned_paths: vec!["crates/vida/src/agent_dispatch_surface.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: crate::state_store::LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("claim run for generated local session");
 
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             run_id,

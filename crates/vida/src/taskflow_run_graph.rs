@@ -844,7 +844,7 @@ fn recovery_json_error_payload(
     build_run_graph_operator_surface_payload(
         surface,
         run_id,
-        vec![fallback_dispatch_issue_code()],
+        vec![error_kind.to_string()],
         next_actions,
         serde_json::json!({
             "error_kind": error_kind,
@@ -890,7 +890,7 @@ fn run_graph_status_error_payload(
     build_run_graph_operator_surface_payload(
         "vida taskflow run-graph status",
         run_id,
-        vec![fallback_dispatch_issue_code()],
+        vec![error_kind.to_string()],
         next_actions,
         serde_json::json!({
             "error_kind": error_kind,
@@ -4190,7 +4190,7 @@ async fn run_taskflow_run_graph_state(
                     Ok(truth) => truth,
                     Err(error) => {
                         return emit_run_graph_status_error(
-                            state_dir,
+                            &state_dir,
                             run_id,
                             "projection_truth_unavailable",
                             &error.to_string(),
@@ -4228,7 +4228,7 @@ async fn run_taskflow_run_graph_state(
                             ExitCode::SUCCESS
                         }
                         Err(error) => emit_run_graph_status_error(
-                            state_dir,
+                            &state_dir,
                             run_id,
                             "payload_render_failed",
                             &error,
@@ -4310,7 +4310,7 @@ async fn run_taskflow_run_graph_state(
                     }
                 } else {
                     emit_run_graph_status_error(
-                        state_dir,
+                        &state_dir,
                         run_id,
                         "run_graph_status_unavailable",
                         &error.to_string(),
@@ -4745,7 +4745,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         }
         [head, subcommand] if head == "recovery" && subcommand == "gate-latest" => {
             let state_dir = proxy_state_dir();
-            match StateStore::open_existing_read_only(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => match store.latest_run_graph_gate_summary().await {
                     Ok(Some(summary)) => {
                         print_surface_header(
@@ -4941,7 +4941,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             if head == "recovery" && subcommand == "checkpoint" && flag == "--json" =>
         {
             let state_dir = proxy_state_dir();
-            match StateStore::open_existing_read_only(state_dir).await {
+            match StateStore::open_existing_read_only(state_dir.clone()).await {
                 Ok(store) => match store.run_graph_checkpoint_summary(run_id).await {
                     Ok(summary) => {
                         println!(
@@ -4956,13 +4956,27 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
                         ExitCode::SUCCESS
                     }
                     Err(error) => {
-                        eprintln!("Failed to read checkpoint summary: {error}");
-                        ExitCode::from(1)
+                        let payload = recovery_json_error_payload(
+                            "vida taskflow recovery checkpoint",
+                            run_id,
+                            &state_dir,
+                            "run_graph_checkpoint_unreadable",
+                            &error.to_string(),
+                        );
+                        crate::print_json_pretty(&payload);
+                        exit_code_for_operator_payload(&payload)
                     }
                 },
                 Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
+                    let payload = recovery_json_error_payload(
+                        "vida taskflow recovery checkpoint",
+                        run_id,
+                        &state_dir,
+                        "state_store_unreadable",
+                        &error.to_string(),
+                    );
+                    crate::print_json_pretty(&payload);
+                    exit_code_for_operator_payload(&payload)
                 }
             }
         }
@@ -9417,7 +9431,14 @@ pub(crate) async fn derive_advanced_run_graph_state(
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "analysis".to_string());
         let direct_writer_entry = compiled_control.first_execution_lane.clone();
-        if existing.next_node.as_deref() == Some(direct_writer_entry.as_str()) {
+        let configured_dev_team_entry = "developer";
+        if existing.next_node.as_deref() == Some(direct_writer_entry.as_str())
+            || existing.next_node.as_deref() == Some(configured_dev_team_entry)
+        {
+            let active_entry = existing
+                .next_node
+                .clone()
+                .unwrap_or_else(|| direct_writer_entry.clone());
             let coach_required =
                 json_bool_field(&implementation, "coach_required").unwrap_or(false);
             let verification = compiled_control.verification.clone();
@@ -9426,7 +9447,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
             return Ok(TaskflowRunGraphAdvancePayload {
                 status: run_graph_state_from_authority_ready_transition(
                     &existing,
-                    direct_writer_entry.clone(),
+                    active_entry.clone(),
                     if coach_required {
                         json_string_field(&implementation, "coach_route_task_class")
                             .filter(|value| !value.is_empty())
@@ -9434,8 +9455,8 @@ pub(crate) async fn derive_advanced_run_graph_state(
                     } else {
                         next_node
                     },
-                    format!("{direct_writer_entry}_lane"),
-                    "writer_active".to_string(),
+                    format!("{active_entry}_lane"),
+                    format!("{active_entry}_active"),
                     policy_gate,
                     "execution_cursor".to_string(),
                     DispatchTargetFormat::Lane,
@@ -9446,7 +9467,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
 
         if existing.next_node.as_deref() != Some(analysis_node.as_str()) {
             return Err(format!(
-                "run-graph advance expected next node `{analysis_node}` or `{direct_writer_entry}` for the seeded implementation run, got `{}`",
+                "run-graph advance expected next node `{analysis_node}`, `{direct_writer_entry}`, or `{configured_dev_team_entry}` for the seeded implementation run, got `{}`",
                 existing.next_node.as_deref().unwrap_or("none")
             ));
         }
@@ -9535,7 +9556,9 @@ pub(crate) async fn derive_advanced_run_graph_state(
     let direct_writer_entry = compiled_control.first_execution_lane.clone();
     if existing.task_class == "implementation"
         && existing.route_task_class == "implementation"
-        && (existing.active_node == writer_node || existing.active_node == direct_writer_entry)
+        && (existing.active_node == writer_node
+            || existing.active_node == direct_writer_entry
+            || existing.active_node == "developer")
     {
         if implementation.is_null() {
             return Err(
@@ -9602,6 +9625,21 @@ pub(crate) async fn derive_advanced_run_graph_state(
         let verification_node = json_string_field(&implementation, "verification_route_task_class")
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "verification".to_string());
+        if existing.next_node.as_deref() == Some("review_ensemble") && existing.status == "ready" {
+            return Ok(TaskflowRunGraphAdvancePayload {
+                status: run_graph_state_from_authority_ready_transition(
+                    &existing,
+                    "review_ensemble".to_string(),
+                    Some(verification_node),
+                    "review_ensemble_lane".to_string(),
+                    "review_ensemble_active".to_string(),
+                    "review_findings".to_string(),
+                    "execution_cursor".to_string(),
+                    DispatchTargetFormat::Direct,
+                    true,
+                ),
+            });
+        }
         if existing.next_node.as_deref() != Some(verification_node.as_str()) {
             return Err(format!(
                 "run-graph advance expected next node `{verification_node}` for the implementation coach handoff, got `{}`",
@@ -12755,7 +12793,7 @@ agent_system:
             .iter()
             .any(|code| code
                 .as_str()
-                .is_some_and(|code| code == fallback_dispatch_issue_code())));
+                .is_some_and(|code| code == "run_graph_status_unavailable")));
         assert_eq!(payload["error_kind"], "run_graph_status_unavailable");
         assert_eq!(
             payload["artifact_refs"]["surface"],
@@ -16661,7 +16699,7 @@ agent_system:
             .expect("seeded writer run should advance");
 
         assert_eq!(payload.status.active_node, "junior");
-        assert_eq!(payload.status.lifecycle_stage, "writer_active");
+        assert_eq!(payload.status.lifecycle_stage, "junior_active");
         assert_eq!(payload.status.next_node.as_deref(), Some("coach"));
         assert_eq!(payload.status.handoff_state, "awaiting_coach");
     }

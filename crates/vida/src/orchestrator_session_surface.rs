@@ -778,7 +778,27 @@ async fn run_transfer(args: OrchestratorSessionTransferArgs) -> ExitCode {
                             }
                         }
                     }
-                    Ok(_) => {}
+                    Ok(_) => match build_runtime_owner_evidence(&state_dir, true) {
+                        Ok(evidence) => {
+                            let payload = serde_json::json!({
+                                "surface": "vida orchestrator-session transfer",
+                                "status": "pass",
+                                "blocker_codes": [],
+                                "next_actions": [],
+                                "session_record_status": "missing_claim_only_session_no_active_claims",
+                                "transferred_session_id": args.session_id,
+                                "transferred_to_session_id": current_session_id,
+                                "transferred_claims": [],
+                                "runtime_owner_evidence": evidence,
+                            });
+                            print_or_plain(&payload, args.json);
+                            return ExitCode::SUCCESS;
+                        }
+                        Err(evidence_error) => {
+                            eprintln!("{evidence_error}");
+                            return ExitCode::from(1);
+                        }
+                    },
                     Err(claim_error) => {
                         eprintln!("{claim_error}");
                         return ExitCode::from(1);
@@ -1028,6 +1048,34 @@ mod tests {
             .expect("claim should exist");
         assert_eq!(claim.orchestrator_session_id, "current-session");
         assert_eq!(claim.status, "renewed");
+
+        restore_session_env(saved);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn transfer_missing_claim_only_session_without_active_claims_is_idempotent() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved = saved_session_env();
+        clear_session_env();
+        unsafe {
+            std::env::set_var("VIDA_ORCHESTRATOR_SESSION_ID", "current-session");
+        }
+
+        let harness = TempStateHarness::new().expect("temp state should initialize");
+        let store = crate::state_store::StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        drop(store);
+
+        let exit = run_transfer(crate::OrchestratorSessionTransferArgs {
+            session_id: "claim-only-expired-session".to_string(),
+            to_current: true,
+            state_dir: Some(harness.path().to_path_buf()),
+            json: true,
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
 
         restore_session_env(saved);
     }

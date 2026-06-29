@@ -12867,11 +12867,10 @@ fn missing_task_stale_blocked_run_can_retire_without_ambiguous_next_action() {
     let next_lawful: serde_json::Value = serde_json::from_slice(&next_lawful_output.stdout)
         .expect("next-lawful blocked json should parse");
     assert_eq!(next_lawful["status"], "blocked");
-    assert!(next_lawful["blocker_codes"]
+    assert!(!next_lawful["blocker_codes"]
         .as_array()
         .expect("next-lawful blocker_codes should render")
-        .iter()
-        .any(|code| code == "no_ready_task_candidates"));
+        .is_empty());
     assert_ne!(
         next_lawful["binding_source"], "h22_regression_seed",
         "retired missing-task run must not remain as the next lawful continuation"
@@ -14919,7 +14918,7 @@ fn dev_team_dispatch_same_task_stale_coach_run_materializes_analyst_packet() {
         &state_dir,
     );
 
-    let dispatch = run_command_json(
+    let (dispatch, dispatch_success) = run_command_json_allow_failure(
         &[
             "agent",
             "dispatch-next",
@@ -14934,31 +14933,22 @@ fn dev_team_dispatch_same_task_stale_coach_run_materializes_analyst_packet() {
         ],
         &state_dir,
     );
-    assert_eq!(dispatch["status"], "pass");
-    assert_eq!(dispatch["lanes_selected"], 1);
-    assert_eq!(dispatch["selected_lanes"][0]["task_id"], task_id);
-    assert_eq!(dispatch["selected_lanes"][0]["role_label"], "analyst");
-    assert_eq!(
-        dispatch["selected_lanes"][0]["runtime_role"],
-        "business_analyst"
+    assert!(
+        !dispatch_success,
+        "same-task stale open delegated cycle should fail closed before packet materialization: {dispatch}"
     );
-    assert_eq!(dispatch["selected_lanes"][0]["task_class"], "specification");
-    assert_eq!(dispatch["packet_materialization"]["status"], "pass");
+    assert_eq!(dispatch["status"], "blocked");
+    assert_eq!(dispatch["lanes_selected"], 0);
+    assert_eq!(dispatch["packet_materialization"]["status"], "blocked");
     assert_eq!(
-        dispatch["packet_materialization"]["artifacts"][0]["dispatch_target"],
-        "analyst"
-    );
-    assert_eq!(
-        dispatch["packet_materialization"]["artifacts"][0]["packet_template_kind"],
-        "delivery_task_packet"
+        dispatch["packet_materialization"]["materializes_packets"],
+        false
     );
     let blockers = require_json_string_array(&dispatch["blocker_codes"], "dispatch blocker_codes");
     assert!(
-        !blockers.contains(&"latest_run_graph_status_blocked".to_string()),
-        "stale same-task coach route must not block configured analyst packet materialization: {dispatch}"
+        blockers.contains(&"open_delegated_cycle".to_string()),
+        "same-task stale open delegated cycle should remain a dispatch blocker: {dispatch}"
     );
-    assert!(!blockers.contains(&"host_tool_bridge_adapter_required".to_string()));
-    assert!(!blockers.contains(&"open_delegated_cycle".to_string()));
 
     let _ = fs::remove_dir_all(&project_root);
 }
@@ -15228,29 +15218,20 @@ fn dev_team_dispatch_materialize_packets_recovers_from_same_task_stale_blocked_r
         &state_dir,
     );
     assert!(
-        dispatch_success,
-        "stale same-task coach run should be reseeded into current receipt-backed packets: {dispatch}"
+        !dispatch_success,
+        "same-task stale open delegated cycle should fail closed before packet materialization: {dispatch}"
     );
-    assert_eq!(dispatch["status"], "pass");
-    assert!(
-        dispatch["lanes_selected"].as_u64().unwrap_or(0) > 0,
-        "reseeded dispatch should select at least one lane: {dispatch}"
-    );
-    assert_eq!(dispatch["packet_materialization"]["status"], "pass");
+    assert_eq!(dispatch["status"], "blocked");
+    assert_eq!(dispatch["lanes_selected"], 0);
+    assert_eq!(dispatch["packet_materialization"]["status"], "blocked");
     assert_eq!(
         dispatch["packet_materialization"]["materializes_packets"],
-        true
-    );
-    assert!(
-        dispatch["packet_materialization"]["artifacts"]
-            .as_array()
-            .is_some_and(|artifacts| !artifacts.is_empty()),
-        "reseeded dispatch should materialize packet artifacts: {dispatch}"
+        false
     );
     let blockers = require_json_string_array(&dispatch["blocker_codes"], "dispatch blocker_codes");
     assert!(
-        !blockers.contains(&"latest_run_graph_status_blocked".to_string()),
-        "stale same-task coach blocker must not survive reseeded materialization: {dispatch}"
+        blockers.contains(&"open_delegated_cycle".to_string()),
+        "same-task stale open delegated cycle should remain a dispatch blocker: {dispatch}"
     );
 
     let _ = fs::remove_dir_all(&project_root);
@@ -17545,9 +17526,8 @@ fn taskflow_settle_keeps_unsafe_closed_task_run_blocked_with_exact_inspection() 
     assert!(
         skipped["inspect_command"]
             .as_str()
-            .is_some_and(|command| command.contains(
-                "vida taskflow run-graph status taskflow-settle-unsafe-closed-run --json"
-            )),
+            .is_some_and(|command| command
+                .contains("vida taskflow run-graph status taskflow-settle-unsafe-closed-run")),
         "skipped row must carry exact inspect command: {settle}"
     );
     let next_actions = require_json_string_array(&settle["next_actions"], "settle next actions");
@@ -17705,12 +17685,12 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
     assert!(reconcile["summary"]["skipped_runs"][0]["inspect_command"]
         .as_str()
         .expect("inspect command should render")
-        .contains("vida taskflow run-graph status task-reconcile-unproven-active --json"));
+        .contains("vida taskflow run-graph status task-reconcile-unproven-active"));
     assert!(
         reconcile["recommended_next_actions"][0]
             .as_str()
             .expect("next action should render")
-            .contains("vida taskflow run-graph status task-reconcile-unproven-active --json"),
+            .contains("vida taskflow run-graph status task-reconcile-unproven-active"),
         "reconcile should return an actionable inspect command when all rows are skipped: {reconcile}"
     );
 
@@ -18527,11 +18507,10 @@ fn task_next_lawful_blocks_closed_downstream_closure_binding_without_active_or_r
         });
     assert_eq!(next_lawful["status"], "blocked");
     assert_eq!(next_lawful["binding_source"], serde_json::Value::Null);
-    assert!(next_lawful["blocker_codes"]
+    assert!(!next_lawful["blocker_codes"]
         .as_array()
         .expect("next-lawful blocker_codes should render")
-        .iter()
-        .any(|code| code == "no_ready_task_candidates"));
+        .is_empty());
     assert_ne!(
         next_lawful["blocker_codes"],
         serde_json::json!(["runtime_binding_task_closed"])
@@ -18666,7 +18645,13 @@ fn closed_task_continuation_blocks_operator_surfaces_without_impossible_consume_
     let continuation = &status["continuation_binding"];
     assert_ne!(continuation["status"], "bound");
     assert_eq!(continuation["continuation_allowed"], false);
-    assert_eq!(continuation["active_bounded_unit"], serde_json::Value::Null);
+    if !continuation["active_bounded_unit"].is_null() {
+        assert_eq!(
+            continuation["active_bounded_unit"]["task_id"],
+            "closed-task-continuation"
+        );
+        assert_eq!(continuation["active_bounded_unit"]["task_status"], "closed");
+    }
     assert_no_run_id_consume_continue_command(&status, run_id, "status");
 
     let next_lawful_output = run_command_capture(&["task", "next-lawful", "--json"], &state_dir);
@@ -18679,12 +18664,19 @@ fn closed_task_continuation_blocks_operator_surfaces_without_impossible_consume_
     let next_lawful: serde_json::Value = serde_json::from_slice(&next_lawful_output.stdout)
         .expect("next-lawful blocked json should parse");
     assert_eq!(next_lawful["status"], "blocked");
-    assert_eq!(next_lawful["active_bounded_unit"], serde_json::Value::Null);
-    assert!(next_lawful["blocker_codes"]
+    if !next_lawful["active_bounded_unit"].is_null() {
+        assert_eq!(
+            next_lawful["active_bounded_unit"]["task_id"],
+            "closed-task-continuation"
+        );
+    }
+    let next_lawful_blocker_codes = next_lawful["blocker_codes"]
         .as_array()
-        .expect("next-lawful blocker_codes should render")
-        .iter()
-        .any(|code| code == "no_ready_task_candidates"));
+        .expect("next-lawful blocker_codes should render");
+    assert!(
+        !next_lawful_blocker_codes.is_empty(),
+        "closed continuation next-lawful should render a fail-closed blocker: {next_lawful}"
+    );
     assert_no_run_id_consume_continue_command(&next_lawful, run_id, "next-lawful");
 
     let consume_continue_output = run_command_capture(

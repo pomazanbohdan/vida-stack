@@ -1325,7 +1325,9 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 println!("{}", consume_final_toon_text(&payload, &snapshot_path));
                             }
 
-                            if payload.closure_admission.admitted {
+                            if matches!(consume_final_mode, ConsumeFinalMode::Preview)
+                                || payload.closure_admission.admitted
+                            {
                                 ExitCode::SUCCESS
                             } else {
                                 ExitCode::from(1)

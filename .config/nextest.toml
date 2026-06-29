@@ -11,3 +11,23 @@ retries = { backoff = "exponential", count = 2, delay = "1s", max-delay = "10s",
 [test-groups]
 db = { max-threads = 2 }
 serial-integration = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(/runtime_dispatch_state::tests::execute_and_record_dispatch_receipt.*/)'
+test-group = 'serial-integration'
+
+[[profile.default.overrides]]
+filter = 'test(/runtime_dispatch_state::tests::record_dispatch_execution_started.*/)'
+test-group = 'serial-integration'
+
+[[profile.default.overrides]]
+filter = 'binary(boot_smoke) & test(/taskflow_run_graph_.*/)'
+test-group = 'serial-integration'
+
+[[profile.default.overrides]]
+filter = 'binary(boot_smoke) & (test(doctor_surface_reports_integrity_checks) | test(agent_init_parallel_role_views_do_not_surface_eagain_lock_failures))'
+test-group = 'serial-integration'
+
+[[profile.default.overrides]]
+filter = 'test(/release_surface::tests::release_install.*/)'
+test-group = 'serial-integration'

@@ -8,6 +8,9 @@ build = "build.rs"
 default = []
 coder = []
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
+
 [[bin]]
 name = "vida"
 path = "src/main.rs"

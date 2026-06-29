@@ -12319,6 +12319,40 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         },
                         None => None,
                     };
+                    let stale_closed_runtime_binding =
+                        latest_run_graph_status.as_ref().and_then(|status| {
+                            tasks.iter().find_map(|task| {
+                                (task.id == status.task_id
+                                    && state_store::StateStore::task_status_is_closed_like(
+                                        &task.status,
+                                    ))
+                                .then(|| {
+                                    state_store::RunGraphContinuationBinding {
+                                        run_id: status.run_id.clone(),
+                                        task_id: status.task_id.clone(),
+                                        status: "bound".to_string(),
+                                        active_bounded_unit: serde_json::json!({
+                                            "kind": "run_graph_task",
+                                            "task_id": status.task_id,
+                                            "run_id": status.run_id,
+                                            "active_node": status.active_node,
+                                            "task_status": task.status,
+                                        }),
+                                        binding_source: "latest_run_graph_status_closed_task"
+                                            .to_string(),
+                                        why_this_unit: format!(
+                                            "Latest runtime state points at closed task `{}`.",
+                                            status.task_id
+                                        ),
+                                        primary_path: "diagnosis_path".to_string(),
+                                        sequential_vs_parallel_posture:
+                                            "unknown_until_run_graph_blocker_resolved".to_string(),
+                                        request_text: None,
+                                        recorded_at: "synthetic-read-only".to_string(),
+                                    }
+                                })
+                            })
+                        });
                     let runtime_binding = match select_task_next_lawful_binding(
                         &tasks,
                         explicit_binding.as_ref(),
@@ -12407,6 +12441,15 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ready_task_candidates,
                         command.strategy.as_deref(),
                     );
+                    let scoped_runtime_binding = if scoped_runtime_binding.is_none()
+                        && ready_task_candidates.is_empty()
+                        && crate::continuation_binding_summary::taskflow_leaf_active_tasks(&tasks)
+                            .is_empty()
+                    {
+                        stale_closed_runtime_binding.as_ref()
+                    } else {
+                        scoped_runtime_binding
+                    };
                     let runtime_recovery = match scoped_runtime_binding {
                         Some(binding) => {
                             store.run_graph_recovery_summary(&binding.run_id).await.ok()

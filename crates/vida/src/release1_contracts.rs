@@ -1725,10 +1725,27 @@ const EXTENDED_BLOCKER_CODE_STRINGS: &[&str] = &[
     "unsupported_pricing_import_option",
 ];
 
+pub(crate) const RUN_GRAPH_OPERATOR_BLOCKER_CODE_STRINGS: &[&str] = &[
+    "missing_run_graph_status",
+    "run_graph_checkpoint_unreadable",
+    "run_graph_recovery_unreadable",
+    "run_graph_status_unavailable",
+];
+
+pub(crate) fn run_graph_operator_blocker_code_strings() -> &'static [&'static str] {
+    RUN_GRAPH_OPERATOR_BLOCKER_CODE_STRINGS
+}
+
 pub(crate) fn canonical_blocker_code_str(value: &str) -> Option<&'static str> {
     let trimmed = value.trim();
     taskflow_contracts::canonical_blocker_code_str(trimmed)
         .or_else(|| BlockerCode::from_str(trimmed).map(BlockerCode::as_str))
+        .or_else(|| {
+            RUN_GRAPH_OPERATOR_BLOCKER_CODE_STRINGS
+                .iter()
+                .copied()
+                .find(|code| *code == trimmed)
+        })
         .or_else(|| {
             EXTENDED_BLOCKER_CODE_STRINGS
                 .iter()

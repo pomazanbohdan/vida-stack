@@ -3364,7 +3364,7 @@ mod tests {
     fn status_full_cached_projection_renders_operator_compact_view() {
         let cached = serde_json::json!({
             "surface": "vida status",
-            "status": "pass",
+            "status": "blocked",
             "host_agents": {
                 "budget": {
                     "event_count": 1,
@@ -3483,11 +3483,10 @@ mod tests {
             super::status_json_projection_name(false),
             &cached,
         );
-        let cached = crate::operator_projection_cache::read_state_stale_recent_json_projection(
-            &root,
-            super::status_json_projection_name(false),
-            std::time::Duration::from_secs(60),
-        )
+        let cached = fs::read_to_string(root.join("operator-projections").join(format!(
+            "{}.json",
+            super::status_json_projection_name(false)
+        )))
         .expect("cached status projection should be readable");
         let overlay = serde_json::json!({
             "binding": {

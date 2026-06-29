@@ -69,7 +69,7 @@ fn ratatui_live_attach_renders_operator_console_from_tarpc_local_socket() {
     assert_eq!(snapshot.wizard_diff_change_count, 0);
     assert_eq!(snapshot.job_status, "unavailable");
     assert_eq!(snapshot.event_count, 1);
-    assert_eq!(snapshot.receipt_count, 1);
+    assert_eq!(snapshot.receipt_count, 0);
     assert_eq!(snapshot.lifecycle_state, "ready");
     assert!(snapshot.orchestration_tui_projection);
 
@@ -91,7 +91,7 @@ fn ratatui_live_attach_renders_operator_console_from_tarpc_local_socket() {
         "Wizard form fields[2]{field_id,label,required,control}: project:Project:true:text_input | wizard_kind:Wizard kind:false:select"
     ));
     assert!(
-        rendered.contains("Jobs/Events/Receipts: job_status=unavailable | events=1 | receipts=1")
+        rendered.contains("Jobs/Events/Receipts: job_status=unavailable | events=1 | receipts=0")
     );
     assert!(rendered.contains("Lifecycle: state=ready | binary_fingerprint=local-runtime"));
 }

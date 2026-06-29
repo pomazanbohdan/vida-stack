@@ -202,7 +202,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .list_tasks(None, true)
         .await
         .map_err(|error| format!("Failed to read tasks for runtime bundle: {error}"))?;
-    let (latest_run_graph_task_closed, mut latest_run_graph_task_missing) =
+    let (mut latest_run_graph_task_closed, mut latest_run_graph_task_missing) =
         match effective_latest_run_graph_status {
             Some(status) => {
                 let verdict =
@@ -220,6 +220,15 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             }
             None => (false, false),
         };
+    if let Some(status) = effective_latest_run_graph_status {
+        if all_tasks.iter().any(|task| {
+            task.id == status.task_id
+                && crate::state_store::StateStore::task_status_is_closed_like(&task.status)
+        }) {
+            latest_run_graph_task_closed = true;
+            latest_run_graph_task_missing = false;
+        }
+    }
     let terminal_task_active_status_is_current = latest_terminal_task_active_run_graph_status
         .as_ref()
         .is_some_and(|terminal| {

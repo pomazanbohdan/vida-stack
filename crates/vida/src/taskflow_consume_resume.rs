@@ -82,6 +82,9 @@ async fn fail_fast_state_store_open(
     state_root: std::path::PathBuf,
     label: &str,
 ) -> Result<super::StateStore, String> {
+    if authoritative_datastore_lock_is_held(&state_root)? {
+        return Err(state_store_locked_error(label));
+    }
     match tokio::time::timeout(CONSUME_RESUME_LOCK_TIMEOUT, async {
         loop {
             match super::StateStore::open_existing(state_root.clone()).await {
@@ -2728,7 +2731,7 @@ async fn emit_runtime_consumption_resume_json(
     });
     let runtime_dispatch_receipt_blocker_code =
         runtime_consumption_resume_blocker_code(store, &payload_json, blocker_run_id).await?;
-    let projection_truth = match run_graph_status.as_ref() {
+    let mut projection_truth = match run_graph_status.as_ref() {
         Ok(status) => Some(
             crate::taskflow_run_graph::run_graph_projection_truth(store, status)
                 .await
@@ -2741,6 +2744,11 @@ async fn emit_runtime_consumption_resume_json(
         ),
         Err(_) => None,
     };
+    if let Some(projection_truth) = projection_truth.as_mut() {
+        if let Some(next_action) = projection_truth.next_lawful_operator_action.as_mut() {
+            *next_action = operator_output::command_text::human_command(next_action);
+        }
+    }
     let mut blocker_codes = if ready_handoff_supersedes_stale_blockers {
         Vec::new()
     } else {
@@ -8353,7 +8361,6 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 );
                 return ExitCode::from(1);
             }
-            eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
         }
     }
@@ -8481,7 +8488,11 @@ pub(crate) async fn run_taskflow_consume_advance_command(
     }
 
     let Some((source_dispatch_packet_path, dispatch_receipt, snapshot_path)) = last_result else {
-        eprintln!("No advance step was executed");
+        emit_consume_continue_resume_error(
+            "No advance step was executed",
+            "vida taskflow consume advance",
+            as_json,
+        );
         return ExitCode::from(1);
     };
 
@@ -8565,6 +8576,17 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn wait_for_consume_resume_state_unlock(state_dir: &std::path::Path) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            match super::authoritative_datastore_lock_is_held(state_dir) {
+                Ok(false) => return,
+                Ok(true) => std::thread::sleep(Duration::from_millis(25)),
+                Err(_) => return,
+            }
+        }
     }
 
     struct TestEnvVarGuard {
@@ -13326,6 +13348,7 @@ agent_system:
                 .await
                 .expect("persist executing specification receipt");
             drop(store);
+            wait_for_consume_resume_state_unlock(&state_dir);
 
             let exit = super::run_taskflow_consume_resume_command(
                 state_dir.clone(),
@@ -13733,6 +13756,7 @@ agent_system:
                         .await
                         .expect("acquire current session run claim");
                     drop(store);
+                    wait_for_consume_resume_state_unlock(&state_dir);
 
                     let exit = super::run_taskflow_consume_resume_command(
                         state_dir.clone(),

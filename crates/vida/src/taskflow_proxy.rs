@@ -1680,9 +1680,7 @@ fn apply_scheduler_continuation_dispatch_gate(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect::<std::collections::BTreeSet<_>>();
-    if blocked_task_ids.is_empty() {
-        plan.selected_parallel_tasks.clear();
-    } else {
+    if !blocked_task_ids.is_empty() {
         plan.selected_parallel_tasks
             .retain(|task| !blocked_task_ids.contains(task.id.trim()));
     }
@@ -3195,10 +3193,31 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         .list_tasks(None, true)
         .await
         .map_err(|error| format!("Failed to list tasks for continuation dispatch gate: {error}"))?;
-    let global_latest_run_graph = store
+    let mut global_latest_run_graph = store
         .latest_run_graph_status_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest run-graph status: {error}"))?;
+    if global_latest_run_graph.is_none() && scope_task_id.is_some() {
+        global_latest_run_graph = store.latest_run_graph_status().await.map_err(|error| {
+            format!("Failed to read scoped fallback latest run-graph status: {error}")
+        })?;
+    }
+    if global_latest_run_graph.is_none() {
+        if let Some(scope_task_id) = scope_task_id {
+            global_latest_run_graph = match store
+                .run_graph_status_from_task_rows(scope_task_id, &[])
+                .await
+            {
+                Ok(status) => Some(status),
+                Err(crate::state_store::StateStoreError::MissingTask { .. }) => None,
+                Err(error) => {
+                    return Err(format!(
+                        "Failed to read explicit scoped run-graph status: {error}"
+                    ));
+                }
+            };
+        }
+    }
     if global_latest_run_graph.is_none() {
         return Ok(None);
     }
@@ -3221,18 +3240,50 @@ pub(crate) async fn build_taskflow_continuation_dispatch_gate_from_store(
         &all_tasks,
     )
     .await?;
-    if scope_task_id.is_some() {
+    if let Some(scope_task_id) = scope_task_id {
         if let Some(status) = latest_run_graph.as_ref() {
-            let latest_run_matches_scoped_ready_task = ready_tasks
-                .iter()
-                .any(|task| task.id == status.task_id || task.id == status.run_id);
+            let latest_run_matches_explicit_scope =
+                status.task_id == scope_task_id || status.run_id == scope_task_id;
+            let latest_run_matches_scoped_ready_task = latest_run_matches_explicit_scope
+                || ready_tasks
+                    .iter()
+                    .any(|task| task.id == status.task_id || task.id == status.run_id);
             if !latest_run_matches_scoped_ready_task {
-                return Ok(None);
+                latest_run_graph = match store
+                    .run_graph_status_from_task_rows(scope_task_id, &[])
+                    .await
+                {
+                    Ok(scoped_status)
+                        if scoped_status.task_id == scope_task_id
+                            || scoped_status.run_id == scope_task_id =>
+                    {
+                        Some(scoped_status)
+                    }
+                    Ok(_) | Err(crate::state_store::StateStoreError::MissingTask { .. }) => {
+                        return Ok(None);
+                    }
+                    Err(error) => {
+                        return Err(format!(
+                            "Failed to read explicit scoped run-graph status: {error}"
+                        ));
+                    }
+                };
             }
-            if latest_run_matches_scoped_ready_task
+            let latest_run_matches_explicit_scope =
+                latest_run_graph.as_ref().is_some_and(|status| {
+                    status.task_id == scope_task_id || status.run_id == scope_task_id
+                });
+            if !latest_run_matches_explicit_scope
+                && latest_run_graph.as_ref().is_some_and(|status| {
+                    ready_tasks
+                        .iter()
+                        .any(|task| task.id == status.task_id || task.id == status.run_id)
+                        || status.task_id == scope_task_id
+                        || status.run_id == scope_task_id
+                })
                 && crate::taskflow_run_graph::run_graph_state_has_configured_dev_team_route_mismatch(
                     store,
-                    status,
+                    latest_run_graph.as_ref().expect("latest run graph is scoped"),
                 )
                 .await?
             {

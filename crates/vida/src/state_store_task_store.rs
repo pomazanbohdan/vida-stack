@@ -47,9 +47,9 @@ pub(crate) struct ClosedTaskRunReconciliationSkipped {
     pub(crate) inspect_command: String,
 }
 
-fn run_graph_status_json_command(run_id: &str) -> String {
+fn run_graph_status_command(run_id: &str) -> String {
     format!(
-        "vida taskflow run-graph status {} --json",
+        "vida taskflow run-graph status {}",
         crate::shell_quote(run_id.trim())
     )
 }
@@ -1647,7 +1647,7 @@ impl StateStore {
                         Err(StateStoreError::MissingTask { .. }) => {
                             skipped_count += 1;
                             skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                                inspect_command: run_graph_status_json_command(&row.run_id),
+                                inspect_command: run_graph_status_command(&row.run_id),
                                 run_id: row.run_id,
                                 task_id: row.task_id,
                                 status: row.status,
@@ -1682,7 +1682,7 @@ impl StateStore {
                     }
                     skipped_count += 1;
                     skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                        inspect_command: run_graph_status_json_command(&row.run_id),
+                        inspect_command: run_graph_status_command(&row.run_id),
                         run_id: row.run_id,
                         task_id: row.task_id,
                         status: row.status,
@@ -1694,7 +1694,7 @@ impl StateStore {
                 }
                 skipped_count += 1;
                 skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                    inspect_command: run_graph_status_json_command(&row.run_id),
+                    inspect_command: run_graph_status_command(&row.run_id),
                     run_id: row.run_id,
                     task_id: row.task_id,
                     status: row.status,
@@ -1707,7 +1707,7 @@ impl StateStore {
                 Err(StateStoreError::MissingTask { .. }) => {
                     skipped_count += 1;
                     skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                        inspect_command: run_graph_status_json_command(&row.run_id),
+                        inspect_command: run_graph_status_command(&row.run_id),
                         run_id: row.run_id,
                         task_id: row.task_id,
                         status: row.status,
@@ -1720,7 +1720,7 @@ impl StateStore {
             if !Self::task_status_is_closed_like(&task.status) {
                 skipped_count += 1;
                 skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                    inspect_command: run_graph_status_json_command(&row.run_id),
+                    inspect_command: run_graph_status_command(&row.run_id),
                     run_id: row.run_id,
                     task_id: row.task_id,
                     status: row.status,
@@ -1735,7 +1735,7 @@ impl StateStore {
             {
                 skipped_count += 1;
                 skipped_runs.push(ClosedTaskRunReconciliationSkipped {
-                    inspect_command: run_graph_status_json_command(&row.run_id),
+                    inspect_command: run_graph_status_command(&row.run_id),
                     run_id: row.run_id,
                     task_id: row.task_id,
                     status: row.status,
