@@ -3211,6 +3211,18 @@ fn read_supplied_host_bridge_completion_result(
                 canonical_path.display()
             ));
         }
+        if let (Some(result_completion_receipt_id), Some(cli_completion_receipt_id)) =
+            (result_completion_receipt_id, cli_completion_receipt_id)
+        {
+            if result_completion_receipt_id != cli_completion_receipt_id {
+                return Err(format!(
+                    "Host bridge result file `{}` has completion_receipt_id `{}` but CLI receipt id is `{}`.",
+                    canonical_path.display(),
+                    result_completion_receipt_id,
+                    cli_completion_receipt_id
+                ));
+            }
+        }
         return Ok(Some(result));
     }
 
@@ -12777,6 +12789,8 @@ mod tests {
         let expected_result_path = root.join("host-tool-bridge/results/request-owned.json");
         let staged_result_path = root.join("host-tool-bridge/staged-results/staged.json");
         let forged_result_path = root.join("host-tool-bridge/staged-results/forged.json");
+        let stale_receipt_result_path =
+            root.join("host-tool-bridge/staged-results/stale-receipt.json");
         let unbacked_result_path = root.join("host-tool-bridge/staged-results/unbacked.json");
         let missing_identity_result_path =
             root.join("host-tool-bridge/staged-results/missing-identity.json");
@@ -12784,6 +12798,7 @@ mod tests {
             &request_path,
             &staged_result_path,
             &forged_result_path,
+            &stale_receipt_result_path,
             &unbacked_result_path,
             &missing_identity_result_path,
         ] {
@@ -12852,11 +12867,34 @@ mod tests {
                     "receipt_backed": true
                 },
                 "decision": "pass",
-                "verdict": "pass"
+                "verdict": "pass",
+                "allowed_next_node": "closure"
             })
             .to_string(),
         )
         .expect("write forged result");
+        std::fs::write(
+            &stale_receipt_result_path,
+            serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "pass",
+                "execution_state": "executed",
+                "request_id": "result-binding",
+                "run_id": "run-result-binding",
+                "dispatch_target": "verification",
+                "completion_receipt_id": "stale-completion-result-binding",
+                "source_dispatch_packet_path": root.join("runtime-consumption/dispatch-packets/run-result-binding.json").display().to_string(),
+                "execution_evidence": {
+                    "receipt_backed": true
+                },
+                "decision": "pass",
+                "verdict": "pass",
+                "allowed_next_node": "closure"
+            })
+            .to_string(),
+        )
+        .expect("write stale receipt result");
         std::fs::write(
             &unbacked_result_path,
             serde_json::json!({
@@ -12938,6 +12976,21 @@ mod tests {
         assert!(
             error.contains("missing completion_receipt_id and no CLI receipt id was supplied"),
             "unexpected error: {error}"
+        );
+
+        let stale_receipt_result_path_string = stale_receipt_result_path.display().to_string();
+        let err = read_supplied_host_bridge_completion_result(
+            &root,
+            Some(&stale_receipt_result_path_string),
+            Some(&request_path_string),
+            Some("completion-result-binding"),
+        )
+        .expect_err("stale staged result receipt id must be rejected");
+        assert!(
+            err.contains(
+                "has completion_receipt_id `stale-completion-result-binding` but CLI receipt id is `completion-result-binding`"
+            ),
+            "unexpected error: {err}"
         );
 
         let result = read_supplied_host_bridge_completion_result(
