@@ -3190,6 +3190,24 @@ fn read_supplied_host_bridge_completion_result(
                 }
             }
         }
+        if !host_bridge_completed_result_has_preview_refresh_evidence(&request, &result) {
+            return Err(format!(
+                "Host bridge result file `{}` is not a receipt-backed host_tool_bridge_result bound to the supplied request.",
+                canonical_path.display()
+            ));
+        }
+        if result
+            .get("completion_receipt_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            return Err(format!(
+                "Host bridge result file `{}` is missing completion_receipt_id required by receipt-backed completion.",
+                canonical_path.display()
+            ));
+        }
         return Ok(Some(result));
     }
 
@@ -12755,12 +12773,14 @@ mod tests {
         let expected_result_path = root.join("host-tool-bridge/results/request-owned.json");
         let staged_result_path = root.join("host-tool-bridge/staged-results/staged.json");
         let forged_result_path = root.join("host-tool-bridge/staged-results/forged.json");
+        let unbacked_result_path = root.join("host-tool-bridge/staged-results/unbacked.json");
         let missing_identity_result_path =
             root.join("host-tool-bridge/staged-results/missing-identity.json");
         for path in [
             &request_path,
             &staged_result_path,
             &forged_result_path,
+            &unbacked_result_path,
             &missing_identity_result_path,
         ] {
             std::fs::create_dir_all(path.parent().expect("host bridge test path parent"))
@@ -12794,7 +12814,16 @@ mod tests {
             serde_json::json!({
                 "request_id": "result-binding",
                 "run_id": "run-result-binding",
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "pass",
+                "execution_state": "executed",
                 "dispatch_target": "verification",
+                "completion_receipt_id": "completion-result-binding",
+                "source_dispatch_packet_path": root.join("runtime-consumption/dispatch-packets/run-result-binding.json").display().to_string(),
+                "execution_evidence": {
+                    "receipt_backed": true
+                },
                 "decision": "pass",
                 "verdict": "pass",
                 "blocker_codes": [],
@@ -12807,15 +12836,41 @@ mod tests {
         std::fs::write(
             &forged_result_path,
             serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "pass",
+                "execution_state": "executed",
                 "request_id": "result-binding",
                 "run_id": "wrong-run",
                 "dispatch_target": "verification",
+                "completion_receipt_id": "completion-result-binding",
+                "source_dispatch_packet_path": root.join("runtime-consumption/dispatch-packets/run-result-binding.json").display().to_string(),
+                "execution_evidence": {
+                    "receipt_backed": true
+                },
                 "decision": "pass",
                 "verdict": "pass"
             })
             .to_string(),
         )
         .expect("write forged result");
+        std::fs::write(
+            &unbacked_result_path,
+            serde_json::json!({
+                "request_id": "result-binding",
+                "run_id": "run-result-binding",
+                "dispatch_target": "verification",
+                "status": "pass",
+                "execution_state": "executed",
+                "decision": "pass",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "rework_target": "none",
+                "allowed_next_node": "closure"
+            })
+            .to_string(),
+        )
+        .expect("write unbacked result");
         std::fs::write(
             &missing_identity_result_path,
             serde_json::json!({
@@ -12851,6 +12906,18 @@ mod tests {
         .expect_err("forged identity must be rejected");
         assert!(
             error.contains("has run_id `wrong-run` but request has `run-result-binding`"),
+            "unexpected error: {error}"
+        );
+
+        let unbacked_result_path_string = unbacked_result_path.display().to_string();
+        let error = read_supplied_host_bridge_completion_result(
+            &root,
+            Some(&unbacked_result_path_string),
+            Some(&request_path_string),
+        )
+        .expect_err("unbacked staged result must be rejected");
+        assert!(
+            error.contains("is not a receipt-backed host_tool_bridge_result"),
             "unexpected error: {error}"
         );
 
