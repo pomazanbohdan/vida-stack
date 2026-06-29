@@ -11,12 +11,14 @@ use serde::Serialize;
 use taskflow_host_bridge::{
     decide_host_bridge_completion_authority, host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
+    host_bridge_completed_result_execution_state_is_admissible,
     host_bridge_completed_result_has_preview_refresh_evidence,
     host_bridge_completed_result_status_is_admissible,
     host_bridge_completion_authorized_request_artifacts, host_bridge_completion_retryable_blocker,
     host_bridge_completion_verdict, host_bridge_request_artifacts_are_bare_completion_candidates,
     host_bridge_request_requires_implementation_artifacts,
-    host_bridge_request_status_after_completion, host_bridge_result_verdict_fields_for_gate,
+    host_bridge_request_status_after_completion, host_bridge_result_verdict_contract_blockers,
+    host_bridge_result_verdict_fields_for_gate,
     materialize_host_bridge_completion_evidence as materialize_shared_host_bridge_completion_evidence,
     normalize_host_bridge_provenance_for_completion,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
@@ -3191,12 +3193,7 @@ fn read_supplied_host_bridge_completion_result(
                 }
             }
         }
-        if !host_bridge_completed_result_has_preview_refresh_evidence(&request, &result) {
-            return Err(format!(
-                "Host bridge result file `{}` is not a receipt-backed host_tool_bridge_result bound to the supplied request.",
-                canonical_path.display()
-            ));
-        }
+        validate_supplied_host_bridge_result_contract(&request, &result, &canonical_path)?;
         let result_completion_receipt_id = result
             .get("completion_receipt_id")
             .and_then(serde_json::Value::as_str)
@@ -3227,6 +3224,94 @@ fn read_supplied_host_bridge_completion_result(
     }
 
     read_host_bridge_json_artifact_at_path(&canonical_path).map(Some)
+}
+
+fn validate_supplied_host_bridge_result_contract(
+    request: &serde_json::Value,
+    result: &serde_json::Value,
+    result_path: &Path,
+) -> Result<(), String> {
+    let typed_request = HostBridgeRequest::from_value(request.clone()).map_err(|error| {
+        format!("Host bridge request cannot be parsed for supplied result validation: {error}.")
+    })?;
+    if result
+        .get("artifact_kind")
+        .and_then(serde_json::Value::as_str)
+        != Some("host_tool_bridge_result")
+    {
+        return Err(format!(
+            "Host bridge result file `{}` artifact_kind is not host_tool_bridge_result.",
+            result_path.display()
+        ));
+    }
+    if !result
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(host_bridge_completed_result_status_is_admissible)
+    {
+        return Err(format!(
+            "Host bridge result file `{}` status is not pass or blocked.",
+            result_path.display()
+        ));
+    }
+    if !result
+        .get("execution_state")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(host_bridge_completed_result_execution_state_is_admissible)
+    {
+        return Err(format!(
+            "Host bridge result file `{}` execution_state is not executed or blocked.",
+            result_path.display()
+        ));
+    }
+    if result
+        .pointer("/execution_evidence/receipt_backed")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return Err(format!(
+            "Host bridge result file `{}` execution_evidence is not receipt_backed=true.",
+            result_path.display()
+        ));
+    }
+    let request_packet_path = request
+        .get("packet_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Host bridge request for result file `{}` is missing packet_path required by request binding.",
+                result_path.display()
+            )
+        })?;
+    let result_packet_path = result
+        .get("source_dispatch_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Host bridge result file `{}` is missing source_dispatch_packet_path required by request binding.",
+                result_path.display()
+            )
+        })?;
+    if result_packet_path != request_packet_path {
+        return Err(format!(
+            "Host bridge result file `{}` source_dispatch_packet_path does not match the supplied request packet_path.",
+            result_path.display()
+        ));
+    }
+    let verdict_blockers =
+        host_bridge_result_verdict_contract_blockers(result, &typed_request.required_result_fields);
+    if !verdict_blockers.is_empty() {
+        return Err(format!(
+            "Host bridge result file `{}` verdict contract failed: {}.",
+            result_path.display(),
+            verdict_blockers.join(",")
+        ));
+    }
+    Ok(())
 }
 
 fn supplied_host_bridge_completion_result_blocker_codes(
@@ -12791,6 +12876,10 @@ mod tests {
         let forged_result_path = root.join("host-tool-bridge/staged-results/forged.json");
         let stale_receipt_result_path =
             root.join("host-tool-bridge/staged-results/stale-receipt.json");
+        let stale_packet_result_path =
+            root.join("host-tool-bridge/staged-results/stale-packet.json");
+        let missing_packet_result_path =
+            root.join("host-tool-bridge/staged-results/missing-packet.json");
         let unbacked_result_path = root.join("host-tool-bridge/staged-results/unbacked.json");
         let missing_identity_result_path =
             root.join("host-tool-bridge/staged-results/missing-identity.json");
@@ -12799,6 +12888,8 @@ mod tests {
             &staged_result_path,
             &forged_result_path,
             &stale_receipt_result_path,
+            &stale_packet_result_path,
+            &missing_packet_result_path,
             &unbacked_result_path,
             &missing_identity_result_path,
         ] {
@@ -12842,10 +12933,10 @@ mod tests {
                 "execution_evidence": {
                     "receipt_backed": true
                 },
-                "decision": "pass",
+                "decision": "approve",
                 "verdict": "pass",
                 "blocker_codes": [],
-                "rework_target": "none",
+                "rework_target": null,
                 "allowed_next_node": "closure"
             })
             .to_string(),
@@ -12866,8 +12957,10 @@ mod tests {
                 "execution_evidence": {
                     "receipt_backed": true
                 },
-                "decision": "pass",
+                "decision": "approve",
                 "verdict": "pass",
+                "blocker_codes": [],
+                "rework_target": null,
                 "allowed_next_node": "closure"
             })
             .to_string(),
@@ -12888,25 +12981,76 @@ mod tests {
                 "execution_evidence": {
                     "receipt_backed": true
                 },
-                "decision": "pass",
+                "decision": "approve",
                 "verdict": "pass",
+                "blocker_codes": [],
+                "rework_target": null,
                 "allowed_next_node": "closure"
             })
             .to_string(),
         )
         .expect("write stale receipt result");
         std::fs::write(
+            &stale_packet_result_path,
+            serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "pass",
+                "execution_state": "executed",
+                "request_id": "result-binding",
+                "run_id": "run-result-binding",
+                "dispatch_target": "verification",
+                "completion_receipt_id": "completion-result-binding",
+                "source_dispatch_packet_path": root.join("runtime-consumption/dispatch-packets/stale-run.json").display().to_string(),
+                "execution_evidence": {
+                    "receipt_backed": true
+                },
+                "decision": "approve",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "rework_target": null,
+                "allowed_next_node": "closure"
+            })
+            .to_string(),
+        )
+        .expect("write stale packet result");
+        std::fs::write(
+            &missing_packet_result_path,
+            serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "pass",
+                "execution_state": "executed",
+                "request_id": "result-binding",
+                "run_id": "run-result-binding",
+                "dispatch_target": "verification",
+                "completion_receipt_id": "completion-result-binding",
+                "execution_evidence": {
+                    "receipt_backed": true
+                },
+                "decision": "approve",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "rework_target": null,
+                "allowed_next_node": "closure"
+            })
+            .to_string(),
+        )
+        .expect("write missing packet result");
+        std::fs::write(
             &unbacked_result_path,
             serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
                 "request_id": "result-binding",
                 "run_id": "run-result-binding",
                 "dispatch_target": "verification",
                 "status": "pass",
                 "execution_state": "executed",
-                "decision": "pass",
+                "source_dispatch_packet_path": root.join("runtime-consumption/dispatch-packets/run-result-binding.json").display().to_string(),
+                "decision": "approve",
                 "verdict": "pass",
                 "blocker_codes": [],
-                "rework_target": "none",
+                "rework_target": null,
                 "allowed_next_node": "closure"
             })
             .to_string(),
@@ -12961,7 +13105,7 @@ mod tests {
         )
         .expect_err("unbacked staged result must be rejected");
         assert!(
-            error.contains("is not a receipt-backed host_tool_bridge_result"),
+            error.contains("execution_evidence is not receipt_backed=true"),
             "unexpected error: {error}"
         );
 
@@ -12990,6 +13134,34 @@ mod tests {
             err.contains(
                 "has completion_receipt_id `stale-completion-result-binding` but CLI receipt id is `completion-result-binding`"
             ),
+            "unexpected error: {err}"
+        );
+
+        let stale_packet_result_path_string = stale_packet_result_path.display().to_string();
+        let err = read_supplied_host_bridge_completion_result(
+            &root,
+            Some(&stale_packet_result_path_string),
+            Some(&request_path_string),
+            Some("completion-result-binding"),
+        )
+        .expect_err("stale staged result packet path must be rejected");
+        assert!(
+            err.contains(
+                "source_dispatch_packet_path does not match the supplied request packet_path"
+            ),
+            "unexpected error: {err}"
+        );
+
+        let missing_packet_result_path_string = missing_packet_result_path.display().to_string();
+        let err = read_supplied_host_bridge_completion_result(
+            &root,
+            Some(&missing_packet_result_path_string),
+            Some(&request_path_string),
+            Some("completion-result-binding"),
+        )
+        .expect_err("missing staged result packet path must be rejected");
+        assert!(
+            err.contains("is missing source_dispatch_packet_path required by request binding"),
             "unexpected error: {err}"
         );
 
