@@ -165,6 +165,22 @@ pub(crate) fn dispatch_contract_execution_lane_sequence(
         .collect()
 }
 
+pub(crate) fn dispatch_contract_allowed_next_lane_sequence(
+    dispatch_contract: &serde_json::Value,
+) -> Vec<String> {
+    let explicit_lane_sequence = dispatch_contract["lane_sequence"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(canonical_dispatch_target_name)
+        .collect::<Vec<_>>();
+    if !explicit_lane_sequence.is_empty() {
+        return explicit_lane_sequence;
+    }
+    dispatch_contract_execution_lane_sequence(dispatch_contract)
+}
+
 pub(crate) fn dispatch_target_for_runtime_role(
     execution_plan: &serde_json::Value,
     runtime_role: &str,
@@ -710,8 +726,8 @@ pub(crate) fn route_explain_blocker_codes(
 #[cfg(test)]
 mod tests {
     use super::{
-        dispatch_contract_execution_lane_sequence, dispatch_contract_lane,
-        dispatch_contract_lane_activation, dispatch_contract_lane_sequence,
+        dispatch_contract_allowed_next_lane_sequence, dispatch_contract_execution_lane_sequence,
+        dispatch_contract_lane, dispatch_contract_lane_activation, dispatch_contract_lane_sequence,
         explicit_executor_backend_from_route, fallback_executor_backend_from_route,
         fanout_executor_backends_from_route, route_explain_blocker_codes, route_explain_payload,
         route_explain_status, selected_backend_from_execution_plan_route,
@@ -1445,6 +1461,30 @@ mod tests {
                 "verification",
                 "execution_preparation"
             ]
+        );
+    }
+
+    #[test]
+    fn dispatch_contract_allowed_next_sequence_prefers_full_lane_order() {
+        let full_contract = serde_json::json!({
+            "lane_sequence": ["analyst", "designer", "autotester"],
+            "execution_lane_sequence": ["analyst", "autotester"]
+        });
+        assert_eq!(
+            dispatch_contract_allowed_next_lane_sequence(&full_contract),
+            vec![
+                "analyst".to_string(),
+                "designer".to_string(),
+                "autotester".to_string()
+            ]
+        );
+
+        let execution_only_contract = serde_json::json!({
+            "execution_lane_sequence": ["analyst", "autotester"]
+        });
+        assert_eq!(
+            dispatch_contract_allowed_next_lane_sequence(&execution_only_contract),
+            vec!["analyst".to_string(), "autotester".to_string()]
         );
     }
 

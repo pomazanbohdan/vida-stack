@@ -341,8 +341,8 @@ use task_cli_render::{
 use taskflow_layer4::print_taskflow_proxy_help;
 use taskflow_proxy::run_taskflow_proxy;
 pub(crate) use taskflow_routing::{
-    dispatch_contract_execution_lane_sequence, dispatch_contract_lane,
-    dispatch_contract_lane_activation, dispatch_contract_lane_sequence,
+    dispatch_contract_allowed_next_lane_sequence, dispatch_contract_execution_lane_sequence,
+    dispatch_contract_lane, dispatch_contract_lane_activation, dispatch_contract_lane_sequence,
     dispatch_target_for_runtime_role, selected_backend_from_execution_plan_route,
 };
 use taskflow_runtime_bundle::{

@@ -6801,6 +6801,8 @@ pub(crate) async fn derive_downstream_dispatch_preview(
     let dispatch_contract = &role_selection.execution_plan["development_flow"]["dispatch_contract"];
     let lane_sequence = dispatch_contract_lane_sequence(dispatch_contract);
     let execution_lane_sequence = dispatch_contract_execution_lane_sequence(dispatch_contract);
+    let allowed_next_lane_sequence =
+        dispatch_contract_allowed_next_lane_sequence(dispatch_contract);
     if receipt.dispatch_kind == "agent_lane"
         && matches!(receipt.dispatch_status.as_str(), "executed" | "pass")
         && (dispatch_receipt_has_execution_evidence(receipt)
@@ -6826,7 +6828,7 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             }
             if let Some(target_resolution) = lawful_explicit_downstream_dispatch_target(
                 &role_selection.execution_plan,
-                &execution_lane_sequence,
+                &allowed_next_lane_sequence,
                 receipt,
                 &explicit_target,
             ) {
@@ -7346,27 +7348,27 @@ pub(crate) async fn derive_downstream_dispatch_preview(
 
 fn lawful_explicit_downstream_dispatch_target(
     execution_plan: &serde_json::Value,
-    execution_lane_sequence: &[String],
+    allowed_next_lane_sequence: &[String],
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     explicit_target: &str,
 ) -> Option<RuntimeDispatchTargetResolution> {
     let target_resolution = resolve_runtime_dispatch_target(execution_plan, explicit_target)?;
     let target = target_resolution.dispatch_target.as_str();
     let current_index = execution_lane_sequence_index_for_target(
-        execution_lane_sequence,
+        allowed_next_lane_sequence,
         &receipt.dispatch_target,
         receipt.downstream_dispatch_last_target.as_deref(),
     );
 
     if let Some(current_index) = current_index {
-        return execution_lane_sequence
+        return allowed_next_lane_sequence
             .get(current_index + 1)
             .and_then(|next_target| resolve_runtime_dispatch_target(execution_plan, next_target))
             .filter(|next_resolution| next_resolution.dispatch_target == target)
             .map(|_| target_resolution);
     }
 
-    execution_lane_sequence
+    allowed_next_lane_sequence
         .iter()
         .filter_map(|candidate| resolve_runtime_dispatch_target(execution_plan, candidate))
         .any(|candidate| candidate.dispatch_target == target)
@@ -7456,14 +7458,15 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
             && (dispatch_receipt_has_execution_evidence(receipt)
                 || dispatch_receipt_allows_synthetic_lane_completion(receipt));
     let dispatch_contract = &role_selection.execution_plan["development_flow"]["dispatch_contract"];
-    let execution_lane_sequence = dispatch_contract_execution_lane_sequence(dispatch_contract);
+    let allowed_next_lane_sequence =
+        dispatch_contract_allowed_next_lane_sequence(dispatch_contract);
     let result_allowed_next_target = receipt_result_allowed_next_target(store.root(), receipt)
         .and_then(|target| normalized_explicit_allowed_next_target(Some(target.as_str())));
     let result_explicit_downstream_dispatch_target =
         result_allowed_next_target.as_deref().and_then(|target| {
             lawful_explicit_downstream_dispatch_target(
                 &role_selection.execution_plan,
-                &execution_lane_sequence,
+                &allowed_next_lane_sequence,
                 receipt,
                 target,
             )
@@ -18415,6 +18418,104 @@ host_environment:
                 packet["delivery_task_packet"]["owned_paths"],
                 serde_json::json!(owned_paths)
             );
+        });
+    }
+
+    #[test]
+    fn designer_next_lane_is_lawful_allowed_next_after_analyst_design_gate() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let owned_paths = vec!["crates/vida/src/runtime_dispatch_state.rs".to_string()];
+            let mut role_selection =
+                configured_first_step_role_selection(Some("analyst"), Some("analyst"));
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_sequence"] = json!(["analyst", "designer", "autotester"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["execution_lane_sequence"] = json!(["analyst", "autotester"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_catalog"]["designer"] = json!({
+                "dispatch_target": "designer",
+                "task_class": "design",
+                "closure_class": "design",
+                "stage": "design_gate",
+                "activation": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "designer"
+                }
+            });
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_catalog"]["autotester"] = json!({
+                "dispatch_target": "autotester",
+                "task_class": "verification",
+                "closure_class": "proof",
+                "stage": "execution",
+                "activation": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "tester"
+                }
+            });
+            let run_graph_bootstrap = json!({ "run_id": "run-designer-allowed-next-preview" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-designer-allowed-next-preview".to_string(),
+                dispatch_target: "analyst".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent host-bridge --complete".to_string()),
+                dispatch_command: Some("vida agent host-bridge --complete".to_string()),
+                dispatch_packet_path: Some("/tmp/analyst-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("designer".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("analyst".to_string()),
+                downstream_dispatch_last_target: Some("analyst".to_string()),
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-29T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview_with_owned_paths(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+                &owned_paths,
+            )
+            .await
+            .expect("designer should be lawful next lane after analyst");
+
+            assert_eq!(
+                receipt.downstream_dispatch_target.as_deref(),
+                Some("designer")
+            );
+            assert!(receipt.downstream_dispatch_ready);
+            assert!(receipt.downstream_dispatch_blockers.is_empty());
+            let packet_path = receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .expect("designer downstream packet should be written");
+            let packet = read_json(harness.path(), packet_path);
+            assert_eq!(packet["dispatch_target"], "designer");
+            assert_eq!(packet["downstream_dispatch_target"], "designer");
         });
     }
 
