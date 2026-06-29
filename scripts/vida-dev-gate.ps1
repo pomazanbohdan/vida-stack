@@ -474,10 +474,11 @@ function Invoke-Timed {
     $stdoutPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.out.txt" -f $safeId, $started)
     $stderrPath = Join-Path $logDir ("{0}-{1:yyyyMMddHHmmssfff}.err.txt" -f $safeId, $started)
     $artifactRefs = @($stdoutPath, $stderrPath)
-    if ($Mode -eq "release-install") {
-        $latestArtifactPath = Join-Path $logDir "latest-release-install-artifacts.json"
+    if ($Mode -in @("coverage", "release-install")) {
+        $latestArtifactPath = Join-Path $logDir ("latest-{0}-artifacts.json" -f $Mode)
         [pscustomobject]@{
             operation_id = $OperationId
+            mode = $Mode
             command_or_surface = ($Command -join " ")
             stdout_path = $stdoutPath
             stderr_path = $stderrPath
