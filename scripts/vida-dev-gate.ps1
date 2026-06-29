@@ -26,6 +26,10 @@ $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 $Records = New-Object System.Collections.Generic.List[object]
 $OriginalCargoTargetDir = $env:CARGO_TARGET_DIR
+$WindowsEnvScript = Join-Path $PSScriptRoot "vida-windows-env.ps1"
+if (Test-Path -LiteralPath $WindowsEnvScript) {
+    . $WindowsEnvScript
+}
 
 function Test-IsWindowsHost {
     return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
@@ -151,6 +155,10 @@ function Initialize-WindowsHostEnvironment {
 
 function Import-VisualStudioBuildEnvironment {
     if (-not (Test-IsWindowsHost)) {
+        return
+    }
+    if (Get-Command Import-VidaMsvcEnvironment -ErrorAction SilentlyContinue) {
+        Import-VidaMsvcEnvironment
         return
     }
     if ((Get-Command "cl.exe" -ErrorAction SilentlyContinue) -and -not [string]::IsNullOrWhiteSpace($env:VCINSTALLDIR)) {

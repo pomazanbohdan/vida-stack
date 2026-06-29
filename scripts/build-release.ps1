@@ -15,6 +15,10 @@ param(
 $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
 $BuildGuard = $null
+$WindowsEnvScript = Join-Path $PSScriptRoot "vida-windows-env.ps1"
+if (Test-Path -LiteralPath $WindowsEnvScript) {
+    . $WindowsEnvScript
+}
 
 function Show-Help {
     @"
@@ -490,6 +494,9 @@ try {
     $script:ResolvedReleaseBinDir = [System.IO.Path]::GetFullPath($ReleaseBinDir)
 
     if (-not $SkipBuild) {
+        if (Get-Command Import-VidaMsvcEnvironment -ErrorAction SilentlyContinue) {
+            Import-VidaMsvcEnvironment
+        }
         $cleanup = Invoke-VidaBuildTargetProcessCleanup -RootDir $RootDir -TargetRoot $cargoTargetRoot -ExcludeProcessId $PID
         if ($cleanup.Skipped -and $cleanup.SkipReason -eq "unsafe_target_root") {
             Write-Host ("[cleanup] skipped stale target process cleanup for unsafe Cargo target dir: {0}" -f $cargoTargetRoot)

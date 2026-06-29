@@ -316,6 +316,28 @@ function Resolve-VidaCommandPath {
     return $Name
 }
 
+function Test-VidaLibraryOnLibPath {
+    param([string]$LibraryName)
+
+    if ([string]::IsNullOrWhiteSpace($env:LIB)) {
+        return $false
+    }
+    foreach ($entry in ($env:LIB -split ';')) {
+        if ([string]::IsNullOrWhiteSpace($entry)) {
+            continue
+        }
+        try {
+            $candidate = Join-Path ([System.IO.Path]::GetFullPath($entry.Trim())) $LibraryName
+        } catch {
+            continue
+        }
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Assert-VidaWindowsBuildTools {
     if (-not (Test-VidaWindowsHost)) {
         return
@@ -325,6 +347,9 @@ function Assert-VidaWindowsBuildTools {
     $linkPath = Resolve-VidaCommandPath "link.exe"
     if ($clPath -eq "cl.exe" -or $linkPath -eq "link.exe") {
         throw "[vida-windows-env] Visual Studio C++ build tools are not on PATH after environment import."
+    }
+    if (-not (Test-VidaLibraryOnLibPath "kernel32.lib")) {
+        throw "[vida-windows-env] Windows SDK library kernel32.lib is not available on LIB after Visual Studio environment import. Install the Windows SDK with Visual Studio Build Tools, or repair the VS C++ workload, then rerun the script."
     }
     Assert-VidaWritableTemp $env:TEMP
 }

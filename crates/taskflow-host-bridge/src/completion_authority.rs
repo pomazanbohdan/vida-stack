@@ -276,12 +276,18 @@ fn dedup_blockers(blockers: &mut Vec<String>) {
 }
 
 fn completion_tuple_is_passed(input: &HostBridgeCompletionAuthorityInput) -> bool {
-    normalized(&input.decision) == "approve"
-        && matches!(normalized(&input.verdict).as_str(), "pass" | "passed")
+    matches!(
+        normalized(&input.decision).as_str(),
+        "approve" | "pass" | "passed"
+    ) && matches!(normalized(&input.verdict).as_str(), "pass" | "passed")
 }
 
 fn completion_tuple_is_blocked(input: &HostBridgeCompletionAuthorityInput) -> bool {
     !input.blocker_codes.is_empty()
+        || matches!(
+            normalized(&input.decision).as_str(),
+            "blocked" | "fail" | "failed" | "rework_required"
+        )
         || matches!(
             normalized(&input.verdict).as_str(),
             "blocked" | "fail" | "failed" | "rework_required"
@@ -329,7 +335,7 @@ mod tests {
     #[test]
     fn passed_with_empty_blockers_cannot_emit_blocked_event_or_blocker() {
         let decision = decide_host_bridge_completion_authority(input(
-            "approve",
+            "pass",
             "pass",
             [],
             Some("blocked text in resolved summary"),
@@ -353,6 +359,26 @@ mod tests {
             decision
                 .effect_intents
                 .contains(&HostBridgeCompletionEffectIntent::PlanNextStepPacket)
+        );
+    }
+
+    #[test]
+    fn typed_pass_decision_alias_is_accepted_completion() {
+        let decision = decide_host_bridge_completion_authority(input("pass", "pass", [], None));
+
+        assert!(decision.accepted);
+        assert_eq!(decision.final_state, HostBridgeCompletionState::Passed);
+        assert!(decision.blocker_codes.is_empty());
+        assert!(decision.next_step_packet_admitted);
+        assert!(
+            decision
+                .events
+                .contains(&HostBridgeCompletionEvent::CompletionAccepted)
+        );
+        assert!(
+            !decision
+                .events
+                .contains(&HostBridgeCompletionEvent::CompletionRejected)
         );
     }
 
