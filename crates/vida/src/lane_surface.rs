@@ -3144,6 +3144,7 @@ fn read_supplied_host_bridge_completion_result(
     state_root: &Path,
     result_file: Option<&str>,
     request_path: Option<&str>,
+    completion_receipt_id: Option<&str>,
 ) -> Result<Option<serde_json::Value>, String> {
     let Some(result_file) = result_file.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -3196,15 +3197,17 @@ fn read_supplied_host_bridge_completion_result(
                 canonical_path.display()
             ));
         }
-        if result
+        let result_completion_receipt_id = result
             .get("completion_receipt_id")
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none()
-        {
+            .filter(|value| !value.is_empty());
+        let cli_completion_receipt_id = completion_receipt_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if result_completion_receipt_id.is_none() && cli_completion_receipt_id.is_none() {
             return Err(format!(
-                "Host bridge result file `{}` is missing completion_receipt_id required by receipt-backed completion.",
+                "Host bridge result file `{}` is missing completion_receipt_id and no CLI receipt id was supplied for receipt-backed completion.",
                 canonical_path.display()
             ));
         }
@@ -5372,6 +5375,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 store.root(),
                 supplied_completion_result_args.result_file,
                 host_bridge_request,
+                Some(receipt_id),
             ) {
                 Ok(result) => result,
                 Err(error) => {
@@ -12819,7 +12823,6 @@ mod tests {
                 "status": "pass",
                 "execution_state": "executed",
                 "dispatch_target": "verification",
-                "completion_receipt_id": "completion-result-binding",
                 "source_dispatch_packet_path": root.join("runtime-consumption/dispatch-packets/run-result-binding.json").display().to_string(),
                 "execution_evidence": {
                     "receipt_backed": true
@@ -12890,6 +12893,7 @@ mod tests {
             &root,
             Some(&missing_identity_result_path_string),
             Some(&request_path_string),
+            Some("completion-result-binding"),
         )
         .expect_err("missing result identity must be rejected");
         assert!(
@@ -12902,6 +12906,7 @@ mod tests {
             &root,
             Some(&forged_result_path_string),
             Some(&request_path_string),
+            Some("completion-result-binding"),
         )
         .expect_err("forged identity must be rejected");
         assert!(
@@ -12914,6 +12919,7 @@ mod tests {
             &root,
             Some(&unbacked_result_path_string),
             Some(&request_path_string),
+            Some("completion-result-binding"),
         )
         .expect_err("unbacked staged result must be rejected");
         assert!(
@@ -12922,10 +12928,23 @@ mod tests {
         );
 
         let expected_result_path_string = staged_result_path.display().to_string();
+        let error = read_supplied_host_bridge_completion_result(
+            &root,
+            Some(&expected_result_path_string),
+            Some(&request_path_string),
+            None,
+        )
+        .expect_err("staged result without file or CLI receipt id must be rejected");
+        assert!(
+            error.contains("missing completion_receipt_id and no CLI receipt id was supplied"),
+            "unexpected error: {error}"
+        );
+
         let result = read_supplied_host_bridge_completion_result(
             &root,
             Some(&expected_result_path_string),
             Some(&request_path_string),
+            Some("completion-result-binding"),
         )
         .expect("staged result path should be accepted")
         .expect("result should be present");
