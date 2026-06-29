@@ -2557,6 +2557,10 @@ fn dispatch_result_activation_kind(result: &serde_json::Value) -> Option<&'stati
         == Some("execution_evidence_recorded")
         || result["activation_semantics"]["activation_kind"].as_str() == Some("execution_evidence")
         || result["execution_evidence"]["status"].as_str() == Some("recorded")
+        || (result["artifact_kind"].as_str() == Some("host_tool_bridge_result")
+            && result["execution_state"].as_str() == Some("executed")
+            && dispatch_result_is_pass_completion(result)
+            && dispatch_result_receipt_backed(result))
         || result["artifact_kind"].as_str() == Some("runtime_lane_completion_result")
     {
         return Some("execution_evidence");
@@ -5506,7 +5510,7 @@ fn dispatch_result_is_rework_or_blocker(result: &serde_json::Value) -> bool {
         })
         .any(|value| matches!(value.as_str(), "rework_required" | "blocked" | "blocker"))
         || dispatch_result_field_normalized(result, "rework_target").is_some()
-        || result.get("blocker_code").is_some()
+        || dispatch_result_field_normalized(result, "blocker_code").is_some()
 }
 
 fn dispatch_result_is_pass_completion(result: &serde_json::Value) -> bool {
@@ -7514,7 +7518,7 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
         ));
         downstream_dispatch_ready = false;
         downstream_dispatch_blockers = vec![invalid_allowed_next_node_for_execution_plan_blocker()];
-    } else if downstream_dispatch_target.is_none() && receipt_has_terminal_lane_evidence {
+    } else if receipt_has_terminal_lane_evidence {
         if let Some(explicit_target) = result_explicit_downstream_dispatch_target {
             let missing_owned_scope =
                 dispatch_target_requires_owned_write_scope(role_selection, &explicit_target)
@@ -7526,15 +7530,11 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
                 "after `{}` evidence is recorded, activate explicitly allowed `{}` for the next bounded lane",
                 receipt.dispatch_target, explicit_target
             ));
+            downstream_dispatch_blockers.clear();
             if missing_owned_scope {
-                if !downstream_dispatch_blockers
-                    .iter()
-                    .any(|blocker| blocker == "missing_owned_write_scope")
-                {
-                    downstream_dispatch_blockers.push(missing_owned_write_scope_blocker());
-                }
+                downstream_dispatch_blockers.push(missing_owned_write_scope_blocker());
                 downstream_dispatch_ready = false;
-            } else if downstream_dispatch_blockers.is_empty() {
+            } else {
                 downstream_dispatch_ready = true;
             }
         }

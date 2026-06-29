@@ -6884,6 +6884,31 @@ fn should_refresh_resumed_downstream_preview(
                 .map_or(true, |path| path.trim().is_empty()))
 }
 
+async fn refresh_and_persist_resumed_downstream_preview_if_needed(
+    store: &super::StateStore,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+    dispatch_receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) -> Result<bool, String> {
+    if !should_refresh_resumed_downstream_preview(dispatch_receipt) {
+        return Ok(false);
+    }
+    super::refresh_downstream_dispatch_preview(
+        store,
+        role_selection,
+        run_graph_bootstrap,
+        dispatch_receipt,
+    )
+    .await?;
+    store
+        .record_run_graph_dispatch_receipt(dispatch_receipt)
+        .await
+        .map_err(|error| {
+            format!("Failed to persist refreshed resumed downstream dispatch preview: {error}")
+        })?;
+    Ok(true)
+}
+
 fn prepare_explicit_resume_retry_artifact(
     project_root: Option<&std::path::Path>,
     role_selection: &super::RuntimeConsumptionLaneSelection,
@@ -7813,18 +7838,16 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         return ExitCode::from(1);
                     }
                 }
-                if should_refresh_resumed_downstream_preview(&dispatch_receipt) {
-                    if let Err(error) = super::refresh_downstream_dispatch_preview(
-                        &store,
-                        &role_selection,
-                        &run_graph_bootstrap,
-                        &mut dispatch_receipt,
-                    )
-                    .await
-                    {
-                        eprintln!("Failed to refresh resumed downstream dispatch preview: {error}");
-                        return ExitCode::from(1);
-                    }
+                if let Err(error) = refresh_and_persist_resumed_downstream_preview_if_needed(
+                    &store,
+                    &role_selection,
+                    &run_graph_bootstrap,
+                    &mut dispatch_receipt,
+                )
+                .await
+                {
+                    eprintln!("Failed to refresh resumed downstream dispatch preview: {error}");
+                    return ExitCode::from(1);
                 }
                 if let Err(error) = sync_run_graph_after_resumed_execution(
                     &store,
@@ -8063,7 +8086,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         }
                         return ExitCode::from(1);
                     }
-                    let store = match fail_fast_state_store_open_read_only(
+                    let store = match fail_fast_state_store_open(
                         state_root.clone(),
                         "reopening authoritative state store after resumed runtime dispatch",
                     )
@@ -8089,7 +8112,7 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                             return ExitCode::from(1);
                         }
                     };
-                    if let Err(error) = super::refresh_downstream_dispatch_preview(
+                    if let Err(error) = refresh_and_persist_resumed_downstream_preview_if_needed(
                         &store,
                         &role_selection,
                         &run_graph_bootstrap,
@@ -8103,18 +8126,16 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     drop(store);
                 }
             } else {
-                if should_refresh_resumed_downstream_preview(&dispatch_receipt) {
-                    if let Err(error) = super::refresh_downstream_dispatch_preview(
-                        &store,
-                        &role_selection,
-                        &run_graph_bootstrap,
-                        &mut dispatch_receipt,
-                    )
-                    .await
-                    {
-                        eprintln!("Failed to refresh resumed downstream dispatch preview: {error}");
-                        return ExitCode::from(1);
-                    }
+                if let Err(error) = refresh_and_persist_resumed_downstream_preview_if_needed(
+                    &store,
+                    &role_selection,
+                    &run_graph_bootstrap,
+                    &mut dispatch_receipt,
+                )
+                .await
+                {
+                    eprintln!("Failed to refresh resumed downstream dispatch preview: {error}");
+                    return ExitCode::from(1);
                 }
                 if let Err(error) = sync_run_graph_after_resumed_execution(
                     &store,
@@ -8550,7 +8571,8 @@ mod tests {
         read_dispatch_packet, reconcile_blocked_implementer_timeout_with_tracked_close_evidence,
         reconcile_blocked_verification_timeout_with_receipt_evidence,
         reconcile_requested_closed_run_before_consume, recover_missing_first_dispatch_receipt,
-        resolve_default_resume_run_id, resolve_runtime_consumption_resume_inputs,
+        refresh_and_persist_resumed_downstream_preview_if_needed, resolve_default_resume_run_id,
+        resolve_runtime_consumption_resume_inputs,
         resolve_runtime_consumption_resume_inputs_for_run_id, resume_from_persisted_final_snapshot,
         resume_inputs_from_latest_final_snapshot, resume_packet_ready_blocker_parity_error,
         retry_backend_for_dispatch_receipt, runtime_consumption_resume_blocker_code,
@@ -11736,6 +11758,173 @@ agent_system:
         let mut blocked = receipt.clone();
         blocked.dispatch_status = "blocked".to_string();
         assert!(!should_refresh_resumed_downstream_preview(&blocked));
+    }
+
+    #[tokio::test]
+    async fn consume_continue_persists_refreshed_invalid_allowed_next_receipt() {
+        let root =
+            unique_consume_packet_test_root("vida-consume-resume-invalid-allowed-next-refresh");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let run_id = "run-invalid-allowed-next-refresh";
+        let packet_path = root.join("runtime-consumption/dispatch-packets/analyst.json");
+        fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create dispatch packet directory");
+        fs::write(&packet_path, "{}").expect("write dispatch packet placeholder");
+        let result_path = root.join("host-tool-bridge/results/analyst-result.json");
+        fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create host bridge result directory");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "status": "pass",
+                "execution_state": "executed",
+                "decision": "approve",
+                "verdict": "pass",
+                "run_id": run_id,
+                "dispatch_target": "analyst",
+                "allowed_next_node": "designer",
+                "source_dispatch_packet_path": packet_path.display().to_string(),
+                "host_tool_bridge_request": {
+                    "run_id": run_id,
+                    "dispatch_target": "analyst",
+                    "packet_path": packet_path.display().to_string()
+                },
+                "activation_semantics": {
+                    "records_completion_receipt": true
+                },
+                "execution_evidence": {
+                    "receipt_backed": true
+                }
+            })
+            .to_string(),
+        )
+        .expect("write host bridge result");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue analyst designer flow".to_string(),
+            selected_role: "middle".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["analyst".to_string(), "designer".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_sequence": ["analyst", "designer", "autotester"],
+                        "execution_lane_sequence": ["analyst", "autotester"],
+                        "lane_catalog": {
+                            "analyst": {
+                                "dispatch_target": "analyst",
+                                "task_class": "analysis",
+                                "closure_class": "analysis",
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "business_analyst"
+                                }
+                            },
+                            "designer": {
+                                "dispatch_target": "designer",
+                                "task_class": "design",
+                                "closure_class": "design",
+                                "stage": "design_gate",
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "designer"
+                                }
+                            },
+                            "autotester": {
+                                "dispatch_target": "autotester",
+                                "task_class": "verification",
+                                "closure_class": "proof",
+                                "stage": "execution",
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "tester"
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({ "run_id": run_id });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "analyst".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent host-bridge --complete".to_string()),
+            dispatch_command: Some("vida agent host-bridge --complete".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: Some(
+                "explicit allowed_next_node `designer` is not the next lawful lane after `analyst` in the execution plan".to_string(),
+            ),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![
+                "invalid_allowed_next_node_for_execution_plan".to_string(),
+            ],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analyst".to_string()),
+            downstream_dispatch_last_target: Some("analyst".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-29T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist stale receipt");
+        assert!(refresh_and_persist_resumed_downstream_preview_if_needed(
+            &store,
+            &role_selection,
+            &run_graph_bootstrap,
+            &mut receipt,
+        )
+        .await
+        .expect("refresh should persist"));
+
+        let persisted = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("receipt lookup should succeed")
+            .expect("receipt should persist");
+        assert_eq!(
+            persisted.downstream_dispatch_target.as_deref(),
+            Some("designer")
+        );
+        assert!(persisted.downstream_dispatch_ready);
+        assert!(persisted.downstream_dispatch_blockers.is_empty());
+        assert_eq!(
+            persisted.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+        assert!(persisted
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty()));
+
+        store.close().await;
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
