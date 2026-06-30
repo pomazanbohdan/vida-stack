@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -594,8 +594,8 @@ fn write_state_reset_recovery_receipt(
             .clone()
             .unwrap_or_else(|| summary.state_dir.clone())
     };
-    let receipt_dir = receipt_root.join("recovery").join("state-reset-receipts");
-    fs::create_dir_all(&receipt_dir)?;
+    let receipt_dir =
+        create_state_reset_receipt_dir(&receipt_root, &["recovery", "state-reset-receipts"])?;
     let receipt_path = receipt_dir.join(format!("state-reset-{}.json", unix_timestamp_nanos()));
     let recorded_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -626,15 +626,53 @@ fn write_state_reset_recovery_receipt(
             "authoritative_state_opened_after_reinit": summary.state_spine_manifest_present
         }
     });
-    fs::write(
-        &receipt_path,
-        serde_json::to_vec_pretty(&receipt).map_err(|error| {
-            StateStoreError::InvalidStateReset {
-                reason: format!("failed to serialize state reset recovery receipt: {error}"),
-            }
-        })?,
-    )?;
+    let receipt_bytes = serde_json::to_vec_pretty(&receipt).map_err(|error| {
+        StateStoreError::InvalidStateReset {
+            reason: format!("failed to serialize state reset recovery receipt: {error}"),
+        }
+    })?;
+    let mut receipt_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&receipt_path)?;
+    receipt_file.write_all(&receipt_bytes)?;
     Ok(receipt_path)
+}
+
+fn create_state_reset_receipt_dir(
+    receipt_root: &Path,
+    components: &[&str],
+) -> Result<PathBuf, StateStoreError> {
+    let mut path = receipt_root.to_path_buf();
+    for component in components {
+        path.push(component);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(StateStoreError::InvalidStateReset {
+                        reason: format!(
+                            "`vida state reset` refused to write a recovery receipt through non-directory or symlinked path component `{}`",
+                            path.display()
+                        ),
+                    });
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                fs::create_dir(&path)?;
+                let metadata = fs::symlink_metadata(&path)?;
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(StateStoreError::InvalidStateReset {
+                        reason: format!(
+                            "`vida state reset` refused to write a recovery receipt through non-directory or symlinked path component `{}`",
+                            path.display()
+                        ),
+                    });
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(path)
 }
 
 fn validate_state_reset_existing_root(root: &Path) -> Result<(), StateStoreError> {
@@ -915,6 +953,63 @@ mod tests {
         assert_eq!(receipt["reinitialized"], false);
 
         let _ = fs::remove_dir_all(archive_path);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn state_reset_archive_only_rejects_symlinked_recovery_receipt_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-reset-symlink-recovery-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+        let attacker_sink = std::env::temp_dir().join(format!(
+            "vida-state-reset-attacker-sink-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+        fs::create_dir_all(root.join("manifest")).expect("create manifest dir");
+        fs::create_dir_all(root.join("sstables")).expect("create sstables dir");
+        fs::create_dir_all(root.join("vlog")).expect("create vlog dir");
+        fs::create_dir_all(root.join("wal")).expect("create wal dir");
+        fs::create_dir_all(&attacker_sink).expect("create attacker sink");
+        fs::write(root.join(".vida-authoritative-open.guard"), "").expect("write guard");
+        fs::write(root.join("wal").join("00000000000000000003.wal"), "wal")
+            .expect("write datastore payload");
+        std::os::unix::fs::symlink(&attacker_sink, root.join("recovery"))
+            .expect("create recovery symlink");
+
+        let error = StateStore::archive_and_reinit_state_root(root.clone(), true, false)
+            .await
+            .expect_err("symlinked recovery receipt directory should fail closed");
+
+        match error {
+            StateStoreError::InvalidStateReset { reason } => {
+                assert!(reason.contains("refused to write a recovery receipt"));
+                assert!(reason.contains("recovery"));
+            }
+            other => panic!("expected invalid reset error, got {other:?}"),
+        }
+        assert!(!attacker_sink.join("state-reset-receipts").exists());
+
+        if root.exists() {
+            let _ = fs::remove_dir_all(&root);
+        }
+        if let Some(archive_path) = fs::read_dir(root.parent().expect("temp parent"))
+            .expect("read temp parent")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name().is_some_and(|name| {
+                    name.to_string_lossy()
+                        .starts_with("vida-state-reset-symlink-recovery-")
+                        && name.to_string_lossy().contains(".archive.")
+                })
+            })
+        {
+            let _ = fs::remove_dir_all(archive_path);
+        }
+        let _ = fs::remove_dir_all(attacker_sink);
     }
 
     #[tokio::test]
