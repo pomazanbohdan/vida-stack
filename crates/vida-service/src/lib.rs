@@ -1,9 +1,10 @@
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use service_manager::{RestartPolicy as ServiceRestartPolicy, ServiceLevel};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
@@ -52,48 +53,17 @@ impl AcceptedCommandJournal {
     }
 
     pub fn record_accepted(&self, envelope: &VidaCommandEnvelope) -> Result<AcceptedCommandRecord> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "create accepted-command journal parent {}",
-                    parent.display()
-                )
-            })?;
-        }
         let record = AcceptedCommandRecord {
             request_id: envelope.request_id.0.clone(),
             operation: envelope.operation.0.clone(),
             replay_state: "accepted_replayable".to_string(),
         };
-        let line = serde_json::to_string(&record)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .with_context(|| format!("open accepted-command journal {}", self.path.display()))?;
-        writeln!(file, "{line}")?;
+        append_journal_record(&self.path, record.clone(), "accepted-command")?;
         Ok(record)
     }
 
     pub fn replayable_commands(&self) -> Result<Vec<AcceptedCommandRecord>> {
-        if !self.path.exists() {
-            return Ok(Vec::new());
-        }
-        let file = OpenOptions::new()
-            .read(true)
-            .open(&self.path)
-            .with_context(|| format!("read accepted-command journal {}", self.path.display()))?;
-        BufReader::new(file)
-            .lines()
-            .filter_map(|line| match line {
-                Ok(value) if value.trim().is_empty() => None,
-                other => Some(other),
-            })
-            .map(|line| {
-                let line = line?;
-                Ok(serde_json::from_str::<AcceptedCommandRecord>(&line)?)
-            })
-            .collect()
+        replay_journal_records(&self.path, "accepted-command")
     }
 }
 
@@ -111,46 +81,67 @@ impl PendingJobJournal {
         job_id: impl Into<String>,
         envelope: &VidaCommandEnvelope,
     ) -> Result<PendingJobRecord> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("create pending-job journal parent {}", parent.display())
-            })?;
-        }
         let record = PendingJobRecord {
             job_id: job_id.into(),
             source_request_id: envelope.request_id.0.clone(),
             replay_state: "pending_replayable".to_string(),
         };
-        let line = serde_json::to_string(&record)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .with_context(|| format!("open pending-job journal {}", self.path.display()))?;
-        writeln!(file, "{line}")?;
+        append_journal_record(&self.path, record.clone(), "pending-job")?;
         Ok(record)
     }
 
     pub fn replayable_jobs(&self) -> Result<Vec<PendingJobRecord>> {
-        if !self.path.exists() {
-            return Ok(Vec::new());
-        }
-        let file = OpenOptions::new()
-            .read(true)
-            .open(&self.path)
-            .with_context(|| format!("read pending-job journal {}", self.path.display()))?;
-        BufReader::new(file)
-            .lines()
-            .filter_map(|line| match line {
-                Ok(value) if value.trim().is_empty() => None,
-                other => Some(other),
-            })
-            .map(|line| {
-                let line = line?;
-                Ok(serde_json::from_str::<PendingJobRecord>(&line)?)
-            })
-            .collect()
+        replay_journal_records(&self.path, "pending-job")
     }
+}
+
+fn append_journal_record<T>(path: &PathBuf, record: T, journal_name: &str) -> Result<()>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!("create {journal_name} journal parent {}", parent.display())
+        })?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("open {journal_name} journal {}", path.display()))?;
+    serde_json::to_writer(&mut file, &record)
+        .with_context(|| format!("serialize {journal_name} journal {}", path.display()))?;
+    file.write_all(b"\n")
+        .with_context(|| format!("append {journal_name} journal newline {}", path.display()))
+}
+
+fn replay_journal_records<T>(path: &PathBuf, journal_name: &str) -> Result<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("read {journal_name} journal {}", path.display()))?;
+    raw.lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            if line.trim().is_empty() {
+                None
+            } else {
+                Some((index + 1, line))
+            }
+        })
+        .map(|(line_number, line)| {
+            serde_json::from_str::<T>(line).with_context(|| {
+                format!(
+                    "parse {journal_name} journal line {line_number} in {}",
+                    path.display()
+                )
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -346,6 +337,48 @@ mod tests {
 
         assert_eq!(record.replay_state, "accepted_replayable");
         assert_eq!(replayable, vec![record]);
+    }
+
+    #[test]
+    fn journal_replay_skips_blank_lines() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let journal_path = temp.path().join("accepted.jsonl");
+        fs::write(
+            &journal_path,
+            concat!(
+                "\n",
+                "{\"request_id\":\"req-1\",\"operation\":\"vida.service.status\",\"replay_state\":\"accepted_replayable\"}\n",
+                "   \n"
+            ),
+        )
+        .expect("write journal");
+
+        let replayable = AcceptedCommandJournal::open(&journal_path)
+            .replayable_commands()
+            .expect("read replayable commands");
+
+        assert_eq!(replayable.len(), 1);
+        assert_eq!(replayable[0].request_id, "req-1");
+    }
+
+    #[test]
+    fn journal_replay_blocks_malformed_lines() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let journal_path = temp.path().join("pending-jobs.jsonl");
+        fs::write(
+            &journal_path,
+            concat!(
+                "{\"job_id\":\"job-1\",\"source_request_id\":\"req-1\",\"replay_state\":\"pending_replayable\"}\n",
+                "{malformed-json}\n"
+            ),
+        )
+        .expect("write journal");
+
+        let err = PendingJobJournal::open(&journal_path)
+            .replayable_jobs()
+            .expect_err("malformed line blocks replay");
+
+        assert!(err.to_string().contains("parse pending-job journal"));
     }
 
     #[test]
