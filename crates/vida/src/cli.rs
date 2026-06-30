@@ -934,6 +934,12 @@ pub(crate) struct ReleaseInstallArgs {
     pub(crate) skip_build: bool,
 
     #[arg(
+        long = "status",
+        help = "Read latest release install progress without starting a build or install"
+    )]
+    pub(crate) status: bool,
+
+    #[arg(
         long = "source-binary",
         help = "Source vida binary path; defaults to the platform release binary under target/release"
     )]

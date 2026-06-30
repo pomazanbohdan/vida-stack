@@ -7253,6 +7253,7 @@ fn task_close_automation_receipt(
         let receipt = crate::release_surface::release_install_receipt(&crate::ReleaseInstallArgs {
             target: command.install_target.clone(),
             skip_build: command.skip_release_build,
+            status: false,
             source_binary: command.source_binary.clone(),
             install_root: command.install_root.clone(),
             json: true,
