@@ -168,6 +168,8 @@ const DEFAULT_STATE_DIR: &str = ".vida/data/state";
 const STATE_STORE_RECOVERY_HINT: &str = "hint: use VIDA_STATE_DIR=<temp-dir> for a fresh proof run, or reinitialize the long-lived local state root instead of deleting datastore subdirectories by hand";
 const SURREALKV_WAL_REPLAY_CORRUPTION_BLOCKER: &str = "state_store_surrealkv_wal_replay_corruption";
 const SURREALKV_WAL_REPLAY_CORRUPTION_GUIDANCE: &str = "Create a backup copy of the whole state directory first, then recover from a known-good state snapshot or reinitialize the local state root through VIDA recovery tooling; do not delete WAL, SST, or SurrealKV subdirectories in place.";
+const STATE_RESET_ARCHIVE_RENAME_RETRY_COUNT: usize = 120;
+const STATE_RESET_ARCHIVE_RENAME_RETRY_DELAY_MS: u64 = 25;
 pub const STATE_NAMESPACE: &str = "vida";
 pub const STATE_DATABASE: &str = "primary";
 pub const DEFAULT_INSTRUCTION_SOURCE_ROOT: &str =
@@ -514,15 +516,15 @@ impl StateStore {
         }
 
         let archive_path = if root.exists() {
-            let _authoritative_open_guard =
-                if state_reset_dir_has_existing_datastore_payload(&root)? {
-                    validate_state_reset_existing_root(&root)?;
-                    Some(state_store_open::AuthoritativeOpenGuard::acquire(&root).await?)
-                } else {
-                    None
-                };
+            if state_reset_dir_has_existing_datastore_payload(&root)? {
+                validate_state_reset_existing_root(&root)?;
+                {
+                    let _authoritative_open_guard =
+                        state_store_open::AuthoritativeOpenGuard::acquire(&root).await?;
+                }
+            }
             let archive_path = Self::next_state_archive_path(&root);
-            fs::rename(&root, &archive_path)?;
+            Self::rename_state_root_to_archive_with_retry(&root, &archive_path).await?;
             Some(archive_path)
         } else {
             None
@@ -581,6 +583,47 @@ impl StateStore {
             std::process::id()
         ))
     }
+
+    async fn rename_state_root_to_archive_with_retry(
+        root: &Path,
+        archive_path: &Path,
+    ) -> Result<(), StateStoreError> {
+        for attempt in 0..STATE_RESET_ARCHIVE_RENAME_RETRY_COUNT {
+            match fs::rename(root, archive_path) {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if state_reset_archive_rename_error_is_retryable(&error)
+                        && attempt + 1 < STATE_RESET_ARCHIVE_RENAME_RETRY_COUNT =>
+                {
+                    let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(root);
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        STATE_RESET_ARCHIVE_RENAME_RETRY_DELAY_MS,
+                    ))
+                    .await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+
+        Err(StateStoreError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!(
+                "timed out while archiving VIDA state root `{}` to `{}` after waiting for datastore handles to settle",
+                root.display(),
+                archive_path.display()
+            ),
+        )))
+    }
+}
+
+fn state_reset_archive_rename_error_is_retryable(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::Interrupted
+            | io::ErrorKind::PermissionDenied
+    ) || StateStore::message_is_lock_contention(&error.to_string())
 }
 
 fn write_state_reset_recovery_receipt(
@@ -774,6 +817,56 @@ mod tests {
             .as_ref()
             .expect("recovery receipt should be recorded");
         assert!(receipt_path.exists());
+
+        let _ = fs::remove_dir_all(&root);
+        if let Some(archive_path) = summary.archive_path {
+            let _ = fs::remove_dir_all(archive_path);
+        }
+    }
+
+    #[test]
+    fn state_reset_archive_rename_retries_lock_shaped_errors() {
+        for error in [
+            io::Error::new(io::ErrorKind::PermissionDenied, "Access is denied. (os error 5)"),
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "The process cannot access the file because it is being used by another process. (os error 32)",
+            ),
+            io::Error::new(io::ErrorKind::TimedOut, "timed out while waiting for datastore lock"),
+            io::Error::new(io::ErrorKind::Interrupted, "interrupted while archiving state root"),
+        ] {
+            assert!(
+                state_reset_archive_rename_error_is_retryable(&error),
+                "state reset archive rename should retry transient lock-shaped error: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn state_reset_archives_recently_dropped_datastore_without_manual_settle() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-reset-recently-dropped-{}-{nanos}",
+            std::process::id()
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        drop(store);
+
+        let summary = StateStore::archive_and_reinit_state_root(root.clone(), true, true)
+            .await
+            .expect("state reset should wait for recently dropped datastore handles to settle");
+
+        assert!(summary.archive_created);
+        assert!(summary.reinitialized);
+        assert!(summary
+            .archive_path
+            .as_ref()
+            .is_some_and(|path| path.exists()));
+        assert!(root.exists());
 
         let _ = fs::remove_dir_all(&root);
         if let Some(archive_path) = summary.archive_path {
