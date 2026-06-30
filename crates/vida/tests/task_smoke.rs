@@ -11538,6 +11538,194 @@ fn run_graph_status_accepts_state_dir_override() {
 }
 
 #[test]
+fn run_graph_status_failure_emits_operator_envelope() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+
+    let (missing_id, missing_id_succeeded) =
+        run_command_json_allow_failure(&["taskflow", "run-graph", "status", "--json"], &state_dir);
+    assert!(!missing_id_succeeded);
+    assert_eq!(missing_id["surface"], "vida taskflow run-graph status");
+    assert_eq!(missing_id["status"], "blocked");
+    assert_eq!(
+        missing_id["blocker_codes"],
+        serde_json::json!(["missing_run_id"])
+    );
+    assert!(missing_id["next_actions"]
+        .as_array()
+        .expect("missing id next_actions should render")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .is_some_and(|text| text.contains("vida taskflow run-graph latest"))));
+    let missing_id_plain = run_command_capture(&["taskflow", "run-graph", "status"], &state_dir);
+    assert!(!missing_id_plain.status.success());
+    let missing_id_plain_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&missing_id_plain.stdout),
+        String::from_utf8_lossy(&missing_id_plain.stderr)
+    );
+    assert!(
+        missing_id_plain_text.contains("Usage: vida taskflow run-graph status <run-id>"),
+        "plain missing-id failure must expose usage: {missing_id_plain_text}"
+    );
+
+    let (json, succeeded) = run_command_json_allow_failure(
+        &[
+            "taskflow",
+            "run-graph",
+            "status",
+            "missing-run-graph-status",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!succeeded);
+    assert_eq!(json["surface"], "vida taskflow run-graph status");
+    assert_eq!(json["status"], "blocked");
+    assert_eq!(json["run_id"], "missing-run-graph-status");
+    assert_eq!(
+        json["blocker_codes"],
+        serde_json::json!(["run_graph_status_unavailable"])
+    );
+    assert_eq!(
+        json["artifact_refs"]["surface"],
+        "vida taskflow run-graph status"
+    );
+    assert_eq!(json["artifact_refs"]["run_id"], "missing-run-graph-status");
+    assert!(json["error"]
+        .as_str()
+        .expect("error should render")
+        .contains("run_graph:missing-run-graph-status"));
+    assert!(json["next_actions"]
+        .as_array()
+        .expect("next_actions should render")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .is_some_and(|text| text.contains("vida taskflow run-graph latest"))));
+    vida_test_support::assert_release1_operator_shape("vida taskflow run-graph status", &json);
+
+    let plain = run_command_capture(
+        &[
+            "taskflow",
+            "run-graph",
+            "status",
+            "missing-run-graph-status",
+        ],
+        &state_dir,
+    );
+    assert!(!plain.status.success());
+    let plain_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&plain.stdout),
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    assert!(
+        plain_text.starts_with("vida taskflow run-graph status\n"),
+        "plain failure must keep surface header: {plain_text}"
+    );
+    assert!(plain_text.contains("run: missing-run-graph-status"));
+    assert!(plain_text.contains("status: blocked"));
+    assert!(plain_text.contains("blocker_codes: run_graph_status_unavailable"));
+    assert!(plain_text.contains("next: vida taskflow run-graph latest"));
+
+    create_run_graph_backing_task(&state_dir, "blocked-run-graph-status");
+    let dispatch = run_command_json(
+        &[
+            "taskflow",
+            "run-graph",
+            "dispatch-init",
+            "blocked-run-graph-status",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let dispatch_packet_path = dispatch["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch-init should provide packet path");
+    let _bridge = run_command_json(
+        &[
+            "agent-init",
+            "--dispatch-packet",
+            dispatch_packet_path,
+            "--execute-dispatch",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let blocked = run_command_json(
+        &[
+            "taskflow",
+            "run-graph",
+            "status",
+            "blocked-run-graph-status",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(blocked["surface"], "vida taskflow run-graph status");
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(
+        blocked["blocker_codes"],
+        serde_json::json!(["host_tool_bridge_adapter_required"])
+    );
+    assert_eq!(
+        blocked["artifact_refs"]["run_id"],
+        "blocked-run-graph-status"
+    );
+    assert_eq!(
+        blocked["artifact_refs"]["task_id"],
+        "blocked-run-graph-status"
+    );
+    assert_eq!(
+        blocked["artifact_refs"]["dispatch_status"],
+        "bridge_request_pending"
+    );
+    assert_eq!(
+        blocked["artifact_refs"]["blocker_code"],
+        "host_tool_bridge_adapter_required"
+    );
+    assert!(blocked["artifact_refs"]["host_bridge_request_path"]
+        .as_str()
+        .is_some_and(|path| path.contains("host-tool-bridge")));
+    assert!(blocked["next_actions"]
+        .as_array()
+        .expect("blocked run next_actions should render")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .is_some_and(|text| text.contains("vida lane show blocked-run-graph-status"))));
+    vida_test_support::assert_release1_operator_shape("vida taskflow run-graph status", &blocked);
+    let blocked_plain = run_command_capture(
+        &[
+            "taskflow",
+            "run-graph",
+            "status",
+            "blocked-run-graph-status",
+        ],
+        &state_dir,
+    );
+    assert!(blocked_plain.status.success());
+    let blocked_plain_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&blocked_plain.stdout),
+        String::from_utf8_lossy(&blocked_plain.stderr)
+    );
+    assert!(
+        blocked_plain_text.starts_with("vida taskflow run-graph status\n"),
+        "plain blocked run must keep surface header: {blocked_plain_text}"
+    );
+    assert!(blocked_plain_text.contains("run: blocked-run-graph-status"));
+    assert!(blocked_plain_text.contains("status: blocked"));
+    assert!(blocked_plain_text.contains("blocker_codes: host_tool_bridge_adapter_required"));
+    assert!(blocked_plain_text.contains("next action: inspect dispatch receipt"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn run_graph_and_recovery_status_output_contract_matrix() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
