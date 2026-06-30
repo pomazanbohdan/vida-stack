@@ -4526,8 +4526,11 @@ hierarchy: framework,contracts
         receipt.downstream_dispatch_active_target = Some("docflow".to_string());
         receipt.downstream_dispatch_last_target = Some("closure".to_string());
         receipt.recorded_at = "2026-03-18T00:00:00Z".to_string();
-        store
-            .record_run_graph_dispatch_receipt(&receipt)
+        let stored_receipt: RunGraphDispatchReceiptStored = receipt.into();
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert(("run_graph_dispatch_receipt", "run-drift"))
+            .content(stored_receipt)
             .await
             .expect("persist drifted dispatch receipt");
 
@@ -4538,6 +4541,91 @@ hierarchy: framework,contracts
         assert!(error
             .to_string()
             .contains("run-graph dispatch receipt summary is inconsistent"));
+
+        store.close().await;
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_repairs_in_flight_downstream_lane_drift() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-in-flight-lane-drift-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-in-flight-drift".to_string();
+        status.task_id = "task-in-flight-drift".to_string();
+        status.active_node = "autotester".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lane_id = "autotester_lane".to_string();
+        status.lifecycle_stage = "autotester_blocked".to_string();
+        status.policy_gate = "host_bridge_completion_result_blocked".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "dispatch.autotester_lane".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut receipt = sample_dispatch_receipt_with_status("bridge_request_pending");
+        receipt.run_id = "run-in-flight-drift".to_string();
+        receipt.dispatch_target = "autotester".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.blocker_code = Some("host_tool_bridge_adapter_required".to_string());
+        receipt.downstream_dispatch_target = Some("developer".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers =
+            vec!["host_bridge_completion_result_blocked".to_string()];
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_active_target = Some("autotester".to_string());
+        receipt.downstream_dispatch_last_target = Some("autotester".to_string());
+        receipt.recorded_at = "2026-03-18T00:05:00Z".to_string();
+        let stored_receipt: RunGraphDispatchReceiptStored = receipt.into();
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert(("run_graph_dispatch_receipt", "run-in-flight-drift"))
+            .content(stored_receipt)
+            .await
+            .expect("persist stale dispatch receipt");
+
+        let summary = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect("stale in-flight lane drift should repair")
+            .expect("latest dispatch receipt summary should exist");
+        assert_eq!(summary.run_id, "run-in-flight-drift");
+        assert_eq!(summary.dispatch_status, "bridge_request_pending");
+        assert_eq!(summary.lane_status, "lane_open");
+        assert_eq!(
+            summary.downstream_dispatch_status.as_deref(),
+            Some("blocked")
+        );
+        assert_eq!(
+            summary.downstream_dispatch_blockers,
+            vec!["host_bridge_completion_result_blocked".to_string()]
+        );
+
+        let repaired: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .select(("run_graph_dispatch_receipt", "run-in-flight-drift"))
+            .await
+            .expect("load repaired stored receipt");
+        assert_eq!(
+            repaired
+                .expect("repaired stored receipt exists")
+                .lane_status
+                .as_deref(),
+            Some("lane_open")
+        );
 
         store.close().await;
         let _ = fs::remove_dir_all(&root);

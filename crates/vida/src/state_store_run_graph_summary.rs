@@ -1084,6 +1084,58 @@ pub(crate) fn normalize_legacy_downstream_preview_drift(
     receipt
 }
 
+fn normalize_repairable_in_flight_receipt_lane_status_drift(
+    mut receipt: RunGraphDispatchReceiptStored,
+) -> (RunGraphDispatchReceiptStored, bool) {
+    let Some(raw_lane_status) = receipt
+        .lane_status
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return (receipt, false);
+    };
+    let Some(canonical_lane_status) = canonical_lane_status_str(raw_lane_status) else {
+        return (receipt, false);
+    };
+    if receipt
+        .downstream_dispatch_status
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        return (receipt, false);
+    }
+    if !matches!(
+        receipt.dispatch_status.trim(),
+        "packet_ready" | "routed" | "bridge_request_pending" | "executing"
+    ) || !matches!(
+        canonical_lane_status,
+        "packet_ready" | "lane_open" | "lane_running"
+    ) || receipt
+        .supersedes_receipt_id
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return (receipt, false);
+    }
+    let effective_derived_lane_status = normalize_run_graph_lane_status(
+        Some(raw_lane_status),
+        &receipt.dispatch_status,
+        None,
+        None,
+    );
+    if canonical_lane_status == effective_derived_lane_status {
+        return (receipt, false);
+    }
+    receipt.lane_status = Some(effective_derived_lane_status);
+    (receipt, true)
+}
+
 fn reconcile_run_graph_status_with_closed_task(
     mut status: RunGraphStatus,
     task: Option<&TaskRecord>,
@@ -2555,6 +2607,9 @@ impl StateStore {
         self.record_run_graph_owner_evidence(&receipt.run_id, "dispatch_receipt")
             .await?;
         let receipt: RunGraphDispatchReceiptStored = receipt.clone().into();
+        let receipt = normalize_legacy_downstream_preview_drift(receipt);
+        let (receipt, _) = normalize_repairable_in_flight_receipt_lane_status_drift(receipt);
+        Self::ensure_run_graph_dispatch_receipt_summary_consistency(&receipt)?;
         Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
         let _: Option<RunGraphDispatchReceiptStored> = self
             .db
@@ -4448,7 +4503,14 @@ impl StateStore {
         };
         Self::ensure_run_graph_dispatch_receipt_required_fields_present(&receipt)?;
         let receipt = normalize_legacy_downstream_preview_drift(receipt);
+        let (receipt, lane_status_repaired) =
+            normalize_repairable_in_flight_receipt_lane_status_drift(receipt);
         Self::ensure_run_graph_dispatch_receipt_summary_consistency(&receipt)?;
+        if lane_status_repaired {
+            let public_receipt: RunGraphDispatchReceipt = receipt.clone().into();
+            self.record_run_graph_dispatch_receipt(&public_receipt)
+                .await?;
+        }
         let mut receipt: RunGraphDispatchReceipt = receipt.into();
         if crate::runtime_dispatch_state::normalize_stale_in_flight_dispatch_receipt(
             self.root(),
@@ -4861,6 +4923,7 @@ impl StateStore {
     ) -> Result<RunGraphDispatchReceiptStored, StateStoreError> {
         Self::ensure_run_graph_dispatch_receipt_required_fields_present(&receipt)?;
         let receipt = normalize_legacy_downstream_preview_drift(receipt);
+        let (receipt, _) = normalize_repairable_in_flight_receipt_lane_status_drift(receipt);
         Self::ensure_run_graph_dispatch_receipt_summary_consistency(&receipt)?;
         Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
         Ok(receipt)
