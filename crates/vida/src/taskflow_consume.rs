@@ -2301,6 +2301,47 @@ mod tests {
     }
 
     #[test]
+    fn direct_development_flow_next_node_maps_to_dispatch_target() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "test".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "test".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "designer": {
+                        "dispatch_target": "designer",
+                        "task_class": "design",
+                        "activation": {
+                            "activation_runtime_role": "designer"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let latest_status = serde_json::json!({
+            "next_node": "designer",
+            "active_node": "analyst"
+        });
+
+        assert_eq!(
+            super::canonical_dispatch_target_from_latest_status(&role_selection, &latest_status)
+                .as_deref(),
+            Some("designer")
+        );
+    }
+
+    #[test]
     fn blocked_dispatch_receipts_only_persist_in_execute_mode() {
         assert!(should_record_blocked_dispatch_receipt(
             ConsumeFinalMode::Execute

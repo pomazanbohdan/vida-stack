@@ -105,17 +105,85 @@ pub(crate) fn dispatch_contract_lane<'a>(
             return Some(lane);
         }
     }
-    if let Some(route) = execution_plan["development_flow"].get(canonical_target.as_str()) {
-        return Some(route);
-    }
-    if canonical_target != dispatch_target {
-        if let Some(route) = execution_plan["development_flow"].get(dispatch_target) {
+    for (selector, route) in direct_development_flow_route_selectors(execution_plan) {
+        if selector == canonical_target || selector == dispatch_target {
             return Some(route);
         }
     }
     let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
     legacy_dispatch_contract_lane(dispatch_contract, canonical_target.as_str())
         .or_else(|| legacy_dispatch_contract_lane(dispatch_contract, dispatch_target))
+}
+
+pub(crate) fn direct_development_flow_route_entries<'a>(
+    execution_plan: &'a serde_json::Value,
+) -> Vec<(String, &'a serde_json::Value)> {
+    direct_development_flow_route_records(execution_plan)
+        .into_iter()
+        .map(|entry| (entry.dispatch_target, entry.route))
+        .collect()
+}
+
+pub(crate) fn direct_development_flow_route_selectors<'a>(
+    execution_plan: &'a serde_json::Value,
+) -> Vec<(String, &'a serde_json::Value)> {
+    direct_development_flow_route_records(execution_plan)
+        .into_iter()
+        .flat_map(|entry| {
+            let route_id = canonical_dispatch_target_name(&entry.route_id);
+            if route_id == entry.dispatch_target {
+                vec![(entry.dispatch_target, entry.route)]
+            } else {
+                vec![
+                    (route_id, entry.route),
+                    (entry.dispatch_target, entry.route),
+                ]
+            }
+        })
+        .collect()
+}
+
+struct DirectDevelopmentFlowRouteEntry<'a> {
+    route_id: String,
+    dispatch_target: String,
+    route: &'a serde_json::Value,
+}
+
+fn direct_development_flow_route_records<'a>(
+    execution_plan: &'a serde_json::Value,
+) -> Vec<DirectDevelopmentFlowRouteEntry<'a>> {
+    execution_plan["development_flow"]
+        .as_object()
+        .into_iter()
+        .flat_map(|flow| flow.iter())
+        .filter(|(route_id, route)| direct_development_flow_entry_is_route(route_id, route))
+        .map(|(route_id, route)| DirectDevelopmentFlowRouteEntry {
+            route_id: route_id.to_string(),
+            dispatch_target: development_flow_route_dispatch_target(route_id, route),
+            route,
+        })
+        .collect()
+}
+
+fn direct_development_flow_entry_is_route(route_id: &str, route: &serde_json::Value) -> bool {
+    if matches!(route_id, "dispatch_contract" | "default_route") || !route.is_object() {
+        return false;
+    }
+    route.get("dispatch_target").is_some()
+        || route.get("target").is_some()
+        || route
+            .get("activation")
+            .is_some_and(serde_json::Value::is_object)
+        || route
+            .get("runtime_assignment")
+            .is_some_and(serde_json::Value::is_object)
+}
+
+fn development_flow_route_dispatch_target(route_id: &str, route: &serde_json::Value) -> String {
+    json_string(route.get("dispatch_target"))
+        .or_else(|| json_string(route.get("target")))
+        .map(|target| canonical_dispatch_target_name(&target))
+        .unwrap_or_else(|| canonical_dispatch_target_name(route_id))
 }
 
 pub(crate) fn dispatch_contract_lane_activation(lane: &serde_json::Value) -> &serde_json::Value {
@@ -207,6 +275,14 @@ pub(crate) fn dispatch_target_for_runtime_role(
             if lane_runtime_role.as_deref() == Some(runtime_role) {
                 return Some(dispatch_target.clone());
             }
+        }
+    }
+    for (dispatch_target, route) in direct_development_flow_route_entries(execution_plan) {
+        let activation = dispatch_contract_lane_activation(route);
+        let route_runtime_role = json_string(activation.get("activation_runtime_role"))
+            .or_else(|| json_string(route.get("runtime_role")));
+        if route_runtime_role.as_deref() == Some(runtime_role) {
+            return Some(dispatch_target);
         }
     }
     legacy_dispatch_target_for_runtime_role(runtime_role).map(str::to_string)
@@ -1111,6 +1187,10 @@ mod tests {
             .expect("development_flow route should resolve as a dispatch lane");
         assert_eq!(lane["dispatch_target"].as_str(), Some("designer"));
         assert_eq!(lane["task_class"].as_str(), Some("design"));
+        assert_eq!(
+            super::dispatch_target_for_runtime_role(&execution_plan, "designer").as_deref(),
+            Some("designer")
+        );
 
         let payload = route_explain_payload(
             &execution_plan,
@@ -1123,6 +1203,37 @@ mod tests {
             Some("internal_subagents")
         );
         assert_eq!(route_explain_status(&payload, Some(true)), "pass");
+    }
+
+    #[test]
+    fn dispatch_contract_lane_preserves_direct_route_key_aliases() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "coach_test_gate": {
+                    "dispatch_target": "coach",
+                    "task_class": "review",
+                    "activation": {
+                        "activation_runtime_role": "coach"
+                    }
+                }
+            }
+        });
+
+        let route_by_key = dispatch_contract_lane(&execution_plan, "coach_test_gate")
+            .expect("direct route key should resolve");
+        let route_by_target = dispatch_contract_lane(&execution_plan, "coach")
+            .expect("dispatch target should resolve");
+        assert_eq!(route_by_key, route_by_target);
+        assert_eq!(route_by_key["dispatch_target"].as_str(), Some("coach"));
+        assert_eq!(
+            super::dispatch_target_for_runtime_role(&execution_plan, "coach").as_deref(),
+            Some("coach")
+        );
+        let selectors: Vec<_> = super::direct_development_flow_route_selectors(&execution_plan)
+            .into_iter()
+            .map(|(selector, _)| selector)
+            .collect();
+        assert_eq!(selectors, vec!["coach_test_gate", "coach"]);
     }
 
     #[test]

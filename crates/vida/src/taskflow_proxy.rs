@@ -7878,6 +7878,11 @@ fn route_validate_targets(execution_plan: &serde_json::Value) -> Vec<String> {
                 .map(str::to_string),
         );
     }
+    targets.extend(
+        crate::taskflow_routing::direct_development_flow_route_selectors(execution_plan)
+            .into_iter()
+            .map(|(target, _)| target),
+    );
     let mut unique = BTreeSet::new();
     targets
         .into_iter()
@@ -11870,6 +11875,48 @@ agent_system:
 
         let targets = super::route_validate_targets(&execution_plan);
         assert_eq!(targets, vec!["implementation", "coach", "architecture"]);
+    }
+
+    #[test]
+    fn validate_routing_targets_include_direct_development_flow_routes() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": ["analyst"]
+                },
+                "designer": {
+                    "dispatch_target": "designer",
+                    "task_class": "design",
+                    "activation": {
+                        "activation_runtime_role": "designer"
+                    }
+                }
+            }
+        });
+
+        let targets = super::route_validate_targets(&execution_plan);
+        assert_eq!(targets, vec!["analyst", "designer"]);
+    }
+
+    #[test]
+    fn validate_routing_targets_include_direct_route_key_aliases() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": ["analyst"]
+                },
+                "coach_test_gate": {
+                    "dispatch_target": "coach",
+                    "task_class": "review",
+                    "activation": {
+                        "activation_runtime_role": "coach"
+                    }
+                }
+            }
+        });
+
+        let targets = super::route_validate_targets(&execution_plan);
+        assert_eq!(targets, vec!["analyst", "coach_test_gate", "coach"]);
     }
 
     #[test]

@@ -1327,6 +1327,9 @@ pub(crate) fn execution_plan_route_for_dispatch_target<'a>(
 
     for target in targets {
         let target = target.as_str();
+        if let Some(route) = dispatch_contract_lane(execution_plan, target) {
+            return Some(route);
+        }
         if target == "analysis" {
             if let Some(route) = development_flow
                 .get("analysis")
@@ -1358,9 +1361,6 @@ pub(crate) fn execution_plan_route_for_dispatch_target<'a>(
             .get(target)
             .filter(|value| !value.is_null())
         {
-            return Some(route);
-        }
-        if let Some(route) = dispatch_contract_lane(execution_plan, target) {
             return Some(route);
         }
     }
