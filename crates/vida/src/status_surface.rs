@@ -1737,22 +1737,31 @@ async fn cached_status_projection_current_runtime_admissible(
     if payload_has_closed_task_active_run_projection_mismatch(&payload) {
         return false;
     }
-    if payload
+    let cached_active_unit_is_null = payload
         .get("active_bounded_unit")
         .unwrap_or(&serde_json::Value::Null)
-        .is_null()
-    {
-        return true;
-    }
+        .is_null();
 
-    let Ok(store) = StateStore::open_existing_read_only_with_strict_timeout(
+    let store = match StateStore::open_existing_read_only_with_strict_timeout(
         state_dir.to_path_buf(),
         std::time::Duration::from_millis(250),
     )
     .await
-    else {
-        return false;
+    {
+        Ok(store) => store,
+        Err(error) if StateStore::error_is_lock_contention(&error) => {
+            return !cached_active_unit_is_null;
+        }
+        Err(_) => return false,
     };
+    if cached_active_unit_is_null {
+        let Ok(all_tasks) = store.list_tasks(None, true).await else {
+            return false;
+        };
+        return !all_tasks
+            .iter()
+            .any(|task| task.status.as_str() == "in_progress");
+    }
     let latest_terminal_task_active_run_graph_status =
         match store.latest_terminal_task_active_run_graph_status().await {
             Ok(summary) => summary,
@@ -3818,6 +3827,57 @@ mod tests {
 
         let _ = fs::remove_dir_all(root);
         restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_cached_projection_is_admissible_under_read_lock_contention() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-status-cache-lock-contention-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open state store");
+        store.close().await;
+        let held_reader = state_store::StateStore::open_existing_read_only(root.clone())
+            .await
+            .expect("held read-only store should open");
+        let cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "active_bounded_unit": {
+                "kind": "task_graph_task",
+                "task_id": "task-under-lock",
+                "task_status": "in_progress"
+            }
+        });
+
+        assert!(
+            super::cached_status_projection_current_runtime_admissible(&root, &cached.to_string())
+                .await,
+            "recent cached status should remain admissible when only the live state read is locked"
+        );
+        let null_active_cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "active_bounded_unit": serde_json::Value::Null
+        });
+        assert!(
+            !super::cached_status_projection_current_runtime_admissible(
+                &root,
+                &null_active_cached.to_string()
+            )
+            .await,
+            "cached null active unit must not be admitted when the live TaskFlow check is locked"
+        );
+
+        drop(held_reader);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

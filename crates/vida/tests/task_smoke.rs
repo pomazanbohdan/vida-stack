@@ -3525,6 +3525,87 @@ fn task_close_feedback_ignores_historical_blocker_words_in_success_reason() {
 }
 
 #[test]
+fn task_close_feedback_ignores_stale_superseded_blocker_words_in_success_reason() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    create_epic_parent(
+        &state_dir,
+        "feedback-stale-blocker-parent",
+        "Feedback stale blocker parent",
+        "open",
+    );
+    for (task_id, title) in [
+        (
+            "feedback-stale-blocker-wording-task",
+            "Feedback stale blocker wording task",
+        ),
+        (
+            "feedback-superseded-blocked-wording-task",
+            "Feedback superseded blocked wording task",
+        ),
+    ] {
+        let created = run_command_json(
+            &[
+                "task",
+                "create",
+                task_id,
+                title,
+                "--parent-id",
+                "feedback-stale-blocker-parent",
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(created["status"], "pass");
+    }
+
+    let stale_close = run_command_json(
+        &[
+            "task",
+            "close",
+            "feedback-stale-blocker-wording-task",
+            "--reason",
+            "Stale_not_reproduced: previous blocker/blocked runtime report is superseded by current proof; proof commands passed.",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(stale_close["status"], "pass");
+    assert_eq!(stale_close["blocker_codes"], serde_json::json!([]));
+    assert_eq!(
+        stale_close["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(
+        stale_close["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
+        serde_json::json!([])
+    );
+
+    let superseded_close = run_command_json(
+        &[
+            "task",
+            "close",
+            "feedback-superseded-blocked-wording-task",
+            "--reason",
+            "Superseded external report mentioned a blocked analyst route and prior blocker wording; current validation passed.",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(superseded_close["status"], "pass");
+    assert_eq!(superseded_close["blocker_codes"], serde_json::json!([]));
+    assert_eq!(
+        superseded_close["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(
+        superseded_close["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
+        serde_json::json!([])
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn task_close_feedback_ignores_recovery_readiness_blocked_diagnostic_reason() {
     let (project_root, state_dir) = project_bound_state_dir();
     create_epic_parent(

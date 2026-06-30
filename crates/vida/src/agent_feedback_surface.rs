@@ -248,6 +248,10 @@ fn ignored_feedback_meta_language(reason: &str) -> Vec<String> {
             "blocked diagnostic wording",
             "blocker wording",
             "blocker diagnostic wording",
+            "blocked analyst route",
+            "blocked designer route",
+            "blocked runtime route",
+            "blocked runtime report",
             "continuation blockers remain separate",
             "continuation blockers remain",
             "continuation blocker remains",
@@ -386,6 +390,10 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "blocker flag",
             "blocked flag",
             "blocked field",
+            "blocked analyst route",
+            "blocked designer route",
+            "blocked runtime route",
+            "blocked runtime report",
             "continuation blockers remain separate",
             "continuation blockers remain",
             "continuation blocker remains",
@@ -431,6 +439,12 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
 fn ignored_historical_blocker_meta_phrases(reason: &str) -> Vec<String> {
     let normalized = reason.to_ascii_lowercase();
     let has_historical_context = [
+        "stale",
+        "stale_not_reproduced",
+        "stale not reproduced",
+        "superseded",
+        "supersedes",
+        "not reproduced",
         "closure_ready=false",
         "verdict text",
         "no longer bridges",
@@ -445,6 +459,20 @@ fn ignored_historical_blocker_meta_phrases(reason: &str) -> Vec<String> {
     }
 
     [
+        "blocker/blocked",
+        "blocker / blocked",
+        "blocker or blocked",
+        "blocker and blocked",
+        "blocker wording",
+        "blocked wording",
+        "prior blocker",
+        "prior blocked",
+        "previous blocker",
+        "previous blocked",
+        "stale blocker",
+        "stale blocked",
+        "superseded blocker",
+        "superseded blocked",
         "blocker/rework",
         "blocker_code/blockers",
         "blocked verification lane",
@@ -480,7 +508,8 @@ fn ignored_historical_failure_state_segments(reason: &str) -> Vec<String> {
                         &normalized,
                         &full_reason_normalized,
                     ))
-                || has_current_failure_outcome_language(&normalized)
+                || (has_current_failure_outcome_language(&normalized)
+                    && !has_stale_or_superseded_context(&normalized))
             {
                 return None;
             }
@@ -647,6 +676,12 @@ fn has_historical_or_success_evidence_context(normalized: &str) -> bool {
         "formerly",
         "past",
         "old ",
+        "stale",
+        "stale_not_reproduced",
+        "stale not reproduced",
+        "superseded",
+        "supersedes",
+        "not reproduced",
         "quoted",
         "quote",
         "repro",
@@ -685,6 +720,19 @@ fn has_historical_or_success_evidence_context(normalized: &str) -> bool {
         || (has_evidence_context
             && has_success_context
             && has_failure_state_artifact_language(normalized))
+}
+
+fn has_stale_or_superseded_context(normalized: &str) -> bool {
+    [
+        "stale",
+        "stale_not_reproduced",
+        "stale not reproduced",
+        "superseded",
+        "supersedes",
+        "not reproduced",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
 }
 
 fn has_failure_state_artifact_language(normalized: &str) -> bool {
@@ -814,7 +862,14 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "proof:",
         "proof commands passed",
         "reported",
+        "report",
         "reports",
+        "stale",
+        "stale_not_reproduced",
+        "stale not reproduced",
+        "superseded",
+        "supersedes",
+        "not reproduced",
         "not a pr-specific blocker",
         "not a current blocker",
         "not an active blocker",
@@ -2018,6 +2073,25 @@ mod tests {
             .any(|phrase| phrase.as_str().is_some_and(
                 |value| value.contains("previous task close output quoted blocker details")
             )));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_stale_superseded_blocker_wording() {
+        for reason in [
+            "Stale_not_reproduced: previous blocker/blocked runtime report is superseded by current proof; proof commands passed.",
+            "Superseded external report mentioned a blocked analyst route and prior blocker wording; current validation passed.",
+        ] {
+            assert_eq!(
+                super::canonical_close_status_from_reason(reason),
+                None,
+                "stale/superseded evidence context should not become a current close state: {reason}"
+            );
+            let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+            let score = super::default_feedback_score(outcome, "verification");
+            let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+            assert_eq!(outcome, "success");
+            assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        }
     }
 
     #[test]
