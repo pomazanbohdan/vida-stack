@@ -6804,7 +6804,6 @@ pub(crate) async fn derive_downstream_dispatch_preview(
         super::execution_plan_agent_only_development_required(&role_selection.execution_plan);
     let dispatch_contract = &role_selection.execution_plan["development_flow"]["dispatch_contract"];
     let lane_sequence = dispatch_contract_lane_sequence(dispatch_contract);
-    let execution_lane_sequence = dispatch_contract_execution_lane_sequence(dispatch_contract);
     let allowed_next_lane_sequence =
         dispatch_contract_allowed_next_lane_sequence(dispatch_contract);
     if receipt.dispatch_kind == "agent_lane"
@@ -7019,12 +7018,27 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             Vec::new(),
         ),
         _ if receipt.dispatch_kind == "agent_lane" => {
+            if matches!(
+                receipt.dispatch_status.as_str(),
+                "routed" | "executing" | "bridge_request_pending"
+            ) {
+                return (
+                    None,
+                    Some("vida agent-init".to_string()),
+                    Some(format!(
+                        "`{}` dispatch is in flight; wait for terminal execution evidence before deriving downstream lane blockers",
+                        receipt.dispatch_target
+                    )),
+                    false,
+                    Vec::new(),
+                );
+            }
             let current_index = execution_lane_sequence_index_for_target(
-                &execution_lane_sequence,
+                &allowed_next_lane_sequence,
                 &receipt.dispatch_target,
                 receipt.downstream_dispatch_last_target.as_deref(),
             );
-            if current_index.is_some_and(|index| execution_lane_sequence.get(index + 1).is_none()) {
+            if current_index.is_some_and(|index| allowed_next_lane_sequence.get(index + 1).is_none()) {
                 if dispatch_contract_lane(&role_selection.execution_plan, &receipt.dispatch_target)
                     .is_some_and(|lane| {
                         lane["stage"].as_str() == Some("execution")
@@ -7058,16 +7072,20 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             }
             let current_lane =
                 dispatch_contract_lane(&role_selection.execution_plan, &receipt.dispatch_target);
+            let configured_successor_present =
+                current_index.and_then(|index| allowed_next_lane_sequence.get(index + 1)).is_some();
             if current_lane.and_then(|lane| lane["stage"].as_str()) == Some("design_gate")
                 || (receipt.dispatch_target == "specification"
                     && current_lane.and_then(|lane| lane["stage"].as_str()).is_none()
                     && (dispatch_contract.get("specification_activation").is_some()
                         || role_selection.tracked_flow_entry.as_deref() == Some("spec-pack")))
             {
-                if !tracked_specification_gate_required(role_selection) {
-                    let has_specification_evidence =
-                        dispatch_receipt_has_execution_evidence(receipt)
-                            || dispatch_receipt_allows_synthetic_lane_completion(receipt);
+                if configured_successor_present {
+                    // The configured lane sequence owns multi-agent progression; the
+                    // spec/design closure shortcut only applies at a terminal lane.
+                } else if !tracked_specification_gate_required(role_selection) {
+                    let has_specification_evidence = dispatch_receipt_has_execution_evidence(receipt)
+                        || dispatch_receipt_allows_synthetic_lane_completion(receipt);
                     let evidence_blocker = current_lane
                         .and_then(|lane| lane["completion_blocker"].as_str())
                         .unwrap_or(blocker_code_str(BlockerCode::PendingSpecificationEvidence));
@@ -7088,7 +7106,7 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                             )
                         },
                     );
-                }
+                } else {
                 let has_specification_evidence = dispatch_receipt_has_execution_evidence(receipt)
                     || tracked_specification_gate_completion_ready(store, role_selection, receipt)
                         .await;
@@ -7176,21 +7194,7 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                         blockers
                     },
                 );
-            }
-            if matches!(
-                receipt.dispatch_status.as_str(),
-                "routed" | "executing"
-            ) {
-                return (
-                    None,
-                    Some("vida agent-init".to_string()),
-                    Some(format!(
-                        "`{}` dispatch is in flight; wait for terminal execution evidence before deriving downstream lane blockers",
-                        receipt.dispatch_target
-                    )),
-                    false,
-                    Vec::new(),
-                );
+                }
             }
             let implementation = &role_selection.execution_plan["development_flow"]["implementation"];
             let analysis_target = implementation
@@ -7257,7 +7261,7 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     })
                     .and_then(|target| {
                         execution_lane_sequence_index_for_target(
-                            &execution_lane_sequence,
+                            &allowed_next_lane_sequence,
                             &target,
                             receipt.downstream_dispatch_last_target.as_deref(),
                         )
@@ -7266,7 +7270,7 @@ pub(crate) async fn derive_downstream_dispatch_preview(
             let Some(current_index) = current_index else {
                 return (None, None, None, false, Vec::new());
             };
-            let next_target = execution_lane_sequence.get(current_index + 1);
+            let next_target = allowed_next_lane_sequence.get(current_index + 1);
             if let Some(next_target) = next_target {
                 let Some(next_target_resolution) =
                     resolve_runtime_dispatch_target(&role_selection.execution_plan, next_target)
@@ -18516,6 +18520,219 @@ host_environment:
             let packet = read_json(harness.path(), packet_path);
             assert_eq!(packet["dispatch_target"], "designer");
             assert_eq!(packet["downstream_dispatch_target"], "designer");
+        });
+    }
+
+    #[test]
+    fn designer_completion_uses_configured_lane_sequence_before_closure_fallback() {
+        let root = std::env::current_dir()
+            .expect("current dir should resolve")
+            .join("target")
+            .join("tmp")
+            .join(format!(
+                "vida-designer-next-lane-preview-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|duration| duration.as_nanos())
+                    .unwrap_or(0)
+            ));
+        let state_root = root.join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let mut role_selection =
+                configured_first_step_role_selection(Some("analyst"), Some("analyst"));
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_sequence"] = json!(["analyst", "designer", "autotester"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["execution_lane_sequence"] = json!(["analyst", "autotester"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_catalog"]["designer"] = json!({
+                "dispatch_target": "designer",
+                "task_class": "design",
+                "closure_class": "design",
+                "stage": "design_gate",
+                "activation": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "designer"
+                }
+            });
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_catalog"]["autotester"] = json!({
+                "dispatch_target": "autotester",
+                "task_class": "verification",
+                "closure_class": "proof",
+                "stage": "execution",
+                "activation": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "tester"
+                }
+            });
+            let run_graph_bootstrap = json!({ "run_id": "run-designer-autotester-preview" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-designer-autotester-preview".to_string(),
+                dispatch_target: "designer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent host-bridge --complete".to_string()),
+                dispatch_command: Some("vida agent host-bridge --complete".to_string()),
+                dispatch_packet_path: Some("/tmp/designer-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("designer".to_string()),
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("designer".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-30T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview_with_owned_paths(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+                &["crates/vida/src/runtime_dispatch_state.rs".to_string()],
+            )
+            .await
+            .expect("designer completion should advance to the configured next lane");
+
+            assert_eq!(
+                receipt.downstream_dispatch_target.as_deref(),
+                Some("autotester")
+            );
+            assert!(receipt.downstream_dispatch_ready);
+            assert!(receipt.downstream_dispatch_blockers.is_empty());
+            let packet_path = receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .expect("autotester downstream packet should be written");
+            let packet_path = std::path::PathBuf::from(packet_path);
+            let packet_path = if packet_path.is_absolute() {
+                packet_path
+            } else {
+                root.join(packet_path)
+            };
+            let packet = serde_json::from_str::<serde_json::Value>(
+                &fs::read_to_string(packet_path).expect("packet should be readable"),
+            )
+            .expect("packet should be json");
+            assert_eq!(packet["dispatch_target"], "autotester");
+            assert_eq!(packet["downstream_dispatch_target"], "autotester");
+            store.close().await;
+            let _ = fs::remove_dir_all(&root);
+        });
+    }
+
+    #[test]
+    fn pending_designer_lane_does_not_precompute_terminal_closure() {
+        let root = std::env::current_dir()
+            .expect("current dir should resolve")
+            .join("target")
+            .join("tmp")
+            .join(format!(
+                "vida-designer-pending-preview-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|duration| duration.as_nanos())
+                    .unwrap_or(0)
+            ));
+        let state_root = root.join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let mut role_selection =
+                configured_first_step_role_selection(Some("analyst"), Some("analyst"));
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_sequence"] = json!(["analyst", "designer", "autotester"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["execution_lane_sequence"] = json!(["analyst", "designer", "autotester"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_catalog"]["designer"] = json!({
+                "dispatch_target": "designer",
+                "task_class": "design",
+                "closure_class": "design",
+                "stage": "design_gate",
+                "activation": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "designer"
+                }
+            });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-designer-pending-preview".to_string(),
+                dispatch_target: "designer".to_string(),
+                dispatch_status: "bridge_request_pending".to_string(),
+                lane_status: "lane_open".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/designer-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: Some("host_tool_bridge_adapter_required".to_string()),
+                downstream_dispatch_target: Some("closure".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec![
+                    "host_tool_bridge_adapter_required".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("designer".to_string()),
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("designer".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-30T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview_with_owned_paths(
+                &store,
+                &role_selection,
+                &json!({ "run_id": "run-designer-pending-preview" }),
+                &mut receipt,
+                &[],
+            )
+            .await
+            .expect("pending designer lane should refresh without terminal projection");
+
+            assert_eq!(receipt.downstream_dispatch_target, None);
+            assert!(!receipt.downstream_dispatch_ready);
+            assert!(receipt.downstream_dispatch_blockers.is_empty());
+            assert_eq!(
+                receipt.downstream_dispatch_note.as_deref(),
+                Some("`designer` dispatch is in flight; wait for terminal execution evidence before deriving downstream lane blockers")
+            );
+            store.close().await;
+            let _ = fs::remove_dir_all(&root);
         });
     }
 

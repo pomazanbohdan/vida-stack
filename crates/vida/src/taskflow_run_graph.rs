@@ -429,6 +429,7 @@ fn run_graph_repair_target(
     projection_truth
         .dispatch_receipt
         .as_ref()
+        .filter(|receipt| !receipt_has_inflight_downstream_projection(receipt))
         .and_then(|receipt| {
             receipt
                 .downstream_dispatch_target
@@ -449,6 +450,14 @@ fn run_graph_repair_target(
                 .filter(|value| !value.is_empty() && *value != "none")
                 .map(str::to_string)
         })
+}
+
+fn receipt_has_inflight_downstream_projection(receipt: &RunGraphDispatchReceipt) -> bool {
+    receipt.dispatch_kind == "agent_lane"
+        && matches!(
+            receipt.dispatch_status.as_str(),
+            "routed" | "executing" | "bridge_request_pending"
+        )
 }
 
 fn run_graph_state_operator_artifact_refs(
@@ -472,6 +481,7 @@ fn run_graph_state_operator_artifact_refs(
         run_graph_repair_target(status, projection_truth).as_deref(),
     );
     if let Some(receipt) = projection_truth.dispatch_receipt.as_ref() {
+        let inflight_downstream_projection = receipt_has_inflight_downstream_projection(receipt);
         insert_string_artifact_ref(
             &mut refs,
             "dispatch_target",
@@ -494,30 +504,32 @@ fn run_graph_state_operator_artifact_refs(
             receipt.dispatch_result_path.as_deref(),
         );
         insert_string_artifact_ref(&mut refs, "blocker_code", receipt.blocker_code.as_deref());
-        insert_string_artifact_ref(
-            &mut refs,
-            "downstream_dispatch_target",
-            receipt.downstream_dispatch_target.as_deref(),
-        );
-        insert_string_artifact_ref(
-            &mut refs,
-            "downstream_dispatch_status",
-            receipt.downstream_dispatch_status.as_deref(),
-        );
-        insert_string_artifact_ref(
-            &mut refs,
-            "downstream_dispatch_result_path",
-            receipt.downstream_dispatch_result_path.as_deref(),
-        );
-        refs.insert(
-            "downstream_dispatch_ready".to_string(),
-            serde_json::json!(receipt.downstream_dispatch_ready),
-        );
-        if !receipt.downstream_dispatch_blockers.is_empty() {
-            refs.insert(
-                "downstream_dispatch_blockers".to_string(),
-                serde_json::json!(receipt.downstream_dispatch_blockers),
+        if !inflight_downstream_projection {
+            insert_string_artifact_ref(
+                &mut refs,
+                "downstream_dispatch_target",
+                receipt.downstream_dispatch_target.as_deref(),
             );
+            insert_string_artifact_ref(
+                &mut refs,
+                "downstream_dispatch_status",
+                receipt.downstream_dispatch_status.as_deref(),
+            );
+            insert_string_artifact_ref(
+                &mut refs,
+                "downstream_dispatch_result_path",
+                receipt.downstream_dispatch_result_path.as_deref(),
+            );
+            refs.insert(
+                "downstream_dispatch_ready".to_string(),
+                serde_json::json!(receipt.downstream_dispatch_ready),
+            );
+            if !receipt.downstream_dispatch_blockers.is_empty() {
+                refs.insert(
+                    "downstream_dispatch_blockers".to_string(),
+                    serde_json::json!(receipt.downstream_dispatch_blockers),
+                );
+            }
         }
         if let Some(root) = state_root {
             let result = receipt
@@ -1473,10 +1485,43 @@ fn build_run_graph_state_json_payload_with_task_identity_and_state_root(
             "run_id": status.run_id,
             "run_graph_status": status,
             "delegation_gate": status.delegation_gate(),
-            "projection_truth": projection_truth,
+            "projection_truth": public_run_graph_projection_truth(projection_truth),
             "task_identity": task_identity,
         }),
     )
+}
+
+fn public_run_graph_projection_truth(
+    projection_truth: &RunGraphProjectionTruth,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(projection_truth).unwrap_or(serde_json::Value::Null);
+    let Some(receipt) = projection_truth.dispatch_receipt.as_ref() else {
+        return value;
+    };
+    if !receipt_has_inflight_downstream_projection(receipt) {
+        return value;
+    }
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "stale_downstream_projection_suppressed".to_string(),
+            serde_json::json!(true),
+        );
+        if let Some(receipt_object) = object
+            .get_mut("dispatch_receipt")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            receipt_object.remove("downstream_dispatch_target");
+            receipt_object.remove("downstream_dispatch_command");
+            receipt_object.remove("downstream_dispatch_note");
+            receipt_object.remove("downstream_dispatch_ready");
+            receipt_object.remove("downstream_dispatch_blockers");
+            receipt_object.remove("downstream_dispatch_packet_path");
+            receipt_object.remove("downstream_dispatch_status");
+            receipt_object.remove("downstream_dispatch_result_path");
+            receipt_object.remove("downstream_dispatch_trace_path");
+        }
+    }
+    value
 }
 
 fn build_run_graph_state_json_payload(
@@ -11500,6 +11545,72 @@ agent_system:
             selected_backend: Some("codex".to_string()),
             recorded_at: "2026-04-24T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    fn run_graph_status_json_suppresses_inflight_stale_downstream_projection() {
+        let mut status = default_run_graph_status("run-designer-pending", "designer", "design");
+        status.task_id = "task-designer-pending".to_string();
+        status.active_node = "designer".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "designer_blocked".to_string();
+        status.recovery_ready = false;
+
+        let mut receipt = packet_gate_receipt("run-designer-pending");
+        receipt.dispatch_target = "designer".to_string();
+        receipt.dispatch_status = "bridge_request_pending".to_string();
+        receipt.lane_status = "lane_open".to_string();
+        receipt.blocker_code = Some("host_tool_bridge_adapter_required".to_string());
+        receipt.downstream_dispatch_target = Some("closure".to_string());
+        receipt.downstream_dispatch_command = None;
+        receipt.downstream_dispatch_note = Some(
+            "specification evidence is recorded and no tracked design-first gate is required; close the bounded lane"
+                .to_string(),
+        );
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_blockers =
+            vec!["host_tool_bridge_adapter_required".to_string()];
+
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: false,
+            next_lawful_operator_action: Some(
+                "vida taskflow run-graph status run-designer-pending --json".to_string(),
+            ),
+            dispatch_receipt: Some(receipt),
+            continuation_binding: None,
+        };
+
+        let payload = build_run_graph_state_json_payload_with_task_identity_and_state_root(
+            "vida taskflow run-graph status",
+            &status,
+            &projection_truth,
+            None,
+            None,
+        )
+        .expect("run-graph status payload should build");
+
+        assert_eq!(payload["artifact_refs"]["repair_target"], "designer");
+        assert!(payload["artifact_refs"]
+            .get("downstream_dispatch_target")
+            .is_none());
+        assert!(payload["artifact_refs"]
+            .get("downstream_dispatch_ready")
+            .is_none());
+        assert_eq!(
+            payload["projection_truth"]["stale_downstream_projection_suppressed"],
+            true
+        );
+        let receipt = &payload["projection_truth"]["dispatch_receipt"];
+        assert!(receipt.get("downstream_dispatch_target").is_none());
+        assert!(receipt.get("downstream_dispatch_ready").is_none());
+        assert_eq!(receipt["dispatch_status"], "bridge_request_pending");
     }
 
     #[test]
