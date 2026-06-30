@@ -6782,10 +6782,15 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
             .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "vida-host-bridge-complete-missing-preflight-{}-{nanos}",
-            std::process::id()
-        ));
+        let root = std::env::current_dir()
+            .expect("current dir")
+            .join("target/tmp")
+            .join(format!(
+                "vida-host-bridge-complete-missing-preflight-{}-{nanos}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create host bridge state root");
         let store = state_store::StateStore::open(root.clone())
             .await
             .expect("open store");
@@ -7026,8 +7031,43 @@ mod tests {
             after.blocker_code.as_deref(),
             Some("host_bridge_completion_result_blocked")
         );
-        assert!(after.dispatch_result_path.is_some());
+        let dispatch_result_path = after
+            .dispatch_result_path
+            .as_ref()
+            .expect("dispatch result path should be persisted");
+        assert!(
+            std::path::Path::new(dispatch_result_path).exists(),
+            "dispatch result path should exist: {dispatch_result_path}"
+        );
         assert!(after.downstream_dispatch_trace_path.is_some());
+        let result: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dispatch_result_path).expect("canonical result readable"),
+        )
+        .expect("canonical result should decode");
+        let submitted_result_path = std::fs::canonicalize(&staged_result_path)
+            .expect("staged result should canonicalize")
+            .display()
+            .to_string();
+        assert_eq!(
+            result["submitted_result_path"],
+            submitted_result_path.as_str()
+        );
+        assert_eq!(
+            result["submitted_result_source"],
+            "operator_supplied_result_file"
+        );
+        let receipt: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&receipt_path).expect("receipt readable"),
+        )
+        .expect("receipt should decode");
+        assert_eq!(
+            receipt["submitted_result_path"],
+            submitted_result_path.as_str()
+        );
+        assert_eq!(
+            receipt["submitted_result_source"],
+            "operator_supplied_result_file"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

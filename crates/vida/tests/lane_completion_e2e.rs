@@ -311,6 +311,21 @@ fn lane_public_surface_matrix_fails_closed_with_json_contracts() {
             "vida lane takeover-ready",
             "missing_lane_receipt",
         ),
+        (
+            "run_lane complete missing run with result file",
+            vec![
+                "lane",
+                "complete",
+                "matrix-missing-run",
+                "--receipt-id",
+                "receipt-1",
+                "--host-bridge-result-file",
+                "missing.json",
+                "--json",
+            ],
+            "vida lane complete",
+            "missing_lane_receipt",
+        ),
     ] {
         let (payload, success) = run_vida_json_with_state(&args, &state_root);
         assert!(!success, "{label} should fail closed: {payload}");
