@@ -257,6 +257,86 @@ mod tests {
 
         let _ = fs::remove_dir_all(&state_root);
     }
+
+    #[test]
+    fn completion_result_separates_typed_blockers_from_summary_derivation() {
+        let state_root = std::env::temp_dir().join(format!(
+            "vida-lane-completion-summary-derivation-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&state_root);
+
+        let pass_path = super::write_runtime_lane_completion_result_with_summary_next_and_blockers(
+            &state_root,
+            "run-autotester-pass",
+            "autotester",
+            "receipt-pass",
+            "packet.json",
+            Some("verdict: blocked; rework required text is advisory-only"),
+            false,
+            Some("developer"),
+            &[],
+            None,
+        )
+        .expect("advisory summary should not block explicit typed pass");
+        let pass: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&pass_path).expect("pass result should be readable"),
+        )
+        .expect("pass result should decode");
+
+        assert_eq!(pass["status"], "pass");
+        assert_eq!(pass["blocker_codes"], serde_json::json!([]));
+        assert_eq!(pass["allowed_next_node"], "developer");
+        assert_eq!(pass["summary_classifier_source"], "typed_blockers_only");
+        assert_eq!(pass["host_bridge_completion_authority"]["accepted"], true);
+        assert_eq!(
+            pass["host_bridge_completion_authority"]["final_state"],
+            "Passed"
+        );
+        assert_eq!(
+            pass["host_bridge_completion_authority"]["effect_intents"],
+            serde_json::json!(["CommitEvidence", "PlanNextStepPacket"])
+        );
+
+        let typed_blockers = vec!["host_bridge_completion_result_blocked".to_string()];
+        let blocked_path =
+            super::write_runtime_lane_completion_result_with_summary_next_and_blockers(
+                &state_root,
+                "run-autotester-blocked",
+                "autotester",
+                "receipt-blocked",
+                "packet.json",
+                Some("summary says pass, but typed blocker is authoritative"),
+                false,
+                Some("developer"),
+                &typed_blockers,
+                Some("developer"),
+            )
+            .expect("typed blocker should produce blocked completion");
+        let blocked: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&blocked_path).expect("blocked result should be readable"),
+        )
+        .expect("blocked result should decode");
+
+        assert_eq!(blocked["status"], "blocked");
+        assert_eq!(blocked["blocker_codes"], serde_json::json!(typed_blockers));
+        assert_eq!(blocked["allowed_next_node"], "developer_rework");
+        assert_eq!(blocked["summary_classifier_source"], "typed_blockers_only");
+        assert_eq!(
+            blocked["host_bridge_completion_authority"]["accepted"],
+            false
+        );
+        assert_eq!(
+            blocked["host_bridge_completion_authority"]["final_state"],
+            "Blocked"
+        );
+        assert_eq!(
+            blocked["host_bridge_completion_authority"]["effect_intents"],
+            serde_json::json!(["RecordBlocker"])
+        );
+
+        let _ = fs::remove_dir_all(&state_root);
+    }
 }
 
 pub(crate) fn write_runtime_lane_completion_result_with_summary(

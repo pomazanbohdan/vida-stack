@@ -4,6 +4,7 @@ pub const BLOCKER_OUTCOME_CONTRADICTION: &str = "host_bridge_completion_outcome_
 pub const BLOCKER_PROVENANCE_REJECTED: &str = "host_bridge_completion_provenance_rejected";
 pub const BLOCKER_RECEIPT_NOT_BOUND: &str = "host_bridge_completion_receipt_not_bound";
 pub const BLOCKER_TYPED_BLOCKED_OUTCOME: &str = "host_bridge_completion_blocked";
+pub const BLOCKER_TYPED_FAILED_OUTCOME: &str = "host_bridge_completion_failed";
 pub const BLOCKER_SUMMARY_DERIVED: &str = "host_bridge_completion_summary_blocked";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,17 +59,145 @@ pub struct HostBridgeCompletionTransitionCase {
     pub name: &'static str,
     pub input: HostBridgeCompletionAuthorityInput,
     pub expected_state: HostBridgeCompletionState,
+    pub expected_events: Vec<HostBridgeCompletionEvent>,
+    pub expected_effect_intents: Vec<HostBridgeCompletionEffectIntent>,
+    pub expected_next_step_packet_admitted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostBridgeCompletionTransition {
+    pub from_state: HostBridgeCompletionState,
+    pub event: HostBridgeCompletionEvent,
+    pub to_state: HostBridgeCompletionState,
+    pub effect_intents: Vec<HostBridgeCompletionEffectIntent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostBridgeCompletionFsm {
+    state: HostBridgeCompletionState,
+    transitions: Vec<HostBridgeCompletionTransition>,
+}
+
+impl Default for HostBridgeCompletionFsm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HostBridgeCompletionFsm {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: HostBridgeCompletionState::Pending,
+            transitions: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn state(&self) -> HostBridgeCompletionState {
+        self.state
+    }
+
+    #[must_use]
+    pub fn transitions(&self) -> &[HostBridgeCompletionTransition] {
+        &self.transitions
+    }
+
+    #[must_use]
+    pub fn decide(self, input: HostBridgeCompletionAuthorityInput) -> HostBridgeCompletionAuthorityDecision {
+        let next_step_packet_requested = input.next_step_packet_requested;
+        let (outcome, blockers) = derive_completion_authority_outcome(&input);
+        self.apply_outcome(outcome, blockers, next_step_packet_requested)
+    }
+
+    fn apply_outcome(
+        mut self,
+        outcome: HostBridgeCompletionOutcome,
+        blocker_codes: Vec<String>,
+        next_step_packet_requested: bool,
+    ) -> HostBridgeCompletionAuthorityDecision {
+        self.transition(
+            HostBridgeCompletionEvent::ResultReceived,
+            HostBridgeCompletionState::ResultReceived,
+            Vec::new(),
+        );
+
+        let row = COMPLETION_AUTHORITY_TRANSITIONS
+            .iter()
+            .find(|row| row.outcome == outcome)
+            .expect("host bridge completion outcome should have a transition row");
+        let next_step_packet_admitted = matches!(
+            row.next_step_packet_policy,
+            NextStepPacketPolicy::AdmitWhenRequested
+        ) && next_step_packet_requested;
+        let mut effect_intents = row.effect_intents.to_vec();
+        if next_step_packet_admitted {
+            effect_intents.push(HostBridgeCompletionEffectIntent::PlanNextStepPacket);
+        }
+        self.transition(row.event, row.final_state, effect_intents);
+        if row.accepted {
+            self.transition(
+                HostBridgeCompletionEvent::EvidenceCommitted,
+                row.final_state,
+                Vec::new(),
+            );
+        }
+
+        let events = self
+            .transitions
+            .iter()
+            .map(|transition| transition.event)
+            .collect::<Vec<_>>();
+        let effect_intents = self
+            .transitions
+            .iter()
+            .flat_map(|transition| transition.effect_intents.iter().copied())
+            .collect::<Vec<_>>();
+
+        HostBridgeCompletionAuthorityDecision {
+            final_state: row.final_state,
+            accepted: row.accepted,
+            blocker_codes,
+            events,
+            effect_intents,
+            next_step_packet_admitted,
+        }
+    }
+
+    fn transition(
+        &mut self,
+        event: HostBridgeCompletionEvent,
+        to_state: HostBridgeCompletionState,
+        effect_intents: Vec<HostBridgeCompletionEffectIntent>,
+    ) {
+        let from_state = self.state;
+        self.transitions.push(HostBridgeCompletionTransition {
+            from_state,
+            event,
+            to_state,
+            effect_intents,
+        });
+        self.state = to_state;
+    }
 }
 
 #[must_use]
 pub fn decide_host_bridge_completion_authority(
     input: HostBridgeCompletionAuthorityInput,
 ) -> HostBridgeCompletionAuthorityDecision {
+    HostBridgeCompletionFsm::new().decide(input)
+}
+
+#[must_use]
+fn derive_completion_authority_outcome(
+    input: &HostBridgeCompletionAuthorityInput,
+) -> (HostBridgeCompletionOutcome, Vec<String>) {
     let mut blockers = typed_blockers(&input);
     blockers.extend(summary_blocker_codes(input.summary.as_deref()));
     dedup_blockers(&mut blockers);
     let passed = completion_tuple_is_passed(&input);
-    let blocked = completion_tuple_is_blocked(&input);
+    let failed = completion_tuple_is_failed(&input);
+    let blocked = completion_tuple_is_blocked(&input) || failed;
 
     if passed && blocked {
         push_unique(&mut blockers, BLOCKER_OUTCOME_CONTRADICTION);
@@ -80,15 +209,26 @@ pub fn decide_host_bridge_completion_authority(
         push_unique(&mut blockers, BLOCKER_RECEIPT_NOT_BOUND);
     }
 
-    if blockers.is_empty() && passed {
-        return accepted_decision(input.next_step_packet_requested);
+    if blockers
+        .iter()
+        .any(|blocker| failure_blocker_code(blocker.as_str()))
+    {
+        return (HostBridgeCompletionOutcome::Failed, blockers);
     }
 
-    rejected_decision(if blockers.is_empty() {
-        vec![BLOCKER_TYPED_BLOCKED_OUTCOME.to_string()]
-    } else {
-        blockers
-    })
+    if failed {
+        push_unique(&mut blockers, BLOCKER_TYPED_FAILED_OUTCOME);
+        return (HostBridgeCompletionOutcome::Failed, blockers);
+    }
+
+    if blockers.is_empty() && passed {
+        return (HostBridgeCompletionOutcome::Passed, blockers);
+    }
+
+    if blockers.is_empty() {
+        push_unique(&mut blockers, BLOCKER_TYPED_BLOCKED_OUTCOME);
+    }
+    (HostBridgeCompletionOutcome::Blocked, blockers)
 }
 
 #[must_use]
@@ -98,6 +238,9 @@ pub fn completion_authority_transition_matrix() -> Vec<HostBridgeCompletionTrans
             name: "passed_empty_blockers",
             input: input("approve", "pass", [], Some("proof passed")),
             expected_state: HostBridgeCompletionState::Passed,
+            expected_events: accepted_events(),
+            expected_effect_intents: accepted_effect_intents(true),
+            expected_next_step_packet_admitted: true,
         },
         HostBridgeCompletionTransitionCase {
             name: "passed_summary_mentions_resolved_blocker",
@@ -108,6 +251,9 @@ pub fn completion_authority_transition_matrix() -> Vec<HostBridgeCompletionTrans
                 Some("proof passed; previous blocker was resolved"),
             ),
             expected_state: HostBridgeCompletionState::Passed,
+            expected_events: accepted_events(),
+            expected_effect_intents: accepted_effect_intents(true),
+            expected_next_step_packet_admitted: true,
         },
         HostBridgeCompletionTransitionCase {
             name: "summary_only_blocked_outcome",
@@ -120,16 +266,41 @@ pub fn completion_authority_transition_matrix() -> Vec<HostBridgeCompletionTrans
                 ),
             ),
             expected_state: HostBridgeCompletionState::Blocked,
+            expected_events: rejected_events(),
+            expected_effect_intents: rejected_effect_intents(),
+            expected_next_step_packet_admitted: false,
         },
         HostBridgeCompletionTransitionCase {
             name: "blocked_typed_blocker",
             input: input("approve", "blocked", ["implementation_missing"], None),
             expected_state: HostBridgeCompletionState::Blocked,
+            expected_events: rejected_events(),
+            expected_effect_intents: rejected_effect_intents(),
+            expected_next_step_packet_admitted: false,
+        },
+        HostBridgeCompletionTransitionCase {
+            name: "explicit_rework_without_blocker_derives_typed_blocked_outcome",
+            input: input("rework_required", "rework_required", [], None),
+            expected_state: HostBridgeCompletionState::Blocked,
+            expected_events: rejected_events(),
+            expected_effect_intents: rejected_effect_intents(),
+            expected_next_step_packet_admitted: false,
+        },
+        HostBridgeCompletionTransitionCase {
+            name: "explicit_failed_without_blocker_is_failed",
+            input: input("failed", "failed", [], None),
+            expected_state: HostBridgeCompletionState::Failed,
+            expected_events: rejected_events(),
+            expected_effect_intents: rejected_effect_intents(),
+            expected_next_step_packet_admitted: false,
         },
         HostBridgeCompletionTransitionCase {
             name: "contradictory_pass_with_blocker",
             input: input("approve", "pass", ["host_agent_execution_failed"], None),
             expected_state: HostBridgeCompletionState::Failed,
+            expected_events: rejected_events(),
+            expected_effect_intents: rejected_effect_intents(),
+            expected_next_step_packet_admitted: false,
         },
         HostBridgeCompletionTransitionCase {
             name: "receipt_not_bound",
@@ -138,6 +309,9 @@ pub fn completion_authority_transition_matrix() -> Vec<HostBridgeCompletionTrans
                 ..input("approve", "pass", [], None)
             },
             expected_state: HostBridgeCompletionState::Failed,
+            expected_events: rejected_events(),
+            expected_effect_intents: rejected_effect_intents(),
+            expected_next_step_packet_admitted: false,
         },
         HostBridgeCompletionTransitionCase {
             name: "provenance_rejected",
@@ -146,52 +320,80 @@ pub fn completion_authority_transition_matrix() -> Vec<HostBridgeCompletionTrans
                 ..input("approve", "pass", [], None)
             },
             expected_state: HostBridgeCompletionState::Failed,
+            expected_events: rejected_events(),
+            expected_effect_intents: rejected_effect_intents(),
+            expected_next_step_packet_admitted: false,
         },
     ]
 }
 
-fn accepted_decision(next_step_packet_requested: bool) -> HostBridgeCompletionAuthorityDecision {
-    let mut effect_intents = vec![HostBridgeCompletionEffectIntent::CommitEvidence];
-    if next_step_packet_requested {
-        effect_intents.push(HostBridgeCompletionEffectIntent::PlanNextStepPacket);
-    }
-    HostBridgeCompletionAuthorityDecision {
-        final_state: HostBridgeCompletionState::Passed,
-        accepted: true,
-        blocker_codes: Vec::new(),
-        events: vec![
-            HostBridgeCompletionEvent::ResultReceived,
-            HostBridgeCompletionEvent::CompletionAccepted,
-            HostBridgeCompletionEvent::EvidenceCommitted,
-        ],
-        effect_intents,
-        next_step_packet_admitted: next_step_packet_requested,
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostBridgeCompletionOutcome {
+    Passed,
+    Blocked,
+    Failed,
 }
 
-fn rejected_decision(blocker_codes: Vec<String>) -> HostBridgeCompletionAuthorityDecision {
-    let final_state = if blocker_codes.iter().any(|blocker| {
-        matches!(
-            blocker.as_str(),
-            BLOCKER_OUTCOME_CONTRADICTION | BLOCKER_PROVENANCE_REJECTED | BLOCKER_RECEIPT_NOT_BOUND
-        )
-    }) {
-        HostBridgeCompletionState::Failed
-    } else {
-        HostBridgeCompletionState::Blocked
-    };
-    HostBridgeCompletionAuthorityDecision {
-        final_state,
-        accepted: false,
-        blocker_codes,
-        events: vec![
-            HostBridgeCompletionEvent::ResultReceived,
-            HostBridgeCompletionEvent::CompletionRejected,
-        ],
-        effect_intents: vec![HostBridgeCompletionEffectIntent::RecordBlocker],
-        next_step_packet_admitted: false,
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NextStepPacketPolicy {
+    AdmitWhenRequested,
+    Never,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HostBridgeCompletionTransitionRow {
+    outcome: HostBridgeCompletionOutcome,
+    final_state: HostBridgeCompletionState,
+    accepted: bool,
+    event: HostBridgeCompletionEvent,
+    events: &'static [HostBridgeCompletionEvent],
+    effect_intents: &'static [HostBridgeCompletionEffectIntent],
+    next_step_packet_policy: NextStepPacketPolicy,
+}
+
+const ACCEPTED_EVENTS: &[HostBridgeCompletionEvent] = &[
+    HostBridgeCompletionEvent::ResultReceived,
+    HostBridgeCompletionEvent::CompletionAccepted,
+    HostBridgeCompletionEvent::EvidenceCommitted,
+];
+const REJECTED_EVENTS: &[HostBridgeCompletionEvent] = &[
+    HostBridgeCompletionEvent::ResultReceived,
+    HostBridgeCompletionEvent::CompletionRejected,
+];
+const ACCEPTED_EFFECT_INTENTS: &[HostBridgeCompletionEffectIntent] =
+    &[HostBridgeCompletionEffectIntent::CommitEvidence];
+const REJECTED_EFFECT_INTENTS: &[HostBridgeCompletionEffectIntent] =
+    &[HostBridgeCompletionEffectIntent::RecordBlocker];
+
+const COMPLETION_AUTHORITY_TRANSITIONS: &[HostBridgeCompletionTransitionRow] = &[
+    HostBridgeCompletionTransitionRow {
+        outcome: HostBridgeCompletionOutcome::Passed,
+        final_state: HostBridgeCompletionState::Passed,
+        accepted: true,
+        event: HostBridgeCompletionEvent::CompletionAccepted,
+        events: ACCEPTED_EVENTS,
+        effect_intents: ACCEPTED_EFFECT_INTENTS,
+        next_step_packet_policy: NextStepPacketPolicy::AdmitWhenRequested,
+    },
+    HostBridgeCompletionTransitionRow {
+        outcome: HostBridgeCompletionOutcome::Blocked,
+        final_state: HostBridgeCompletionState::Blocked,
+        accepted: false,
+        event: HostBridgeCompletionEvent::CompletionRejected,
+        events: REJECTED_EVENTS,
+        effect_intents: REJECTED_EFFECT_INTENTS,
+        next_step_packet_policy: NextStepPacketPolicy::Never,
+    },
+    HostBridgeCompletionTransitionRow {
+        outcome: HostBridgeCompletionOutcome::Failed,
+        final_state: HostBridgeCompletionState::Failed,
+        accepted: false,
+        event: HostBridgeCompletionEvent::CompletionRejected,
+        events: REJECTED_EVENTS,
+        effect_intents: REJECTED_EFFECT_INTENTS,
+        next_step_packet_policy: NextStepPacketPolicy::Never,
+    },
+];
 
 fn typed_blockers(input: &HostBridgeCompletionAuthorityInput) -> Vec<String> {
     input
@@ -286,12 +488,49 @@ fn completion_tuple_is_blocked(input: &HostBridgeCompletionAuthorityInput) -> bo
     !input.blocker_codes.is_empty()
         || matches!(
             normalized(&input.decision).as_str(),
-            "blocked" | "fail" | "failed" | "rework_required"
+            "blocked" | "rework_required"
         )
         || matches!(
             normalized(&input.verdict).as_str(),
-            "blocked" | "fail" | "failed" | "rework_required"
+            "blocked" | "rework_required"
         )
+}
+
+fn completion_tuple_is_failed(input: &HostBridgeCompletionAuthorityInput) -> bool {
+    matches!(normalized(&input.decision).as_str(), "fail" | "failed")
+        || matches!(normalized(&input.verdict).as_str(), "fail" | "failed")
+}
+
+fn failure_blocker_code(blocker: &str) -> bool {
+    matches!(
+        blocker,
+        BLOCKER_OUTCOME_CONTRADICTION
+            | BLOCKER_PROVENANCE_REJECTED
+            | BLOCKER_RECEIPT_NOT_BOUND
+            | BLOCKER_TYPED_FAILED_OUTCOME
+    )
+}
+
+fn accepted_events() -> Vec<HostBridgeCompletionEvent> {
+    ACCEPTED_EVENTS.to_vec()
+}
+
+fn rejected_events() -> Vec<HostBridgeCompletionEvent> {
+    REJECTED_EVENTS.to_vec()
+}
+
+fn accepted_effect_intents(
+    next_step_packet_requested: bool,
+) -> Vec<HostBridgeCompletionEffectIntent> {
+    let mut effect_intents = ACCEPTED_EFFECT_INTENTS.to_vec();
+    if next_step_packet_requested {
+        effect_intents.push(HostBridgeCompletionEffectIntent::PlanNextStepPacket);
+    }
+    effect_intents
+}
+
+fn rejected_effect_intents() -> Vec<HostBridgeCompletionEffectIntent> {
+    REJECTED_EFFECT_INTENTS.to_vec()
 }
 
 fn normalized(value: &str) -> String {
@@ -327,9 +566,10 @@ fn input<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_SUMMARY_DERIVED, HostBridgeCompletionEffectIntent,
-        HostBridgeCompletionEvent, HostBridgeCompletionState,
-        completion_authority_transition_matrix, decide_host_bridge_completion_authority, input,
+        BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_SUMMARY_DERIVED, BLOCKER_TYPED_BLOCKED_OUTCOME,
+        BLOCKER_TYPED_FAILED_OUTCOME, HostBridgeCompletionEffectIntent, HostBridgeCompletionEvent,
+        HostBridgeCompletionFsm, HostBridgeCompletionState, completion_authority_transition_matrix,
+        decide_host_bridge_completion_authority, input,
     };
 
     #[test]
@@ -380,6 +620,34 @@ mod tests {
                 .events
                 .contains(&HostBridgeCompletionEvent::CompletionRejected)
         );
+    }
+
+    #[test]
+    fn fsm_boundary_is_the_public_completion_decision_owner() {
+        let decision = HostBridgeCompletionFsm::new().decide(input(
+            "approve",
+            "pass",
+            [],
+            Some("proof passed"),
+        ));
+
+        assert_eq!(decision.final_state, HostBridgeCompletionState::Passed);
+        assert_eq!(
+            decision.events,
+            vec![
+                HostBridgeCompletionEvent::ResultReceived,
+                HostBridgeCompletionEvent::CompletionAccepted,
+                HostBridgeCompletionEvent::EvidenceCommitted,
+            ]
+        );
+        assert_eq!(
+            decision.effect_intents,
+            vec![
+                HostBridgeCompletionEffectIntent::CommitEvidence,
+                HostBridgeCompletionEffectIntent::PlanNextStepPacket,
+            ]
+        );
+        assert!(decision.next_step_packet_admitted);
     }
 
     #[test]
@@ -440,15 +708,40 @@ mod tests {
                 case.name
             );
             assert_eq!(
-                decision.next_step_packet_admitted,
-                decision.accepted
-                    && decision
-                        .effect_intents
-                        .contains(&HostBridgeCompletionEffectIntent::PlanNextStepPacket),
+                decision.next_step_packet_admitted, case.expected_next_step_packet_admitted,
+                "{}",
+                case.name
+            );
+            assert_eq!(decision.events, case.expected_events, "{}", case.name);
+            assert_eq!(
+                decision.effect_intents, case.expected_effect_intents,
                 "{}",
                 case.name
             );
         }
+    }
+
+    #[test]
+    fn explicit_rework_without_blocker_is_blocked_not_failed() {
+        let decision = decide_host_bridge_completion_authority(input(
+            "rework_required",
+            "rework_required",
+            [],
+            None,
+        ));
+
+        assert_eq!(decision.final_state, HostBridgeCompletionState::Blocked);
+        assert_eq!(decision.blocker_codes, vec![BLOCKER_TYPED_BLOCKED_OUTCOME]);
+        assert!(!decision.next_step_packet_admitted);
+    }
+
+    #[test]
+    fn explicit_failed_without_blocker_is_failed_not_retryable_blocked() {
+        let decision = decide_host_bridge_completion_authority(input("failed", "failed", [], None));
+
+        assert_eq!(decision.final_state, HostBridgeCompletionState::Failed);
+        assert_eq!(decision.blocker_codes, vec![BLOCKER_TYPED_FAILED_OUTCOME]);
+        assert!(!decision.next_step_packet_admitted);
     }
 
     #[test]
