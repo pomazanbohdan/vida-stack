@@ -12,6 +12,11 @@ use serde::Serialize;
 
 use crate::ReleaseInstallArgs;
 
+#[cfg(test)]
+static RELEASE_INSTALL_PROGRESS_DIR_OVERRIDE: std::sync::OnceLock<
+    std::sync::Mutex<Option<PathBuf>>,
+> = std::sync::OnceLock::new();
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct ReleaseInstallReceipt {
     pub status: String,
@@ -690,6 +695,16 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
     let latest_path = release_install_progress_latest_path();
     let latest_path_string = latest_path.display().to_string();
     if !latest_path.is_file() {
+        if let Some((latest_event, progress_path)) =
+            latest_release_install_progress_artifact_event()
+        {
+            return release_install_status_receipt_from_event(
+                latest_path_string,
+                latest_event,
+                Vec::new(),
+                Some(progress_path),
+            );
+        }
         return ReleaseInstallProgressStatusReceipt {
             surface: "vida release install --status".to_string(),
             status: "blocked".to_string(),
@@ -752,6 +767,20 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
             };
         }
     };
+    release_install_status_receipt_from_event(
+        latest_path_string,
+        latest_event,
+        vec![latest_path.display().to_string()],
+        None,
+    )
+}
+
+fn release_install_status_receipt_from_event(
+    latest_path_string: String,
+    latest_event: serde_json::Value,
+    mut artifact_refs: Vec<String>,
+    fallback_progress_path: Option<String>,
+) -> ReleaseInstallProgressStatusReceipt {
     let latest_status = latest_event
         .get("status")
         .and_then(serde_json::Value::as_str)
@@ -779,10 +808,14 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
         .get("progress_path")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
-        .or_else(|| fs::read_to_string(latest_path.with_extension("path")).ok());
-    let mut artifact_refs = vec![latest_path.display().to_string()];
+        .or_else(|| {
+            fs::read_to_string(release_install_progress_latest_path().with_extension("path")).ok()
+        })
+        .or(fallback_progress_path);
     if let Some(path) = progress_path.as_ref() {
-        artifact_refs.push(path.clone());
+        if !artifact_refs.iter().any(|artifact| artifact == path) {
+            artifact_refs.push(path.clone());
+        }
     }
     let (status, blocker_codes, next_actions) = release_install_progress_status_contract(
         latest_status.as_deref(),
@@ -803,6 +836,40 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
         artifact_refs,
         latest_event: Some(latest_event),
     }
+}
+
+fn latest_release_install_progress_artifact_event() -> Option<(serde_json::Value, String)> {
+    let mut candidates = fs::read_dir(release_install_progress_dir())
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let file_name = path.file_name()?.to_str()?;
+            if !file_name.starts_with("release-install-") || !file_name.ends_with(".jsonl") {
+                return None;
+            }
+            if !entry.metadata().ok()?.is_file() {
+                return None;
+            }
+            let body = fs::read_to_string(&path).ok()?;
+            let event = body
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())?;
+            let recorded_at = event
+                .get("recorded_at_unix_ms")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default();
+            Some((recorded_at, path, event))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+
+    candidates
+        .into_iter()
+        .next()
+        .map(|(_, path, event)| (event, path.display().to_string()))
 }
 
 fn release_install_progress_status_contract(
@@ -955,23 +1022,29 @@ fn release_install_progress_path() -> Option<PathBuf> {
         .duration_since(UNIX_EPOCH)
         .ok()?
         .as_millis();
-    Some(
-        trusted_workspace_root()
-            .join(".vida")
-            .join("data")
-            .join("state")
-            .join("release-install-progress")
-            .join(format!("release-install-{stamp}.jsonl")),
-    )
+    Some(release_install_progress_dir().join(format!("release-install-{stamp}.jsonl")))
 }
 
-fn release_install_progress_latest_path() -> PathBuf {
+fn release_install_progress_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(path) = RELEASE_INSTALL_PROGRESS_DIR_OVERRIDE
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .expect("release install progress dir override should not be poisoned")
+        .clone()
+    {
+        return path;
+    }
+
     trusted_workspace_root()
         .join(".vida")
         .join("data")
         .join("state")
         .join("release-install-progress")
-        .join("latest.json")
+}
+
+fn release_install_progress_latest_path() -> PathBuf {
+    release_install_progress_dir().join("latest.json")
 }
 
 fn write_release_install_progress_event(
@@ -1849,6 +1922,27 @@ mod tests {
             .expect("release progress test lock should not be poisoned")
     }
 
+    struct ReleaseProgressDirOverrideGuard;
+
+    impl Drop for ReleaseProgressDirOverrideGuard {
+        fn drop(&mut self) {
+            set_release_install_progress_dir_override(None);
+        }
+    }
+
+    fn release_progress_dir_override(path: PathBuf) -> ReleaseProgressDirOverrideGuard {
+        set_release_install_progress_dir_override(Some(path));
+        ReleaseProgressDirOverrideGuard
+    }
+
+    fn set_release_install_progress_dir_override(path: Option<PathBuf>) {
+        let mut override_path = RELEASE_INSTALL_PROGRESS_DIR_OVERRIDE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .expect("release progress dir override should not be poisoned");
+        *override_path = path;
+    }
+
     fn clean_release_progress_latest_markers() {
         let latest_path = release_install_progress_latest_path();
         let _ = fs::remove_file(&latest_path);
@@ -2005,9 +2099,11 @@ mod tests {
     #[test]
     fn release_install_progress_event_writes_durable_jsonl_artifact() {
         let _guard = release_progress_test_lock();
-        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
-        let progress_path = harness.path().join("release-install-progress.jsonl");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let progress_path = release_install_progress_path()
+            .expect("release progress path should be available for test");
         let command = release_build_command();
 
         write_release_install_progress_event(&progress_path, "started", &command, None)
@@ -2037,9 +2133,11 @@ mod tests {
     #[test]
     fn release_install_status_reports_running_started_child() {
         let _guard = release_progress_test_lock();
-        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
-        let progress_path = harness.path().join("release-install-progress.jsonl");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let progress_path = release_install_progress_path()
+            .expect("release progress path should be available for test");
 
         write_release_install_progress_event_with_child(
             &progress_path,
@@ -2073,9 +2171,11 @@ mod tests {
     #[test]
     fn release_install_status_treats_started_without_pid_as_running() {
         let _guard = release_progress_test_lock();
-        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
-        let progress_path = harness.path().join("release-install-progress.jsonl");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let progress_path = release_install_progress_path()
+            .expect("release progress path should be available for test");
 
         write_release_install_progress_event_with_child(
             &progress_path,
@@ -2120,9 +2220,11 @@ mod tests {
     #[test]
     fn release_install_status_blocks_build_pass_without_install_phase() {
         let _guard = release_progress_test_lock();
-        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
-        let progress_path = harness.path().join("release-install-progress.jsonl");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let progress_path = release_install_progress_path()
+            .expect("release progress path should be available for test");
 
         write_release_install_progress_event_with_child(
             &progress_path,
@@ -2148,11 +2250,146 @@ mod tests {
     }
 
     #[test]
+    fn release_install_status_recovers_missing_latest_marker_from_durable_progress() {
+        let _guard = release_progress_test_lock();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let progress_path = release_install_progress_path()
+            .expect("release progress path should be available for test");
+
+        write_release_install_progress_event_with_child(
+            &progress_path,
+            "pass",
+            "build",
+            &release_build_command(),
+            Some(0),
+            Some(std::process::id()),
+            Some("completed"),
+        )
+        .expect("build pass progress should write");
+        write_release_install_progress_event_with_child(
+            &progress_path,
+            "pass",
+            "install",
+            &[
+                "vida".to_string(),
+                "release".to_string(),
+                "install".to_string(),
+            ],
+            Some(0),
+            None,
+            Some("completed"),
+        )
+        .expect("install pass progress should write");
+        fs::remove_file(release_install_progress_latest_path())
+            .expect("latest marker should be removed for recovery test");
+        let _ = fs::remove_file(release_install_progress_latest_path().with_extension("path"));
+
+        let receipt = release_install_status_receipt();
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.blocker_codes, Vec::<String>::new());
+        assert_eq!(receipt.latest_status.as_deref(), Some("pass"));
+        assert_eq!(receipt.latest_phase.as_deref(), Some("install"));
+        assert_eq!(
+            receipt.progress_path.as_deref(),
+            Some(progress_path.display().to_string().as_str())
+        );
+        assert_eq!(
+            receipt.artifact_refs,
+            vec![progress_path.display().to_string()]
+        );
+    }
+
+    #[test]
+    fn release_install_status_uses_newest_durable_progress_event_timestamp() {
+        let _guard = release_progress_test_lock();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let progress_dir = release_install_progress_dir();
+        fs::create_dir_all(&progress_dir).expect("progress dir should write");
+        let older_path = progress_dir.join("release-install-older.jsonl");
+        let newer_path = progress_dir.join("release-install-newer.jsonl");
+        let older = serde_json::json!({
+            "surface": "vida release install",
+            "status": "pass",
+            "phase": "build",
+            "command": release_build_command(),
+            "exit_code": 0,
+            "process_id": null,
+            "child_state": "completed",
+            "progress_path": older_path.display().to_string(),
+            "recorded_at_unix_ms": 1_u64,
+        });
+        let newer = serde_json::json!({
+            "surface": "vida release install",
+            "status": "pass",
+            "phase": "install",
+            "command": ["vida", "release", "install"],
+            "exit_code": 0,
+            "process_id": null,
+            "child_state": "completed",
+            "progress_path": newer_path.display().to_string(),
+            "recorded_at_unix_ms": 2_u64,
+        });
+        fs::write(&older_path, format!("{older}\n")).expect("older progress should write");
+        fs::write(&newer_path, format!("{newer}\n")).expect("newer progress should write");
+
+        let receipt = release_install_status_receipt();
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.latest_phase.as_deref(), Some("install"));
+        assert_eq!(
+            receipt.progress_path.as_deref(),
+            Some(newer_path.display().to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn release_install_status_rejects_invalid_latest_marker_before_fallback() {
+        let _guard = release_progress_test_lock();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let progress_path = release_install_progress_path()
+            .expect("release progress path should be available for test");
+        write_release_install_progress_event_with_child(
+            &progress_path,
+            "pass",
+            "install",
+            &[
+                "vida".to_string(),
+                "release".to_string(),
+                "install".to_string(),
+            ],
+            Some(0),
+            None,
+            Some("completed"),
+        )
+        .expect("install pass progress should write");
+        fs::write(release_install_progress_latest_path(), "{invalid json")
+            .expect("invalid latest marker should write");
+
+        let receipt = release_install_status_receipt();
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(
+            receipt.blocker_codes,
+            vec!["release_install_progress_invalid".to_string()]
+        );
+        assert!(receipt.latest_event.is_none());
+    }
+
+    #[test]
     fn release_install_receipt_blocks_duplicate_running_build() {
         let _guard = release_progress_test_lock();
-        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
-        let progress_path = harness.path().join("release-install-progress.jsonl");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let progress_path = release_install_progress_path()
+            .expect("release progress path should be available for test");
 
         write_release_install_progress_event_with_child(
             &progress_path,
@@ -2195,6 +2432,8 @@ mod tests {
     #[test]
     fn release_install_status_blocks_missing_progress() {
         let _guard = release_progress_test_lock();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
         clean_release_progress_latest_markers();
 
         let receipt = release_install_status_receipt();
@@ -2211,8 +2450,9 @@ mod tests {
     #[test]
     fn release_install_status_surface_does_not_start_build_or_install() {
         let _guard = release_progress_test_lock();
-        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
 
         let exit = run_release_install(ReleaseInstallArgs {
             target: "current".to_string(),
