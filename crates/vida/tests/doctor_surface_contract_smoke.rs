@@ -3162,6 +3162,8 @@ fn taskflow_next_outputs_default_toon_json_and_help_contracts() {
     let help_stdout = String::from_utf8_lossy(&help.stdout);
     assert!(help_stdout.contains("vida taskflow next"));
     assert!(help_stdout.contains("--json"));
+    assert!(help_stdout.contains("--refresh"));
+    assert!(help_stdout.contains("--no-cache"));
     assert!(
         help_stdout.contains("compact TOON"),
         "taskflow next help should document default compact TOON: {help_stdout}"
@@ -3169,6 +3171,10 @@ fn taskflow_next_outputs_default_toon_json_and_help_contracts() {
     assert!(
         help_stdout.contains("machine-readable JSON"),
         "taskflow next help should document explicit machine-readable JSON: {help_stdout}"
+    );
+    assert!(
+        help_stdout.contains("authoritative recompute"),
+        "taskflow next help should document cache refresh behavior: {help_stdout}"
     );
 }
 

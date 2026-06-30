@@ -25,6 +25,8 @@ const TASKFLOW_SCHEDULER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration
 const TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(300);
 const TASKFLOW_NEXT_PROJECTION_NAME: &str = "taskflow-next-latest";
+const TASKFLOW_NEXT_USAGE: &str =
+    "Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--refresh|--no-cache] [--json]";
 const TASKFLOW_GRAPH_SUMMARY_PROJECTION_NAME: &str = "taskflow-graph-summary-latest";
 const TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION: &str =
     "taskflow-graph-summary-projection-v2";
@@ -4300,6 +4302,7 @@ enum TaskflowNextArgs<'a> {
     Help,
     Next {
         as_json: bool,
+        bypass_cache: bool,
         scope_task_id: Option<&'a str>,
         state_dir: Option<PathBuf>,
     },
@@ -4307,10 +4310,11 @@ enum TaskflowNextArgs<'a> {
 
 fn parse_taskflow_next_args(args: &[String]) -> Result<TaskflowNextArgs<'_>, &'static str> {
     if !matches!(args.first().map(String::as_str), Some("next")) {
-        return Err("Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
+        return Err(TASKFLOW_NEXT_USAGE);
     }
 
     let mut as_json = false;
+    let mut bypass_cache = false;
     let mut scope_task_id = None;
     let mut state_dir = None;
     let mut index = 1;
@@ -4320,20 +4324,20 @@ fn parse_taskflow_next_args(args: &[String]) -> Result<TaskflowNextArgs<'_>, &'s
                 as_json = true;
                 index += 1;
             }
+            "--refresh" | "--no-cache" => {
+                bypass_cache = true;
+                index += 1;
+            }
             "--scope" => {
                 let Some(task_id) = args.get(index + 1) else {
-                    return Err(
-                        "Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]",
-                    );
+                    return Err(TASKFLOW_NEXT_USAGE);
                 };
                 scope_task_id = Some(task_id.as_str());
                 index += 2;
             }
             "--state-dir" => {
                 let Some(path) = args.get(index + 1) else {
-                    return Err(
-                        "Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]",
-                    );
+                    return Err(TASKFLOW_NEXT_USAGE);
                 };
                 state_dir = Some(PathBuf::from(path));
                 index += 2;
@@ -4342,15 +4346,14 @@ fn parse_taskflow_next_args(args: &[String]) -> Result<TaskflowNextArgs<'_>, &'s
                 return Ok(TaskflowNextArgs::Help);
             }
             _ => {
-                return Err(
-                    "Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]",
-                );
+                return Err(TASKFLOW_NEXT_USAGE);
             }
         }
     }
 
     Ok(TaskflowNextArgs::Next {
         as_json,
+        bypass_cache,
         scope_task_id,
         state_dir,
     })
@@ -4785,23 +4788,6 @@ async fn run_taskflow_settle(args: &[String]) -> ExitCode {
     }
 }
 
-fn cached_taskflow_next_open_delegated_cycle_projection(cached: &str) -> bool {
-    let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
-        return false;
-    };
-    if payload.get("status").and_then(serde_json::Value::as_str) != Some("blocked") {
-        return false;
-    }
-    let blocker_codes = payload
-        .get("blocker_codes")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    blocker_codes
-        .iter()
-        .any(|code| code.as_str() == Some("open_delegated_cycle"))
-}
-
 async fn graph_summary_task_rows(
     state_dir: &Path,
 ) -> Result<Vec<crate::state_store::TaskRecord>, crate::state_store::StateStoreError> {
@@ -4852,16 +4838,17 @@ async fn taskflow_next_task_rows(
 }
 
 pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
-    let (as_json, scope_task_id, state_dir) = match parse_taskflow_next_args(args) {
+    let (as_json, bypass_cache, scope_task_id, state_dir) = match parse_taskflow_next_args(args) {
         Ok(TaskflowNextArgs::Help) => {
             print_taskflow_proxy_help(Some("next"));
             return ExitCode::SUCCESS;
         }
         Ok(TaskflowNextArgs::Next {
             as_json,
+            bypass_cache,
             scope_task_id,
             state_dir,
-        }) => (as_json, scope_task_id, state_dir),
+        }) => (as_json, bypass_cache, scope_task_id, state_dir),
         Err(usage) => {
             eprintln!("{usage}");
             return ExitCode::from(2);
@@ -4875,35 +4862,6 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    if as_json && scope_task_id.is_none() {
-        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
-            &state_dir,
-            TASKFLOW_NEXT_PROJECTION_NAME,
-        ) {
-            println!("{cached}");
-            return cached_operator_projection_exit_code(&cached);
-        }
-        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
-            &state_dir,
-            TASKFLOW_NEXT_PROJECTION_NAME,
-            TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
-        ) {
-            println!("{cached}");
-            return cached_operator_projection_exit_code(&cached);
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                TASKFLOW_NEXT_PROJECTION_NAME,
-                TASKFLOW_READ_MODEL_RECENT_PROJECTION_MAX_AGE,
-            )
-        {
-            if cached_taskflow_next_open_delegated_cycle_projection(&cached) {
-                println!("{cached}");
-                return cached_operator_projection_exit_code(&cached);
-            }
-        }
-    }
     let runtime_consumption = match crate::runtime_consumption_summary(&state_dir) {
         Ok(summary) => summary,
         Err(error) => {
@@ -5130,13 +5088,18 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         "gate": gate,
         "dispatch": dispatch,
         "runtime_consumption": runtime_consumption,
+        "cache_policy": {
+            "mode": if bypass_cache { "no_cache" } else { "authoritative_refresh" },
+            "read_cache_before_authoritative_open": false,
+            "projection_name": TASKFLOW_NEXT_PROJECTION_NAME
+        },
         "shared_fields": shared_fields,
         "operator_contracts": operator_contracts,
     });
 
     if as_json {
         crate::print_json_pretty(&payload);
-        if scope_task_id.is_none() {
+        if scope_task_id.is_none() && !bypass_cache {
             crate::operator_projection_cache::write_json_projection(
                 &state_dir,
                 TASKFLOW_NEXT_PROJECTION_NAME,
@@ -8530,9 +8493,9 @@ async fn run_taskflow_route_diagnostic(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_graph_summary_waves, build_taskflow_scheduler_dispatch_plan,
-        cached_operator_projection_exit_code, cached_taskflow_next_open_delegated_cycle_projection,
-        compact_taskflow_graph_summary_payload, graph_summary_scheduling_projection_json,
-        graph_summary_task_rows, taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
+        cached_operator_projection_exit_code, compact_taskflow_graph_summary_payload,
+        graph_summary_scheduling_projection_json, graph_summary_task_rows,
+        taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
         TASKFLOW_SCHEDULER_LOCK_TIMEOUT,
     };
     use crate::state_store::{
@@ -8664,19 +8627,6 @@ mod tests {
             cached_operator_projection_exit_code(r#"{"status":"blocked"}"#),
             ExitCode::from(1)
         );
-    }
-
-    #[test]
-    fn cached_taskflow_next_stale_projection_only_allows_open_delegated_cycle() {
-        assert!(cached_taskflow_next_open_delegated_cycle_projection(
-            r#"{"status":"blocked","blocker_codes":["open_delegated_cycle"]}"#
-        ));
-        assert!(!cached_taskflow_next_open_delegated_cycle_projection(
-            r#"{"status":"pass","blocker_codes":[]}"#
-        ));
-        assert!(!cached_taskflow_next_open_delegated_cycle_projection(
-            r#"{"status":"blocked","blocker_codes":["no_ready_task_candidates"]}"#
-        ));
     }
 
     #[test]

@@ -6375,6 +6375,117 @@ fn task_next_lawful_cache_refreshes_after_task_mutation() {
     let _ = fs::remove_dir_all(&state_dir);
 }
 
+#[test]
+fn taskflow_next_json_recomputes_before_taskflow_next_projection_cache() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "taskflow-next-cache-refresh-parent";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "TaskFlow next cache refresh parent",
+        "open",
+    );
+    let ready_task_id = "taskflow-next-cache-refresh-ready-task";
+    let ready = run_command_json(
+        &[
+            "task",
+            "create",
+            ready_task_id,
+            "TaskFlow next cache refresh ready task",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(ready["status"], "pass");
+
+    let task_snapshot_marker =
+        fs::read_to_string(format!("{state_dir}/.task-snapshot-state-marker"))
+            .expect("task snapshot marker should exist");
+    write_operator_projection(
+        &state_dir,
+        "taskflow-next-latest",
+        &serde_json::json!({
+            "surface": "vida taskflow next",
+            "status": "blocked",
+            "cache_probe": "stale-taskflow-next-reused",
+            "blocker_codes": ["open_delegated_cycle"],
+            "next_actions": ["stale cached blocker"],
+            "projection_cache_dependencies": {
+                "task_snapshot_marker": task_snapshot_marker.trim()
+            }
+        }),
+    );
+
+    let next = run_command_json(&["taskflow", "next", "--json"], &state_dir);
+    assert_eq!(next["status"], "pass");
+    assert_eq!(next["primary_ready_task"]["id"], ready_task_id);
+    assert_eq!(next["cache_policy"]["mode"], "authoritative_refresh");
+    assert_eq!(
+        next["cache_policy"]["read_cache_before_authoritative_open"],
+        false
+    );
+    assert_ne!(next["cache_probe"], "stale-taskflow-next-reused");
+    assert!(!next["blocker_codes"]
+        .as_array()
+        .expect("blocker_codes should render")
+        .iter()
+        .any(|code| code == "open_delegated_cycle"));
+
+    write_operator_projection(
+        &state_dir,
+        "taskflow-next-latest",
+        &serde_json::json!({
+            "surface": "vida taskflow next",
+            "status": "blocked",
+            "cache_probe": "stale-taskflow-next-reused",
+            "blocker_codes": ["open_delegated_cycle"],
+            "next_actions": ["stale cached blocker"],
+            "projection_cache_dependencies": {
+                "task_snapshot_marker": task_snapshot_marker.trim()
+            }
+        }),
+    );
+    let projection_path = format!("{state_dir}/operator-projections/taskflow-next-latest.json");
+    let stale_projection_before_refresh = fs::read_to_string(&projection_path)
+        .expect("stale taskflow-next projection should exist before refresh");
+    let refreshed = run_command_json(&["taskflow", "next", "--refresh", "--json"], &state_dir);
+    assert_eq!(refreshed["status"], "pass");
+    assert_eq!(refreshed["primary_ready_task"]["id"], ready_task_id);
+    assert_eq!(refreshed["cache_policy"]["mode"], "no_cache");
+    assert_ne!(refreshed["cache_probe"], "stale-taskflow-next-reused");
+    assert_eq!(
+        fs::read_to_string(&projection_path)
+            .expect("refresh must not remove existing taskflow-next projection"),
+        stale_projection_before_refresh,
+        "--refresh must skip rewriting taskflow-next-latest projection"
+    );
+
+    let no_cache = run_command_json(&["taskflow", "next", "--no-cache", "--json"], &state_dir);
+    assert_eq!(no_cache["status"], "pass");
+    assert_eq!(no_cache["primary_ready_task"]["id"], ready_task_id);
+    assert_eq!(no_cache["cache_policy"]["mode"], "no_cache");
+    assert_ne!(no_cache["cache_probe"], "stale-taskflow-next-reused");
+    assert_eq!(
+        fs::read_to_string(&projection_path)
+            .expect("no-cache must not remove existing taskflow-next projection"),
+        stale_projection_before_refresh,
+        "--no-cache must skip rewriting taskflow-next-latest projection"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
 fn create_task_attempt_fixture(state_dir: &str, task_id: &str) {
     fs::create_dir_all(state_dir).expect("create state dir");
     create_epic_parent(
