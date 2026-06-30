@@ -1310,7 +1310,6 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             &runtime_consumption,
                             latest_release_admission_operator_evidence_snapshot_path.as_deref(),
                             latest_final_snapshot_path.as_deref(),
-                            protocol_binding.latest_receipt_id.as_deref(),
                             summary_only,
                         ) {
                             Ok(value) => value,
@@ -2650,17 +2649,9 @@ fn incomplete_release_admission_operator_evidence_for_status(
     runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
     latest_release_admission_operator_evidence_snapshot_path: Option<&str>,
     latest_final_snapshot_path: Option<&str>,
-    protocol_binding_latest_receipt_id: Option<&str>,
     summary_only: bool,
 ) -> Result<bool, String> {
-    if latest_release_admission_operator_evidence_snapshot_path.is_some()
-        || crate::runtime_consumption_state::latest_admissible_retrieval_trust_signal(
-            runtime_consumption,
-            latest_final_snapshot_path,
-            protocol_binding_latest_receipt_id,
-        )
-        .is_some()
-    {
+    if latest_release_admission_operator_evidence_snapshot_path.is_some() {
         return Ok(false);
     }
 
@@ -2717,7 +2708,7 @@ mod tests {
     }
 
     #[test]
-    fn status_release_admission_accepts_current_bundle_check_retrieval_trust_signal() {
+    fn status_release_admission_rejects_bundle_check_retrieval_trust_without_release_evidence() {
         let root = unique_status_packet_test_root("vida-status-bundle-check-trust");
         let runtime_dir = root.join("runtime-consumption");
         fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
@@ -2772,26 +2763,37 @@ mod tests {
         };
 
         assert!(
-            !super::incomplete_release_admission_operator_evidence_for_status(
+            super::incomplete_release_admission_operator_evidence_for_status(
                 &root,
                 &runtime_consumption,
                 None,
                 None,
-                Some("protocol-binding-current"),
                 true,
             )
-            .expect("release-admission evaluation should pass")
+            .expect("release-admission evaluation should pass"),
+            "retrieval-trust evidence from a bundle-check snapshot must not clear the separate release-admission evidence blocker"
         );
         assert!(
             super::incomplete_release_admission_operator_evidence_for_status(
                 &root,
                 &runtime_consumption,
                 None,
-                None,
-                Some("protocol-binding-stale"),
+                Some("runtime-consumption/final-recorded.json"),
                 true,
             )
-            .expect("release-admission evaluation should pass")
+            .expect("release-admission evaluation should pass"),
+            "summary status must still inspect the latest snapshot for a complete release-admission table"
+        );
+        assert!(
+            !super::incomplete_release_admission_operator_evidence_for_status(
+                &root,
+                &runtime_consumption,
+                Some("runtime-consumption/release-admission-operator-evidence.json"),
+                None,
+                true,
+            )
+            .expect("release-admission evaluation should pass"),
+            "an explicit release-admission operator-evidence snapshot remains sufficient"
         );
 
         let _ = fs::remove_dir_all(root);
