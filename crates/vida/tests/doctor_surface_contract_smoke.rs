@@ -32,6 +32,11 @@ impl VidaCommand {
         self
     }
 
+    fn current_dir(&mut self, dir: impl AsRef<std::path::Path>) -> &mut Self {
+        self.command.current_dir(dir);
+        self
+    }
+
     fn output(&mut self) -> io::Result<Output> {
         let mut last = None;
         for attempt in 0..20 {
@@ -1489,6 +1494,189 @@ fn agent_init_downstream_packet_preview_synthesizes_request_text_from_stale_coac
     assert!(
         request_text.contains("receipt-backed implementation evidence"),
         "agent-init preview request should carry proof target: {request_text}"
+    );
+}
+
+#[test]
+fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_request() {
+    let state_dir = unique_state_dir();
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .current_dir(&workspace_root)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+
+    let packet_dir = format!("{state_dir}/runtime-consumption/downstream-dispatch-packets");
+    std::fs::create_dir_all(&packet_dir).expect("downstream packet dir should exist");
+    let packet_path = format!("{packet_dir}/autotester-worker-scope.json");
+    let owned_paths =
+        serde_json::json!(["lib/src/features/activity/record_detail_view.dart", "test"]);
+    let lane_runtime_assignment = serde_json::json!({
+        "activation_agent_type": "middle",
+        "activation_runtime_role": "worker",
+        "selected_backend_id": "internal_subagents",
+        "selected_carrier_id": "middle",
+        "task_class": "implementation_medium",
+        "runtime_role": "worker"
+    });
+    let role_selection_full = serde_json::json!({
+        "ok": true,
+        "activation_source": "packet",
+        "selection_mode": "fixed",
+        "fallback_role": "orchestrator",
+        "request": "Use meeting-specific event fields when scheduling Meeting activities",
+        "selected_role": "business_analyst",
+        "conversational_mode": null,
+        "single_task_only": false,
+        "tracked_flow_entry": "dev-pack",
+        "allow_freeform_chat": false,
+        "confidence": "high",
+        "matched_terms": [],
+        "compiled_bundle": null,
+        "execution_plan": {
+            "runtime_assignment": {
+                "activation_agent_type": "middle",
+                "activation_runtime_role": "business_analyst",
+                "runtime_role": "business_analyst",
+                "task_class": "specification",
+                "selected_backend_id": "internal_subagents"
+            },
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_sequence": ["designer", "autotester", "developer"],
+                    "execution_lane_sequence": ["autotester", "developer"],
+                    "lane_catalog": {
+                        "autotester": {
+                            "dispatch_target": "autotester",
+                            "task_class": "implementation_medium",
+                            "runtime_role": "worker",
+                            "closure_class": "implementation",
+                            "packet_template_kind": "delivery_task_packet",
+                            "activation": lane_runtime_assignment,
+                            "runtime_assignment": lane_runtime_assignment
+                        }
+                    }
+                }
+            },
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true,
+                        "autotester": true
+                    }
+                }
+            ]
+        },
+        "reason": "test"
+    });
+    let delivery_task_packet = serde_json::json!({
+        "task_id": "activity-meeting-event-form-fields",
+        "backlog_id": "activity-meeting-event-form-fields",
+        "goal": "author autotester coverage",
+        "scope_in": ["autotester coverage"],
+        "owned_paths": owned_paths,
+        "read_only_paths": ["lib/src/features/activity/record_detail_view.dart"],
+        "definition_of_done": ["host bridge request carries autotester lane contract"],
+        "verification_command": "vida agent-init --downstream-packet autotester-worker-scope.json --execute-dispatch --json",
+        "proof_target": "autotester host bridge request",
+        "stop_rules": ["stop if request contract is wrong"],
+        "blocking_question": "Does autotester request use worker implementation scope?",
+        "handoff_runtime_role": "worker",
+        "handoff_task_class": "implementation_medium",
+        "implementation_isolation": {
+            "canonical_worktree_writes_allowed": false,
+            "owned_paths": owned_paths
+        }
+    });
+    let packet_body = serde_json::json!({
+        "packet_kind": "runtime_downstream_dispatch_packet",
+        "run_id": "activity-meeting-event-form-fields",
+        "task_id": "activity-meeting-event-form-fields",
+        "dispatch_target": "autotester",
+        "downstream_dispatch_target": "autotester",
+        "downstream_dispatch_ready": true,
+        "downstream_dispatch_blockers": [],
+        "activation_agent_type": "middle",
+        "activation_runtime_role": "worker",
+        "runtime_role": "business_analyst",
+        "task_class": "specification",
+        "handoff_runtime_role": "worker",
+        "handoff_task_class": "implementation_medium",
+        "selected_backend": "internal_subagents",
+        "packet_template_kind": "delivery_task_packet",
+        "prompt": "autotester proof",
+        "owned_paths": owned_paths,
+        "read_only_paths": ["lib/src/features/activity/record_detail_view.dart"],
+        "implementation_isolation": {
+            "canonical_worktree_writes_allowed": false,
+            "owned_paths": owned_paths
+        },
+        "role_selection_full": role_selection_full,
+        "delivery_task_packet": delivery_task_packet
+    });
+    std::fs::write(&packet_path, packet_body.to_string())
+        .expect("autotester downstream packet should be written");
+
+    let output = vida()
+        .args([
+            "agent-init",
+            "--downstream-packet",
+            &packet_path,
+            "--execute-dispatch",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .env("VIDA_AGENT_INIT_EXECUTE_DISPATCH_WORKER", "1")
+        .current_dir(&workspace_root)
+        .output()
+        .expect("agent-init execute-dispatch should run");
+    assert_success(&output, "agent-init execute-dispatch");
+
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("agent-init execute json should parse");
+    assert_eq!(payload["surface"], "vida agent-init");
+    assert!(
+        matches!(payload["status"].as_str(), Some("pass" | "blocked")),
+        "agent-init should reach dispatch materialization or an execution-evidence blocker: {payload}"
+    );
+    assert_eq!(payload["dispatch_target"], "autotester");
+
+    let request_dir = format!("{state_dir}/host-tool-bridge/requests");
+    let request_path = std::fs::read_dir(&request_dir)
+        .expect("host bridge request dir should exist")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .expect("host bridge request json should be materialized");
+    let request: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&request_path).expect("host bridge request should be readable"),
+    )
+    .expect("host bridge request json should parse");
+    assert_eq!(request["dispatch_target"], "autotester");
+    assert_eq!(request["runtime_role"], "worker");
+    assert_eq!(request["task_class"], "implementation_medium");
+    assert_eq!(
+        request["implementation_isolation"]["canonical_worktree_writes_allowed"],
+        false
+    );
+    let request_owned_paths = request["owned_paths"]
+        .as_array()
+        .expect("host bridge request should carry owned paths");
+    assert!(
+        request_owned_paths.iter().any(|path| path == "test"),
+        "autotester request should include test write scope: {request_owned_paths:?}"
+    );
+    let isolation_owned_paths = request["implementation_isolation"]["owned_paths"]
+        .as_array()
+        .expect("implementation isolation should carry owned paths");
+    assert!(
+        isolation_owned_paths.iter().any(|path| path == "test"),
+        "autotester isolation should include test write scope: {isolation_owned_paths:?}"
     );
 }
 
