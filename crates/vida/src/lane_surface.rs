@@ -4221,6 +4221,27 @@ fn host_bridge_request_artifact_authority_keys(
             if !receipt_backed {
                 return None;
             }
+            let schema_version = object
+                .get("schema_version")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim);
+            if !matches!(
+                schema_version,
+                Some("host-bridge-implementation-artifact-v1")
+                    | Some("stage-attempt-implementation-artifact-v1")
+            ) {
+                return None;
+            }
+            object
+                .get("source_artifact_ref")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            object
+                .get("source_artifact_kind")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
             Some(
                 crate::runtime_dispatch_packets::TaskflowImplementationArtifactAuthority {
                     attempt_id: object
