@@ -348,6 +348,14 @@ fn default_feedback_score(outcome: &str, task_class: &str) -> u64 {
     }
 }
 
+const APPROVAL_COVERAGE_META_PHRASES: &[&str] = &[
+    "approval coverage",
+    "awaiting approval coverage",
+    "approval_wait coverage",
+    "approval required coverage",
+    "pending approval coverage",
+];
+
 fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
     let mut ignored = ignored_feedback_phrases(
         reason,
@@ -420,14 +428,13 @@ fn ignored_canonical_close_meta_language(reason: &str) -> Vec<String> {
             "blocked alternative",
             "blocked candidates",
             "blocked candidate",
-            "approval coverage",
-            "awaiting approval coverage",
-            "approval_wait coverage",
-            "approval required coverage",
-            "pending approval coverage",
             "ready/blocked/progress/list/tree",
         ],
     );
+    ignored.extend(ignored_feedback_phrases(
+        reason,
+        APPROVAL_COVERAGE_META_PHRASES,
+    ));
     ignored.extend(ignored_historical_blocker_meta_phrases(reason));
     ignored.extend(ignored_historical_failure_state_segments(reason));
     ignored.extend(ignored_canonical_close_meta_segments(reason));
@@ -508,8 +515,7 @@ fn ignored_historical_failure_state_segments(reason: &str) -> Vec<String> {
                         &normalized,
                         &full_reason_normalized,
                     ))
-                || (has_current_failure_outcome_language(&normalized)
-                    && !has_stale_or_superseded_context(&normalized))
+                || has_current_failure_outcome_language_for_historical_segment(&normalized)
             {
                 return None;
             }
@@ -817,6 +823,30 @@ fn has_current_failure_outcome_language(normalized: &str) -> bool {
         || has_contrastive_blocker_clause(trimmed)
 }
 
+fn has_current_failure_outcome_language_for_historical_segment(normalized: &str) -> bool {
+    if !has_current_failure_outcome_language(normalized) {
+        return false;
+    }
+    if !has_stale_or_superseded_context(normalized) {
+        return true;
+    }
+    let trimmed = normalized.trim_start_matches(['"', '\'', '`', ' ']);
+    [
+        "current blocker",
+        "current blocked",
+        "currently blocked",
+        "currently failing",
+        "remains blocked",
+        "remained blocked",
+        "stays blocked",
+        "blocker remains",
+        "awaiting approval remains current",
+    ]
+    .iter()
+    .any(|phrase| trimmed.contains(phrase))
+        || has_contrastive_blocker_clause(trimmed)
+}
+
 const CONCRETE_CANONICAL_CLOSE_PHRASES: &[&str] = &[
     "still blocked",
     "remains blocked",
@@ -981,6 +1011,27 @@ pub(crate) fn canonical_close_status_from_reason(
     for phrase in ignored_canonical_close_historical_context(reason) {
         normalized = normalized.replace(&phrase, " canonical_close_context_language ");
     }
+    for phrase in ignored_feedback_phrases(reason, APPROVAL_COVERAGE_META_PHRASES) {
+        normalized = normalized.replace(&phrase, " canonical_close_context_language ");
+    }
+    let mut approval_normalized = normalized.clone();
+    for phrase in ignored_canonical_close_meta_language(reason) {
+        approval_normalized =
+            approval_normalized.replace(&phrase, " canonical_close_context_language ");
+    }
+    let approval_keywords = [
+        "approval_wait".to_string(),
+        "awaiting_approval".to_string(),
+        "approval required".to_string(),
+        "pending approval".to_string(),
+        "awaiting approval".to_string(),
+    ];
+    if !super::contains_keywords(&approval_normalized, &approval_keywords).is_empty() {
+        return Some((
+            "awaiting_approval",
+            crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str(),
+        ));
+    }
     if has_concrete_canonical_close_field_label(&normalized)
         || has_current_failure_outcome_language(&normalized)
     {
@@ -992,19 +1043,6 @@ pub(crate) fn canonical_close_status_from_reason(
     for phrase in ignored_canonical_close_meta_language(reason) {
         normalized = normalized.replace(&phrase, " canonical_close_context_language ");
     }
-    let approval_keywords = [
-        "approval_wait".to_string(),
-        "awaiting_approval".to_string(),
-        "approval required".to_string(),
-        "pending approval".to_string(),
-    ];
-    if !super::contains_keywords(&normalized, &approval_keywords).is_empty() {
-        return Some((
-            "awaiting_approval",
-            crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str(),
-        ));
-    }
-
     let blocker_keywords = [
         "blocked".to_string(),
         "blocker".to_string(),
@@ -2118,6 +2156,7 @@ mod tests {
         for reason in [
             "Stale_not_reproduced: previous blocker/blocked runtime report is superseded by current proof; proof commands passed.",
             "Superseded external report mentioned a blocked analyst route and prior blocker wording; current validation passed.",
+            "Stale report: blocked by missing verifier evidence; current proof passed.",
         ] {
             assert_eq!(
                 super::canonical_close_status_from_reason(reason),
@@ -2130,6 +2169,56 @@ mod tests {
             assert_eq!(outcome, "success");
             assert_eq!(inference["failure_markers"], serde_json::json!([]));
         }
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_stale_superseded_current_blocker_wording() {
+        for (reason, expected) in [
+            (
+                "Superseded: currently blocked by missing verifier evidence",
+                ("blocked", "blocked"),
+            ),
+            (
+                "Stale report, but task remains blocked by approval",
+                ("blocked", "blocked"),
+            ),
+            (
+                "Stale_not_reproduced historical report; awaiting approval remains current.",
+                (
+                    "awaiting_approval",
+                    crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str(),
+                ),
+            ),
+        ] {
+            assert_eq!(
+                super::canonical_close_status_from_reason(reason),
+                Some(expected),
+                "stale/superseded context must not mask current blocker language: {reason}"
+            );
+            assert!(
+                !super::ignored_canonical_close_historical_context(reason)
+                    .iter()
+                    .any(|segment| segment.contains("currently blocked")
+                        || segment.contains("remains blocked")
+                        || segment.contains("awaiting approval remains current")),
+                "current blocker segment must not be stripped as historical context: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_approval_coverage_meta_language() {
+        let reason =
+            "Added approval required coverage and pending approval coverage; proof passed.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
     }
 
     #[test]
