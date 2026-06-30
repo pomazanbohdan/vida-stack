@@ -788,7 +788,7 @@ fn host_bridge_adapter_payload(
             "vida agent host-bridge --request {} --host-agent-id {} --submit-result {} --receipt-id {}",
             crate::shell_quote(&request_path.display().to_string()),
             crate::shell_quote("<host-agent-id>"),
-            crate::shell_quote(&request.result_path.display().to_string()),
+            crate::shell_quote("<host-bridge-result-file>"),
             crate::shell_quote(&receipt_id)
         );
         command
@@ -6100,22 +6100,14 @@ mod tests {
             payload["operator_contracts"]["contract_id"],
             "host-agent-bridge-adapter-v1"
         );
-        assert!(payload["host_bridge"]["completion_command"]
+        let completion_command = payload["host_bridge"]["completion_command"]
             .as_str()
-            .unwrap()
-            .starts_with("vida agent host-bridge --request request.json "));
-        assert!(payload["host_bridge"]["completion_command"]
-            .as_str()
-            .unwrap()
-            .contains("--submit-result result.json"));
-        assert!(payload["host_bridge"]["completion_command"]
-            .as_str()
-            .unwrap()
-            .contains("--receipt-id run-1-implementer-host-bridge-receipt"));
-        assert!(!payload["host_bridge"]["completion_command"]
-            .as_str()
-            .unwrap()
-            .contains("--json"));
+            .expect("completion command should render");
+        assert!(completion_command.starts_with("vida agent host-bridge --request request.json "));
+        assert!(completion_command.contains("--submit-result '<host-bridge-result-file>'"));
+        assert!(!completion_command.contains("--submit-result result.json"));
+        assert!(completion_command.contains("--receipt-id run-1-implementer-host-bridge-receipt"));
+        assert!(!completion_command.contains("--json"));
         let calls = payload["host_bridge"]["host_tool_calls"]
             .as_array()
             .expect("host tool calls should render");
@@ -6169,6 +6161,7 @@ mod tests {
             .to_string(),
         )
         .expect("write packet");
+        let canonical_result_path = state_root.join("host-tool-bridge/results/result.json");
         let request = serde_json::json!({
             "schema_version": 1,
             "status": "pending",
@@ -6188,7 +6181,7 @@ mod tests {
             "adapter_capability_id": "codex.multi_agent_v1",
             "invocation_mode": "parent_host_tool_api",
             "request_path": request_path.display().to_string(),
-            "result_path": state_root.join("host-tool-bridge/results/result.json").display().to_string(),
+            "result_path": canonical_result_path.display().to_string(),
             "receipt_path": state_root.join("host-tool-bridge/receipts/receipt.json").display().to_string()
         });
         std::fs::write(&request_path, request.to_string()).expect("write request");
@@ -6204,6 +6197,11 @@ mod tests {
         assert!(completion_command.contains("--receipt-id run-analyst-analyst-host-bridge-receipt"));
         assert!(completion_command.contains("--host-agent-id '<host-agent-id>'"));
         assert!(completion_command.contains("--submit-result"));
+        assert!(completion_command.contains("--submit-result '<host-bridge-result-file>'"));
+        assert!(
+            !completion_command.contains(&canonical_result_path.display().to_string()),
+            "completion command must not use canonical result_path as submit-result input: {completion_command}"
+        );
         assert!(!completion_command.contains("--host-bridge-summary"));
         assert!(
             !completion_command.contains("--allowed-next-node"),
