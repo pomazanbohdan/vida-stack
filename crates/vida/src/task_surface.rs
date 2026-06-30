@@ -1346,7 +1346,8 @@ fn task_proof_target_status_with_inheritance(
             ),
         };
     }
-    let status = if state_store::StateStore::task_status_is_closed_like(&task.status) {
+    let task_is_closed = state_store::StateStore::task_status_is_closed_like(&task.status);
+    let status = if task_is_closed {
         "missing_evidence"
     } else {
         "pending"
@@ -1363,10 +1364,17 @@ fn task_proof_target_status_with_inheritance(
         },
         artifact_status: "not_recorded".to_string(),
         legacy_close_reason_match,
-        next_action: format!(
-            "Run or attach evidence for proof target `{}`, then close or update `{}`.",
-            target, task.id
-        ),
+        next_action: if task_is_closed {
+            format!(
+                "Structured proof evidence is missing on already closed task `{}`; inspect task history or use an explicit repair/reopen flow before mutating proof evidence.",
+                task.id
+            )
+        } else {
+            format!(
+                "Run or attach evidence for proof target `{}`, then close or update `{}`.",
+                target, task.id
+            )
+        },
     }
 }
 
@@ -1418,6 +1426,11 @@ fn task_proof_status_payload_with_inheritance(
     } else if missing_count == 0 {
         "No proof action required; all configured proof targets have structured proof evidence."
             .to_string()
+    } else if state_store::StateStore::task_status_is_closed_like(&task.status) {
+        format!(
+            "Structured proof evidence is missing on already closed task `{}`; inspect task history or use an explicit repair/reopen flow before mutating proof evidence.",
+            task.id
+        )
     } else {
         format!(
             "Run or attach missing proof evidence, then inspect again with `{}`.",
@@ -16698,6 +16711,14 @@ mod tests {
             .expect("evidence detail should render")
             .contains("structured proof evidence is required"));
         assert_eq!(payload["proof_targets"][1]["status"], "missing_evidence");
+        assert!(payload["proof_targets"][1]["next_action"]
+            .as_str()
+            .expect("closed missing target next action should render")
+            .contains("already closed task"));
+        assert!(payload["next_required_command"]
+            .as_str()
+            .expect("closed missing next required command should render")
+            .contains("already closed task"));
         assert_eq!(
             payload["missing_targets"],
             serde_json::json!([

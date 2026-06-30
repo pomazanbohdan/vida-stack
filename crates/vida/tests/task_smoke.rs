@@ -9050,6 +9050,25 @@ fn task_close_requires_structured_proof_evidence_for_configured_targets() {
     assert_eq!(allowed_close["closed"], true);
     assert_eq!(allowed_close["task"]["status"], "closed");
 
+    let post_close_proof_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(post_close_proof_status["status"], "pass");
+    assert_eq!(post_close_proof_status["task_status"], "closed");
+    assert_eq!(post_close_proof_status["satisfied_count"], 1);
+    assert_eq!(post_close_proof_status["missing_count"], 0);
+    assert_eq!(
+        post_close_proof_status["proof_targets"][0]["status"],
+        "satisfied"
+    );
+    assert_eq!(
+        post_close_proof_status["proof_targets"][0]["evidence_source"],
+        "task_proof_evidence_registry"
+    );
+    assert_eq!(
+        post_close_proof_status["next_required_command"],
+        "No proof action required; all configured proof targets have structured proof evidence."
+    );
+
     let _ = fs::remove_dir_all(&state_dir);
 }
 
