@@ -104,7 +104,10 @@ impl HostBridgeCompletionFsm {
     }
 
     #[must_use]
-    pub fn decide(self, input: HostBridgeCompletionAuthorityInput) -> HostBridgeCompletionAuthorityDecision {
+    pub fn decide(
+        self,
+        input: HostBridgeCompletionAuthorityInput,
+    ) -> HostBridgeCompletionAuthorityDecision {
         let next_step_packet_requested = input.next_step_packet_requested;
         let (outcome, blockers) = derive_completion_authority_outcome(&input);
         self.apply_outcome(outcome, blockers, next_step_packet_requested)
