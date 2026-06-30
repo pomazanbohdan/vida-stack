@@ -48,6 +48,7 @@ pub(crate) struct ReleaseInstallProgressStatusReceipt {
     pub blocker_codes: Vec<String>,
     pub next_actions: Vec<String>,
     pub latest_status: Option<String>,
+    pub latest_phase: Option<String>,
     pub latest_path: String,
     pub progress_path: Option<String>,
     pub process_id: Option<u32>,
@@ -296,6 +297,12 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         if let Err(blocked) =
             install_release_binary_target(&source_binary, &path, target, &mut installed_targets)
         {
+            record_release_install_phase_progress(
+                &build,
+                "blocked",
+                Some(1),
+                Some("install_failed"),
+            );
             return blocked_receipt(requested_target, source_binary_path, build, blocked);
         }
     }
@@ -331,6 +338,12 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
                 target,
                 &mut installed_targets,
             ) {
+                record_release_install_phase_progress(
+                    &build,
+                    "blocked",
+                    Some(1),
+                    Some("install_failed"),
+                );
                 return blocked_receipt(requested_target, source_binary_path, build, blocked);
             }
         }
@@ -343,6 +356,12 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         let current_root = match install_layout.as_ref() {
             Some(layout) => PathBuf::from(&layout.current_root),
             None => {
+                record_release_install_phase_progress(
+                    &build,
+                    "blocked",
+                    Some(1),
+                    Some("asset_failed"),
+                );
                 return blocked_receipt(
                     requested_target,
                     source_binary_path,
@@ -360,6 +379,12 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
         match materialize_release_runtime_assets(&current_root) {
             Ok(update) => update,
             Err(io_error) => {
+                record_release_install_phase_progress(
+                    &build,
+                    "blocked",
+                    Some(1),
+                    Some("asset_failed"),
+                );
                 return blocked_receipt(
                     requested_target,
                     source_binary_path,
@@ -380,6 +405,7 @@ pub(crate) fn release_install_receipt(args: &ReleaseInstallArgs) -> ReleaseInsta
     };
 
     record_skip_build_release_install_progress(&mut build);
+    record_release_install_phase_progress(&build, "pass", Some(0), Some("completed"));
 
     ReleaseInstallReceipt {
         status: "pass".to_string(),
@@ -437,6 +463,31 @@ fn install_release_binary_target(
     });
     let _ = write_binary_fingerprint_metadata(destination, &fingerprint);
     Ok(())
+}
+
+fn record_release_install_phase_progress(
+    build: &ReleaseBuildReceipt,
+    status: &str,
+    exit_code: Option<i32>,
+    child_state: Option<&str>,
+) {
+    let Some(progress_path) = build.progress_path.as_deref() else {
+        return;
+    };
+    let command = vec![
+        "vida".to_string(),
+        "release".to_string(),
+        "install".to_string(),
+    ];
+    let _ = write_release_install_progress_event_with_child(
+        Path::new(progress_path),
+        status,
+        "install",
+        &command,
+        exit_code,
+        None,
+        child_state,
+    );
 }
 
 fn release_build_command() -> Vec<String> {
@@ -648,6 +699,7 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
                     .to_string(),
             ],
             latest_status: None,
+            latest_phase: None,
             latest_path: latest_path_string,
             progress_path: None,
             process_id: None,
@@ -668,6 +720,7 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
                     latest_path.display()
                 )],
                 latest_status: None,
+                latest_phase: None,
                 latest_path: latest_path_string,
                 progress_path: None,
                 process_id: None,
@@ -689,6 +742,7 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
                     latest_path.display()
                 )],
                 latest_status: None,
+                latest_phase: None,
                 latest_path: latest_path_string,
                 progress_path: None,
                 process_id: None,
@@ -700,6 +754,10 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
     };
     let latest_status = latest_event
         .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let latest_phase = latest_event
+        .get("phase")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
     let process_id = latest_event
@@ -726,14 +784,18 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
     if let Some(path) = progress_path.as_ref() {
         artifact_refs.push(path.clone());
     }
-    let (status, blocker_codes, next_actions) =
-        release_install_progress_status_contract(latest_status.as_deref(), child_state.as_deref());
+    let (status, blocker_codes, next_actions) = release_install_progress_status_contract(
+        latest_status.as_deref(),
+        latest_phase.as_deref(),
+        child_state.as_deref(),
+    );
     ReleaseInstallProgressStatusReceipt {
         surface: "vida release install --status".to_string(),
         status,
         blocker_codes,
         next_actions,
         latest_status,
+        latest_phase,
         latest_path: latest_path_string,
         progress_path,
         process_id,
@@ -745,13 +807,22 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
 
 fn release_install_progress_status_contract(
     latest_status: Option<&str>,
+    latest_phase: Option<&str>,
     child_state: Option<&str>,
 ) -> (String, Vec<String>, Vec<String>) {
     match latest_status {
-        Some("pass") => (
+        Some("pass") if latest_phase == Some("install") => (
             "pass".to_string(),
             Vec::new(),
             vec!["Release install completed; verify `vida --version` and PATH if needed.".to_string()],
+        ),
+        Some("pass") => (
+            "blocked".to_string(),
+            vec!["release_install_progress_missing_install_phase".to_string()],
+            vec![
+                "Latest release install progress only proves the build phase; rerun `vida release install --json` or inspect the target hash before treating the install as complete."
+                    .to_string(),
+            ],
         ),
         Some("started")
             if matches!(
@@ -1256,17 +1327,26 @@ fn install_target_paths(
     requested_target: &str,
     install_root: Option<&Path>,
 ) -> Result<Vec<(String, PathBuf)>, BlockedRelease> {
+    install_target_paths_with_path_env(requested_target, install_root, std::env::var_os("PATH"))
+}
+
+fn install_target_paths_with_path_env(
+    requested_target: &str,
+    install_root: Option<&Path>,
+    path_env: Option<OsString>,
+) -> Result<Vec<(String, PathBuf)>, BlockedRelease> {
     let root = release_install_root(install_root);
     let binary_name = vida_binary_file_name();
     match requested_target {
         "current" | "cur" | "all" | "local" | "cargo" => {
             let root = root.ok_or_else(unresolved_install_target)?;
-            Ok(vec![(
-                "current".to_string(),
-                root.join("current").join("bin").join(binary_name),
-            )])
+            let current_path = root.join("current").join("bin").join(binary_name);
+            if install_root.is_none() {
+                fail_if_default_current_target_is_not_active_path(&current_path, path_env)?;
+            }
+            Ok(vec![("current".to_string(), current_path)])
         }
-        "path" => resolve_vida_from_path_env(std::env::var_os("PATH"))
+        "path" => resolve_vida_from_path_env(path_env)
             .map(|path| vec![("path".to_string(), path)])
             .ok_or(BlockedRelease {
                 blocker_code: "install_target_unresolved",
@@ -1279,6 +1359,43 @@ fn install_target_paths(
                 .to_string(),
             io_error: None,
         }),
+    }
+}
+
+fn fail_if_default_current_target_is_not_active_path(
+    current_path: &Path,
+    path_env: Option<OsString>,
+) -> Result<(), BlockedRelease> {
+    let Some(active_path) = resolve_vida_from_path_env(path_env) else {
+        return Ok(());
+    };
+    if release_paths_match(&active_path, current_path) {
+        return Ok(());
+    }
+    Err(BlockedRelease {
+        blocker_code: "release_install_active_path_mismatch",
+        next_action: format!(
+            "Default `--target current` would install `{}` but the first `vida` on PATH is `{}`; put current/bin first on PATH or rerun `vida release install --target path --json` to update the active PATH binary.",
+            current_path.display(),
+            active_path.display()
+        ),
+        io_error: None,
+    })
+}
+
+fn release_paths_match(left: &Path, right: &Path) -> bool {
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => release_path_key(left) == release_path_key(right),
+    }
+}
+
+fn release_path_key(path: &Path) -> String {
+    let key = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        key.to_ascii_lowercase()
+    } else {
+        key
     }
 }
 
@@ -1748,8 +1865,8 @@ mod tests {
         assert!(help.contains("--skip-build"));
         assert!(help.contains("--status"));
         assert!(help.contains("--target"));
-        assert!(help.contains("cur"));
-        assert!(help.contains("path"));
+        assert!(help.contains("Install target: current, cur, or path."));
+        assert!(help.contains("Legacy all/local/cargo aliases resolve to current."));
         assert!(help.contains("--source-binary"));
         assert!(help.contains("--install-root"));
     }
@@ -1801,6 +1918,26 @@ mod tests {
                     .join(vida_binary_file_name())
             )]
         );
+    }
+
+    #[test]
+    fn release_install_default_current_blocks_when_active_path_differs() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let active_dir = harness.path().join("active-bin");
+        fs::create_dir_all(&active_dir).expect("active PATH bin should exist");
+        let active_vida = active_dir.join(vida_binary_file_name());
+        fs::write(&active_vida, b"old active vida").expect("active vida should write");
+        let path_env = std::env::join_paths([active_dir]).expect("PATH should join");
+
+        let blocked = install_target_paths_with_path_env("current", None, Some(path_env))
+            .expect_err("default current target should block when PATH uses another vida");
+
+        assert_eq!(blocked.blocker_code, "release_install_active_path_mismatch");
+        assert!(blocked.next_action.contains("--target path"));
+        assert!(blocked.next_action.contains("current/bin"));
+        assert!(blocked
+            .next_action
+            .contains(&active_vida.display().to_string()));
     }
 
     #[test]
@@ -1968,7 +2105,7 @@ mod tests {
     #[test]
     fn release_install_status_contract_blocks_dead_started_child() {
         let (status, blocker_codes, next_actions) =
-            release_install_progress_status_contract(Some("started"), Some("dead"));
+            release_install_progress_status_contract(Some("started"), Some("build"), Some("dead"));
 
         assert_eq!(status, "blocked");
         assert_eq!(
@@ -1978,6 +2115,36 @@ mod tests {
         assert!(next_actions
             .iter()
             .any(|action| action.contains("recorded build process is not alive")));
+    }
+
+    #[test]
+    fn release_install_status_blocks_build_pass_without_install_phase() {
+        let _guard = release_progress_test_lock();
+        clean_release_progress_latest_markers();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let progress_path = harness.path().join("release-install-progress.jsonl");
+
+        write_release_install_progress_event_with_child(
+            &progress_path,
+            "pass",
+            "build",
+            &release_build_command(),
+            Some(0),
+            Some(std::process::id()),
+            Some("completed"),
+        )
+        .expect("build pass progress should write");
+
+        let receipt = release_install_status_receipt();
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(receipt.latest_status.as_deref(), Some("pass"));
+        assert_eq!(receipt.latest_phase.as_deref(), Some("build"));
+        assert_eq!(
+            receipt.blocker_codes,
+            vec!["release_install_progress_missing_install_phase".to_string()]
+        );
+        clean_release_progress_latest_markers();
     }
 
     #[test]
@@ -2173,6 +2340,7 @@ mod tests {
         )
         .expect("latest progress should be json");
         assert_eq!(latest["status"], "pass");
+        assert_eq!(latest["phase"], "install");
         assert_eq!(latest["exit_code"], 0);
         assert_eq!(latest["progress_path"], progress_path);
         assert_eq!(receipt.io_error, None);
