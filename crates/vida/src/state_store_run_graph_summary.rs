@@ -275,6 +275,8 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.context_state = "sealed".to_string();
         } else {
             let blocked_target = normalize_run_graph_node(&receipt.dispatch_target);
+            let retryable_blocked_receipt =
+                blocked_agent_lane_receipt_allows_recovery_retry(&receipt);
             status.active_node = receipt.dispatch_target.clone();
             status.next_node = None;
             status.lifecycle_stage = format!("{blocked_target}_blocked");
@@ -285,10 +287,17 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
                 "none".to_string()
             };
             status.context_state = "sealed".to_string();
+            if retryable_blocked_receipt {
+                status.next_node = Some(blocked_target.clone());
+                status.handoff_state = format!("awaiting_{blocked_target}");
+                status.recovery_ready = true;
+            }
         }
         status.checkpoint_kind = "none".to_string();
         status.status = "blocked".to_string();
-        status.recovery_ready = false;
+        if !blocked_agent_lane_receipt_allows_recovery_retry(&receipt) {
+            status.recovery_ready = false;
+        }
         return Ok(status);
     }
     if pre_execution_packet_ready {
@@ -671,6 +680,22 @@ fn blocked_agent_lane_receipt_keeps_resume_target(receipt: &RunGraphDispatchRece
         "internal_activation_view_only"
             | crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
     )
+}
+
+fn blocked_agent_lane_receipt_allows_recovery_retry(
+    receipt: &RunGraphDispatchReceiptStored,
+) -> bool {
+    blocked_agent_lane_receipt_keeps_resume_target(receipt)
+        && receipt.dispatch_status == "blocked"
+        && receipt.blocker_code.as_deref() == Some("host_bridge_completion_result_blocked")
+        && receipt
+            .supersedes_receipt_id
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        && receipt
+            .exception_path_receipt_id
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
 }
 
 fn dispatch_identity_task_id_for_target(
@@ -5617,6 +5642,126 @@ mod tests {
         receipt.dispatch_packet_path = Some("/dev/zero".to_string());
 
         assert!(downstream_packet_evidence_from_receipt(&receipt).is_none());
+    }
+
+    #[test]
+    fn host_bridge_completion_result_blocker_keeps_lawful_dispatch_retry() {
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-host-bridge-completion-retry".to_string();
+        status.task_id = "task-host-bridge-completion-retry".to_string();
+        status.active_node = "designer".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "designer_blocked".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+
+        let root = temp_run_graph_root("host-bridge-completion-retry");
+        let result_path = root
+            .join(".vida/data/state/runtime-consumption/dispatch-results/designer-blocked.json");
+        fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create result parent");
+        fs::write(
+            &result_path,
+            serde_json::to_string(&serde_json::json!({
+                "status": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_code": "host_bridge_completion_result_blocked",
+                "blocker_codes": ["host_bridge_completion_result_blocked"],
+                "allowed_next_node": null,
+                "completed_target": "designer"
+            }))
+            .expect("serialize result"),
+        )
+        .expect("write result");
+
+        let mut receipt = sample_dispatch_receipt(&status.run_id);
+        receipt.dispatch_target = "designer".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some("host_bridge_completion_result_blocked".to_string());
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
+        receipt.downstream_dispatch_target = None;
+        receipt.downstream_dispatch_packet_path = None;
+        receipt.downstream_dispatch_status = None;
+
+        let stored_receipt = RunGraphDispatchReceiptStored::from(receipt);
+        let projected =
+            reconcile_run_graph_status_with_dispatch_receipt(status, Some(&stored_receipt))
+                .expect("host bridge completion blocker should reconcile");
+
+        assert_eq!(projected.status, "blocked");
+        assert_eq!(projected.active_node, "designer");
+        assert_eq!(projected.lifecycle_stage, "designer_blocked");
+        assert_eq!(projected.next_node.as_deref(), Some("designer"));
+        assert_eq!(projected.handoff_state, "awaiting_designer");
+        assert_eq!(projected.resume_target, "dispatch.designer");
+        assert!(projected.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn recovery_summary_exposes_host_bridge_completion_retry_target() {
+        let root = temp_run_graph_root("host-bridge-completion-retry-recovery");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record(
+                "task-host-bridge-completion-retry-recovery",
+                "in_progress",
+            ))
+            .await
+            .expect("seed task");
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-host-bridge-completion-retry-recovery".to_string();
+        status.task_id = "task-host-bridge-completion-retry-recovery".to_string();
+        status.active_node = "designer".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "designer_blocked".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked status");
+
+        let result_path = root
+            .join(".vida/data/state/runtime-consumption/dispatch-results/designer-blocked.json");
+        fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create result parent");
+        fs::write(&result_path, "{}").expect("write result placeholder");
+        let mut receipt = sample_dispatch_receipt(&status.run_id);
+        receipt.dispatch_target = "designer".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_blocked".to_string();
+        receipt.blocker_code = Some("host_bridge_completion_result_blocked".to_string());
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
+        receipt.downstream_dispatch_target = None;
+        receipt.downstream_dispatch_packet_path = None;
+        receipt.downstream_dispatch_status = None;
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist blocked receipt");
+
+        let recovery = store
+            .run_graph_recovery_summary(&status.run_id)
+            .await
+            .expect("load recovery summary");
+
+        assert_eq!(recovery.resume_status, "blocked");
+        assert_eq!(recovery.active_node, "designer");
+        assert_eq!(recovery.lifecycle_stage, "designer_blocked");
+        assert_eq!(recovery.resume_node.as_deref(), Some("designer"));
+        assert_eq!(recovery.resume_target, "dispatch.designer");
+        assert!(recovery.recovery_ready);
+        assert!(recovery.delegation_gate.delegated_cycle_open);
+
+        close_store_and_remove_root(store, root).await;
     }
 
     #[test]
