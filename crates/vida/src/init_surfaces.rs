@@ -2925,6 +2925,55 @@ mod tests {
     }
 
     #[test]
+    fn agent_init_execute_dispatch_requires_receipt_backed_evidence() {
+        let args = AgentInitArgs {
+            execute_dispatch: true,
+            dispatch_packet: Some("packet.json".to_string()),
+            ..AgentInitArgs::default()
+        };
+        let dispatch_mode =
+            agent_init_dispatch_mode(&args, &serde_json::json!({ "mode": "dispatch_packet" }));
+
+        assert_eq!(dispatch_mode["mode"], "execution_dispatch");
+        assert_eq!(dispatch_mode["activation_view_only"], false);
+        assert_eq!(
+            dispatch_mode["activation_view_is_execution_evidence"],
+            false
+        );
+        assert_eq!(
+            dispatch_mode["required_completion_evidence"],
+            "receipt_backed_execution_evidence"
+        );
+        assert_eq!(
+            dispatch_mode["missing_execution_evidence_semantics"],
+            "non_executing_bridge_blocker"
+        );
+
+        let missing_packet_args = AgentInitArgs {
+            execute_dispatch: true,
+            ..AgentInitArgs::default()
+        };
+        let missing_packet_mode =
+            agent_init_dispatch_mode(&missing_packet_args, &serde_json::Value::Null);
+        let payload = agent_init_execute_dispatch_missing_packet_payload(&missing_packet_mode);
+
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["execution_state"], "blocked");
+        assert_eq!(
+            payload["artifact_refs"]["receipt_backed_execution_required"],
+            true
+        );
+        assert!(payload["next_actions"]
+            .as_array()
+            .expect("next actions should render")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .unwrap_or_default()
+                .contains("Do not treat packetless `vida agent-init --execute-dispatch`")));
+    }
+
+    #[test]
     fn orchestrator_init_summary_payload_projects_top_level_continuation_fields() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let bundle = crate::taskflow_runtime_bundle::blocking_runtime_bundle("test");
