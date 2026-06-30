@@ -34,7 +34,7 @@ repos:
     hooks:
       - id: vida-script-check
         name: VIDA script/diff hygiene gate
-        entry: pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check
+        entry: cmd.exe /d /s /c "scripts\vida-dev-gate.cmd -Mode script-check"
         language: system
         pass_filenames: false
         always_run: true
