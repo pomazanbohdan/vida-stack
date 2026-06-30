@@ -7392,7 +7392,7 @@ mod tests {
                 run_id: run_id.to_string(),
                 dispatch_target: "autotester".to_string(),
                 dispatch_status: "bridge_request_pending".to_string(),
-                lane_status: crate::LaneStatus::LaneOpen.as_str().to_string(),
+                lane_status: crate::LaneStatus::LaneRunning.as_str().to_string(),
                 supersedes_receipt_id: None,
                 exception_path_receipt_id: None,
                 dispatch_kind: "agent_lane".to_string(),
