@@ -1812,7 +1812,7 @@ fn dispatch_init_task_identity_from_task(
     }
 }
 
-async fn ensure_dispatch_init_task_identity(
+async fn preview_dispatch_init_task_identity(
     store: &StateStore,
     run_id: &str,
 ) -> Result<Option<RunGraphDispatchTaskIdentity>, String> {
@@ -1827,7 +1827,16 @@ async fn ensure_dispatch_init_task_identity(
         Ok(task) => task,
         Err(_) => return Ok(None),
     };
-    let identity = dispatch_init_task_identity_from_task(run_id, &task);
+    Ok(Some(dispatch_init_task_identity_from_task(run_id, &task)))
+}
+
+async fn ensure_dispatch_init_task_identity(
+    store: &StateStore,
+    run_id: &str,
+) -> Result<Option<RunGraphDispatchTaskIdentity>, String> {
+    let Some(identity) = preview_dispatch_init_task_identity(store, run_id).await? else {
+        return Ok(None);
+    };
     store
         .record_run_graph_dispatch_task_identity(&identity)
         .await
@@ -9360,7 +9369,7 @@ async fn preview_run_graph_dispatch_init_artifacts(
     }
     let task_identity = if let Ok(task) = store.show_task(&effective_run_id).await {
         inject_task_planner_metadata(&mut role_selection, &task.planner_metadata);
-        ensure_dispatch_init_task_identity(store, &effective_run_id).await?
+        preview_dispatch_init_task_identity(store, &effective_run_id).await?
     } else {
         None
     };
@@ -15235,6 +15244,76 @@ agent_system:
         assert_eq!(identity.feature_epic_id.as_deref(), Some("cache-epic"));
         assert_eq!(identity.dev_task_id.as_deref(), Some("cache-task"));
         assert_eq!(identity.source, "dispatch_init_existing_task");
+        store.close().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_preview_derives_missing_task_identity_without_persisting() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "preview-epic",
+                title: "Preview Epic",
+                display_id: None,
+                description: "identity parent",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create parent epic");
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: "preview-task",
+                title: "Preview Task",
+                display_id: None,
+                description: "identity child",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: Some("preview-epic"),
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create child task");
+        store.close().await;
+
+        let read_only_store = StateStore::open_existing_read_only(harness.path().to_path_buf())
+            .await
+            .expect("open read-only store");
+        let identity = preview_dispatch_init_task_identity(&read_only_store, "preview-task")
+            .await
+            .expect("preview identity should derive")
+            .expect("preview identity should be present");
+        assert_eq!(identity.run_id, "preview-task");
+        assert_eq!(identity.feature_epic_id.as_deref(), Some("preview-epic"));
+        assert_eq!(identity.dev_task_id.as_deref(), Some("preview-task"));
+        read_only_store.close().await;
+
+        let store = StateStore::open_existing(harness.path().to_path_buf())
+            .await
+            .expect("reopen store");
+        let persisted_identity = store
+            .run_graph_dispatch_task_identity("preview-task")
+            .await
+            .expect("read dispatch task identity");
+        assert!(
+            persisted_identity.is_none(),
+            "dispatch-init preview must not persist task identity through a read-only state handle"
+        );
         store.close().await;
     }
 
