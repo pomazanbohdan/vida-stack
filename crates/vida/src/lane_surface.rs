@@ -4206,14 +4206,38 @@ fn host_bridge_request_artifacts_are_taskflow_authorized(
 }
 
 fn host_bridge_request_artifact_authority_keys(
-    request_artifacts: &serde_json::Value,
+    request: &serde_json::Value,
+    state_root: &Path,
 ) -> Vec<crate::runtime_dispatch_packets::TaskflowImplementationArtifactAuthority> {
+    let request_artifacts = request
+        .get("implementation_artifacts")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    let normalized_refs = request
+        .get("implementation_artifact_refs")
+        .and_then(serde_json::Value::as_array)
+        .map(|refs| {
+            refs.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     request_artifacts
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|artifact| {
             let object = artifact.as_object()?;
+            if !host_bridge_request_artifact_has_matching_normalized_ref(
+                artifact,
+                &normalized_refs,
+                state_root,
+            ) {
+                return None;
+            }
             let receipt_backed = object
                 .get("receipt_backed")
                 .and_then(serde_json::Value::as_bool)
@@ -4283,6 +4307,34 @@ fn host_bridge_request_artifact_authority_keys(
             }
             keys
         })
+}
+
+fn host_bridge_request_artifact_has_matching_normalized_ref(
+    artifact: &serde_json::Value,
+    normalized_refs: &[String],
+    state_root: &Path,
+) -> bool {
+    normalized_refs.iter().any(|artifact_ref| {
+        if !host_bridge_artifact_ref_is_normalized_implementation_artifact(artifact_ref) {
+            return false;
+        }
+        let Ok(path) = crate::runtime_dispatch_packets::validate_attempt_artifact_ref(
+            artifact_ref,
+            state_root,
+        ) else {
+            return false;
+        };
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .is_some_and(|stored| stored == *artifact)
+    })
+}
+
+fn host_bridge_artifact_ref_is_normalized_implementation_artifact(artifact_ref: &str) -> bool {
+    let normalized = artifact_ref.trim().replace('\\', "/");
+    normalized.starts_with("host-tool-bridge/implementation-artifacts/")
+        || normalized.contains("/host-tool-bridge/implementation-artifacts/")
 }
 
 fn host_bridge_implementation_scope_validation(
@@ -4407,11 +4459,7 @@ async fn taskflow_implementation_artifacts_for_host_bridge_request(
         Err(_) => crate::runtime_dispatch_packets::TaskflowImplementationArtifacts::default(),
     };
     if taskflow_artifacts.artifacts.is_empty() {
-        let request_artifacts = request
-            .get("implementation_artifacts")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([]));
-        for authority_key in host_bridge_request_artifact_authority_keys(&request_artifacts) {
+        for authority_key in host_bridge_request_artifact_authority_keys(&request, store.root()) {
             if !taskflow_artifacts
                 .authority_keys
                 .iter()
@@ -13776,6 +13824,28 @@ mod tests {
         let request_path = root.join("host-tool-bridge/requests/closed-authority.json");
         std::fs::create_dir_all(request_path.parent().expect("request parent"))
             .expect("create request parent");
+        let normalized_artifact_path =
+            root.join("host-tool-bridge/implementation-artifacts/closed-authority-attempt-1-0-patch_proposal.json");
+        std::fs::create_dir_all(normalized_artifact_path.parent().expect("artifact parent"))
+            .expect("create artifact parent");
+        let implementation_artifact = serde_json::json!({
+            "artifact_kind": "patch_proposal",
+            "schema_version": "host-bridge-implementation-artifact-v1",
+            "attempt_id": "closed-authority-attempt-1",
+            "task_id": run_id,
+            "stage_id": "implementation",
+            "freshness": task.updated_at,
+            "consolidation_receipt_id": "closed-authority-receipt-1",
+            "changed_files": ["crates/vida/src/lane_surface.rs"],
+            "source_artifact_ref": "host-tool-bridge/artifacts/closed-authority.json",
+            "source_artifact_kind": "patch_proposal",
+            "receipt_backed": true
+        });
+        std::fs::write(
+            &normalized_artifact_path,
+            serde_json::to_vec_pretty(&implementation_artifact).expect("artifact should serialize"),
+        )
+        .expect("write normalized artifact");
         let request = serde_json::json!({
             "schema_version": 1,
             "status": "pending",
@@ -13787,19 +13857,8 @@ mod tests {
             "implementation_isolation": {
                 "owned_paths": ["crates/vida/src/lane_surface.rs"]
             },
-            "implementation_artifacts": [{
-                "artifact_kind": "patch_proposal",
-                "schema_version": "host-bridge-implementation-artifact-v1",
-                "attempt_id": "closed-authority-attempt-1",
-                "task_id": run_id,
-                "stage_id": "implementation",
-                "freshness": task.updated_at,
-                "consolidation_receipt_id": "closed-authority-receipt-1",
-                "changed_files": ["crates/vida/src/lane_surface.rs"],
-                "source_artifact_ref": "host-tool-bridge/artifacts/closed-authority.json",
-                "source_artifact_kind": "patch_proposal",
-                "receipt_backed": true
-            }]
+            "implementation_artifacts": [implementation_artifact],
+            "implementation_artifact_refs": [normalized_artifact_path.display().to_string()]
         });
         std::fs::write(&request_path, request.to_string()).expect("write request");
 
@@ -14768,13 +14827,16 @@ mod tests {
                 },
                 "implementation_artifacts": [{
                     "artifact_kind": "patch_proposal",
+                    "schema_version": "host-bridge-implementation-artifact-v1",
                     "attempt_id": "request-attempt-1",
                     "task_id": run_id,
                     "stage_id": "implementation",
                     "freshness": task.updated_at,
                     "receipt_backed": true,
                     "consolidation_receipt_id": "self-attested-request-receipt",
-                    "changed_files": ["crates/vida/src/lib.rs"]
+                    "changed_files": ["crates/vida/src/lib.rs"],
+                    "source_artifact_ref": "host-tool-bridge/artifacts/self-attested.json",
+                    "source_artifact_kind": "patch_proposal"
                 }],
                 "result_path": result_path.display().to_string(),
                 "receipt_path": bridge_receipt_path.display().to_string()
