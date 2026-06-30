@@ -105,6 +105,14 @@ pub(crate) fn dispatch_contract_lane<'a>(
             return Some(lane);
         }
     }
+    if let Some(route) = execution_plan["development_flow"].get(canonical_target.as_str()) {
+        return Some(route);
+    }
+    if canonical_target != dispatch_target {
+        if let Some(route) = execution_plan["development_flow"].get(dispatch_target) {
+            return Some(route);
+        }
+    }
     let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
     legacy_dispatch_contract_lane(dispatch_contract, canonical_target.as_str())
         .or_else(|| legacy_dispatch_contract_lane(dispatch_contract, dispatch_target))
@@ -1078,6 +1086,41 @@ mod tests {
         assert_ne!(
             payload["selected_backend"].as_str(),
             payload["activation_agent_type"].as_str()
+        );
+        assert_eq!(route_explain_status(&payload, Some(true)), "pass");
+    }
+
+    #[test]
+    fn dispatch_contract_lane_resolves_development_flow_route_entries() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "designer": {
+                    "dispatch_target": "designer",
+                    "task_class": "design",
+                    "closure_class": "design",
+                    "executor_backend": "internal_subagents",
+                    "activation": {
+                        "activation_agent_type": "middle",
+                        "activation_runtime_role": "designer"
+                    }
+                }
+            }
+        });
+
+        let lane = dispatch_contract_lane(&execution_plan, "designer")
+            .expect("development_flow route should resolve as a dispatch lane");
+        assert_eq!(lane["dispatch_target"].as_str(), Some("designer"));
+        assert_eq!(lane["task_class"].as_str(), Some("design"));
+
+        let payload = route_explain_payload(
+            &execution_plan,
+            "designer",
+            Some(&execution_plan["development_flow"]["designer"]),
+        );
+        assert_eq!(payload["route_present"].as_bool(), Some(true));
+        assert_eq!(
+            payload["selected_backend"].as_str(),
+            Some("internal_subagents")
         );
         assert_eq!(route_explain_status(&payload, Some(true)), "pass");
     }

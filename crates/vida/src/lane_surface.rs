@@ -15821,18 +15821,22 @@ mod tests {
 
         let mut role_selection = lane_complete_role_selection(run_id);
         role_selection.execution_plan["development_flow"]["dispatch_contract"]
-            ["execution_lane_sequence"] = serde_json::json!(["designer", "developer"]);
+            ["execution_lane_sequence"] = serde_json::json!(["analyst", "designer", "developer"]);
+        role_selection.execution_plan["development_flow"]["designer"] = serde_json::json!({
+            "dispatch_target": "designer",
+            "stage": "design",
+            "task_class": "specification",
+            "closure_class": "specification",
+            "completion_blocker": "pending_design_evidence",
+            "packet_template_kind": "delivery_task_packet",
+            "activation_agent_type": "middle",
+            "activation_runtime_role": "designer",
+            "runtime_assignment": {
+                "selected_backend_id": "internal_subagents",
+                "selected_carrier_id": "middle"
+            }
+        });
         role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
-            "designer": {
-                "dispatch_target": "designer",
-                "stage": "design",
-                "task_class": "specification",
-                "closure_class": "specification",
-                "completion_blocker": "pending_design_evidence",
-                "packet_template_kind": "delivery_task_packet",
-                "activation_agent_type": "middle",
-                "activation_runtime_role": "designer"
-            },
             "developer": {
                 "dispatch_target": "developer",
                 "stage": "execution",
