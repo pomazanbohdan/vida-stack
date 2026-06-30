@@ -75,6 +75,14 @@ Derived cache, rendered projection, lane preview, advisory text, and operator su
 
 When a session/environment self-diagnostic discovers a new reusable Error Search optimization, update this protocol in the same bounded batch. Current examples include preferring `vida task show <task-id> --json` over heavier lane/run-graph projections for timeout recovery metadata, and requiring log-backed execution for long proof gates that can exceed host-tool stdout retention.
 
+## Runtime-First Diagnostic Rule
+
+1. Before local source edits for a task, attempt the configured VIDA runtime path: `orchestrator-init`, team dispatch preview, run-graph dispatch init, `agent-init --execute-dispatch`, host-bridge request rendering, host adapter execution, and receipt-backed completion.
+2. Treat activation views, missing execution evidence, impossible next actions, host-bridge submit-result contradictions, stale downstream routes, and open delegated-cycle write guards as runtime blockers, not as silent permission to write locally.
+3. Manual repair is lawful only after the blocker packet records active bounded unit, command, exit result, `blocker_codes`, artifact paths, root write guard or delegated-cycle state, and the runtime defect task that owns the blocker.
+4. In manual repair, keep the same configured flow as evidence: analyst result, test-author proof, implementation, coach/review, verifier proof, PR protocol, commit/push, and release/system-binary policy.
+5. If the same runtime blocker appears again in the session, raise or keep priority at the highest active level, add release-required evidence when the fix must unblock the installed binary, and do not close the task without a system-binary update decision.
+
 ## Multi-Defect Batch Rule
 
 When more than two defects, PR failures, CI failures, runtime blockers, or operator-surface gaps are present:
@@ -109,7 +117,7 @@ A VIDA runtime Error Search fix is not ready for commit until the proof matrix c
 2. adjacent contract tests for the affected command family,
 3. one debug runtime probe when the defect is observable through a local command,
 4. formatting or schema validation for edited source/docs,
-5. release build/install only when installed-runtime behavior must be validated or when preparing a push that depends on installed binary behavior,
+5. release build/install according to the System Binary Update Policy in `docs/process/command-timing-and-gate-optimization-protocol.md`,
 6. post-pool continuous-improvement diagnostics after the coherent fix pool is proven: command timings, VIDA runtime slow-surface status, token/output reduction opportunities, stage-ordering/parallelism findings, script/gate decisions, command-surface follow-ups, and documentation sync for any new reusable rule.
 
 Record timings for each proof command. If a repeated proof command exceeds the project timing target, create or update an operator-efficiency task.

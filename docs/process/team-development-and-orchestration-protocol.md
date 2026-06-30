@@ -43,6 +43,7 @@ Project development runs as:
 12. test-first for runtime/operator defect remediation, with a middle-tier test author before the implementation lane.
 13. TaskFlow-actualized at every layer: new evidence must update task status, parent/child placement, priority, dependencies, proof targets, execution semantics, and sequential/parallel posture before the next lane is dispatched.
 14. source-neutral: pull requests, defects, external downstream reports, CI failures, release tasks, optimization tasks, documentation/process tasks, operator-surface gaps, diagnostics, and newly discovered work all follow the same spec-first intake, TaskFlow actualization, configured-role chain, proof, and closure discipline.
+15. runtime-first: every executable task must attempt the configured VIDA runtime flow before root-session implementation; manual execution is allowed only after a recorded runtime blocker prevents the lawful lane path.
 
 ## Team Topology
 
@@ -75,6 +76,16 @@ The configured development chain is:
 5. `coach_implementation_gate`: the post-implementation coach lane, resolved through runtime role `coach`, that reviews the completed implementation against the analyst brief, accepted test, spec, acceptance targets, and expected handoff before independent review.
 6. `duplication_reviewer`: an independent review lane that checks whether the implementation reuses existing framework/runtime contracts, avoids duplicate code/config semantics/operator surfaces, and has no dead or unwired helpers.
 7. `tester` / `prover`: independent verification and proof lanes that gate release closure.
+
+Runtime-first execution rule:
+
+1. For each task or subtask, the orchestrator must first bind the active bounded unit with `vida orchestrator-init --json`, preview the configured team with `vida agent dispatch-next --dev-team --json`, then execute the next lane through `vida taskflow run-graph dispatch-init ...` and `vida agent-init --dispatch-packet ... --execute-dispatch`.
+2. The configured runtime sequence is authoritative. If a project pack exposes four runtime roles but expands the worker role into multiple lane steps, the orchestrator follows the lane sequence returned by runtime instead of assuming a hardcoded count.
+3. Lanes run sequentially unless TaskFlow execution semantics, dispatch preview, owned paths, and conflict domain all report parallel-safe admission.
+4. Host-tool subagents are adapter carriers for runtime packets. Their result is not complete until the parent orchestrator submits or records a runtime receipt through the host-bridge/lane surface.
+5. If runtime cannot execute the configured chain, the orchestrator records the failing command, `blocker_codes`, artifact paths, and active task/run identity before entering bounded Defective Runtime Emulation Mode.
+6. Defective Runtime Emulation Mode must preserve the same configured evidence chain manually: analyst/spec evidence, test-author proof, implementation, coach/review, independent verification, TaskFlow note, PR protocol, commit/push, and any required release/system-binary update.
+7. Manual emulation never converts into permission to skip the runtime defect. The blocking runtime issue must be created or updated, prioritized, and linked to the current task before unrelated implementation continues.
 
 ## Canonical Work Unit
 
