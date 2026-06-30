@@ -6,22 +6,35 @@ use surrealdb_core::cnf::ConfigMap;
 use surrealdb_core::kvs::Datastore;
 use surrealdb_core::options::EngineOptions;
 use tokio_util::sync::CancellationToken;
+use vida_runtime_local::jobs::RetryBackoffPolicy;
 
-const AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS: u64 = 25;
 const AUTHORITATIVE_DATASTORE_LOCK_MAX_WAIT_MS: u64 = 30_000;
-const AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT: usize = (AUTHORITATIVE_DATASTORE_LOCK_MAX_WAIT_MS
-    / AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS)
-    as usize;
+const AUTHORITATIVE_DATASTORE_LOCK_RETRY_POLICY: RetryBackoffPolicy =
+    RetryBackoffPolicy::linear_millis(AUTHORITATIVE_DATASTORE_LOCK_MAX_WAIT_MS, 25);
+const AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS: u64 =
+    AUTHORITATIVE_DATASTORE_LOCK_RETRY_POLICY.base_delay_millis();
+const AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT: usize =
+    AUTHORITATIVE_DATASTORE_LOCK_RETRY_POLICY.max_attempts_usize();
 const AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT: usize = AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT;
 const AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS: u64 = AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS;
-const READ_ONLY_OPEN_RETRY_COUNT: usize = 800;
-const READ_ONLY_OPEN_RETRY_DELAY_MS: u64 = 25;
+const READ_ONLY_OPEN_RETRY_POLICY: RetryBackoffPolicy =
+    RetryBackoffPolicy::linear_attempts(800, 25);
+const READ_ONLY_OPEN_RETRY_COUNT: usize = READ_ONLY_OPEN_RETRY_POLICY.max_attempts_usize();
+const READ_ONLY_OPEN_RETRY_DELAY_MS: u64 = READ_ONLY_OPEN_RETRY_POLICY.base_delay_millis();
 const READ_ONLY_OPEN_MIN_TIMEOUT_MS: u64 = 10_000;
 const DATASTORE_CLOSE_SETTLE_MS: u64 = 250;
-const STALE_LOCK_MARKER_REMOVE_RETRY_COUNT: usize = 20;
-const STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS: u64 = 25;
-const FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_COUNT: usize = 8;
-const FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_DELAY_MS: u64 = DATASTORE_CLOSE_SETTLE_MS;
+const STALE_LOCK_MARKER_REMOVE_RETRY_POLICY: RetryBackoffPolicy =
+    RetryBackoffPolicy::linear_attempts(20, 25);
+const STALE_LOCK_MARKER_REMOVE_RETRY_COUNT: usize =
+    STALE_LOCK_MARKER_REMOVE_RETRY_POLICY.max_attempts_usize();
+const STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS: u64 =
+    STALE_LOCK_MARKER_REMOVE_RETRY_POLICY.base_delay_millis();
+const FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_POLICY: RetryBackoffPolicy =
+    RetryBackoffPolicy::linear_attempts(8, DATASTORE_CLOSE_SETTLE_MS);
+const FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_COUNT: usize =
+    FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_POLICY.max_attempts_usize();
+const FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_DELAY_MS: u64 =
+    FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_POLICY.base_delay_millis();
 const VIDA_SURREALKV_MAX_MEMTABLE_SIZE_BYTES: usize = 16 * 1024 * 1024;
 const VIDA_SURREALKV_BLOCK_CACHE_CAPACITY_BYTES: u64 = 16 * 1024 * 1024;
 const VIDA_SURREALKV_VLOG_MAX_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
@@ -674,6 +687,21 @@ mod tests {
                 "Windows raw OS error {code} should be retried as lock contention"
             );
         }
+    }
+
+    #[test]
+    fn state_open_retry_windows_use_shared_backoff_policy() {
+        assert_eq!(AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT, 1_200);
+        assert_eq!(AUTHORITATIVE_DATASTORE_LOCK_RETRY_DELAY_MS, 25);
+        assert_eq!(READ_ONLY_OPEN_RETRY_COUNT, 800);
+        assert_eq!(READ_ONLY_OPEN_RETRY_DELAY_MS, 25);
+        assert_eq!(STALE_LOCK_MARKER_REMOVE_RETRY_COUNT, 20);
+        assert_eq!(STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS, 25);
+        assert_eq!(FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_COUNT, 8);
+        assert_eq!(
+            FAILED_OPEN_SELF_LOCK_CLEANUP_RETRY_DELAY_MS,
+            DATASTORE_CLOSE_SETTLE_MS
+        );
     }
 
     #[tokio::test]

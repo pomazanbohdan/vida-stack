@@ -149,12 +149,104 @@ pub struct RetryPolicy {
     pub base_backoff_seconds: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RetryBackoffKind {
+    Exponential,
+    Linear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryBackoffPolicy {
+    max_attempts: u64,
+    base_delay_millis: u64,
+    kind: RetryBackoffKind,
+}
+
+impl RetryBackoffPolicy {
+    pub const fn exponential_seconds(max_attempts: u64, base_delay_seconds: u64) -> Self {
+        Self {
+            max_attempts,
+            base_delay_millis: base_delay_seconds.saturating_mul(1_000),
+            kind: RetryBackoffKind::Exponential,
+        }
+    }
+
+    pub const fn linear_seconds(max_attempts: u64, base_delay_seconds: u64) -> Self {
+        Self {
+            max_attempts,
+            base_delay_millis: base_delay_seconds.saturating_mul(1_000),
+            kind: RetryBackoffKind::Linear,
+        }
+    }
+
+    pub const fn linear_attempts(max_attempts: u64, base_delay_millis: u64) -> Self {
+        Self {
+            max_attempts,
+            base_delay_millis,
+            kind: RetryBackoffKind::Linear,
+        }
+    }
+
+    pub const fn linear_millis(max_wait_millis: u64, base_delay_millis: u64) -> Self {
+        let max_attempts = if base_delay_millis == 0 {
+            1
+        } else {
+            max_wait_millis / base_delay_millis
+        };
+        Self {
+            max_attempts,
+            base_delay_millis,
+            kind: RetryBackoffKind::Linear,
+        }
+    }
+
+    pub const fn max_attempts(&self) -> u64 {
+        self.max_attempts
+    }
+
+    pub const fn max_attempts_usize(&self) -> usize {
+        if self.max_attempts > usize::MAX as u64 {
+            usize::MAX
+        } else {
+            self.max_attempts as usize
+        }
+    }
+
+    pub const fn base_delay_millis(&self) -> u64 {
+        self.base_delay_millis
+    }
+
+    pub fn retry_delay_millis(&self, attempt_count: u64) -> u64 {
+        match self.kind {
+            RetryBackoffKind::Exponential => {
+                let exponent = attempt_count.saturating_sub(1).min(8);
+                self.base_delay_millis.saturating_mul(1 << exponent)
+            }
+            RetryBackoffKind::Linear => self.base_delay_millis.saturating_mul(attempt_count.max(1)),
+        }
+    }
+
+    pub fn retry_delay_seconds(&self, attempt_count: u64) -> u64 {
+        self.retry_delay_millis(attempt_count).saturating_add(999) / 1_000
+    }
+}
+
 impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
             max_attempts: 3,
             base_backoff_seconds: 30,
         }
+    }
+}
+
+impl RetryPolicy {
+    pub fn backoff_policy(&self) -> RetryBackoffPolicy {
+        RetryBackoffPolicy::exponential_seconds(self.max_attempts, self.base_backoff_seconds)
+    }
+
+    pub fn retry_after_seconds(&self, attempt_count: u64) -> u64 {
+        self.backoff_policy().retry_delay_seconds(attempt_count)
     }
 }
 
@@ -819,8 +911,7 @@ fn stable_128bit_hash(input: &[u8]) -> [u8; 16] {
 }
 
 fn backoff_seconds(attempt_count: u64, policy: &RetryPolicy) -> u64 {
-    let exponent = attempt_count.saturating_sub(1).min(8);
-    policy.base_backoff_seconds.saturating_mul(1 << exponent)
+    policy.retry_after_seconds(attempt_count)
 }
 
 fn trace_entry(kind: &str, detail: &str) -> DurableJobTraceEntry {
@@ -854,6 +945,25 @@ mod tests {
         assert_eq!(config.recovery_behavior, "fail_and_retry_immediately");
         assert_eq!(registry.workers[0].job_kind, EFFECTUM_OUTBOX_WORKER);
         assert_eq!(registry.workers[0].command_operation, "vida.effect.ack");
+    }
+
+    #[test]
+    fn retry_backoff_policy_covers_exponential_linear_and_bounded_windows() {
+        let effectum = RetryPolicy::default();
+        assert_eq!(effectum.retry_after_seconds(1), 30);
+        assert_eq!(effectum.retry_after_seconds(3), 120);
+
+        let worker = RetryBackoffPolicy::linear_seconds(3, 15);
+        assert_eq!(worker.retry_delay_seconds(1), 15);
+        assert_eq!(worker.retry_delay_seconds(3), 45);
+
+        let read_only = RetryBackoffPolicy::linear_attempts(800, 25);
+        assert_eq!(read_only.max_attempts_usize(), 800);
+        assert_eq!(read_only.base_delay_millis(), 25);
+
+        let state_open = RetryBackoffPolicy::linear_millis(30_000, 25);
+        assert_eq!(state_open.max_attempts_usize(), 1_200);
+        assert_eq!(state_open.base_delay_millis(), 25);
     }
 
     #[test]

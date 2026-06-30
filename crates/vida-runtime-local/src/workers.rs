@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::jobs::RetryBackoffPolicy;
+
 pub const WORKER_CLAIM_CONFLICT_BLOCKER: &str = "vida_worker_claim_conflict";
 pub const WORKER_RETRY_EXHAUSTED_BLOCKER: &str = "vida_worker_retry_exhausted";
 
@@ -17,6 +19,12 @@ impl Default for WorkerAutomationConfig {
             max_attempts: 3,
             base_retry_seconds: 15,
         }
+    }
+}
+
+impl WorkerAutomationConfig {
+    pub fn retry_policy(&self) -> RetryBackoffPolicy {
+        RetryBackoffPolicy::linear_seconds(self.max_attempts, self.base_retry_seconds)
     }
 }
 
@@ -331,7 +339,8 @@ impl AutomationWorkerRuntime {
             .or_default();
         *remaining = remaining.saturating_sub(1);
 
-        let exhausted = *attempt >= self.config.max_attempts && *remaining > 0;
+        let retry_policy = self.config.retry_policy();
+        let exhausted = *attempt >= retry_policy.max_attempts() && *remaining > 0;
         AutomationWorkerOutcome {
             status: if exhausted {
                 AutomationWorkerStatus::RetryExhausted
@@ -345,8 +354,8 @@ impl AutomationWorkerRuntime {
             retry: Some(RetryObservation {
                 run_id: request.run_id.clone(),
                 attempt: *attempt,
-                max_attempts: self.config.max_attempts,
-                retry_after_seconds: self.config.base_retry_seconds * *attempt,
+                max_attempts: retry_policy.max_attempts(),
+                retry_after_seconds: retry_policy.retry_delay_seconds(*attempt),
                 blocker_code: exhausted.then(|| WORKER_RETRY_EXHAUSTED_BLOCKER.to_string()),
             }),
             policy_verdict,
@@ -594,5 +603,43 @@ mod tests {
             AutomationWorkerStatus::MaterializedNextPacket
         );
         assert_eq!(restarted.state.completed_packets.len(), 1);
+    }
+
+    #[test]
+    fn retry_exhaustion_fails_closed_without_packet_or_command() {
+        let config = WorkerAutomationConfig {
+            max_attempts: 2,
+            base_retry_seconds: 5,
+        };
+        let mut runtime = AutomationWorkerRuntime::new(config);
+        let request = AnalystCompletionRequest::next_developer_packet("run-exhausted", "idem-1");
+        runtime.inject_transient_failures("run-exhausted", 3);
+
+        let first = runtime.process_analyst_completion(request.clone());
+        assert_eq!(first.status, AutomationWorkerStatus::Retrying);
+
+        let exhausted = runtime.process_analyst_completion(request);
+        assert_eq!(exhausted.status, AutomationWorkerStatus::RetryExhausted);
+        assert!(exhausted.packet.is_none());
+        assert!(exhausted.command.is_none());
+        assert_eq!(
+            exhausted.retry,
+            Some(RetryObservation {
+                run_id: "run-exhausted".to_string(),
+                attempt: 2,
+                max_attempts: 2,
+                retry_after_seconds: 10,
+                blocker_code: Some(WORKER_RETRY_EXHAUSTED_BLOCKER.to_string()),
+            })
+        );
+        assert_eq!(
+            exhausted
+                .trace
+                .iter()
+                .find(|entry| entry.kind == "retry_observed")
+                .map(|entry| entry.detail.as_str()),
+            Some(WORKER_RETRY_EXHAUSTED_BLOCKER)
+        );
+        assert!(runtime.state.completed_packets.is_empty());
     }
 }
