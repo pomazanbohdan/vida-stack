@@ -277,6 +277,9 @@ pub(crate) fn dispatch_target_for_runtime_role(
             }
         }
     }
+    if let Some(dispatch_target) = legacy_dispatch_target_for_runtime_role(runtime_role) {
+        return Some(dispatch_target.to_string());
+    }
     for (dispatch_target, route) in direct_development_flow_route_entries(execution_plan) {
         let activation = dispatch_contract_lane_activation(route);
         let route_runtime_role = json_string(activation.get("activation_runtime_role"))
@@ -285,7 +288,7 @@ pub(crate) fn dispatch_target_for_runtime_role(
             return Some(dispatch_target);
         }
     }
-    legacy_dispatch_target_for_runtime_role(runtime_role).map(str::to_string)
+    None
 }
 
 fn carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<String> {
@@ -1234,6 +1237,32 @@ mod tests {
             .map(|(selector, _)| selector)
             .collect();
         assert_eq!(selectors, vec!["coach_test_gate", "coach"]);
+    }
+
+    #[test]
+    fn direct_development_flow_route_cannot_override_legacy_worker_runtime_role() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "aaa": {
+                    "dispatch_target": "coach",
+                    "task_class": "review",
+                    "executor_backend": "hermes_cli",
+                    "activation": {
+                        "activation_runtime_role": "worker"
+                    }
+                }
+            }
+        });
+
+        assert_eq!(
+            super::dispatch_target_for_runtime_role(&execution_plan, "worker").as_deref(),
+            Some("implementer")
+        );
+        assert_eq!(
+            dispatch_contract_lane(&execution_plan, "coach")
+                .and_then(|route| route["task_class"].as_str()),
+            Some("review")
+        );
     }
 
     #[test]
