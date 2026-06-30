@@ -26,7 +26,7 @@ const VIDA_SURREALKV_MAX_MEMTABLE_SIZE_BYTES: usize = 16 * 1024 * 1024;
 const VIDA_SURREALKV_BLOCK_CACHE_CAPACITY_BYTES: u64 = 16 * 1024 * 1024;
 const VIDA_SURREALKV_VLOG_MAX_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 
-struct AuthoritativeOpenGuard {
+pub(super) struct AuthoritativeOpenGuard {
     file: std::fs::File,
 }
 
@@ -92,7 +92,7 @@ fn local_process_liveness(process_id: u32) -> ProcessLiveness {
 }
 
 impl AuthoritativeOpenGuard {
-    async fn acquire(root: &Path) -> Result<Self, StateStoreError> {
+    pub(super) async fn acquire(root: &Path) -> Result<Self, StateStoreError> {
         let guard_path = root.join(".vida-authoritative-open.guard");
         let file = OpenOptions::new()
             .create(true)
