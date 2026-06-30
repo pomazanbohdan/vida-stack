@@ -6468,16 +6468,17 @@ fn resume_inputs_from_downstream_packet_without_store(
     let recorded_at = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .expect("rfc3339 timestamp should render");
-    let activation_agent_type = string_field(&packet, "activation_agent_type").or_else(|| {
+    let activation_agent_type =
         downstream_packet_runtime_assignment_field(&packet, "activation_agent_type")
+            .or_else(|| string_field(&packet, "activation_agent_type"))
             .or_else(|| downstream_packet_runtime_assignment_field(&packet, "selected_tier"))
-            .or_else(|| downstream_packet_runtime_assignment_field(&packet, "selected_carrier_id"))
-    });
-    let activation_runtime_role = string_field(&packet, "activation_runtime_role").or_else(|| {
-        downstream_packet_runtime_assignment_field(&packet, "activation_runtime_role").or_else(
-            || downstream_packet_runtime_assignment_field(&packet, "selected_runtime_role"),
-        )
-    });
+            .or_else(|| downstream_packet_runtime_assignment_field(&packet, "selected_carrier_id"));
+    let activation_runtime_role =
+        downstream_packet_runtime_assignment_field(&packet, "activation_runtime_role")
+            .or_else(|| {
+                downstream_packet_runtime_assignment_field(&packet, "selected_runtime_role")
+            })
+            .or_else(|| string_field(&packet, "activation_runtime_role"));
     let selected_backend = string_field(&packet, "selected_backend").or_else(|| {
         downstream_packet_runtime_assignment_field(&packet, "selected_backend_id")
             .or_else(|| {
@@ -6552,6 +6553,15 @@ fn downstream_packet_runtime_assignment_field(
                 .and_then(|value| {
                     serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
                 })?;
+            if let Some(value) =
+                super::runtime_dispatch_downstream_packets::configured_lane_contract_field(
+                    &role_selection,
+                    &dispatch_target,
+                    field,
+                )
+            {
+                return Some(value);
+            }
             let (assignment, _) = super::runtime_dispatch_state::dispatch_target_runtime_assignment(
                 &role_selection.execution_plan,
                 &dispatch_target,

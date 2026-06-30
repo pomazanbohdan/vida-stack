@@ -1512,16 +1512,7 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
     let packet_dir = format!("{state_dir}/runtime-consumption/downstream-dispatch-packets");
     std::fs::create_dir_all(&packet_dir).expect("downstream packet dir should exist");
     let packet_path = format!("{packet_dir}/autotester-worker-scope.json");
-    let owned_paths =
-        serde_json::json!(["lib/src/features/activity/record_detail_view.dart", "test"]);
-    let lane_runtime_assignment = serde_json::json!({
-        "activation_agent_type": "middle",
-        "activation_runtime_role": "worker",
-        "selected_backend_id": "internal_subagents",
-        "selected_carrier_id": "middle",
-        "task_class": "implementation_medium",
-        "runtime_role": "worker"
-    });
+    let owned_paths = serde_json::json!(["lib/src/features/activity/record_detail_view.dart"]);
     let role_selection_full = serde_json::json!({
         "ok": true,
         "activation_source": "packet",
@@ -1549,16 +1540,14 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
                     "lane_sequence": ["designer", "autotester", "developer"],
                     "execution_lane_sequence": ["autotester", "developer"],
                     "lane_catalog": {
-                        "autotester": {
-                            "dispatch_target": "autotester",
-                            "task_class": "implementation_medium",
-                            "runtime_role": "worker",
-                            "closure_class": "implementation",
-                            "packet_template_kind": "delivery_task_packet",
-                            "activation": lane_runtime_assignment,
-                            "runtime_assignment": lane_runtime_assignment
+                            "autotester": {
+                                "dispatch_target": "autotester",
+                                "task_class": "implementation_medium",
+                                "runtime_role": "worker",
+                                "closure_class": "implementation",
+                                "packet_template_kind": "delivery_task_packet"
+                            }
                         }
-                    }
                 }
             },
             "backend_admissibility_matrix": [
@@ -1586,7 +1575,7 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
         "proof_target": "autotester host bridge request",
         "stop_rules": ["stop if request contract is wrong"],
         "blocking_question": "Does autotester request use worker implementation scope?",
-        "handoff_runtime_role": "worker",
+        "handoff_runtime_role": "business_analyst",
         "handoff_task_class": "implementation_medium",
         "implementation_isolation": {
             "canonical_worktree_writes_allowed": false,
@@ -1602,10 +1591,10 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
         "downstream_dispatch_ready": true,
         "downstream_dispatch_blockers": [],
         "activation_agent_type": "middle",
-        "activation_runtime_role": "worker",
+        "activation_runtime_role": "business_analyst",
         "runtime_role": "business_analyst",
         "task_class": "specification",
-        "handoff_runtime_role": "worker",
+        "handoff_runtime_role": "business_analyst",
         "handoff_task_class": "implementation_medium",
         "selected_backend": "internal_subagents",
         "packet_template_kind": "delivery_task_packet",
@@ -1668,14 +1657,18 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
         .as_array()
         .expect("host bridge request should carry owned paths");
     assert!(
-        request_owned_paths.iter().any(|path| path == "test"),
+        request_owned_paths
+            .iter()
+            .any(|path| path == "test" || path == "tests"),
         "autotester request should include test write scope: {request_owned_paths:?}"
     );
     let isolation_owned_paths = request["implementation_isolation"]["owned_paths"]
         .as_array()
         .expect("implementation isolation should carry owned paths");
     assert!(
-        isolation_owned_paths.iter().any(|path| path == "test"),
+        isolation_owned_paths
+            .iter()
+            .any(|path| path == "test" || path == "tests"),
         "autotester isolation should include test write scope: {isolation_owned_paths:?}"
     );
 }

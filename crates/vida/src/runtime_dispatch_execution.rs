@@ -2604,6 +2604,46 @@ fn existing_host_bridge_request_needs_adapter_refresh(
         .any(|field| !host_bridge_request_value_matches(existing, expected, field))
 }
 
+fn existing_host_bridge_request_needs_pending_contract_refresh(
+    existing: &serde_json::Value,
+    expected: &serde_json::Value,
+) -> bool {
+    if existing
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        != "pending"
+    {
+        return false;
+    }
+    if [
+        "schema_version",
+        "request_id",
+        "run_id",
+        "task_id",
+        "dispatch_target",
+        "packet_path",
+        "backend_id",
+        "carrier_id",
+        "execution_boundary",
+        "dispatch_transport",
+    ]
+    .iter()
+    .any(|field| !host_bridge_request_value_matches(existing, expected, field))
+    {
+        return false;
+    }
+    [
+        "runtime_role",
+        "task_class",
+        "implementation_isolation",
+        "expected_implementation_artifact_kinds",
+        "owned_paths",
+    ]
+    .iter()
+    .any(|field| !host_bridge_request_value_matches(existing, expected, field))
+}
+
 fn materialize_host_tool_bridge_request(
     project_root: &Path,
     state_root: &Path,
@@ -2612,7 +2652,7 @@ fn materialize_host_tool_bridge_request(
     backend_id: &str,
     carrier_id: &str,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
-    _role_selection: &RuntimeConsumptionLaneSelection,
+    role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Result<serde_json::Value, String> {
     let request_id = host_tool_bridge_request_id(receipt, dispatch_packet_path);
     let paths =
@@ -2637,18 +2677,57 @@ fn materialize_host_tool_bridge_request(
                 "close_tool": configured_host_tool_bridge_string(selected_cli_entry, "close_tool"),
             })
         });
-    let implementation_isolation =
+    let configured_runtime_role =
+        crate::runtime_dispatch_downstream_packets::configured_lane_runtime_role(
+            role_selection,
+            &receipt.dispatch_target,
+        );
+    let request_runtime_role = configured_runtime_role
+        .clone()
+        .or_else(|| dispatch_packet_handoff_runtime_role(dispatch_packet_path))
+        .or_else(|| receipt.activation_runtime_role.clone());
+    let request_task_class = configured_runtime_role
+        .as_deref()
+        .map(|runtime_role| {
+            crate::runtime_dispatch_state::runtime_packet_handoff_task_class_for_plan(
+                &role_selection.execution_plan,
+                &receipt.dispatch_target,
+                runtime_role,
+            )
+        })
+        .filter(|task_class| !task_class.trim().is_empty())
+        .or_else(|| dispatch_packet_handoff_task_class(dispatch_packet_path))
+        .unwrap_or_else(|| canonical_dispatch_target_for_admissibility(&receipt.dispatch_target));
+    let mut request_owned_paths = dispatch_packet_string_list(dispatch_packet_path, "owned_paths");
+    if crate::runtime_dispatch_downstream_packets::test_lane_requires_test_write_scope(
+        &receipt.dispatch_target,
+        None,
+        &request_task_class,
+    ) {
+        for test_path in
+            crate::runtime_dispatch_downstream_packets::project_test_write_scope_paths(project_root)
+        {
+            if !request_owned_paths.iter().any(|path| path == &test_path) {
+                request_owned_paths.push(test_path);
+            }
+        }
+    }
+    let recomputed_implementation_isolation =
+        crate::runtime_dispatch_packets::implementation_isolation_contract(
+            &request_task_class,
+            &request_owned_paths,
+        );
+    let implementation_isolation = if recomputed_implementation_isolation.is_null() {
         dispatch_packet_value_field(dispatch_packet_path, "implementation_isolation")
-            .unwrap_or(serde_json::Value::Null);
+            .unwrap_or(serde_json::Value::Null)
+    } else {
+        recomputed_implementation_isolation
+    };
     let expected_implementation_artifact_kinds = if implementation_isolation.is_null() {
         serde_json::json!([])
     } else {
         serde_json::json!(["patch_proposal", "isolated_worktree_manifest"])
     };
-    let request_runtime_role = dispatch_packet_handoff_runtime_role(dispatch_packet_path)
-        .or_else(|| receipt.activation_runtime_role.clone());
-    let request_task_class = dispatch_packet_handoff_task_class(dispatch_packet_path)
-        .unwrap_or_else(|| canonical_dispatch_target_for_admissibility(&receipt.dispatch_target));
     let request = serde_json::json!({
         "schema_version": 1,
         "status": "pending",
@@ -2672,7 +2751,7 @@ fn materialize_host_tool_bridge_request(
         "expected_implementation_artifact_kinds": expected_implementation_artifact_kinds,
         "implementation_artifacts": [],
         "required_result_fields": default_host_bridge_required_result_fields(),
-        "owned_paths": dispatch_packet_string_list(dispatch_packet_path, "owned_paths"),
+        "owned_paths": request_owned_paths,
         "read_only_paths": dispatch_packet_string_list(dispatch_packet_path, "read_only_paths"),
         "proof_target": dispatch_packet_string_field(dispatch_packet_path, "proof_target"),
         "request_path": paths.request_path.display().to_string(),
@@ -2702,7 +2781,9 @@ fn materialize_host_tool_bridge_request(
             .and_then(serde_json::Value::as_str)
             == Some(dispatch_packet_path)
         {
-            if existing_host_bridge_request_needs_adapter_refresh(&existing, &request) {
+            if existing_host_bridge_request_needs_pending_contract_refresh(&existing, &request) {
+                replace_existing_request = true;
+            } else if existing_host_bridge_request_needs_adapter_refresh(&existing, &request) {
                 validate_existing_host_bridge_request_identity_matches_expected(
                     &existing,
                     &request,
@@ -9333,6 +9414,146 @@ host_tool_bridge:
             serde_json::json!(["lib/src/activity_screen.dart", "test"])
         );
         assert_eq!(request["proof_target"], "autotester proof");
+
+        let _ = std::fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn host_bridge_request_refreshes_pending_stale_autotester_contract() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-autotester-refresh-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(project_root.join("test")).expect("create test root");
+        let state_root = project_root.join(".vida").join("data").join("state");
+        let packet_dir = state_root
+            .join("runtime-consumption")
+            .join("dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("autotester-stale.json");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "dispatch_target": "autotester",
+                "handoff_runtime_role": "business_analyst",
+                "handoff_task_class": "specification",
+                "runtime_role": "business_analyst",
+                "task_class": "specification",
+                "owned_paths": ["lib/src/activity_screen.dart"],
+                "read_only_paths": ["docs/process"],
+                "proof_target": "autotester proof",
+                "delivery_task_packet": {
+                    "handoff_runtime_role": "business_analyst",
+                    "handoff_task_class": "specification",
+                    "owned_paths": ["lib/src/activity_screen.dart"],
+                    "implementation_isolation": serde_json::Value::Null,
+                    "proof_target": "autotester proof"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write stale packet");
+        let selected_cli_entry = serde_yaml::from_str(
+            r#"
+host_tool_bridge:
+  request_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  result_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  receipt_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  adapter_kind: codex_host_tools
+  adapter_capability_id: codex.multi_agent_v1
+  invocation_mode: parent_host_tool_api
+ "#,
+        )
+        .expect("host bridge config should parse");
+        let mut receipt = internal_codex_fallback_receipt(
+            packet_path.to_str().expect("packet path should render"),
+        );
+        receipt.run_id = "activity-meeting-event-form-fields".to_string();
+        receipt.dispatch_target = "autotester".to_string();
+        receipt.activation_runtime_role = Some("business_analyst".to_string());
+        let stale_role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+
+        let stale_request = materialize_host_tool_bridge_request(
+            &project_root,
+            &state_root,
+            Some(&selected_cli_entry),
+            packet_path.to_str().expect("packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &stale_role_selection,
+        )
+        .expect("stale request should materialize");
+        assert_eq!(stale_request["runtime_role"], "business_analyst");
+        assert_eq!(stale_request["task_class"], "specification");
+        let request_path = stale_request["request_path"]
+            .as_str()
+            .expect("request path should render");
+        let mut persisted_request: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(request_path).expect("read stale request"),
+        )
+        .expect("decode stale request");
+        for field in ["request_path", "result_path", "receipt_path"] {
+            let slash_normalized = persisted_request[field]
+                .as_str()
+                .expect("path field should render")
+                .replace('\\', "/");
+            persisted_request[field] = serde_json::json!(slash_normalized);
+        }
+        std::fs::write(
+            request_path,
+            serde_json::to_string_pretty(&persisted_request).expect("encode stale request"),
+        )
+        .expect("rewrite stale request with path metadata drift");
+
+        let refreshed_role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "autotester": {
+                            "dispatch_target": "autotester",
+                            "runtime_role": "worker",
+                            "task_class": "implementation_medium",
+                            "closure_class": "implementation",
+                            "packet_template_kind": "delivery_task_packet"
+                        }
+                    }
+                }
+            }
+        }));
+        let refreshed_request = materialize_host_tool_bridge_request(
+            &project_root,
+            &state_root,
+            Some(&selected_cli_entry),
+            packet_path.to_str().expect("packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &refreshed_role_selection,
+        )
+        .expect("pending stale request should refresh from lane contract");
+
+        assert_eq!(refreshed_request["runtime_role"], "worker");
+        assert_eq!(refreshed_request["task_class"], "implementation_medium");
+        assert_eq!(
+            refreshed_request["implementation_isolation"]["canonical_worktree_writes_allowed"],
+            false
+        );
+        assert!(refreshed_request["owned_paths"]
+            .as_array()
+            .expect("request owned paths")
+            .iter()
+            .any(|path| path == "test"));
+        assert!(refreshed_request["implementation_isolation"]["owned_paths"]
+            .as_array()
+            .expect("isolation owned paths")
+            .iter()
+            .any(|path| path == "test"));
 
         let _ = std::fs::remove_dir_all(project_root);
     }

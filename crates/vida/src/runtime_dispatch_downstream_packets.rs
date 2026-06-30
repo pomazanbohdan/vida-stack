@@ -6,9 +6,9 @@ use crate::runtime_dispatch_packet_text::{
     runtime_packet_prompt, runtime_packet_request_text, runtime_tracked_flow_packet,
 };
 use crate::runtime_dispatch_packets::{
-    delivery_packet_task_class_requires_owned_paths, runtime_coach_review_packet,
-    runtime_delivery_task_packet_with_scope_context, runtime_escalation_packet,
-    runtime_execution_block_packet, runtime_verifier_proof_packet,
+    delivery_packet_task_class_requires_owned_paths, implementation_isolation_contract,
+    runtime_coach_review_packet, runtime_delivery_task_packet_with_scope_context,
+    runtime_escalation_packet, runtime_execution_block_packet, runtime_verifier_proof_packet,
 };
 use crate::{
     derive_lane_status, dispatch_contract_execution_lane_sequence, dispatch_contract_lane,
@@ -74,7 +74,7 @@ fn push_unique_owned_path(paths: &mut Vec<String>, path: &str) {
     paths.push(trimmed.to_string());
 }
 
-fn test_lane_requires_test_write_scope(
+pub(crate) fn test_lane_requires_test_write_scope(
     downstream_target: &str,
     downstream_lane_id: Option<&str>,
     handoff_task_class: &str,
@@ -91,7 +91,7 @@ fn test_lane_requires_test_write_scope(
             })
 }
 
-fn project_test_write_scope_paths(project_root: &Path) -> Vec<String> {
+pub(crate) fn project_test_write_scope_paths(project_root: &Path) -> Vec<String> {
     let candidates = ["test", "tests", "integration_test", "e2e"];
     let mut paths = candidates
         .iter()
@@ -102,6 +102,288 @@ fn project_test_write_scope_paths(project_root: &Path) -> Vec<String> {
         paths.push("test".to_string());
     }
     paths
+}
+
+fn normalized_owned_paths(owned_paths: &[String]) -> Vec<String> {
+    let mut packet = serde_json::json!({});
+    if !crate::runtime_dispatch_state::apply_owned_paths(&mut packet, owned_paths) {
+        return Vec::new();
+    }
+    packet
+        .get("owned_paths")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn configured_lane_contract_field(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_target: &str,
+    field: &str,
+) -> Option<String> {
+    let lane = dispatch_contract_lane(&role_selection.execution_plan, dispatch_target)?;
+    let activation = lane.get("activation").unwrap_or(lane);
+    json_string(activation.get(field))
+        .or_else(|| {
+            (field == "activation_runtime_role")
+                .then(|| json_string(activation.get("runtime_role")))?
+        })
+        .or_else(|| {
+            lane.get("runtime_assignment").and_then(|assignment| {
+                json_string(assignment.get(field)).or_else(|| {
+                    (field == "activation_runtime_role")
+                        .then(|| json_string(assignment.get("runtime_role")))?
+                })
+            })
+        })
+        .or_else(|| {
+            lane.get("carrier_runtime_assignment")
+                .and_then(|assignment| {
+                    json_string(assignment.get(field)).or_else(|| {
+                        (field == "activation_runtime_role")
+                            .then(|| json_string(assignment.get("runtime_role")))?
+                    })
+                })
+        })
+        .or_else(|| {
+            (field == "activation_runtime_role").then(|| json_string(lane.get("runtime_role")))?
+        })
+}
+
+pub(crate) fn configured_lane_runtime_role(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_target: &str,
+) -> Option<String> {
+    configured_lane_contract_field(role_selection, dispatch_target, "activation_runtime_role")
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DownstreamDispatchPacketContract {
+    pub dispatch_target: String,
+    pub downstream_lane_id: Option<String>,
+    pub lookup_target: String,
+    pub activation_agent_type: Option<String>,
+    pub activation_runtime_role: Option<String>,
+    pub handoff_runtime_role: String,
+    pub handoff_task_class: String,
+    pub closure_class: String,
+    pub owned_paths: Vec<String>,
+    pub implementation_isolation: serde_json::Value,
+}
+
+impl DownstreamDispatchPacketContract {
+    pub(crate) fn for_dispatch_target(
+        role_selection: &RuntimeConsumptionLaneSelection,
+        current_dispatch_target: &str,
+        raw_dispatch_target: &str,
+        explicit_lane_id: Option<String>,
+        activation_agent_type_hint: Option<String>,
+        activation_runtime_role_hint: Option<String>,
+        implementation_owned_paths_override: &[String],
+        project_root: &Path,
+    ) -> Self {
+        let target_resolution = crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
+            &role_selection.execution_plan,
+            raw_dispatch_target,
+        );
+        let resolved_lane_id = target_resolution.as_ref().and_then(|resolution| {
+            if raw_dispatch_target == resolution.dispatch_target {
+                None
+            } else {
+                resolution.lane_id.clone()
+            }
+        });
+        let dispatch_target = target_resolution
+            .as_ref()
+            .map(|resolution| resolution.dispatch_target.clone())
+            .unwrap_or_else(|| raw_dispatch_target.to_string());
+        let downstream_lane_id = infer_downstream_lane_id_for_dispatch_target(
+            role_selection,
+            current_dispatch_target,
+            dispatch_target.as_str(),
+            explicit_lane_id.or(resolved_lane_id),
+        );
+        let lookup_target = downstream_lane_id
+            .clone()
+            .unwrap_or_else(|| dispatch_target.clone());
+        let (_, _, mut activation_agent_type, mut activation_runtime_role) =
+            if dispatch_target.is_empty() {
+                (
+                    String::new(),
+                    None,
+                    activation_agent_type_hint.clone(),
+                    activation_runtime_role_hint.clone(),
+                )
+            } else {
+                downstream_activation_fields(role_selection, dispatch_target.as_str())
+            };
+        if !dispatch_target.is_empty() {
+            if activation_agent_type.is_none() {
+                activation_agent_type = configured_lane_contract_field(
+                    role_selection,
+                    lookup_target.as_str(),
+                    "activation_agent_type",
+                )
+                .or_else(|| {
+                    runtime_assignment_activation_field(role_selection, "activation_agent_type")
+                });
+            }
+            if activation_runtime_role.is_none() {
+                activation_runtime_role = configured_lane_runtime_role(
+                    role_selection,
+                    lookup_target.as_str(),
+                )
+                .or_else(|| {
+                    runtime_assignment_activation_field(role_selection, "activation_runtime_role")
+                });
+            }
+        }
+        let handoff_runtime_role = activation_runtime_role
+            .as_deref()
+            .or(activation_runtime_role_hint.as_deref())
+            .unwrap_or(role_selection.selected_role.as_str())
+            .to_string();
+        let handoff_task_class =
+            crate::runtime_dispatch_state::runtime_packet_handoff_task_class_for_plan(
+                &role_selection.execution_plan,
+                lookup_target.as_str(),
+                handoff_runtime_role.as_str(),
+            );
+        let closure_class =
+            dispatch_contract_lane(&role_selection.execution_plan, lookup_target.as_str())
+                .and_then(|lane| lane["closure_class"].as_str())
+                .unwrap_or("implementation")
+                .to_string();
+        let owned_paths =
+            if delivery_packet_task_class_requires_owned_paths(handoff_task_class.as_str()) {
+                let mut owned_paths = if implementation_owned_paths_override.is_empty() {
+                    crate::runtime_dispatch_state::owned_paths_for_required_delivery_task_class(
+                        role_selection,
+                        handoff_task_class.as_str(),
+                    )
+                } else {
+                    implementation_owned_paths_override.to_vec()
+                };
+                if test_lane_requires_test_write_scope(
+                    dispatch_target.as_str(),
+                    downstream_lane_id.as_deref(),
+                    handoff_task_class.as_str(),
+                ) {
+                    for test_path in project_test_write_scope_paths(project_root) {
+                        push_unique_owned_path(&mut owned_paths, &test_path);
+                    }
+                }
+                normalized_owned_paths(&owned_paths)
+            } else {
+                Vec::new()
+            };
+        let implementation_isolation =
+            implementation_isolation_contract(handoff_task_class.as_str(), &owned_paths);
+        Self {
+            dispatch_target,
+            downstream_lane_id,
+            lookup_target,
+            activation_agent_type,
+            activation_runtime_role,
+            handoff_runtime_role,
+            handoff_task_class,
+            closure_class,
+            owned_paths,
+            implementation_isolation,
+        }
+    }
+
+    fn set_field(
+        object: &mut serde_json::Map<String, serde_json::Value>,
+        key: &str,
+        value: serde_json::Value,
+    ) -> bool {
+        if object.get(key) == Some(&value) {
+            return false;
+        }
+        object.insert(key.to_string(), value);
+        true
+    }
+
+    pub(crate) fn apply_to_active_packet_body(&self, packet: &mut serde_json::Value) -> bool {
+        let Some(object) = packet.as_object_mut() else {
+            return false;
+        };
+        let mut repaired = false;
+        repaired |= Self::set_field(
+            object,
+            "handoff_runtime_role",
+            serde_json::json!(self.handoff_runtime_role),
+        );
+        repaired |= Self::set_field(
+            object,
+            "handoff_task_class",
+            serde_json::json!(self.handoff_task_class),
+        );
+        if !self.owned_paths.is_empty() {
+            repaired |= crate::runtime_dispatch_state::apply_owned_paths(packet, &self.owned_paths);
+        }
+        let Some(object) = packet.as_object_mut() else {
+            return repaired;
+        };
+        repaired |= Self::set_field(
+            object,
+            "implementation_isolation",
+            self.implementation_isolation.clone(),
+        );
+        repaired
+    }
+
+    pub(crate) fn apply_to_packet(&self, packet: &mut serde_json::Value) -> bool {
+        let packet_template_kind = packet
+            .get("packet_template_kind")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| "delivery_task_packet".to_string());
+        let mut repaired = false;
+        if let Some(object) = packet.as_object_mut() {
+            repaired |= Self::set_field(
+                object,
+                "activation_agent_type",
+                serde_json::json!(self.activation_agent_type),
+            );
+            repaired |= Self::set_field(
+                object,
+                "activation_runtime_role",
+                serde_json::json!(self.activation_runtime_role),
+            );
+            repaired |= Self::set_field(
+                object,
+                "handoff_runtime_role",
+                serde_json::json!(self.handoff_runtime_role),
+            );
+            repaired |= Self::set_field(
+                object,
+                "handoff_task_class",
+                serde_json::json!(self.handoff_task_class),
+            );
+        }
+        if !self.owned_paths.is_empty() {
+            repaired |= crate::runtime_dispatch_state::apply_owned_paths(packet, &self.owned_paths);
+        }
+        if let Some(object) = packet.as_object_mut() {
+            repaired |= Self::set_field(
+                object,
+                "implementation_isolation",
+                self.implementation_isolation.clone(),
+            );
+        }
+        if let Some(active_packet) = packet.get_mut(&packet_template_kind) {
+            repaired |= self.apply_to_active_packet_body(active_packet);
+        }
+        repaired
+    }
 }
 
 #[cfg(test)]
@@ -132,61 +414,30 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         .downstream_dispatch_target
         .as_deref()
         .unwrap_or_default();
-    let downstream_target_resolution =
-        crate::runtime_dispatch_state::resolve_runtime_dispatch_target(
-            &role_selection.execution_plan,
-            raw_downstream_target,
-        );
-    let downstream_lane_id = downstream_target_resolution
-        .as_ref()
-        .and_then(|resolution| {
-            if raw_downstream_target == resolution.dispatch_target {
-                None
-            } else {
-                resolution.lane_id.clone()
-            }
-        });
-    let downstream_target = downstream_target_resolution
-        .as_ref()
-        .map(|resolution| resolution.dispatch_target.as_str())
-        .unwrap_or(raw_downstream_target);
-    let downstream_lane_id = infer_downstream_lane_id_for_dispatch_target(
+    let contract = DownstreamDispatchPacketContract::for_dispatch_target(
         role_selection,
-        &receipt.dispatch_target,
-        downstream_target,
-        downstream_lane_id,
+        receipt.dispatch_target.as_str(),
+        raw_downstream_target,
+        None,
+        receipt.activation_agent_type.clone(),
+        receipt.activation_runtime_role.clone(),
+        implementation_owned_paths_override,
+        &project_root,
     );
-    let downstream_contract_lookup_target =
-        downstream_lane_id.as_deref().unwrap_or(downstream_target);
-    let (
-        downstream_dispatch_kind,
-        _downstream_dispatch_surface,
-        mut activation_agent_type,
-        mut activation_runtime_role,
-    ) = if downstream_target.is_empty() {
-        (
-            receipt.dispatch_kind.clone(),
-            receipt.dispatch_surface.clone(),
-            receipt.activation_agent_type.clone(),
-            receipt.activation_runtime_role.clone(),
-        )
-    } else {
-        downstream_activation_fields(role_selection, downstream_target)
-    };
-    if !downstream_target.is_empty() {
-        if activation_agent_type.is_none() {
-            activation_agent_type =
-                runtime_assignment_activation_field(role_selection, "activation_agent_type");
-        }
-        if activation_runtime_role.is_none() {
-            activation_runtime_role =
-                runtime_assignment_activation_field(role_selection, "activation_runtime_role");
-        }
-    }
-    let handoff_runtime_role = activation_runtime_role
-        .as_deref()
-        .or(receipt.activation_runtime_role.as_deref())
-        .unwrap_or(role_selection.selected_role.as_str());
+    let downstream_target = contract.dispatch_target.as_str();
+    let downstream_contract_lookup_target = contract.lookup_target.as_str();
+    let (downstream_dispatch_kind, _downstream_dispatch_surface, _, _) =
+        if downstream_target.is_empty() {
+            (
+                receipt.dispatch_kind.clone(),
+                receipt.dispatch_surface.clone(),
+                contract.activation_agent_type.clone(),
+                contract.activation_runtime_role.clone(),
+            )
+        } else {
+            downstream_activation_fields(role_selection, downstream_target)
+        };
+    let handoff_runtime_role = contract.handoff_runtime_role.as_str();
     let packet_template_kind = if downstream_target.is_empty() {
         "delivery_task_packet".to_string()
     } else {
@@ -199,65 +450,29 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     let activation_command = packet_path
         .and_then(|path| path.to_str())
         .map(crate::runtime_dispatch_state::agent_init_execute_command_for_packet_path);
-    let handoff_task_class =
-        crate::runtime_dispatch_state::runtime_packet_handoff_task_class_for_plan(
-            &role_selection.execution_plan,
-            downstream_contract_lookup_target,
-            handoff_runtime_role,
-        );
-    let closure_class = dispatch_contract_lane(
-        &role_selection.execution_plan,
-        downstream_contract_lookup_target,
-    )
-    .and_then(|lane| lane["closure_class"].as_str())
-    .unwrap_or("implementation");
+    let handoff_task_class = contract.handoff_task_class.as_str();
+    let closure_class = contract.closure_class.as_str();
     let selected_backend = crate::runtime_dispatch_state::downstream_selected_backend(
         role_selection,
         downstream_target,
-        activation_agent_type.as_deref(),
+        contract.activation_agent_type.as_deref(),
         receipt.selected_backend.as_deref(),
     );
     let mut delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
         &receipt.run_id,
         downstream_target,
         handoff_runtime_role,
-        handoff_task_class.as_str(),
+        handoff_task_class,
         closure_class,
         &role_selection.request,
         crate::runtime_dispatch_state::resolved_tracked_design_doc_path(role_selection).as_deref(),
     );
-    if delivery_packet_task_class_requires_owned_paths(handoff_task_class.as_str()) {
-        let mut owned_paths = if implementation_owned_paths_override.is_empty() {
-            crate::runtime_dispatch_state::owned_paths_for_required_delivery_task_class(
-                role_selection,
-                handoff_task_class.as_str(),
-            )
-        } else {
-            implementation_owned_paths_override.to_vec()
-        };
-        if test_lane_requires_test_write_scope(
-            downstream_target,
-            downstream_lane_id.as_deref(),
-            handoff_task_class.as_str(),
-        ) {
-            for test_path in project_test_write_scope_paths(&project_root) {
-                push_unique_owned_path(&mut owned_paths, &test_path);
-            }
-        }
-        if !crate::runtime_dispatch_state::apply_owned_paths_if_missing(
-            &mut delivery_task_packet,
-            &owned_paths,
-        ) {
-            crate::runtime_dispatch_state::clear_runtime_consumption_fallback_owned_paths(
-                &mut delivery_task_packet,
-            );
-        }
-    }
+    contract.apply_to_active_packet_body(&mut delivery_task_packet);
     let execution_block_packet = runtime_execution_block_packet(
         &receipt.run_id,
         downstream_target,
         handoff_runtime_role,
-        handoff_task_class.as_str(),
+        handoff_task_class,
         closure_class,
     );
     let host_runtime =
@@ -267,7 +482,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
             &role_selection.execution_plan,
             downstream_target,
             selected_backend.as_deref(),
-            activation_agent_type.as_deref(),
+            contract.activation_agent_type.as_deref(),
             Some(&host_runtime),
             downstream_target.is_empty()
                 && crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(receipt),
@@ -414,7 +629,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     );
     body.insert(
         "downstream_lane_id".to_string(),
-        serde_json::json!(downstream_lane_id),
+        serde_json::json!(contract.downstream_lane_id),
     );
     body.insert(
         "downstream_dispatch_command".to_string(),
@@ -463,19 +678,19 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     );
     body.insert(
         "activation_agent_type".to_string(),
-        serde_json::json!(activation_agent_type),
+        serde_json::json!(contract.activation_agent_type),
     );
     body.insert(
         "activation_runtime_role".to_string(),
-        serde_json::json!(activation_runtime_role),
+        serde_json::json!(contract.activation_runtime_role),
     );
     body.insert(
         "handoff_runtime_role".to_string(),
-        serde_json::json!(handoff_runtime_role),
+        serde_json::json!(contract.handoff_runtime_role),
     );
     body.insert(
         "handoff_task_class".to_string(),
-        serde_json::json!(handoff_task_class),
+        serde_json::json!(contract.handoff_task_class),
     );
     body.insert(
         "selected_backend".to_string(),
@@ -514,7 +729,9 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         "orchestration_contract".to_string(),
         role_selection.execution_plan["orchestration_contract"].clone(),
     );
-    serde_json::Value::Object(body)
+    let mut packet = serde_json::Value::Object(body);
+    contract.apply_to_packet(&mut packet);
+    packet
 }
 
 fn runtime_assignment_activation_field(
@@ -843,31 +1060,7 @@ mod tests {
                                 "task_class": "implementation_medium",
                                 "runtime_role": "worker",
                                 "closure_class": "implementation",
-                                "packet_template_kind": "delivery_task_packet",
-                                "activation": {
-                                    "activation_agent_type": "middle",
-                                    "activation_runtime_role": "worker",
-                                    "selected_backend_id": "internal_subagents",
-                                    "selected_carrier_id": "middle",
-                                    "task_class": "implementation_medium",
-                                    "runtime_role": "worker"
-                                },
-                                "runtime_assignment": {
-                                    "activation_agent_type": "middle",
-                                    "activation_runtime_role": "worker",
-                                    "selected_backend_id": "internal_subagents",
-                                    "selected_carrier_id": "middle",
-                                    "task_class": "implementation_medium",
-                                    "runtime_role": "worker"
-                                },
-                                "carrier_runtime_assignment": {
-                                    "activation_agent_type": "middle",
-                                    "activation_runtime_role": "worker",
-                                    "selected_backend_id": "internal_subagents",
-                                    "selected_carrier_id": "middle",
-                                    "task_class": "implementation_medium",
-                                    "runtime_role": "worker"
-                                }
+                                "packet_template_kind": "delivery_task_packet"
                             }
                         }
                     }

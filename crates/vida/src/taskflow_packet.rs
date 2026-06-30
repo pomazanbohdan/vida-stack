@@ -285,6 +285,43 @@ fn reconcile_dispatch_packet_owned_paths_from_task(
     repaired
 }
 
+fn reconcile_dispatch_packet_lane_contract_from_task(
+    dispatch_packet_body: &mut serde_json::Value,
+    task: &TaskRecord,
+) -> Option<bool> {
+    let role_selection = dispatch_packet_body
+        .get("role_selection_full")
+        .cloned()
+        .and_then(|value| {
+            serde_json::from_value::<crate::RuntimeConsumptionLaneSelection>(value).ok()
+        })?;
+    let dispatch_target = packet_trimmed_string(dispatch_packet_body, "dispatch_target")
+        .or_else(|| packet_trimmed_string(dispatch_packet_body, "downstream_dispatch_target"))?
+        .to_string();
+    let source_dispatch_target =
+        packet_trimmed_string(dispatch_packet_body, "source_dispatch_target")
+            .unwrap_or(dispatch_target.as_str())
+            .to_string();
+    let downstream_lane_id =
+        packet_trimmed_string(dispatch_packet_body, "downstream_lane_id").map(str::to_string);
+    let activation_agent_type_hint =
+        packet_trimmed_string(dispatch_packet_body, "activation_agent_type").map(str::to_string);
+    let activation_runtime_role_hint =
+        packet_trimmed_string(dispatch_packet_body, "activation_runtime_role").map(str::to_string);
+    let project_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let contract = crate::runtime_dispatch_downstream_packets::DownstreamDispatchPacketContract::for_dispatch_target(
+        &role_selection,
+        source_dispatch_target.as_str(),
+        dispatch_target.as_str(),
+        downstream_lane_id,
+        activation_agent_type_hint,
+        activation_runtime_role_hint,
+        &task.planner_metadata.owned_paths,
+        &project_root,
+    );
+    Some(contract.apply_to_packet(dispatch_packet_body))
+}
+
 fn packet_string_array(packet: &serde_json::Value, key: &str) -> Option<Vec<String>> {
     Some(
         packet
@@ -445,7 +482,8 @@ async fn repair_persisted_dispatch_packet_from_task(
     let mut packet = read_packet_body(dispatch_packet_path)?;
     validate_packet_repair_binding(run_id, task, &status, &receipt, &packet)?;
     let mut repaired = repair_delivery_task_packet_identity(&mut packet);
-    repaired |= reconcile_dispatch_packet_owned_paths_from_task(&mut packet, task);
+    repaired |= reconcile_dispatch_packet_lane_contract_from_task(&mut packet, task)
+        .unwrap_or_else(|| reconcile_dispatch_packet_owned_paths_from_task(&mut packet, task));
     crate::validate_runtime_dispatch_packet_contract(&packet, "Repaired dispatch packet").map_err(
         |error| {
             format!("execution_preparation_gate_blocked: {error}; dispatch packet `{display_path}`")
@@ -1854,6 +1892,166 @@ mod tests {
                 repaired["delivery_task_packet"]["implementation_isolation"]["owned_paths"],
                 expected_paths
             );
+        }
+        .await;
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        let _ = fs::remove_dir_all(&root);
+        result
+    }
+
+    #[tokio::test]
+    async fn packet_repair_recomputes_stale_downstream_lane_contract_from_current_assignment() {
+        let root = packet_repair_temp_root("stale-autotester-contract");
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(root.clone()));
+        let result = async {
+            fs::create_dir_all(&root).expect("create state root");
+            let store = StateStore::open(root.clone()).await.expect("open store");
+            let mut task = packet_repair_task_with_metadata();
+            task.id = "activity-meeting-event-form-fields".to_string();
+            task.planner_metadata.owned_paths =
+                vec!["lib/src/features/activity/record_detail_view.dart".to_string()];
+            let run_id = "activity-meeting-event-form-fields";
+            store
+                .record_run_graph_status(&packet_repair_status(run_id, &task.id))
+                .await
+                .expect("persist status");
+            let packet_path = root
+                .join("runtime-consumption")
+                .join("run-stale-autotester-contract.json");
+            fs::create_dir_all(packet_path.parent().expect("packet parent"))
+                .expect("create packet parent");
+            let packet = serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "run_id": run_id,
+                "dispatch_target": "autotester",
+                "downstream_dispatch_target": "autotester",
+                "activation_agent_type": "middle",
+                "activation_runtime_role": "business_analyst",
+                "handoff_runtime_role": "business_analyst",
+                "handoff_task_class": "implementation_medium",
+                "owned_paths": ["lib/src/features/activity/record_detail_view.dart"],
+                "implementation_isolation": {
+                    "schema_version": "implementation-isolation-v1",
+                    "canonical_worktree_writes_allowed": false,
+                    "owned_paths": ["lib/src/features/activity/record_detail_view.dart"]
+                },
+                "role_selection_full": {
+                    "ok": true,
+                    "activation_source": "packet",
+                    "selection_mode": "fixed",
+                    "fallback_role": "orchestrator",
+                    "request": "Use meeting-specific event fields when scheduling Meeting activities",
+                    "selected_role": "business_analyst",
+                    "conversational_mode": null,
+                    "single_task_only": false,
+                    "tracked_flow_entry": "dev-pack",
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": [],
+                    "compiled_bundle": null,
+                    "execution_plan": {
+                        "runtime_assignment": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst",
+                            "runtime_role": "business_analyst",
+                            "task_class": "specification",
+                            "selected_backend_id": "internal_subagents"
+                        },
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "lane_catalog": {
+                                    "autotester": {
+                                        "dispatch_target": "autotester",
+                                        "runtime_role": "worker",
+                                        "task_class": "implementation_medium",
+                                        "closure_class": "implementation",
+                                        "packet_template_kind": "delivery_task_packet"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "reason": "test"
+                },
+                "delivery_task_packet": {
+                    "packet_id": "activity-meeting-event-form-fields::autotester::delivery",
+                    "task_id": run_id,
+                    "backlog_id": run_id,
+                    "owner": "taskflow",
+                    "closure_class": "implementation",
+                    "goal": "author autotester coverage",
+                    "scope_in": ["autotester coverage"],
+                    "scope_out": [],
+                    "owned_paths": ["lib/src/features/activity/record_detail_view.dart"],
+                    "implementation_isolation": {
+                        "schema_version": "implementation-isolation-v1",
+                        "canonical_worktree_writes_allowed": false,
+                        "owned_paths": ["lib/src/features/activity/record_detail_view.dart"]
+                    },
+                    "read_only_paths": ["docs/process"],
+                    "inputs": [],
+                    "outputs": [],
+                    "definition_of_done": ["autotester contract is repaired"],
+                    "verification_command": "vida agent-init --downstream-packet stale.json --execute-dispatch --json",
+                    "proof_target": "autotester host bridge request",
+                    "active_skills": "no_applicable_skill",
+                    "stop_rules": ["stop after result"],
+                    "blocking_question": "Does autotester get worker/test scope?",
+                    "handoff_runtime_role": "business_analyst",
+                    "handoff_task_class": "implementation_medium",
+                    "handoff_selection": "runtime_selected_tier",
+                    "request_excerpt": "Use meeting-specific event fields"
+                }
+            });
+            fs::write(
+                &packet_path,
+                serde_json::to_vec_pretty(&packet).expect("encode packet"),
+            )
+            .expect("write packet");
+            let mut receipt = packet_repair_receipt(run_id, &packet_path);
+            receipt.dispatch_target = "autotester".to_string();
+            receipt.activation_runtime_role = Some("business_analyst".to_string());
+            store
+                .record_run_graph_dispatch_receipt(&receipt)
+                .await
+                .expect("persist receipt");
+
+            let mutation = repair_persisted_dispatch_packet_from_task(&store, run_id, &task)
+                .await
+                .expect("repair stale autotester contract");
+
+            assert!(mutation.repaired);
+            assert!(mutation.contract_validated);
+            let repaired: serde_json::Value =
+                serde_json::from_slice(&fs::read(&packet_path).expect("read repaired packet"))
+                    .expect("decode repaired packet");
+            assert_eq!(repaired["activation_runtime_role"], "worker");
+            assert_eq!(repaired["handoff_runtime_role"], "worker");
+            assert_eq!(repaired["handoff_task_class"], "implementation_medium");
+            assert_eq!(
+                repaired["delivery_task_packet"]["handoff_runtime_role"],
+                "worker"
+            );
+            let owned_paths = repaired["owned_paths"]
+                .as_array()
+                .expect("top-level owned paths");
+            assert!(owned_paths
+                .iter()
+                .any(|path| path == "lib/src/features/activity/record_detail_view.dart"));
+            assert!(owned_paths
+                .iter()
+                .any(|path| path == "test" || path == "tests"));
+            assert!(repaired["implementation_isolation"]["owned_paths"]
+                .as_array()
+                .expect("top-level isolation owned paths")
+                .iter()
+                .any(|path| path == "test" || path == "tests"));
+            assert!(repaired["delivery_task_packet"]["implementation_isolation"]["owned_paths"]
+                .as_array()
+                .expect("delivery isolation owned paths")
+                .iter()
+                .any(|path| path == "test" || path == "tests"));
         }
         .await;
         crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
