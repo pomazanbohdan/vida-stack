@@ -303,6 +303,11 @@ impl StateStore {
         if Self::run_graph_status_is_reconciled_terminal_closure(status) {
             return Ok(true);
         }
+        match self.show_task(&status.task_id).await {
+            Ok(task) if Self::task_has_canonical_close_truth(&task) => return Ok(true),
+            Ok(_) | Err(StateStoreError::MissingTask { .. }) => {}
+            Err(error) => return Err(error),
+        }
         self.task_close_reconcile_has_persisted_receipt_truth(&status.run_id, &status.task_id)
             .await
     }
@@ -1316,6 +1321,33 @@ impl StateStore {
         Ok(!self
             .run_graph_dispatch_has_receipt_backed_execution_truth(&run_id)
             .await?)
+    }
+
+    async fn retire_canonical_task_close_active_run(
+        &self,
+        task: &TaskRecord,
+    ) -> Result<(), StateStoreError> {
+        if !Self::task_has_canonical_close_truth(task) {
+            return Ok(());
+        }
+        let Some(run_id) = self.latest_run_graph_run_id_for_task(&task.id).await? else {
+            return Ok(());
+        };
+        let status = match self.run_graph_status(&run_id).await {
+            Ok(status) => status,
+            Err(StateStoreError::MissingTask { .. }) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if status.task_id != task.id
+            || Self::run_graph_status_is_reconciled_terminal_closure(&status)
+        {
+            return Ok(());
+        }
+        let retired_status =
+            Self::task_close_retired_run_graph_status(status, "closed_task_stale_run_retired");
+        self.record_reconciled_terminal_closure_run_graph_status(&retired_status)
+            .await?;
+        self.clear_run_graph_continuation_binding(&run_id).await
     }
 
     fn normalize_execution_semantics_value(value: Option<&str>) -> Option<String> {
@@ -4102,6 +4134,10 @@ impl StateStore {
         for parent in &closed_parents {
             self.release_active_task_claims_for_task(&parent.id, "task_closed")
                 .await?;
+        }
+        self.retire_canonical_task_close_active_run(&task).await?;
+        for parent in &closed_parents {
+            self.retire_canonical_task_close_active_run(parent).await?;
         }
         self.refresh_run_graph_continuation_after_task_close(task_id)
             .await?;

@@ -1838,6 +1838,91 @@ fn remove_string_from_json_array(value: &mut serde_json::Value, target: &str) {
     }
 }
 
+fn push_unique_string_to_json_array(value: &mut serde_json::Value, item: &str) {
+    let Some(rows) = value.as_array_mut() else {
+        return;
+    };
+    if rows.iter().any(|entry| entry.as_str() == Some(item)) {
+        return;
+    }
+    rows.push(serde_json::Value::String(item.to_string()));
+}
+
+fn json_blocker_status(blocker_codes: Option<&serde_json::Value>) -> serde_json::Value {
+    if blocker_codes
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|rows| rows.iter().any(|entry| entry.as_str().is_some()))
+    {
+        serde_json::json!("blocked")
+    } else {
+        serde_json::json!("pass")
+    }
+}
+
+fn refresh_json_object_status_from_blockers(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+) {
+    let status = json_blocker_status(object.get("blocker_codes"));
+    object.insert("status".to_string(), status);
+}
+
+fn refresh_cached_closed_task_active_run_projection_mismatch(
+    payload: &mut serde_json::Value,
+    mismatch: bool,
+) -> Option<()> {
+    let blocker_code = "closed_task_active_run_projection_mismatch";
+    for path in [
+        &["blocker_codes"][..],
+        &["shared_fields", "blocker_codes"][..],
+        &["operator_contracts", "blocker_codes"][..],
+    ] {
+        let pointer = format!("/{}", path.join("/"));
+        let Some(current) = payload.pointer_mut(&pointer) else {
+            continue;
+        };
+        if mismatch {
+            push_unique_string_to_json_array(current, blocker_code);
+        } else {
+            remove_string_from_json_array(current, blocker_code);
+        }
+    }
+
+    let next_action =
+        crate::status_surface_signals::closed_task_active_run_projection_mismatch_next_action();
+    for path in [
+        &["next_actions"][..],
+        &["shared_fields", "next_actions"][..],
+        &["operator_contracts", "next_actions"][..],
+    ] {
+        let pointer = format!("/{}", path.join("/"));
+        let Some(current) = payload.pointer_mut(&pointer) else {
+            continue;
+        };
+        if mismatch {
+            push_unique_string_to_json_array(current, &next_action);
+        } else {
+            remove_string_from_json_array(current, &next_action);
+        }
+    }
+
+    let object = payload.as_object_mut()?;
+    refresh_json_object_status_from_blockers(object);
+    if let Some(shared_fields) = object
+        .get_mut("shared_fields")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        refresh_json_object_status_from_blockers(shared_fields);
+    }
+    if let Some(operator_contracts) = object
+        .get_mut("operator_contracts")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        refresh_json_object_status_from_blockers(operator_contracts);
+    }
+
+    Some(())
+}
+
 fn refresh_cached_protocol_binding_projection(
     payload: &mut serde_json::Value,
     protocol_binding: &crate::state_store::ProtocolBindingSummary,
@@ -2321,6 +2406,10 @@ async fn refresh_cached_status_projection_runtime_fields(
     let activation_truth =
         crate::project_activator_surface::canonical_project_activation_status_truth(&project_root);
     refresh_cached_project_activation_projection(&mut payload, &activation_truth)?;
+    refresh_cached_closed_task_active_run_projection_mismatch(
+        &mut payload,
+        closed_task_active_run_projection_mismatch,
+    )?;
     let latest_run_graph_surface_truth =
         latest_run_graph_dispatch_receipt
             .as_ref()
@@ -4693,6 +4782,48 @@ host_environment:
                 "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
             )
         );
+    }
+
+    #[test]
+    fn cached_closed_task_active_run_overlay_keeps_status_and_contracts_in_sync() {
+        let blocker = "closed_task_active_run_projection_mismatch";
+        let next_action =
+            crate::status_surface_signals::closed_task_active_run_projection_mismatch_next_action();
+        let mut payload = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": [blocker],
+            "next_actions": [next_action],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": [blocker],
+                "next_actions": [next_action],
+                "artifact_refs": {}
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": [blocker],
+                "next_actions": [next_action],
+                "artifact_refs": {}
+            }
+        });
+
+        super::refresh_cached_closed_task_active_run_projection_mismatch(&mut payload, false)
+            .expect("cached overlay should update payload");
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["shared_fields"]["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+        assert_eq!(payload["next_actions"], serde_json::json!([]));
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+
+        super::refresh_cached_closed_task_active_run_projection_mismatch(&mut payload, true)
+            .expect("cached overlay should update payload");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(payload["blocker_codes"], serde_json::json!([blocker]));
+        assert_eq!(payload["next_actions"], serde_json::json!([next_action]));
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
     #[test]

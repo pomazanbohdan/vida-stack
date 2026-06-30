@@ -17246,8 +17246,12 @@ fn task_close_preserves_unevidenced_closed_task_active_run_projection() {
             "unevidenced task close must keep the closed-task active-run blocker visible: {doctor}"
         );
         assert_eq!(
-            doctor["latest_terminal_task_active_run_graph_status"]["task_id"], task_id,
-            "doctor should retain the unevidenced terminal-task active run after task close: {doctor}"
+            doctor["latest_run_graph_status"]["task_id"], task_id,
+            "doctor should retain current unevidenced active run evidence after task close: {doctor}"
+        );
+        assert_ne!(
+            doctor["latest_run_graph_status"]["status"], "completed",
+            "doctor must not report unevidenced active run as completed after task close: {doctor}"
         );
     } else {
         assert_eq!(doctor["task_store"]["in_progress_count"], 0);
@@ -18076,7 +18080,7 @@ fn task_reconcile_closed_runs_skips_closed_task_active_run_without_receipt_truth
 }
 
 #[test]
-fn task_reconcile_closed_runs_retires_canonical_task_close_active_run() {
+fn task_close_retires_canonical_task_close_active_run_before_reconcile() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
 
@@ -18128,10 +18132,14 @@ fn task_reconcile_closed_runs_retires_canonical_task_close_active_run() {
     let before = run_command_json(&["doctor", "--json"], &state_dir);
     let before_blockers = require_json_string_array(&before["blocker_codes"], "before blockers");
     assert!(
-        before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
-        "canonical task close should expose the stale active run before reconcile: {before}"
+        !before_blockers.contains(&"closed_task_active_run_projection_mismatch".to_string()),
+        "canonical task close should retire the stale active run without manual reconcile: {before}"
     );
-    let (diagnostics_before, diagnostics_before_success) = run_command_json_allow_failure(
+    assert!(
+        before["latest_terminal_task_active_run_graph_status"].is_null(),
+        "canonical task close should clear terminal active-run projection immediately: {before}"
+    );
+    let (diagnostics_before, _) = run_command_json_allow_failure(
         &[
             "diagnostics",
             "post-commit",
@@ -18141,31 +18149,31 @@ fn task_reconcile_closed_runs_retires_canonical_task_close_active_run() {
         ],
         &state_dir,
     );
-    assert!(
-        !diagnostics_before_success,
-        "diagnostics post-commit must fail closed before closed-run reconcile: {diagnostics_before}"
-    );
     let diagnostics_before_blockers = require_json_string_array(
         &diagnostics_before["blocker_codes"],
         "diagnostics before blockers",
     );
     assert!(
-        diagnostics_before_blockers
+        !diagnostics_before_blockers
             .contains(&"closed_task_active_run_projection_mismatch".to_string()),
-        "diagnostics post-commit must share doctor/status closed-run blocker before reconcile: {diagnostics_before}"
+        "diagnostics post-commit must not preserve closed-run blocker after task close retirement: {diagnostics_before}"
+    );
+    assert_eq!(
+        diagnostics_before["taskflow_status"]["closed_task_active_run_projection_mismatch"], false,
+        "diagnostics taskflow status must report the closed-run projection as clear even if git status blocks the whole diagnostic: {diagnostics_before}"
     );
     assert!(
         diagnostics_before["next_actions"]
             .as_array()
             .expect("diagnostics next actions should render")
             .iter()
-            .any(|action| action.as_str().is_some_and(|value| {
+            .all(|action| !action.as_str().is_some_and(|value| {
                 value.contains("vida task reconcile-closed-runs --limit 25")
                     && !value.contains("vida task reconcile-closed-runs --limit 25 --json")
                     && value
                         .contains("closed tasks must not remain projected as active runtime work")
             })),
-        "diagnostics post-commit must publish the same canonical reconcile next action: {diagnostics_before}"
+        "diagnostics post-commit must not recommend manual reconcile after canonical close retirement: {diagnostics_before}"
     );
 
     let reconcile = run_command_json(
@@ -18173,12 +18181,7 @@ fn task_reconcile_closed_runs_retires_canonical_task_close_active_run() {
         &state_dir,
     );
     assert_eq!(reconcile["status"], "pass");
-    assert_eq!(reconcile["summary"]["reconciled_count"], 1);
-    assert_eq!(reconcile["summary"]["skipped_count"], 0);
-    assert_eq!(
-        reconcile["summary"]["reconciled_runs"][0]["run_id"], task_id,
-        "canonical task close should retire the stale active run: {reconcile}"
-    );
+    assert_eq!(reconcile["summary"]["reconciled_count"], 0);
 
     let after = run_command_json(&["doctor", "--json"], &state_dir);
     let after_blockers = require_json_string_array(&after["blocker_codes"], "after blockers");
