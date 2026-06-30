@@ -508,8 +508,7 @@ fn ignored_historical_failure_state_segments(reason: &str) -> Vec<String> {
                         &normalized,
                         &full_reason_normalized,
                     ))
-                || (has_current_failure_outcome_language(&normalized)
-                    && !has_stale_or_superseded_context(&normalized))
+                || has_current_failure_outcome_language(&normalized)
             {
                 return None;
             }
@@ -720,19 +719,6 @@ fn has_historical_or_success_evidence_context(normalized: &str) -> bool {
         || (has_evidence_context
             && has_success_context
             && has_failure_state_artifact_language(normalized))
-}
-
-fn has_stale_or_superseded_context(normalized: &str) -> bool {
-    [
-        "stale",
-        "stale_not_reproduced",
-        "stale not reproduced",
-        "superseded",
-        "supersedes",
-        "not reproduced",
-    ]
-    .iter()
-    .any(|phrase| normalized.contains(phrase))
 }
 
 fn has_failure_state_artifact_language(normalized: &str) -> bool {
@@ -2091,6 +2077,41 @@ mod tests {
             let inference = super::close_feedback_outcome_inference(reason, outcome, score);
             assert_eq!(outcome, "success");
             assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        }
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_stale_superseded_current_blocker_wording() {
+        for (reason, expected) in [
+            (
+                "Superseded: currently blocked by missing verifier evidence",
+                ("blocked", "blocked"),
+            ),
+            (
+                "Stale report, but task remains blocked by approval",
+                ("blocked", "blocked"),
+            ),
+            (
+                "Stale_not_reproduced historical report; awaiting approval remains current.",
+                (
+                    "awaiting_approval",
+                    crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str(),
+                ),
+            ),
+        ] {
+            assert_eq!(
+                super::canonical_close_status_from_reason(reason),
+                Some(expected),
+                "stale/superseded context must not mask current blocker language: {reason}"
+            );
+            assert!(
+                !super::ignored_canonical_close_historical_context(reason)
+                    .iter()
+                    .any(|segment| segment.contains("currently blocked")
+                        || segment.contains("remains blocked")
+                        || segment.contains("awaiting approval remains current")),
+                "current blocker segment must not be stripped as historical context: {reason}"
+            );
         }
     }
 
