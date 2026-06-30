@@ -513,7 +513,11 @@ fn cli_mutation_entry_architecture_lint_covers_service_first_boundary() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/service_client_cli.rs"),
     )
     .expect("service client source");
-    assert!(service_client.contains("client.execute(envelope_for_request(request))"));
+    assert!(service_client.contains("VidaCommandPipeline::new("));
+    assert!(service_client.contains("LocalRuntimeVidaClient::new_ready()"));
+    assert!(!service_client.contains("InProcessVidaClient::new_ready()"));
+    assert!(service_client.contains(".execute(envelope_for_request(request))"));
+    assert!(!service_client.contains("client.execute(envelope_for_request(request))"));
     assert!(!service_client.contains("authorize_operation("));
     assert!(!service_client.contains("OperationalJournal"));
 }

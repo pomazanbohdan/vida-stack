@@ -8,9 +8,21 @@ use vida_contracts::{
     VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
 };
 
+use crate::command_pipeline::VidaCommandPipeline;
 use crate::vida_client::VidaClient;
-use crate::vida_client_inprocess::InProcessVidaClient;
+use crate::vida_client_inprocess::LocalRuntimeVidaClient;
 use crate::ProxyArgs;
+
+#[derive(Debug, Clone, Copy)]
+struct BorrowedServiceClient<'a, C> {
+    client: &'a C,
+}
+
+impl<C: VidaClient> VidaClient for BorrowedServiceClient<'_, C> {
+    fn execute(&self, envelope: VidaCommandEnvelope) -> VidaCommandResponse {
+        self.client.execute(envelope)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ServiceCliFamily {
@@ -35,7 +47,7 @@ pub(crate) fn run_service(args: ProxyArgs) -> ExitCode {
     run_with_client(
         ServiceCliFamily::Service,
         args,
-        &InProcessVidaClient::new_ready(),
+        &LocalRuntimeVidaClient::new_ready(),
     )
 }
 
@@ -43,7 +55,7 @@ pub(crate) fn run_project(args: ProxyArgs) -> ExitCode {
     run_with_client(
         ServiceCliFamily::Project,
         args,
-        &InProcessVidaClient::new_ready(),
+        &LocalRuntimeVidaClient::new_ready(),
     )
 }
 
@@ -51,7 +63,7 @@ pub(crate) fn run_wizard(args: ProxyArgs) -> ExitCode {
     run_with_client(
         ServiceCliFamily::Wizard,
         args,
-        &InProcessVidaClient::new_ready(),
+        &LocalRuntimeVidaClient::new_ready(),
     )
 }
 
@@ -59,7 +71,7 @@ pub(crate) fn run_job(args: ProxyArgs) -> ExitCode {
     run_with_client(
         ServiceCliFamily::Job,
         args,
-        &InProcessVidaClient::new_ready(),
+        &LocalRuntimeVidaClient::new_ready(),
     )
 }
 
@@ -67,7 +79,7 @@ pub(crate) fn run_receipt(args: ProxyArgs) -> ExitCode {
     run_with_client(
         ServiceCliFamily::Receipt,
         args,
-        &InProcessVidaClient::new_ready(),
+        &LocalRuntimeVidaClient::new_ready(),
     )
 }
 
@@ -114,7 +126,8 @@ pub(crate) fn execute_service_cli_request<C: VidaClient>(
     client: &C,
     request: &ServiceCliRequest,
 ) -> VidaCommandResponse {
-    client.execute(envelope_for_request(request))
+    VidaCommandPipeline::new(BorrowedServiceClient { client })
+        .execute(envelope_for_request(request))
 }
 
 pub(crate) fn service_cli_request(
@@ -549,11 +562,18 @@ mod tests {
             let request = service_cli_request(family, &args).expect("request should map");
             assert_eq!(request.operation, expected_operation);
             let response = execute_service_cli_request(&client, &request);
-            assert!(response.error.is_none());
+            if expected_operation == operations::WIZARD_SESSION_START {
+                assert_eq!(
+                    response.blockers[0].code,
+                    "operation_owned_write_scope_denied"
+                );
+            } else {
+                assert!(response.error.is_none());
+            }
         }
 
         let operations = client.operations.borrow().clone();
-        assert_eq!(operations.len(), 15);
+        assert_eq!(operations.len(), 14);
         assert!(operations.contains(&operations::SERVICE_STATUS.to_string()));
         assert!(operations.contains(&operations::SERVICE_LIFECYCLE_PLAN.to_string()));
         assert!(operations.contains(&operations::SERVICE_LIFECYCLE_STATUS.to_string()));
