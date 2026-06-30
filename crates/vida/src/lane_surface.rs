@@ -3211,7 +3211,12 @@ fn reconcile_lane_completion_allowed_next_node(
                 .is_some_and(|target| target == effective_requested);
         let stale_terminal_closure =
             terminal_closure_route(persisted) && lawful_requested.is_some();
-        if !persisted_matches && !stale_terminal_closure {
+        let stale_current_lane_marker =
+            crate::runtime_dispatch_state::persisted_downstream_dispatch_target_is_current_lane_marker(
+                receipt,
+                persisted,
+            ) && lawful_requested.is_some();
+        if !persisted_matches && !stale_terminal_closure && !stale_current_lane_marker {
             return Err(format!(
                 "{surface_label} allowed_next_node `{requested}` does not match persisted downstream route `{persisted}`."
             ));
@@ -3694,7 +3699,15 @@ fn trusted_host_bridge_completion_request_context(
             );
         }
     }
-    if receipt.dispatch_status == "bridge_request_pending" && receipt.dispatch_result_path.is_some()
+    let receipt_target_matches_request = receipt.dispatch_target.trim() == dispatch_target;
+    let receipt_packet_matches_request = if receipt_target_matches_request {
+        trusted_host_bridge_receipt_packet_matches_request(state_root, &packet_path, receipt)?
+    } else {
+        None
+    };
+    if receipt.dispatch_status == "bridge_request_pending"
+        && receipt.dispatch_result_path.is_some()
+        && receipt_packet_matches_request != Some(true)
     {
         let normalized_request_path =
             crate::runtime_dispatch_state::normalize_persisted_runtime_path(request_path);
@@ -3707,7 +3720,6 @@ fn trusted_host_bridge_completion_request_context(
             false,
         )?;
     }
-    let receipt_target_matches_request = receipt.dispatch_target.trim() == dispatch_target;
     if retryable_completion_context
         && !adapter_gate_context
         && !receipt_target_matches_request
@@ -3725,18 +3737,8 @@ fn trusted_host_bridge_completion_request_context(
         );
     }
     if receipt_target_matches_request {
-        if let Some(authoritative_packet_path) = receipt
-            .downstream_dispatch_packet_path
-            .as_deref()
-            .or(receipt.dispatch_packet_path.as_deref())
-        {
-            let authoritative_packet_path =
-                crate::runtime_dispatch_state::normalize_persisted_runtime_path(
-                    authoritative_packet_path,
-                );
-            let authoritative_packet_path =
-                canonicalize_existing_state_path(state_root, &authoritative_packet_path, "packet")?;
-            if packet_path != authoritative_packet_path {
+        if let Some(matches_request) = receipt_packet_matches_request {
+            if !matches_request {
                 return Err(
                 "Host bridge request packet path does not match persisted dispatch receipt evidence."
                     .to_string(),
@@ -3756,6 +3758,25 @@ fn trusted_host_bridge_completion_request_context(
         dispatch_target: dispatch_target.to_string(),
         packet_path: packet_path.display().to_string(),
     }))
+}
+
+fn trusted_host_bridge_receipt_packet_matches_request(
+    state_root: &Path,
+    request_packet_path: &Path,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<bool>, String> {
+    let Some(authoritative_packet_path) = receipt
+        .downstream_dispatch_packet_path
+        .as_deref()
+        .or(receipt.dispatch_packet_path.as_deref())
+    else {
+        return Ok(None);
+    };
+    let authoritative_packet_path =
+        crate::runtime_dispatch_state::normalize_persisted_runtime_path(authoritative_packet_path);
+    let authoritative_packet_path =
+        canonicalize_existing_state_path(state_root, &authoritative_packet_path, "packet")?;
+    Ok(Some(request_packet_path == authoritative_packet_path))
 }
 
 fn path_has_dot_segment(path: &Path) -> bool {
@@ -5641,8 +5662,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     ) {
                         Ok(context) => context,
                         Err(error) => {
-                            eprintln!("{error}");
-                            return ExitCode::from(2);
+                            return emit_host_bridge_completion_error_envelope(
+                                as_json,
+                                run_id,
+                                host_bridge_request,
+                                host_bridge_result_file,
+                                &error,
+                            );
                         }
                     }
                 } else {
@@ -5967,8 +5993,13 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             ) {
                 Ok(target) => target,
                 Err(error) => {
-                    eprintln!("{error}");
-                    return ExitCode::from(1);
+                    return emit_host_bridge_completion_error_envelope(
+                        as_json,
+                        run_id,
+                        host_bridge_request,
+                        supplied_completion_result_args.result_file,
+                        &error,
+                    );
                 }
             };
             let mut downstream_completion_blockers = host_bridge_evidence
@@ -7025,6 +7056,65 @@ mod tests {
             selected_backend: Some("internal_subagents".to_string()),
             recorded_at: "2026-04-09T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    fn lane_completion_reconciles_stale_current_lane_marker_to_requested_next() {
+        let mut role_selection = lane_complete_role_selection("ldr-074j");
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]
+            ["execution_lane_sequence"] =
+            serde_json::json!(["developer", "coach_implementation_gate", "tester"]);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
+            "analyst": {
+                "dispatch_target": "analyst",
+                "task_class": "specification",
+                "completion_blocker": "pending_analysis_evidence"
+            },
+            "developer": {
+                "dispatch_target": "developer",
+                "task_class": "implementation",
+                "completion_blocker": "pending_implementation_evidence"
+            }
+        });
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.downstream_dispatch_target = Some("analyst".to_string());
+        receipt.downstream_dispatch_active_target = Some("analyst".to_string());
+
+        let target = reconcile_lane_completion_allowed_next_node(
+            "Lane completion",
+            Some(&role_selection),
+            &receipt,
+            Some("developer"),
+            receipt.downstream_dispatch_target.as_deref(),
+        )
+        .expect("stale current-lane marker must not block the concrete next lane");
+
+        assert_eq!(target.as_deref(), Some("developer"));
+    }
+
+    #[test]
+    fn host_bridge_completion_route_error_envelope_is_actionable_json_contract() {
+        let envelope = host_bridge_completion_error_envelope(
+            "run-route-conflict",
+            Some("host-tool-bridge/requests/request.json"),
+            Some("host-tool-bridge/results/result.json"),
+            "Lane completion allowed_next_node `developer` does not match persisted downstream route `architect`.",
+        );
+
+        assert_eq!(envelope.surface, "vida lane complete");
+        assert_eq!(envelope.status, "blocked");
+        assert_eq!(
+            envelope.blocker_codes,
+            vec!["host_bridge_completion_result_invalid".to_string()]
+        );
+        assert!(envelope
+            .reason
+            .contains("does not match persisted downstream route `architect`"));
+        assert!(envelope
+            .next_actions
+            .iter()
+            .any(|action| action.contains("retry `vida agent host-bridge --submit-result`")));
     }
 
     fn sample_exception_takeover_args(run_id: &str, receipt_id: &str) -> Vec<String> {
@@ -14175,6 +14265,102 @@ mod tests {
         .expect("pending bridge request should return completion context");
 
         assert_eq!(context.dispatch_target, "implementer");
+        assert_eq!(
+            context.packet_path,
+            canonicalize_existing_regular_state_path(&root, &packet_path, "packet")
+                .expect("canonical packet")
+                .display()
+                .to_string()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pending_host_bridge_completion_uses_receipt_packet_when_dispatch_result_is_oversized() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-oversized-dispatch-result-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let packet_path =
+            root.join("runtime-consumption/dispatch-packets/pending-original-packet.json");
+        let oversized_dispatch_result_path =
+            root.join("runtime-consumption/dispatch-results/oversized-activation.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        std::fs::create_dir_all(
+            oversized_dispatch_result_path
+                .parent()
+                .expect("dispatch result parent"),
+        )
+        .expect("create dispatch result parent");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-host-bridge-oversized-dispatch-result",
+                "dispatch_target": "analyst",
+                "downstream_dispatch_active_target": "analyst",
+                "downstream_dispatch_status": "blocked"
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        std::fs::write(
+            &oversized_dispatch_result_path,
+            vec![b'x'; (MAX_HOST_BRIDGE_REQUEST_BYTES + 1) as usize],
+        )
+        .expect("write oversized dispatch result");
+        let request_path = root.join("host-tool-bridge/requests/pending-original.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "bridge_request_pending",
+                "request_id": "pending-original",
+                "run_id": "run-host-bridge-oversized-dispatch-result",
+                "task_id": "run-host-bridge-oversized-dispatch-result",
+                "dispatch_target": "analyst",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge"
+            })
+            .to_string(),
+        )
+        .expect("write request");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-host-bridge-oversized-dispatch-result",
+            "specification",
+            "specification",
+        );
+        status.active_node = "analyst".to_string();
+        status.status = "blocked".to_string();
+        status.policy_gate = "host_tool_bridge_adapter_required".to_string();
+
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = "run-host-bridge-oversized-dispatch-result".to_string();
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.dispatch_result_path = Some(oversized_dispatch_result_path.display().to_string());
+        receipt.downstream_dispatch_packet_path = None;
+
+        let context = trusted_host_bridge_completion_request_context(
+            &root,
+            "run-host-bridge-oversized-dispatch-result",
+            &request_path.display().to_string(),
+            Some(&status),
+            &receipt,
+        )
+        .expect("matching receipt packet should avoid reading oversized activation result")
+        .expect("pending bridge request should return completion context");
+
+        assert_eq!(context.dispatch_target, "analyst");
         assert_eq!(
             context.packet_path,
             canonicalize_existing_regular_state_path(&root, &packet_path, "packet")

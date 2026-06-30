@@ -7400,6 +7400,25 @@ pub(crate) fn lawful_explicit_downstream_dispatch_target_from_execution_plan(
     .map(|resolution| resolution.dispatch_target)
 }
 
+pub(crate) fn persisted_downstream_dispatch_target_is_current_lane_marker(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    persisted_target: &str,
+) -> bool {
+    let persisted_target = persisted_target.trim();
+    if persisted_target.is_empty() {
+        return false;
+    }
+    if receipt.dispatch_target.trim() == persisted_target {
+        return true;
+    }
+    receipt
+        .downstream_dispatch_active_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|active_target| active_target == persisted_target)
+}
+
 fn execution_lane_sequence_index_for_target(
     execution_lane_sequence: &[String],
     target: &str,
