@@ -759,6 +759,25 @@ fn latest_run_graph_status_blocks_normal_continuation(
     })
 }
 
+fn ready_head_repairs_blocked_runtime_run(
+    ready_head: &GraphSummaryTaskRef,
+    active_run_id: Option<&str>,
+    active_task_id: Option<&str>,
+) -> bool {
+    let distinct_active_run = active_run_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|run_id| run_id != ready_head.id);
+    let distinct_active_task = active_task_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none_or(|task_id| task_id != ready_head.id);
+    if !distinct_active_run || !distinct_active_task {
+        return false;
+    }
+    ready_head.issue_type.trim() == "defect" && ready_head.id.starts_with("runtime-defect-")
+}
+
 fn authoritative_dispatch_blocker_codes(
     dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
 ) -> Vec<String> {
@@ -3549,9 +3568,19 @@ fn build_taskflow_next_decision(
         && latest_run_graph_status
             .zip(ready_head.as_ref())
             .is_some_and(|(status, task)| status.task_id != task.id);
-    let latest_run_graph_status_blocked =
-        latest_run_graph_status_is_blocked && !legacy_ownerless_latest_run_nonblocking;
+    let active_blocked_run_id = latest_run_graph_status
+        .map(|status| status.run_id.as_str())
+        .or_else(|| dispatch.map(|receipt| receipt.run_id.as_str()));
+    let active_blocked_task_id = latest_run_graph_status.map(|status| status.task_id.as_str());
+    let runtime_defect_ready_head_repairs_blocked_run = ready_head.as_ref().is_some_and(|task| {
+        ready_head_repairs_blocked_runtime_run(task, active_blocked_run_id, active_blocked_task_id)
+    });
+    let latest_run_graph_status_blocked = latest_run_graph_status_is_blocked
+        && !legacy_ownerless_latest_run_nonblocking
+        && !runtime_defect_ready_head_repairs_blocked_run;
     let recovery_holds_current_active_bound_run = recovery_holds_active_bound_run;
+    let recovery_gate_blocks_admission =
+        recovery_holds_current_active_bound_run && !runtime_defect_ready_head_repairs_blocked_run;
     let latest_run_graph_task_no_longer_active =
         latest_run_graph_task_closed || latest_run_graph_task_missing;
     let latest_run_graph_task_missing_stale =
@@ -3591,7 +3620,7 @@ fn build_taskflow_next_decision(
 
     let admissibility_gate = if latest_run_graph_task_missing_stale {
         "stale_missing_task_run_graph".to_string()
-    } else if recovery_holds_current_active_bound_run {
+    } else if recovery_gate_blocks_admission {
         "delegated_cycle_runtime_gate".to_string()
     } else if active_exception_takeover_continuation {
         "active_exception_takeover_continuation".to_string()
@@ -3612,7 +3641,7 @@ fn build_taskflow_next_decision(
     let mut next_actions = Vec::<String>::new();
     let candidate_task_context = TaskflowNextCandidateContext {
         ready_head: ready_head.clone(),
-        admissible_now: !(recovery_holds_current_active_bound_run
+        admissible_now: !(recovery_gate_blocks_admission
             || latest_run_graph_task_missing_stale
             || active_exception_takeover_binding
             || active_exception_takeover_continuation
@@ -3681,7 +3710,7 @@ fn build_taskflow_next_decision(
                 }),
                 Some(next_action),
             )
-        } else if recovery_holds_current_active_bound_run {
+        } else if recovery_gate_blocks_admission {
             if let Some(code) = crate::release1_contracts::blocker_code_value(
                 crate::release1_contracts::BlockerCode::OpenDelegatedCycle,
             ) {
@@ -13014,6 +13043,98 @@ agent_system:
             operator_contracts["artifact_refs"],
             shared_fields["artifact_refs"]
         );
+    }
+
+    #[test]
+    fn taskflow_next_decision_admits_runtime_defect_ready_head_for_blocked_run_repair() {
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-blocked",
+            "task-blocked",
+            "analysis",
+        );
+        latest_status.status = "blocked".to_string();
+        latest_status.lifecycle_stage = "analysis_blocked".to_string();
+        let mut ready =
+            sample_task("runtime-defect-open-delegated-cycle-blocks-dispatch-next-20260630");
+        ready.issue_type = "defect".to_string();
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&ready),
+            false,
+            true,
+            Some("final"),
+            None,
+            None,
+            Some(&latest_status),
+            false,
+            false,
+            false,
+            None,
+            None,
+            "test-session",
+            &[],
+        );
+
+        assert_eq!(decision.status, "pass");
+        assert_eq!(
+            decision
+                .primary_ready_task
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("runtime-defect-open-delegated-cycle-blocks-dispatch-next-20260630")
+        );
+        assert!(decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "ready_now"
+        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "latest_run_graph_status_blocked"));
+    }
+
+    #[test]
+    fn taskflow_next_decision_admits_runtime_defect_ready_head_with_dispatch_only_cycle() {
+        let dispatch = exception_takeover_dispatch("task-zombie-d-testing-analysis-and-task-plan");
+        let mut ready =
+            sample_task("runtime-defect-open-delegated-cycle-blocks-dispatch-next-20260630");
+        ready.issue_type = "defect".to_string();
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&ready),
+            true,
+            true,
+            Some("final"),
+            None,
+            Some(&dispatch),
+            None,
+            false,
+            false,
+            false,
+            None,
+            None,
+            "test-session",
+            &[],
+        );
+
+        assert_eq!(decision.status, "pass");
+        assert_eq!(
+            decision
+                .primary_ready_task
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("runtime-defect-open-delegated-cycle-blocks-dispatch-next-20260630")
+        );
+        assert!(decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "ready_now"
+        );
+        assert!(!decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "open_delegated_cycle"));
     }
 
     #[test]
