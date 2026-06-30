@@ -1513,6 +1513,70 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
     std::fs::create_dir_all(&packet_dir).expect("downstream packet dir should exist");
     let packet_path = format!("{packet_dir}/autotester-worker-scope.json");
     let owned_paths = serde_json::json!(["lib/src/features/activity/record_detail_view.dart"]);
+    let compiled_bundle = serde_json::json!({
+        "agent_system": {
+            "routing": {
+                "default": {
+                    "executor_backend": "internal_subagents"
+                }
+            }
+        },
+        "dev_team_readiness": {
+            "roles": [
+                {"role_id": "designer", "runtime_role": "designer", "task_classes": ["design"]},
+                {"role_id": "autotester", "runtime_role": "worker", "task_classes": ["implementation_medium"]},
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]}
+            ],
+            "flows": [
+                {
+                    "flow_id": "configured_autotester_flow",
+                    "enabled": true,
+                    "ordered_steps": [
+                        {"role_id": "designer"},
+                        {"role_id": "autotester"},
+                        {"role_id": "developer"}
+                    ]
+                }
+            ]
+        },
+        "carrier_runtime": {
+            "model_selection": {
+                "enabled": true,
+                "candidate_scope": "unified_carrier_model_profiles",
+                "default_strategy": "balanced_cost_quality"
+            },
+            "roles": [
+                {
+                    "role_id": "middle",
+                    "tier": "middle",
+                    "rate": 4,
+                    "normalized_cost_units": 4,
+                    "default_runtime_role": "worker",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation_medium"],
+                    "reasoning_band": "medium",
+                    "default_model_profile": "codex_gpt55_medium_write",
+                    "model_profiles": {
+                        "codex_gpt55_medium_write": {
+                            "profile_id": "codex_gpt55_medium_write",
+                            "model_ref": "gpt-5.5",
+                            "provider": "openai",
+                            "reasoning_effort": "medium",
+                            "plan_mode_reasoning_effort": "high",
+                            "sandbox_mode": "workspace-write",
+                            "normalized_cost_units": 4,
+                            "speed_tier": "fast",
+                            "quality_tier": "medium",
+                            "write_scope": "workspace-write",
+                            "runtime_roles": ["worker"],
+                            "task_classes": ["implementation_medium"],
+                            "readiness": { "required": true, "ready": true }
+                        }
+                    }
+                }
+            ]
+        }
+    });
     let role_selection_full = serde_json::json!({
         "ok": true,
         "activation_source": "packet",
@@ -1525,8 +1589,8 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
         "tracked_flow_entry": "dev-pack",
         "allow_freeform_chat": false,
         "confidence": "high",
-        "matched_terms": [],
-        "compiled_bundle": null,
+        "matched_terms": ["dev_team_flow_id:configured_autotester_flow"],
+        "compiled_bundle": compiled_bundle,
         "execution_plan": {
             "runtime_assignment": {
                 "activation_agent_type": "middle",
@@ -1534,21 +1598,6 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
                 "runtime_role": "business_analyst",
                 "task_class": "specification",
                 "selected_backend_id": "internal_subagents"
-            },
-            "development_flow": {
-                "dispatch_contract": {
-                    "lane_sequence": ["designer", "autotester", "developer"],
-                    "execution_lane_sequence": ["autotester", "developer"],
-                    "lane_catalog": {
-                            "autotester": {
-                                "dispatch_target": "autotester",
-                                "task_class": "implementation_medium",
-                                "runtime_role": "worker",
-                                "closure_class": "implementation",
-                                "packet_template_kind": "delivery_task_packet"
-                            }
-                        }
-                }
             },
             "backend_admissibility_matrix": [
                 {
