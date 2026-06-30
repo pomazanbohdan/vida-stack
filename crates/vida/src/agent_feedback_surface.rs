@@ -802,13 +802,11 @@ fn has_current_failure_outcome_language(normalized: &str) -> bool {
         "continuation blocker:",
         "continuation_blocked:",
         "continuation_blocked flag:",
-        "awaiting_approval:",
-        "approval_wait:",
     ]
     .iter()
     .any(|prefix| trimmed.starts_with(prefix));
     starts_with_failure_state
-        || has_concrete_canonical_close_phrase(trimmed)
+        || has_concrete_blocked_close_phrase(trimmed)
         || trimmed.contains("current blocker")
         || trimmed.contains("current blocked")
         || trimmed.contains("currently blocked")
@@ -847,6 +845,13 @@ const CONCRETE_CANONICAL_CLOSE_PHRASES: &[&str] = &[
 fn has_concrete_canonical_close_phrase(normalized: &str) -> bool {
     CONCRETE_CANONICAL_CLOSE_PHRASES
         .iter()
+        .any(|phrase| normalized.contains(phrase))
+}
+
+fn has_concrete_blocked_close_phrase(normalized: &str) -> bool {
+    CONCRETE_CANONICAL_CLOSE_PHRASES
+        .iter()
+        .take_while(|phrase| **phrase != "approval required")
         .any(|phrase| normalized.contains(phrase))
 }
 
@@ -2637,15 +2642,21 @@ mod tests {
 
     #[test]
     fn canonical_close_status_preserves_approval_prefix_with_meta_keywords() {
-        let reason = "Awaiting_approval: return to operator with proof artifact";
-
-        assert_eq!(
-            super::canonical_close_status_from_reason(reason),
-            Some((
-                "awaiting_approval",
-                crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str()
-            ))
-        );
+        for reason in [
+            "Awaiting_approval: return to operator with proof artifact",
+            "Approval_wait: return to operator with proof artifact",
+            "Approval required before closing this task.",
+            "Pending approval before closing this task.",
+        ] {
+            assert_eq!(
+                super::canonical_close_status_from_reason(reason),
+                Some((
+                    "awaiting_approval",
+                    crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str()
+                )),
+                "approval-only close reason should not be classified as blocked: {reason}"
+            );
+        }
     }
 
     #[test]
