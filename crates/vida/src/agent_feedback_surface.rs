@@ -157,6 +157,7 @@ fn feedback_failure_markers(normalized_reason: &str) -> Vec<String> {
             "fail".to_string(),
             "failed".to_string(),
             "blocked".to_string(),
+            "recovery_readiness_blocked".to_string(),
             "abort".to_string(),
             "abandon".to_string(),
             "rejected".to_string(),
@@ -506,6 +507,8 @@ fn has_failure_state_language(normalized: &str) -> bool {
         "canonical_gate_blocked",
         "canonical_status_blocked",
         "close_feedback_canonical_status_blocked",
+        "recovery_readiness_blocked",
+        "recovery readiness blocked",
         "status=blocked",
         "status: blocked",
         "blocker details",
@@ -689,6 +692,8 @@ fn has_failure_state_artifact_language(normalized: &str) -> bool {
         "canonical_gate_blocked",
         "canonical_status_blocked",
         "close_feedback_canonical_status_blocked",
+        "recovery_readiness_blocked",
+        "recovery readiness blocked",
         "status=blocked",
         "status: blocked",
         "blocker details",
@@ -888,6 +893,9 @@ pub(crate) fn canonical_close_status_from_reason(
     if has_concrete_canonical_close_field_label(&normalized) {
         return Some(("blocked", "blocked"));
     }
+    if has_concrete_canonical_close_status_code(&normalized) {
+        return Some(("blocked", "blocked"));
+    }
     for phrase in ignored_canonical_close_meta_language(reason) {
         normalized = normalized.replace(&phrase, " canonical_close_context_language ");
     }
@@ -915,6 +923,17 @@ pub(crate) fn canonical_close_status_from_reason(
     }
 
     None
+}
+
+fn has_concrete_canonical_close_status_code(normalized: &str) -> bool {
+    [
+        "recovery_readiness_blocked",
+        "canonical_gate_blocked",
+        "canonical_status_blocked",
+        "close_feedback_canonical_status_blocked",
+    ]
+    .iter()
+    .any(|code| normalized.trim() == *code)
 }
 
 fn host_agent_ids(carrier_catalog: &[serde_json::Value]) -> Vec<String> {
@@ -1681,6 +1700,30 @@ mod tests {
     }
 
     #[test]
+    fn close_feedback_inference_ignores_recovery_readiness_blocked_diagnostic_wording() {
+        let reason = "Fixed release install closeout diagnostics after prior step close mentioning recovery_readiness_blocked and task-zombie-d-testing-analysis-and-task-plan returned exitCode=1; proof commands passed.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert!(inference["success_markers"]
+            .as_array()
+            .expect("success markers should render")
+            .iter()
+            .any(|marker| marker == "proof commands passed"));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase
+                .as_str()
+                .is_some_and(|value| value.contains("recovery_readiness_blocked"))));
+    }
+
+    #[test]
     fn canonical_close_status_ignores_passed_invariant_rejection_wording() {
         for (reason, expected_ignored_phrase) in [
             (
@@ -1775,6 +1818,26 @@ mod tests {
         assert_eq!(
             super::canonical_close_status_from_reason(reason),
             Some(("blocked", "blocked"))
+        );
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_literal_recovery_readiness_blocked_code() {
+        let reason = "recovery_readiness_blocked";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "failure");
+        assert_eq!(score, 35);
+        assert_eq!(
+            inference["failure_markers"],
+            serde_json::json!(["recovery_readiness_blocked"])
         );
     }
 

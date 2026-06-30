@@ -3525,6 +3525,115 @@ fn task_close_feedback_ignores_historical_blocker_words_in_success_reason() {
 }
 
 #[test]
+fn task_close_feedback_ignores_recovery_readiness_blocked_diagnostic_reason() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    create_epic_parent(
+        &state_dir,
+        "feedback-recovery-diagnostic-parent",
+        "Feedback recovery diagnostic parent",
+        "open",
+    );
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-recovery-diagnostic-task",
+            "Feedback recovery diagnostic task",
+            "--parent-id",
+            "feedback-recovery-diagnostic-parent",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+
+    let closed = run_command_json(
+        &[
+            "task",
+            "close",
+            "feedback-recovery-diagnostic-task",
+            "--reason",
+            "Fixed release install closeout diagnostics after prior step close mentioning recovery_readiness_blocked and task-zombie-d-testing-analysis-and-task-plan returned exitCode=1; proof commands passed.",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(closed["status"], "pass");
+    assert_eq!(closed["blocker_codes"], serde_json::json!([]));
+    assert_eq!(
+        closed["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(
+        closed["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
+        serde_json::json!([])
+    );
+    assert!(
+        closed["host_agent_telemetry"]["feedback_outcome_inference"]["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase
+                .as_str()
+                .is_some_and(|value| value.contains("recovery_readiness_blocked")))
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
+fn task_close_feedback_blocks_literal_recovery_readiness_blocked_reason() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    create_epic_parent(
+        &state_dir,
+        "feedback-current-recovery-blocked-parent",
+        "Feedback current recovery blocked parent",
+        "open",
+    );
+    let created = run_command_json(
+        &[
+            "task",
+            "create",
+            "feedback-current-recovery-blocked-task",
+            "Feedback current recovery blocked task",
+            "--parent-id",
+            "feedback-current-recovery-blocked-parent",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(created["status"], "pass");
+
+    let blocked = run_command_capture(
+        &[
+            "task",
+            "close",
+            "feedback-current-recovery-blocked-task",
+            "--reason",
+            "recovery_readiness_blocked",
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert!(!blocked.status.success());
+    let blocked_json: serde_json::Value =
+        serde_json::from_slice(&blocked.stdout).expect("blocked close json should parse");
+    assert_eq!(blocked_json["status"], "blocked");
+    assert_eq!(blocked_json["task"]["status"], "open");
+    assert_eq!(
+        blocked_json["blocker_codes"],
+        serde_json::json!([
+            "canonical_gate_blocked",
+            "close_feedback_canonical_status_blocked"
+        ])
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn task_close_feedback_ignores_if_blocked_process_field_in_task_notes() {
     let (project_root, state_dir) = project_bound_state_dir();
     create_epic_parent(
