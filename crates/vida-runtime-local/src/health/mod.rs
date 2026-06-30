@@ -25,6 +25,26 @@ pub const REPAIR_LEGACY_PASS_RESULT_PROJECTION_CONTRADICTION: &str =
     "repair_legacy_pass_result_projection_contradiction";
 pub const REPORT_UNREPAIRABLE_PROJECTION_FAILURE: &str = "report_unrepairable_projection_failure";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ProjectionRepairError {
+    #[error("repair_plan_requires_event_backing")]
+    RequiresEventBacking,
+    #[error("repair_plan_requires_canonical_passed_evidence")]
+    RequiresCanonicalPassedEvidence,
+    #[error("repair_plan_requires_authorized_repair_class")]
+    RequiresAuthorizedRepairClass,
+}
+
+impl ProjectionRepairError {
+    pub fn blocker_code(self) -> &'static str {
+        match self {
+            Self::RequiresEventBacking => REPAIR_PLAN_REQUIRES_EVENT_BACKING,
+            Self::RequiresCanonicalPassedEvidence => REPAIR_PLAN_REQUIRES_CANONICAL_PASSED_EVIDENCE,
+            Self::RequiresAuthorizedRepairClass => REPAIR_PLAN_REQUIRES_AUTHORIZED_REPAIR_CLASS,
+        }
+    }
+}
+
 pub fn classify_projection_drift(
     _health: &RedbJournalHealth,
     failures: &[RedbProjectionFailureRecord],
@@ -87,16 +107,16 @@ pub fn apply_projection_repair_plan(
     before_health: &RedbJournalHealth,
     after_health: &RedbJournalHealth,
     canonical_outcome: Option<&CompletionOutcome>,
-) -> Result<ProjectionRepairReceipt, &'static str> {
+) -> Result<ProjectionRepairReceipt, ProjectionRepairError> {
     if plan.required_existing_event_cursors.is_empty() {
-        return Err(REPAIR_PLAN_REQUIRES_EVENT_BACKING);
+        return Err(ProjectionRepairError::RequiresEventBacking);
     }
     if plan.canonical_passed_evidence_required && !canonical_passed_evidence_gate(canonical_outcome)
     {
-        return Err(REPAIR_PLAN_REQUIRES_CANONICAL_PASSED_EVIDENCE);
+        return Err(ProjectionRepairError::RequiresCanonicalPassedEvidence);
     }
     if !repair_plan_has_authorized_apply_path(plan, canonical_outcome) {
-        return Err(REPAIR_PLAN_REQUIRES_AUTHORIZED_REPAIR_CLASS);
+        return Err(ProjectionRepairError::RequiresAuthorizedRepairClass);
     }
     Ok(ProjectionRepairReceipt {
         plan_id: plan.plan_id.clone(),
@@ -114,7 +134,7 @@ pub fn guarded_projection_repair(
     failures: &[RedbProjectionFailureRecord],
     idempotency_key: impl Into<String>,
     canonical_outcome: Option<&CompletionOutcome>,
-) -> Result<Option<ProjectionRepairReceipt>, &'static str> {
+) -> Result<Option<ProjectionRepairReceipt>, ProjectionRepairError> {
     let Some(finding) = classify_projection_drift(health, failures)
         .into_iter()
         .next()
@@ -296,7 +316,7 @@ mod tests {
         };
         assert_eq!(
             apply_projection_repair_plan(&plan, "idem-1", &empty_health(), &empty_health(), None),
-            Err(REPAIR_PLAN_REQUIRES_EVENT_BACKING)
+            Err(ProjectionRepairError::RequiresEventBacking)
         );
     }
 
@@ -405,7 +425,7 @@ mod tests {
                 &empty_health(),
                 None
             ),
-            Err(REPAIR_PLAN_REQUIRES_AUTHORIZED_REPAIR_CLASS)
+            Err(ProjectionRepairError::RequiresAuthorizedRepairClass)
         );
     }
 
@@ -428,13 +448,13 @@ mod tests {
         assert!(!plan.auto_repair_allowed);
         assert_eq!(
             apply_projection_repair_plan(&plan, "idem-1", &health, &health, None),
-            Err(REPAIR_PLAN_REQUIRES_CANONICAL_PASSED_EVIDENCE)
+            Err(ProjectionRepairError::RequiresCanonicalPassedEvidence)
         );
 
         let empty_evidence = CompletionOutcome::passed(Vec::new(), None);
         assert_eq!(
             apply_projection_repair_plan(&plan, "idem-1", &health, &health, Some(&empty_evidence)),
-            Err(REPAIR_PLAN_REQUIRES_CANONICAL_PASSED_EVIDENCE)
+            Err(ProjectionRepairError::RequiresCanonicalPassedEvidence)
         );
 
         let passed =

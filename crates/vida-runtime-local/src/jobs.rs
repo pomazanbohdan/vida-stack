@@ -17,6 +17,95 @@ pub type EffectumQueue = effectum::Queue;
 pub const EFFECTUM_OUTBOX_WORKER: &str = "vida.redb.outbox.effect";
 pub const DEAD_LETTER_BLOCKER_CODE: &str = "vida_job_dead_letter";
 
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeLocalJobError {
+    #[error("decode Effectum outbox job payload: {detail}")]
+    DecodeEffectumOutboxPayload { detail: String },
+    #[error(
+        "refuse to acknowledge redb outbox `{outbox_id}` effect `{effect_id}` from Effectum metadata without executing the persisted VidaEffectIntent"
+    )]
+    MetadataOnlyEffectumAck {
+        outbox_id: String,
+        effect_id: String,
+    },
+    #[error("worker command payload missing `{field}`")]
+    MissingWorkerPayloadField { field: String },
+    #[error("open redb outbox journal `{path}` for worker ack: {detail}")]
+    OpenRedbOutboxForWorkerAck { path: String, detail: String },
+    #[error("read redb outbox `{outbox_id}` for worker ack: {detail}")]
+    ReadRedbOutboxForWorkerAck { outbox_id: String, detail: String },
+    #[error("redb outbox `{outbox_id}` is missing for worker ack")]
+    MissingRedbOutboxForWorkerAck { outbox_id: String },
+    #[error("worker ack authority `{authority}` is not redb_outbox")]
+    WorkerAckAuthorityMismatch { authority: String },
+    #[error("worker ack runner `{runner}` is not effectum")]
+    WorkerAckRunnerMismatch { runner: String },
+    #[error(
+        "worker ack payload operation `{payload_operation}` does not match command operation `{command_operation}`"
+    )]
+    WorkerAckOperationMismatch {
+        payload_operation: String,
+        command_operation: String,
+    },
+    #[error(
+        "worker ack effect_id `{effect_id}` does not match persisted effect `{persisted_effect_id}`"
+    )]
+    WorkerAckEffectMismatch {
+        effect_id: String,
+        persisted_effect_id: String,
+    },
+    #[error("worker ack command_id must match persisted outbox `{outbox_id}`")]
+    WorkerAckCommandIdMismatch { outbox_id: String },
+    #[error("worker ack idempotency_key must match persisted outbox `{outbox_id}`")]
+    WorkerAckIdempotencyKeyMismatch { outbox_id: String },
+    #[error(
+        "worker ack claimed_by `{claimed_by}` does not match persisted claim `{persisted_claim}`"
+    )]
+    WorkerAckClaimMismatch {
+        claimed_by: String,
+        persisted_claim: String,
+    },
+    #[error("worker ack requires claimed outbox state, found `{state}`")]
+    WorkerAckStateInvalid { state: String },
+    #[error("mark outbox `{outbox_id}` succeeded: {detail}")]
+    MarkOutboxSucceeded { outbox_id: String, detail: String },
+    #[error("mark outbox `{outbox_id}` failed: {detail}")]
+    MarkOutboxFailed { outbox_id: String, detail: String },
+    #[error("unsupported worker command outcome `{outcome}`")]
+    UnsupportedWorkerCommandOutcome { outcome: String },
+    #[error("create Effectum queue directory `{path}`: {source}")]
+    CreateEffectumQueueDirectory {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("open Effectum queue `{path}` with recovery `{recovery_behavior}`: {detail}")]
+    OpenEffectumQueue {
+        path: String,
+        recovery_behavior: String,
+        detail: String,
+    },
+    #[error("refuse to enqueue terminal durable job `{job_id}` with lifecycle `{lifecycle:?}`")]
+    EnqueueTerminalDurableJob {
+        job_id: String,
+        lifecycle: DurableJobLifecycle,
+    },
+    #[error("open redb outbox journal `{path}`: {detail}")]
+    OpenRedbOutboxJournal { path: String, detail: String },
+    #[error("read redb outbox records `{path}`: {detail}")]
+    ReadRedbOutboxRecords { path: String, detail: String },
+    #[error("unsupported Effectum recovery behavior `{behavior}`")]
+    UnsupportedEffectumRecoveryBehavior { behavior: String },
+    #[error("serialize Effectum job payload `{job_id}`: {detail}")]
+    SerializeEffectumJobPayload { job_id: String, detail: String },
+    #[error("enqueue Effectum job `{job_id}` for outbox `{outbox_id}`: {detail}")]
+    EnqueueEffectumJob {
+        job_id: String,
+        outbox_id: String,
+        detail: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EffectumQueueConfig {
     pub sqlite_path: PathBuf,
@@ -257,13 +346,17 @@ pub fn effectum_outbox_job_runner() -> effectum::JobRunner<EffectumWorkerPipelin
     effectum::JobRunner::builder(
         EFFECTUM_OUTBOX_WORKER,
         |job: effectum::RunningJob, _pipeline: EffectumWorkerPipeline| async move {
-            let payload: EffectumOutboxJobPayload = job
-                .json_payload()
-                .map_err(|error| format!("decode Effectum outbox job payload: {error}"))?;
-            Err::<WorkerCommandSubmission, String>(format!(
-                "refuse to acknowledge redb outbox `{}` effect `{}` from Effectum metadata without executing the persisted VidaEffectIntent",
-                payload.outbox_id, payload.effect_id
-            ))
+            let payload: EffectumOutboxJobPayload = job.json_payload().map_err(|error| {
+                RuntimeLocalJobError::DecodeEffectumOutboxPayload {
+                    detail: error.to_string(),
+                }
+            })?;
+            Err::<WorkerCommandSubmission, RuntimeLocalJobError>(
+                RuntimeLocalJobError::MetadataOnlyEffectumAck {
+                    outbox_id: payload.outbox_id,
+                    effect_id: payload.effect_id,
+                },
+            )
         },
     )
     .build()
@@ -272,7 +365,7 @@ pub fn effectum_outbox_job_runner() -> effectum::JobRunner<EffectumWorkerPipelin
 pub fn apply_worker_command_to_redb(
     journal_path: &Path,
     command: &WorkerCommandSubmission,
-) -> Result<(), String> {
+) -> Result<(), RuntimeLocalJobError> {
     let outbox_id = required_payload_str(command, "outbox_id")?;
     let effect_id = required_payload_str(command, "effect_id")?;
     let authority = required_payload_str(command, "authority")?;
@@ -286,18 +379,25 @@ pub fn apply_worker_command_to_redb(
         .get("outcome")
         .and_then(|value| value.get("status"))
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "worker command payload missing `outcome.status`".to_string())?;
+        .ok_or_else(|| RuntimeLocalJobError::MissingWorkerPayloadField {
+            field: "outcome.status".to_string(),
+        })?;
     let mut journal = RedbOperationalJournal::open(journal_path).map_err(|error| {
-        format!(
-            "open redb outbox journal `{}` for worker ack: {error}",
-            journal_path.display()
-        )
+        RuntimeLocalJobError::OpenRedbOutboxForWorkerAck {
+            path: journal_path.display().to_string(),
+            detail: error.to_string(),
+        }
     })?;
     let outbox_ref = VidaEventRef(outbox_id.to_string());
     let persisted = journal
         .outbox_effect_record(&outbox_ref)
-        .map_err(|error| format!("read redb outbox `{outbox_id}` for worker ack: {error}"))?
-        .ok_or_else(|| format!("redb outbox `{outbox_id}` is missing for worker ack"))?;
+        .map_err(|error| RuntimeLocalJobError::ReadRedbOutboxForWorkerAck {
+            outbox_id: outbox_id.to_string(),
+            detail: error.to_string(),
+        })?
+        .ok_or_else(|| RuntimeLocalJobError::MissingRedbOutboxForWorkerAck {
+            outbox_id: outbox_id.to_string(),
+        })?;
 
     validate_worker_ack_command(
         command,
@@ -312,9 +412,12 @@ pub fn apply_worker_command_to_redb(
     )?;
 
     match outcome {
-        "succeeded" => journal
-            .mark_outbox_succeeded(&outbox_ref)
-            .map_err(|error| format!("mark outbox `{outbox_id}` succeeded: {error}")),
+        "succeeded" => journal.mark_outbox_succeeded(&outbox_ref).map_err(|error| {
+            RuntimeLocalJobError::MarkOutboxSucceeded {
+                outbox_id: outbox_id.to_string(),
+                detail: error.to_string(),
+            }
+        }),
         "failed" => {
             let reason = command
                 .payload
@@ -325,21 +428,28 @@ pub fn apply_worker_command_to_redb(
                 .to_string();
             journal
                 .mark_outbox_failed(&outbox_ref, reason)
-                .map_err(|error| format!("mark outbox `{outbox_id}` failed: {error}"))
+                .map_err(|error| RuntimeLocalJobError::MarkOutboxFailed {
+                    outbox_id: outbox_id.to_string(),
+                    detail: error.to_string(),
+                })
         }
-        other => Err(format!("unsupported worker command outcome `{other}`")),
+        other => Err(RuntimeLocalJobError::UnsupportedWorkerCommandOutcome {
+            outcome: other.to_string(),
+        }),
     }
 }
 
 fn required_payload_str<'a>(
     command: &'a WorkerCommandSubmission,
     field: &str,
-) -> Result<&'a str, String> {
+) -> Result<&'a str, RuntimeLocalJobError> {
     command
         .payload
         .get(field)
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| format!("worker command payload missing `{field}`"))
+        .ok_or_else(|| RuntimeLocalJobError::MissingWorkerPayloadField {
+            field: field.to_string(),
+        })
 }
 
 fn validate_worker_ack_command(
@@ -352,70 +462,73 @@ fn validate_worker_ack_command(
     command_id: &str,
     idempotency_key: &str,
     claimed_by: &str,
-) -> Result<(), String> {
+) -> Result<(), RuntimeLocalJobError> {
     if authority != "redb_outbox" {
-        return Err(format!(
-            "worker ack authority `{authority}` is not redb_outbox"
-        ));
+        return Err(RuntimeLocalJobError::WorkerAckAuthorityMismatch {
+            authority: authority.to_string(),
+        });
     }
     if runner != "effectum" {
-        return Err(format!("worker ack runner `{runner}` is not effectum"));
+        return Err(RuntimeLocalJobError::WorkerAckRunnerMismatch {
+            runner: runner.to_string(),
+        });
     }
     if operation != command.operation.0 {
-        return Err(format!(
-            "worker ack payload operation `{operation}` does not match command operation `{}`",
-            command.operation.0
-        ));
+        return Err(RuntimeLocalJobError::WorkerAckOperationMismatch {
+            payload_operation: operation.to_string(),
+            command_operation: command.operation.0.clone(),
+        });
     }
     if effect_id != persisted.effect.effect_id.0 {
-        return Err(format!(
-            "worker ack effect_id `{effect_id}` does not match persisted effect `{}`",
-            persisted.effect.effect_id.0
-        ));
+        return Err(RuntimeLocalJobError::WorkerAckEffectMismatch {
+            effect_id: effect_id.to_string(),
+            persisted_effect_id: persisted.effect.effect_id.0.clone(),
+        });
     }
     let expected_ack = format!("job-ack:{}", persisted.outbox_id.0);
     if command.command_id.0 != expected_ack || command_id != expected_ack {
-        return Err(format!(
-            "worker ack command_id must match persisted outbox `{}`",
-            persisted.outbox_id.0
-        ));
+        return Err(RuntimeLocalJobError::WorkerAckCommandIdMismatch {
+            outbox_id: persisted.outbox_id.0.clone(),
+        });
     }
     if command.idempotency_key.0 != expected_ack || idempotency_key != expected_ack {
-        return Err(format!(
-            "worker ack idempotency_key must match persisted outbox `{}`",
-            persisted.outbox_id.0
-        ));
+        return Err(RuntimeLocalJobError::WorkerAckIdempotencyKeyMismatch {
+            outbox_id: persisted.outbox_id.0.clone(),
+        });
     }
     match &persisted.state {
         JournalOutboxState::Claimed { consumer_id } if consumer_id == claimed_by => Ok(()),
-        JournalOutboxState::Claimed { consumer_id } => Err(format!(
-            "worker ack claimed_by `{claimed_by}` does not match persisted claim `{consumer_id}`"
-        )),
-        other => Err(format!(
-            "worker ack requires claimed outbox state, found `{other:?}`"
-        )),
+        JournalOutboxState::Claimed { consumer_id } => {
+            Err(RuntimeLocalJobError::WorkerAckClaimMismatch {
+                claimed_by: claimed_by.to_string(),
+                persisted_claim: consumer_id.clone(),
+            })
+        }
+        other => Err(RuntimeLocalJobError::WorkerAckStateInvalid {
+            state: format!("{other:?}"),
+        }),
     }
 }
 
-pub async fn open_effectum_queue(config: &EffectumQueueConfig) -> Result<EffectumQueue, String> {
+pub async fn open_effectum_queue(
+    config: &EffectumQueueConfig,
+) -> Result<EffectumQueue, RuntimeLocalJobError> {
     if let Some(parent) = config.sqlite_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "create Effectum queue directory `{}`: {error}",
-                parent.display()
-            )
+            RuntimeLocalJobError::CreateEffectumQueueDirectory {
+                path: parent.display().to_string(),
+                source: error,
+            }
         })?;
     }
     EffectumQueue::builder(&config.sqlite_path)
         .job_recovery_behavior(recovery_behavior(&config.recovery_behavior)?)
         .build()
         .await
-        .map_err(|error| {
-            format!(
-                "open Effectum queue `{}` with recovery `{}`: {error}",
-                config.sqlite_path.display(),
-                config.recovery_behavior
-            )
+        .map_err(|error| RuntimeLocalJobError::OpenEffectumQueue {
+            path: config.sqlite_path.display().to_string(),
+            recovery_behavior: config.recovery_behavior.clone(),
+            detail: error.to_string(),
         })
 }
 
@@ -424,15 +537,15 @@ pub async fn enqueue_outbox_job_idempotently(
     config: &EffectumQueueConfig,
     plan: &DurableJobPlan,
     policy: &RetryPolicy,
-) -> Result<EffectumEnqueueReceipt, String> {
+) -> Result<EffectumEnqueueReceipt, RuntimeLocalJobError> {
     if matches!(
         plan.lifecycle,
         DurableJobLifecycle::Succeeded | DurableJobLifecycle::DeadLettered
     ) {
-        return Err(format!(
-            "refuse to enqueue terminal durable job `{}` with lifecycle `{:?}`",
-            plan.job_id.0, plan.lifecycle
-        ));
+        return Err(RuntimeLocalJobError::EnqueueTerminalDurableJob {
+            job_id: plan.job_id.0.clone(),
+            lifecycle: plan.lifecycle.clone(),
+        });
     }
 
     let effectum_job_id = deterministic_effectum_job_id(&plan.job_id);
@@ -447,10 +560,11 @@ pub async fn enqueue_outbox_job_idempotently(
             if queue.get_job_status(effectum_job_id).await.is_ok() {
                 Ok(enqueue_receipt(config, plan, effectum_job_id, true))
             } else {
-                Err(format!(
-                    "enqueue Effectum job `{}` for outbox `{}`: {error}",
-                    plan.job_id.0, plan.outbox_id.0
-                ))
+                Err(RuntimeLocalJobError::EnqueueEffectumJob {
+                    job_id: plan.job_id.0.clone(),
+                    outbox_id: plan.outbox_id.0.clone(),
+                    detail: error.to_string(),
+                })
             }
         }
     }
@@ -491,18 +605,18 @@ pub fn plan_outbox_job_from_redb(
     journal_path: &Path,
     job_id: &str,
     policy: &RetryPolicy,
-) -> Result<Option<DurableJobPlan>, String> {
+) -> Result<Option<DurableJobPlan>, RuntimeLocalJobError> {
     let journal = RedbOperationalJournal::open(journal_path).map_err(|error| {
-        format!(
-            "open redb outbox journal `{}`: {error}",
-            journal_path.display()
-        )
+        RuntimeLocalJobError::OpenRedbOutboxJournal {
+            path: journal_path.display().to_string(),
+            detail: error.to_string(),
+        }
     })?;
     let records = journal.outbox_effect_records().map_err(|error| {
-        format!(
-            "read redb outbox records `{}`: {error}",
-            journal_path.display()
-        )
+        RuntimeLocalJobError::ReadRedbOutboxRecords {
+            path: journal_path.display().to_string(),
+            detail: error.to_string(),
+        }
     })?;
     Ok(plan_outbox_job_from_records(&records, job_id, policy))
 }
@@ -621,11 +735,13 @@ pub fn job_status_payload(plan: &DurableJobPlan) -> serde_json::Value {
     })
 }
 
-fn recovery_behavior(value: &str) -> Result<JobRecoveryBehavior, String> {
+fn recovery_behavior(value: &str) -> Result<JobRecoveryBehavior, RuntimeLocalJobError> {
     match value {
         "fail_and_retry_immediately" => Ok(JobRecoveryBehavior::FailAndRetryImmediately),
         "fail_and_retry_with_backoff" => Ok(JobRecoveryBehavior::FailAndRetryWithBackoff),
-        other => Err(format!("unsupported Effectum recovery behavior `{other}`")),
+        other => Err(RuntimeLocalJobError::UnsupportedEffectumRecoveryBehavior {
+            behavior: other.to_string(),
+        }),
     }
 }
 
@@ -640,7 +756,7 @@ fn effectum_job_for_plan(
     plan: &DurableJobPlan,
     policy: &RetryPolicy,
     effectum_job_id: uuid::Uuid,
-) -> Result<Job, String> {
+) -> Result<Job, RuntimeLocalJobError> {
     let payload = EffectumOutboxJobPayload {
         job_id: plan.job_id.0.clone(),
         outbox_id: plan.outbox_id.0.clone(),
@@ -654,11 +770,9 @@ fn effectum_job_for_plan(
     let mut job = Job::builder(EFFECTUM_OUTBOX_WORKER)
         .name(&plan.job_id.0)
         .json_payload(&payload)
-        .map_err(|error| {
-            format!(
-                "serialize Effectum job payload `{}`: {error}",
-                plan.job_id.0
-            )
+        .map_err(|error| RuntimeLocalJobError::SerializeEffectumJobPayload {
+            job_id: plan.job_id.0.clone(),
+            detail: error.to_string(),
         })?
         .max_retries(policy.max_attempts.try_into().unwrap_or(u32::MAX))
         .backoff_initial_interval(Duration::from_secs(policy.base_backoff_seconds))
@@ -891,7 +1005,16 @@ mod tests {
         let error = apply_worker_command_to_redb(&journal_path, &forged)
             .expect_err("forged ack must fail closed");
 
-        assert!(error.contains("does not match persisted effect"));
+        assert!(
+            matches!(
+                error,
+                RuntimeLocalJobError::WorkerAckEffectMismatch {
+                    ref effect_id,
+                    ref persisted_effect_id
+                } if effect_id == "wrong-effect-id" && persisted_effect_id == "effect-1"
+            ),
+            "unexpected error variant: {error:?}"
+        );
         let reopened = RedbOperationalJournal::open(&journal_path).expect("reopen journal");
         let record = reopened
             .outbox_effect_record(&outbox_id)
@@ -902,6 +1025,70 @@ mod tests {
             JournalOutboxState::Claimed {
                 consumer_id: "effectum-worker-1".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn worker_ack_missing_outcome_reports_typed_payload_variant() {
+        let command = WorkerCommandSubmission {
+            operation: VidaOperation("vida.completion.record".to_string()),
+            command_id: VidaCommandRef("job-ack:outbox-1".to_string()),
+            idempotency_key: VidaIdempotencyKey("job-ack:outbox-1".to_string()),
+            stream_id: VidaStreamRef("job-trace:outbox-1".to_string()),
+            payload: serde_json::json!({
+                "outbox_id": "outbox-1",
+                "effect_id": "effect-1",
+                "runner": "effectum",
+                "authority": "redb_outbox",
+                "operation": "vida.completion.record",
+                "command_id": "job-ack:outbox-1",
+                "idempotency_key": "job-ack:outbox-1",
+                "claimed_by": "effectum-worker-1",
+            }),
+        };
+
+        let error = apply_worker_command_to_redb(Path::new("unused.redb"), &command)
+            .expect_err("missing outcome must fail before journal open");
+
+        assert!(
+            matches!(
+                error,
+                RuntimeLocalJobError::MissingWorkerPayloadField { ref field } if field == "outcome.status"
+            ),
+            "unexpected error variant: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn enqueue_terminal_job_reports_typed_variant() {
+        let dir = tempdir().unwrap();
+        let config = EffectumQueueConfig::new(dir.path().join("jobs.sqlite"));
+        let queue = open_effectum_queue(&config).await.unwrap();
+        let plan = plan_outbox_job(
+            &OutboxJobSnapshot {
+                outbox_id: VidaEventRef("outbox-succeeded-1".to_string()),
+                effect_id: VidaEffectRef("effect-succeeded-1".to_string()),
+                state: JournalOutboxState::Succeeded,
+                attempt_count: 1,
+                source_event_cursor: None,
+                failure_reason: None,
+            },
+            &RetryPolicy::default(),
+        );
+
+        let error =
+            enqueue_outbox_job_idempotently(&queue, &config, &plan, &RetryPolicy::default())
+                .await
+                .expect_err("terminal job must not enqueue");
+
+        assert!(
+            matches!(
+                error,
+                RuntimeLocalJobError::EnqueueTerminalDurableJob { ref job_id, ref lifecycle }
+                    if job_id == "vida-effect-effect-succeeded-1"
+                        && *lifecycle == DurableJobLifecycle::Succeeded
+            ),
+            "unexpected error variant: {error:?}"
         );
     }
 

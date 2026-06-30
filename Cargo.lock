@@ -8365,6 +8365,7 @@ dependencies = [
  "taskflow-state",
  "taskflow-state-redb",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "uuid",
  "vida-contracts",
