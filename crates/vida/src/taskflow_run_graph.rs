@@ -788,15 +788,7 @@ fn build_recovery_json_payload_with_task_identity(
         .dispatch_receipt
         .as_ref()
         .map(|receipt| serde_json::to_value(receipt).expect("dispatch receipt should serialize"))
-        .unwrap_or_else(|| {
-            serde_json::json!({
-                "run_id": summary.run_id,
-                "dispatch_target": summary.active_node,
-                "dispatch_status": summary.resume_status,
-                "lane_status": summary.lifecycle_stage,
-                "blocker_code": summary.delegation_gate.blocker_code,
-            })
-        });
+        .unwrap_or(serde_json::Value::Null);
     build_run_graph_operator_surface_payload(
         surface,
         &summary.run_id,
@@ -12067,7 +12059,12 @@ agent_system:
         )
         .expect("recovery payload should render");
 
-        assert_eq!(payload["dispatch_receipt"]["dispatch_status"], "ready");
+        assert!(payload["dispatch_receipt"].is_null());
+        assert_eq!(
+            payload["projection_truth"]["dispatch_receipt_present"],
+            serde_json::json!(false)
+        );
+        assert!(payload["projection_truth"]["dispatch_receipt"].is_null());
         assert_eq!(payload["shared_fields"]["status"], "blocked");
         assert_eq!(payload["operator_contracts"]["status"], "blocked");
         assert_eq!(
