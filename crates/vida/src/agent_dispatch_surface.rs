@@ -1212,44 +1212,47 @@ async fn attach_host_bridge_implementation_artifacts(
             normalized_artifact.artifact,
         );
     }
-    if let Err(error) = store
-        .record_task_attempt(crate::state_store::RecordTaskAttemptRequest {
-            attempt_id: Some(attempt_id.clone()),
-            task_id: run_id.clone(),
-            stage_id: "implementation".to_string(),
-            backend: host_bridge_request_string(&request, "backend_id")
-                .unwrap_or("host_tool_bridge")
-                .to_string(),
-            model_profile: host_bridge_request_string(&request, "carrier_id")
-                .unwrap_or("host_agent")
-                .to_string(),
-            isolation: command.artifact_kind.clone(),
-            freshness: Some(task.updated_at.clone()),
-            status: "accepted".to_string(),
-            artifact_refs: artifact_refs.clone(),
-            consolidation_receipt_id: Some(consolidation_receipt_id.clone()),
-            selected_model_profile_readiness_status: None,
-            budget_posture: None,
-            cap_posture: None,
-            write_scope_classification: Some("receipt_backed_host_bridge_artifact".to_string()),
-        })
-        .await
-    {
-        return emit_host_bridge_attach_blocked(
-            &command.request,
-            command.json,
-            vec![blocker_code_value(
-                taskflow_contracts::BlockerCode::ImplementationArtifactAuthorityMissing,
-            )],
-            vec![format!(
-                "record TaskFlow implementation attempt authority before completion: {error}"
-            )],
-            serde_json::json!({
-                "request_path": command.request.display().to_string(),
-                "task_id": run_id,
-                "attempt_id": attempt_id,
-            }),
-        );
+    let task_is_closed = crate::state_store::StateStore::task_status_is_closed_like(&task.status);
+    if !task_is_closed {
+        if let Err(error) = store
+            .record_task_attempt(crate::state_store::RecordTaskAttemptRequest {
+                attempt_id: Some(attempt_id.clone()),
+                task_id: run_id.clone(),
+                stage_id: "implementation".to_string(),
+                backend: host_bridge_request_string(&request, "backend_id")
+                    .unwrap_or("host_tool_bridge")
+                    .to_string(),
+                model_profile: host_bridge_request_string(&request, "carrier_id")
+                    .unwrap_or("host_agent")
+                    .to_string(),
+                isolation: command.artifact_kind.clone(),
+                freshness: Some(task.updated_at.clone()),
+                status: "accepted".to_string(),
+                artifact_refs: artifact_refs.clone(),
+                consolidation_receipt_id: Some(consolidation_receipt_id.clone()),
+                selected_model_profile_readiness_status: None,
+                budget_posture: None,
+                cap_posture: None,
+                write_scope_classification: Some("receipt_backed_host_bridge_artifact".to_string()),
+            })
+            .await
+        {
+            return emit_host_bridge_attach_blocked(
+                &command.request,
+                command.json,
+                vec![blocker_code_value(
+                    taskflow_contracts::BlockerCode::ImplementationArtifactAuthorityMissing,
+                )],
+                vec![format!(
+                    "record TaskFlow implementation attempt authority before completion: {error}"
+                )],
+                serde_json::json!({
+                    "request_path": command.request.display().to_string(),
+                    "task_id": run_id,
+                    "attempt_id": attempt_id,
+                }),
+            );
+        }
     }
     let mut request = request;
     if let Some(object) = request.as_object_mut() {
@@ -1321,7 +1324,13 @@ async fn attach_host_bridge_implementation_artifacts(
             "stage_id": "implementation",
             "attempt_id": attempt_id,
             "freshness": task.updated_at,
-            "consolidation_receipt_id": consolidation_receipt_id
+            "consolidation_receipt_id": consolidation_receipt_id,
+            "attempt_recorded": !task_is_closed,
+            "authority_source": if task_is_closed {
+                "host_bridge_request_embedded_artifact"
+            } else {
+                "taskflow_attempt_ledger"
+            }
         }
     });
     emit_host_bridge_payload(&payload, command.json)
@@ -8119,6 +8128,160 @@ mod tests {
         assert_eq!(attempts.len(), 1);
         assert_eq!(attempts[0].attempt_id, "developer-attach-attempt-1");
         assert_eq!(attempts[0].status, "accepted");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_attach_artifact_accepts_closed_task_receipt_backed_request_authority() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-agent-host-bridge-closed-attach-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let run_id = "run-host-bridge-closed-attach";
+        let task = store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge closed task attach",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/taskflow-host-bridge/src".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create closed task");
+        let request_path = root.join("host-tool-bridge/requests/request.json");
+        let packet_path = root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = root.join("host-tool-bridge/results/result.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/receipt.json");
+        let artifact_path = root.join("attempt-artifacts/developer-patch-proposal.json");
+        for path in [
+            &request_path,
+            &packet_path,
+            &result_path,
+            &receipt_path,
+            &artifact_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(&packet_path, "{}").expect("write packet");
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "artifact_kind": "patch_proposal",
+                "changed_files": ["crates/taskflow-host-bridge/src/completion.rs"]
+            })
+            .to_string(),
+        )
+        .expect("write artifact");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-closed-developer-attach",
+            "run_id": run_id,
+            "task_id": run_id,
+            "dispatch_target": "developer",
+            "task_class": "implementation",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string(),
+            "implementation_isolation": {
+                "owned_paths": ["crates/taskflow-host-bridge/src"]
+            }
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("write request");
+        let task_updated_at = task.updated_at.clone();
+        drop(store);
+
+        let exit = run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: vec![artifact_path],
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: Some("closed-attach-attempt-1".to_string()),
+            consolidation_receipt_id: Some("closed-attach-receipt-1".to_string()),
+            complete: false,
+            host_agent_id: None,
+            summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            submit_result: None,
+            result_file: None,
+            receipt_id: None,
+            json: true,
+            state_dir: Some(root.clone()),
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let updated: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read updated request"),
+        )
+        .expect("request should remain json");
+        let artifacts = updated["implementation_artifacts"]
+            .as_array()
+            .expect("implementation artifacts should be an array");
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0]["attempt_id"], "closed-attach-attempt-1");
+        assert_eq!(artifacts[0]["task_id"], run_id);
+        assert_eq!(artifacts[0]["freshness"], task_updated_at);
+        assert_eq!(
+            artifacts[0]["consolidation_receipt_id"],
+            "closed-attach-receipt-1"
+        );
+        assert_eq!(artifacts[0]["receipt_backed"], true);
+        assert_eq!(
+            updated["implementation_artifact_authority"],
+            serde_json::Value::Null
+        );
+        let refs = updated["implementation_artifact_refs"]
+            .as_array()
+            .expect("artifact refs should be recorded");
+        assert_eq!(refs.len(), 1);
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("reopen store");
+        let attempts = store
+            .task_stage_attempts(run_id, "implementation")
+            .await
+            .expect("read implementation attempts");
+        assert!(
+            attempts.is_empty(),
+            "closed task attach must not create a new task attempt"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
