@@ -66,6 +66,44 @@ fn infer_downstream_lane_id_for_dispatch_target(
     })
 }
 
+fn push_unique_owned_path(paths: &mut Vec<String>, path: &str) {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || paths.iter().any(|existing| existing == trimmed) {
+        return;
+    }
+    paths.push(trimmed.to_string());
+}
+
+fn test_lane_requires_test_write_scope(
+    downstream_target: &str,
+    downstream_lane_id: Option<&str>,
+    handoff_task_class: &str,
+) -> bool {
+    matches!(handoff_task_class, "test_authoring" | "regression_test")
+        || [Some(downstream_target), downstream_lane_id]
+            .into_iter()
+            .flatten()
+            .map(|value| value.to_ascii_lowercase())
+            .any(|value| {
+                value.contains("autotest")
+                    || value.contains("test_author")
+                    || value.contains("regression_test")
+            })
+}
+
+fn project_test_write_scope_paths(project_root: &Path) -> Vec<String> {
+    let candidates = ["test", "tests", "integration_test", "e2e"];
+    let mut paths = candidates
+        .iter()
+        .filter(|candidate| project_root.join(candidate).exists())
+        .map(|candidate| (*candidate).to_string())
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        paths.push("test".to_string());
+    }
+    paths
+}
+
 #[cfg(test)]
 pub(crate) fn downstream_dispatch_packet_body(
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -189,13 +227,23 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         crate::runtime_dispatch_state::resolved_tracked_design_doc_path(role_selection).as_deref(),
     );
     if delivery_packet_task_class_requires_owned_paths(handoff_task_class.as_str()) {
-        let owned_paths = if implementation_owned_paths_override.is_empty() {
-            crate::runtime_dispatch_state::implementation_owned_paths_for_role_selection(
+        let mut owned_paths = if implementation_owned_paths_override.is_empty() {
+            crate::runtime_dispatch_state::owned_paths_for_required_delivery_task_class(
                 role_selection,
+                handoff_task_class.as_str(),
             )
         } else {
             implementation_owned_paths_override.to_vec()
         };
+        if test_lane_requires_test_write_scope(
+            downstream_target,
+            downstream_lane_id.as_deref(),
+            handoff_task_class.as_str(),
+        ) {
+            for test_path in project_test_write_scope_paths(&project_root) {
+                push_unique_owned_path(&mut owned_paths, &test_path);
+            }
+        }
         if !crate::runtime_dispatch_state::apply_owned_paths_if_missing(
             &mut delivery_task_packet,
             &owned_paths,
@@ -422,6 +470,14 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         serde_json::json!(activation_runtime_role),
     );
     body.insert(
+        "handoff_runtime_role".to_string(),
+        serde_json::json!(handoff_runtime_role),
+    );
+    body.insert(
+        "handoff_task_class".to_string(),
+        serde_json::json!(handoff_task_class),
+    );
+    body.insert(
         "selected_backend".to_string(),
         serde_json::json!(selected_backend),
     );
@@ -568,6 +624,25 @@ pub(crate) fn write_runtime_downstream_dispatch_packet_with_owned_paths(
 mod tests {
     use super::downstream_dispatch_packet_body_with_owned_paths;
     use crate::RuntimeConsumptionLaneSelection;
+    use std::path::PathBuf;
+
+    struct CurrentDirGuard {
+        previous: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn enter(path: &std::path::Path) -> Self {
+            let previous = std::env::current_dir().expect("current dir should resolve");
+            std::env::set_current_dir(path).expect("test current dir should switch");
+            Self { previous }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.previous);
+        }
+    }
 
     fn role_selection_with_empty_request() -> RuntimeConsumptionLaneSelection {
         RuntimeConsumptionLaneSelection {
@@ -708,5 +783,150 @@ mod tests {
         );
         assert_eq!(packet["downstream_lane_id"], "coach_test_gate");
         assert_eq!(packet["packet_template_kind"], "coach_review_packet");
+    }
+
+    #[test]
+    fn autotester_downstream_packet_uses_lane_assignment_and_test_write_scope() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-autotester-downstream-scope-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(project_root.join("test")).expect("test dir should exist");
+        let _cwd = CurrentDirGuard::enter(&project_root);
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Use meeting-specific event fields when scheduling Meeting activities"
+                .to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "orchestration_contract": {},
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "business_analyst",
+                    "runtime_role": "business_analyst",
+                    "task_class": "specification",
+                    "selected_backend_id": "internal_subagents"
+                },
+                "tracked_flow_bootstrap": {
+                    "dev_task": {
+                        "planner_metadata": {
+                            "owned_paths": [
+                                "src/lib/features/list_view/presentation/stac/widgets/record_detail_view.dart"
+                            ],
+                            "proof_targets": [
+                                "RecordScheduleActivityDialog widget tests cover switching to Meeting"
+                            ]
+                        }
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_sequence": ["designer", "autotester", "developer"],
+                        "execution_lane_sequence": ["autotester", "developer"],
+                        "lane_catalog": {
+                            "autotester": {
+                                "dispatch_target": "autotester",
+                                "task_class": "implementation_medium",
+                                "runtime_role": "worker",
+                                "closure_class": "implementation",
+                                "packet_template_kind": "delivery_task_packet",
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "worker",
+                                    "selected_backend_id": "internal_subagents",
+                                    "selected_carrier_id": "middle",
+                                    "task_class": "implementation_medium",
+                                    "runtime_role": "worker"
+                                },
+                                "runtime_assignment": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "worker",
+                                    "selected_backend_id": "internal_subagents",
+                                    "selected_carrier_id": "middle",
+                                    "task_class": "implementation_medium",
+                                    "runtime_role": "worker"
+                                },
+                                "carrier_runtime_assignment": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "worker",
+                                    "selected_backend_id": "internal_subagents",
+                                    "selected_carrier_id": "middle",
+                                    "task_class": "implementation_medium",
+                                    "runtime_role": "worker"
+                                }
+                            }
+                        }
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+        let mut receipt = receipt_with_coach_downstream();
+        receipt.dispatch_target = "designer".to_string();
+        receipt.downstream_dispatch_target = Some("autotester".to_string());
+        receipt.activation_runtime_role = Some("designer".to_string());
+        receipt.activation_agent_type = Some("middle".to_string());
+
+        let packet = downstream_dispatch_packet_body_with_owned_paths(
+            &role_selection,
+            &serde_json::json!({ "run_id": "activity-meeting-event-form-fields" }),
+            &receipt,
+            None,
+            &[],
+        );
+
+        assert_eq!(packet["activation_runtime_role"], "worker");
+        assert_eq!(packet["activation_agent_type"], "middle");
+        assert_eq!(
+            packet["delivery_task_packet"]["handoff_task_class"],
+            "implementation_medium"
+        );
+        assert_eq!(
+            packet["delivery_task_packet"]["handoff_runtime_role"],
+            "worker"
+        );
+        assert_eq!(
+            packet["delivery_task_packet"]["implementation_isolation"]
+                ["canonical_worktree_writes_allowed"],
+            false
+        );
+        let owned_paths = packet["delivery_task_packet"]["owned_paths"]
+            .as_array()
+            .expect("owned paths should render");
+        assert!(
+            owned_paths.iter().any(|path| path == "test"),
+            "autotester owned scope should include a test write root: {owned_paths:?}"
+        );
+        assert!(
+            owned_paths
+                .iter()
+                .any(|path| path == "src/lib/features/list_view/presentation/stac/widgets/record_detail_view.dart"),
+            "autotester should keep production paths as read/write context when inherited from planner metadata"
+        );
+
+        let _ = std::fs::remove_dir_all(project_root);
     }
 }

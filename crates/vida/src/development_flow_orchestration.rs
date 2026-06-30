@@ -638,6 +638,28 @@ fn lane_template_included(
     }
 }
 
+fn dev_team_lane_activation(
+    compiled_bundle: &serde_json::Value,
+    dispatch_alias: &str,
+    role_label: &str,
+    task_class: &str,
+    runtime_role: &str,
+) -> serde_json::Value {
+    if !dispatch_alias.is_empty() {
+        return crate::build_runtime_assignment_preview_from_dispatch_alias(
+            compiled_bundle,
+            dispatch_alias,
+            task_class,
+        );
+    }
+    crate::build_runtime_assignment_preview_from_resolved_constraints(
+        compiled_bundle,
+        role_label,
+        task_class,
+        runtime_role,
+    )
+}
+
 fn build_resolved_development_dispatch_contract(
     compiled_bundle: &serde_json::Value,
     selection: &crate::RuntimeConsumptionLaneSelection,
@@ -668,18 +690,13 @@ fn build_resolved_development_dispatch_contract(
                 task_class,
             )
             .unwrap_or_default();
-            let activation = if dispatch_alias.is_empty() {
-                serde_json::json!({
-                    "enabled": false,
-                    "reason": "dispatch_alias_missing_from_lane_template",
-                })
-            } else {
-                crate::build_runtime_assignment_preview_from_dispatch_alias(
-                    compiled_bundle,
-                    &dispatch_alias,
-                    task_class,
-                )
-            };
+            let activation = dev_team_lane_activation(
+                compiled_bundle,
+                &dispatch_alias,
+                lane_template["lane_id"].as_str().unwrap_or_default(),
+                task_class,
+                lane_template["runtime_role"].as_str().unwrap_or_default(),
+            );
             let runtime_role = activation["activation_runtime_role"]
                 .as_str()
                 .filter(|value| !value.trim().is_empty())
@@ -697,7 +714,9 @@ fn build_resolved_development_dispatch_contract(
                 "inclusion_rule": lane_template["inclusion_rule"],
                 "completion_blocker": lane_template["completion_blocker"],
                 "policy_diagnostics": lane_template["policy_diagnostics"],
-                "activation": activation,
+                "activation": activation.clone(),
+                "runtime_assignment": activation.clone(),
+                "carrier_runtime_assignment": activation,
             })
         })
         .collect::<Vec<_>>();
@@ -1389,6 +1408,106 @@ mod tests {
                 .expect("fallback fields should be reported")
                 .contains(&json!("packet_template_kind")),
             "missing configured policy fields must be reported explicitly"
+        );
+    }
+
+    #[test]
+    fn aliasless_configured_autotester_lane_gets_lane_local_runtime_assignment() {
+        let bundle = json!({
+            "agent_system": {
+                "routing": {
+                    "default": {
+                        "executor_backend": "internal_subagents"
+                    }
+                }
+            },
+            "dev_team_readiness": {
+                "roles": [
+                    {"role_id": "designer", "runtime_role": "designer", "task_classes": ["design"]},
+                    {"role_id": "autotester", "runtime_role": "worker", "task_classes": ["implementation_medium"]}
+                ],
+                "flows": [
+                    {
+                        "flow_id": "configured_autotester_flow",
+                        "enabled": true,
+                        "ordered_steps": [
+                            {"role_id": "designer"},
+                            {"role_id": "autotester"}
+                        ]
+                    }
+                ]
+            },
+            "carrier_runtime": {
+                "model_selection": {
+                    "enabled": true,
+                    "candidate_scope": "unified_carrier_model_profiles",
+                    "default_strategy": "balanced_cost_quality"
+                },
+                "roles": [
+                    {
+                        "role_id": "middle",
+                        "tier": "middle",
+                        "rate": 4,
+                        "normalized_cost_units": 4,
+                        "default_runtime_role": "worker",
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation_medium"],
+                        "reasoning_band": "medium",
+                        "default_model_profile": "codex_gpt55_medium_write",
+                        "model_profiles": {
+                            "codex_gpt55_medium_write": {
+                                "profile_id": "codex_gpt55_medium_write",
+                                "model_ref": "gpt-5.5",
+                                "provider": "openai",
+                                "reasoning_effort": "medium",
+                                "plan_mode_reasoning_effort": "high",
+                                "sandbox_mode": "workspace-write",
+                                "normalized_cost_units": 4,
+                                "speed_tier": "fast",
+                                "quality_tier": "medium",
+                                "write_scope": "workspace-write",
+                                "runtime_roles": ["worker"],
+                                "task_classes": ["implementation_medium"],
+                                "readiness": { "required": true, "ready": true }
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+        let selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "configured".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "configured flow".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "test".to_string(),
+            matched_terms: vec!["dev_team_flow_id:configured_autotester_flow".to_string()],
+            compiled_bundle: bundle.clone(),
+            execution_plan: serde_json::Value::Null,
+            reason: "test".to_string(),
+        };
+
+        let contract = build_resolved_development_dispatch_contract(&bundle, &selection, false);
+        let autotester = &contract["lane_catalog"]["autotester"];
+
+        assert_eq!(autotester["runtime_role"], "worker");
+        assert_eq!(autotester["task_class"], "implementation_medium");
+        assert_eq!(autotester["activation"]["enabled"], true);
+        assert_eq!(
+            autotester["activation"]["activation_runtime_role"],
+            "worker"
+        );
+        assert_eq!(autotester["activation"]["selected_carrier_id"], "middle");
+        assert_eq!(autotester["runtime_assignment"], autotester["activation"]);
+        assert_eq!(
+            autotester["carrier_runtime_assignment"],
+            autotester["activation"]
         );
     }
 

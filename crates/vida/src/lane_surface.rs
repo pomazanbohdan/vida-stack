@@ -11,6 +11,7 @@ use serde::Serialize;
 use taskflow_host_bridge::{
     decide_host_bridge_completion_authority, host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
+    host_bridge_completed_result_execution_state_is_admissible,
     host_bridge_completed_result_has_preview_refresh_evidence,
     host_bridge_completed_result_status_is_admissible,
     host_bridge_completion_authorized_request_artifacts, host_bridge_completion_retryable_blocker,
@@ -3241,34 +3242,7 @@ fn read_supplied_host_bridge_completion_result(
     {
         let request = read_host_bridge_request(state_root, request_path)?;
         let result = read_host_bridge_json_artifact_at_path(&canonical_path)?;
-        for field in ["run_id", "request_id", "dispatch_target"] {
-            let request_value = request
-                .get(field)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            let result_value = result
-                .get(field)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            if request_value.is_some() && result_value.is_none() {
-                return Err(format!(
-                    "Host bridge result file `{}` is missing {field} required by request binding.",
-                    canonical_path.display()
-                ));
-            }
-            if let (Some(request_value), Some(result_value)) = (request_value, result_value) {
-                if request_value != result_value {
-                    return Err(format!(
-                        "Host bridge result file `{}` has {field} `{}` but request has `{}`.",
-                        canonical_path.display(),
-                        result_value,
-                        request_value
-                    ));
-                }
-            }
-        }
+        validate_host_bridge_result_request_binding(&canonical_path, &request, &result)?;
         return Ok(Some(result));
     }
 
@@ -3290,6 +3264,83 @@ fn supplied_host_bridge_completion_result_path(
         "host bridge result",
     )
     .map(Some)
+}
+
+fn validate_host_bridge_result_request_binding(
+    result_path: &Path,
+    request: &serde_json::Value,
+    result: &serde_json::Value,
+) -> Result<(), String> {
+    for field in ["run_id", "request_id", "dispatch_target"] {
+        let request_value = request
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let result_value = result
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if request_value.is_some() && result_value.is_none() {
+            return Err(format!(
+                "Host bridge result file `{}` is missing {field} required by request binding.",
+                result_path.display()
+            ));
+        }
+        if let (Some(request_value), Some(result_value)) = (request_value, result_value) {
+            if request_value != result_value {
+                return Err(format!(
+                    "Host bridge result file `{}` has {field} `{}` but request has `{}`.",
+                    result_path.display(),
+                    result_value,
+                    request_value
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_materialized_host_bridge_result_contract(
+    result_path: &Path,
+    request: &serde_json::Value,
+    result: &serde_json::Value,
+) -> Result<(), String> {
+    validate_host_bridge_result_request_binding(result_path, request, result)?;
+    if result
+        .get("artifact_kind")
+        .and_then(serde_json::Value::as_str)
+        != Some("host_tool_bridge_result")
+    {
+        return Err(format!(
+            "Host bridge result file `{}` is not an admissible materialized host bridge result: missing artifact_kind `host_tool_bridge_result`.",
+            result_path.display()
+        ));
+    }
+    let status = result
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if !status.is_some_and(host_bridge_completed_result_status_is_admissible) {
+        return Err(format!(
+            "Host bridge result file `{}` is not an admissible materialized host bridge result: invalid status.",
+            result_path.display()
+        ));
+    }
+    let execution_state = result
+        .get("execution_state")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if !execution_state.is_some_and(host_bridge_completed_result_execution_state_is_admissible) {
+        return Err(format!(
+            "Host bridge result file `{}` is not an admissible materialized host bridge result: invalid execution_state.",
+            result_path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn emit_host_bridge_completion_error_envelope(
@@ -3653,6 +3704,7 @@ fn trusted_host_bridge_completion_request_context(
             receipt,
             false,
             false,
+            false,
         )?;
     }
     let receipt_target_matches_request = receipt.dispatch_target.trim() == dispatch_target;
@@ -3825,6 +3877,7 @@ fn validated_host_bridge_paths_from_receipt(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     replace_existing_evidence: bool,
     allow_reconciled_request_paths: bool,
+    allow_existing_result_path: bool,
 ) -> Result<HostBridgeReceiptPaths, String> {
     let canonical_request_path =
         canonicalize_existing_state_path(state_root, request_path, "request")?;
@@ -3908,7 +3961,7 @@ fn validated_host_bridge_paths_from_receipt(
             state_root,
             &paths.result_path,
             "result",
-            replace_existing_evidence,
+            replace_existing_evidence || allow_existing_result_path,
         )?,
         receipt_path: validate_state_artifact_path_for_host_bridge_write(
             state_root,
@@ -3917,6 +3970,36 @@ fn validated_host_bridge_paths_from_receipt(
             replace_existing_evidence,
         )?,
     })
+}
+
+fn supplied_result_path_matches_request_output(
+    state_root: &Path,
+    request: &serde_json::Value,
+    supplied_result_path: Option<&Path>,
+) -> Result<bool, String> {
+    let Some(supplied_result_path) = supplied_result_path else {
+        return Ok(false);
+    };
+    let supplied_result_path = std::fs::canonicalize(supplied_result_path).map_err(|error| {
+        format!(
+            "Failed to canonicalize submitted host bridge result `{}`: {error}",
+            supplied_result_path.display()
+        )
+    })?;
+    let request_result_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(
+        host_bridge_path_string(request, "result_path")?,
+    );
+    let Ok(request_result_path) =
+        canonicalize_existing_regular_state_path(state_root, &request_result_path, "result")
+    else {
+        return Ok(false);
+    };
+    if request_result_path != supplied_result_path {
+        return Ok(false);
+    }
+    let result = read_host_bridge_json_artifact_at_path(&request_result_path)?;
+    validate_materialized_host_bridge_result_contract(&request_result_path, request, &result)?;
+    Ok(true)
 }
 
 fn write_json_artifact_new(
@@ -4359,14 +4442,18 @@ fn materialize_host_bridge_completion_evidence(
         crate::runtime_dispatch_state::normalize_persisted_runtime_path(request_path);
     let canonical_request_path =
         canonicalize_existing_state_path(state_root, &normalized_request_path, "request")?;
+    let request = read_host_bridge_json_artifact_at_path(&canonical_request_path)?;
+    let submitted_result_already_materialized =
+        supplied_result_path_matches_request_output(state_root, &request, supplied_result_path)?;
     let validated_paths = validated_host_bridge_paths_from_receipt(
         state_root,
         &canonical_request_path,
         persisted_receipt,
         replace_existing_evidence,
         allow_reconciled_request_paths,
+        submitted_result_already_materialized,
     )?;
-    let mut request = read_host_bridge_json_artifact_at_path(&canonical_request_path)?;
+    let mut request = request;
     if request.get("run_id").and_then(serde_json::Value::as_str) != Some(run_id) {
         return Err(format!(
             "Host bridge request `{request_path}` does not belong to run `{run_id}`."
@@ -4435,7 +4522,7 @@ fn materialize_host_bridge_completion_evidence(
             "result_path",
         )?),
         "result",
-        replace_existing_evidence,
+        replace_existing_evidence || submitted_result_already_materialized,
     )?;
     let request_receipt_path = validate_state_artifact_path_for_host_bridge_write(
         state_root,
@@ -4760,7 +4847,9 @@ fn materialize_host_bridge_completion_evidence(
         "scope_validation": implementation_scope_validation.clone(),
         "recorded_at": recorded_at,
     });
-    if replace_existing_evidence && result_path.exists() {
+    if submitted_result_already_materialized && result_path.exists() {
+        read_host_bridge_json_artifact_at_path(&result_path)?;
+    } else if replace_existing_evidence && result_path.exists() {
         write_json_artifact_replace_existing(
             state_root,
             &result_path,
@@ -12018,9 +12107,15 @@ mod tests {
         receipt.dispatch_result_path = Some(dispatch_result_path.display().to_string());
         receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
 
-        let trusted =
-            validated_host_bridge_paths_from_receipt(&root, &request_path, &receipt, false, true)
-                .expect("trusted explicit request should not parse oversized dispatch result");
+        let trusted = validated_host_bridge_paths_from_receipt(
+            &root,
+            &request_path,
+            &receipt,
+            false,
+            true,
+            false,
+        )
+        .expect("trusted explicit request should not parse oversized dispatch result");
         assert_eq!(
             trusted.request_path,
             std::fs::canonicalize(&request_path).unwrap()
@@ -12036,6 +12131,7 @@ mod tests {
             &root,
             &request_path,
             &receipt,
+            false,
             false,
             false,
         ) {
@@ -15506,6 +15602,147 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(!receipt_path.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_completion_accepts_valid_canonical_submitted_result_without_overwrite() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::current_dir()
+            .expect("current dir")
+            .join("target/tmp")
+            .join(format!(
+                "vida-host-bridge-canonical-submitted-result-{}-{nanos}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let request_path = root.join("host-tool-bridge/requests/run-canonical-submit.json");
+        let result_path = root.join("host-tool-bridge/results/run-canonical-submit.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/run-canonical-submit.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        std::fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create result parent");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "run-canonical-submit",
+                "run_id": "run-canonical-submit",
+                "dispatch_target": "analyst",
+                "packet_path": root.join("runtime-consumption/downstream-dispatch-packets/run-canonical-submit.json").display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        let canonical_result = serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "schema_version": 1,
+            "status": "pass",
+            "execution_state": "executed",
+            "decision": "pass",
+            "verdict": "pass",
+            "request_id": "run-canonical-submit",
+            "run_id": "run-canonical-submit",
+            "dispatch_target": "analyst",
+            "blocker_codes": [],
+            "allowed_next_node": "developer",
+            "execution_evidence": {
+                "receipt_backed": true
+            },
+            "summary": "already materialized by host bridge adapter"
+        });
+        let canonical_result_encoded =
+            serde_json::to_string_pretty(&canonical_result).expect("encode canonical result");
+        std::fs::write(&result_path, &canonical_result_encoded).expect("seed canonical result");
+        let canonical_result_modified_before = std::fs::metadata(&result_path)
+            .expect("seeded canonical result metadata")
+            .modified()
+            .expect("seeded canonical result modified timestamp");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/run-canonical-submit-activation.json");
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation parent");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = "run-canonical-submit".to_string();
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+
+        let evidence = materialize_host_bridge_completion_evidence(
+            &root,
+            request_path.to_str().expect("utf8 request path"),
+            Some(&result_path),
+            "run-canonical-submit",
+            "analyst",
+            &receipt,
+            "receipt-canonical-submit",
+            Some("agent-1"),
+            Some("host bridge result was already materialized"),
+            Some("developer"),
+            None,
+            None,
+            None,
+            None,
+            &[],
+            false,
+            true,
+            HostBridgeTaskflowImplementationEvidence::default(),
+            &[],
+            false,
+            false,
+        )
+        .expect("valid canonical submitted result should be accepted");
+
+        assert_eq!(evidence.result_path, result_path.display().to_string());
+        assert_eq!(
+            evidence.submitted_result_path.as_deref(),
+            Some(result_path.display().to_string().as_str())
+        );
+        assert_eq!(
+            std::fs::read_to_string(&result_path).expect("result readable"),
+            canonical_result_encoded
+        );
+        assert_eq!(
+            std::fs::metadata(&result_path)
+                .expect("canonical result metadata after completion")
+                .modified()
+                .expect("canonical result modified timestamp after completion"),
+            canonical_result_modified_before
+        );
+        assert!(receipt_path.exists());
+        let receipt_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&receipt_path).expect("receipt readable"),
+        )
+        .expect("receipt decodes");
+        assert_eq!(
+            receipt_json["submitted_result_path"],
+            result_path.display().to_string()
+        );
+        assert_eq!(receipt_json["allowed_next_node"], "developer");
         let _ = std::fs::remove_dir_all(&root);
     }
 

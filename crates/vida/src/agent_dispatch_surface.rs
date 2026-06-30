@@ -788,7 +788,7 @@ fn host_bridge_adapter_payload(
             "vida agent host-bridge --request {} --host-agent-id {} --submit-result {} --receipt-id {}",
             crate::shell_quote(&request_path.display().to_string()),
             crate::shell_quote("<host-agent-id>"),
-            crate::shell_quote(&request.result_path.display().to_string()),
+            crate::shell_quote("<host-bridge-result-file>"),
             crate::shell_quote(&receipt_id)
         );
         command
@@ -1834,6 +1834,32 @@ fn required_string_field(payload: &serde_json::Value, key: &str) -> Option<Strin
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn packet_string_field(packet: &serde_json::Value, field: &str) -> Option<String> {
+    packet
+        .get(field)
+        .or_else(|| {
+            packet
+                .get("delivery_task_packet")
+                .and_then(|value| value.get(field))
+        })
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn packet_handoff_runtime_role(packet: &serde_json::Value) -> Option<String> {
+    packet_string_field(packet, "handoff_runtime_role")
+        .or_else(|| packet_string_field(packet, "activation_runtime_role"))
+        .or_else(|| packet_string_field(packet, "runtime_role"))
+}
+
+fn packet_handoff_task_class(packet: &serde_json::Value) -> Option<String> {
+    packet_string_field(packet, "handoff_task_class")
+        .or_else(|| packet_string_field(packet, "task_class"))
+        .or_else(|| packet_string_field(packet, "route_task_class"))
 }
 
 fn selection_truth_for_task(
@@ -4097,18 +4123,23 @@ fn agent_dispatch_existing_packet_fast_path_payload(
     if !std::path::Path::new(packet_path).is_file() {
         return None;
     }
-    let packet_template_kind = read_canonical_host_bridge_json_artifact(
+    let packet = read_canonical_host_bridge_json_artifact(
         std::path::Path::new(packet_path),
         "existing dispatch packet",
     )
-    .ok()
-    .and_then(|packet| {
-        packet
-            .get("packet_template_kind")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string)
-    })
-    .unwrap_or_else(|| "delivery_task_packet".to_string());
+    .ok()?;
+    let packet_template_kind = packet
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| "delivery_task_packet".to_string());
+    let runtime_role = packet_handoff_runtime_role(&packet)
+        .or_else(|| receipt.activation_runtime_role.clone())
+        .map(serde_json::Value::String)
+        .unwrap_or(serde_json::Value::Null);
+    let task_class = packet_handoff_task_class(&packet)
+        .map(serde_json::Value::String)
+        .unwrap_or(serde_json::Value::Null);
     let mut execute_command =
         crate::continuation_binding_summary::routed_dispatch_command_from_parts(
             receipt.dispatch_command.as_deref(),
@@ -4131,8 +4162,8 @@ fn agent_dispatch_existing_packet_fast_path_payload(
                 "task_id": receipt.run_id,
                 "title": serde_json::Value::Null,
                 "role_label": receipt.dispatch_target,
-                "runtime_role": receipt.activation_runtime_role,
-                "task_class": serde_json::Value::Null,
+                "runtime_role": runtime_role,
+                "task_class": task_class,
                 "dispatch_command": receipt.dispatch_command,
                 "dispatch_command_kind": "receipt_backed_dispatch_packet",
                 "receipt_backed_execution_command": execute_command,
@@ -4184,6 +4215,8 @@ fn agent_dispatch_existing_packet_fast_path_payload(
                 {
                     "task_id": receipt.run_id,
                     "role_label": receipt.dispatch_target,
+                    "runtime_role": runtime_role,
+                    "task_class": task_class,
                     "dispatch_target": receipt.dispatch_target,
                     "packet_template_kind": packet_template_kind,
                     "dispatch_packet_path": packet_path,
@@ -5874,7 +5907,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp);
         std::fs::create_dir_all(&temp).expect("create fast path temp dir");
         let packet_path = temp.join("dispatch-packet.json");
-        std::fs::write(&packet_path, "{}").expect("write dispatch packet");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_template_kind": "delivery_task_packet",
+                "handoff_runtime_role": "worker",
+                "handoff_task_class": "test_authoring",
+                "delivery_task_packet": {
+                    "handoff_runtime_role": "worker",
+                    "handoff_task_class": "test_authoring"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write dispatch packet");
         let command = AgentDispatchNextArgs {
             lanes: 4,
             scope: None,
@@ -5887,7 +5933,7 @@ mod tests {
         };
         let receipt = RunGraphDispatchReceipt {
             run_id: "run-fast".to_string(),
-            dispatch_target: "coach_implementation_gate".to_string(),
+            dispatch_target: "autotester".to_string(),
             dispatch_status: "routed".to_string(),
             lane_status: "lane_open".to_string(),
             supersedes_receipt_id: None,
@@ -5898,7 +5944,7 @@ mod tests {
             dispatch_packet_path: Some(packet_path.display().to_string()),
             dispatch_result_path: None,
             blocker_code: None,
-            downstream_dispatch_target: Some("coach_implementation_gate".to_string()),
+            downstream_dispatch_target: Some("autotester".to_string()),
             downstream_dispatch_command: Some("vida agent-init".to_string()),
             downstream_dispatch_note: None,
             downstream_dispatch_ready: true,
@@ -5911,7 +5957,7 @@ mod tests {
             downstream_dispatch_active_target: None,
             downstream_dispatch_last_target: None,
             activation_agent_type: Some("middle".to_string()),
-            activation_runtime_role: Some("coach".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
             selected_backend: Some("vibe_cli".to_string()),
             recorded_at: "2026-06-25T00:00:00Z".to_string(),
         };
@@ -5922,9 +5968,20 @@ mod tests {
         assert_eq!(payload["status"], release1_pass_status());
         assert_eq!(payload["output_contract"]["view"], "compact");
         assert!(payload.get("parallelization_planner").is_none());
+        assert_eq!(payload["selected_lanes"][0]["role_label"], "autotester");
+        assert_eq!(payload["selected_lanes"][0]["runtime_role"], "worker");
+        assert_eq!(payload["selected_lanes"][0]["task_class"], "test_authoring");
         assert_eq!(
             payload["packet_materialization"]["artifacts"][0]["dispatch_packet_path"],
             packet_path.display().to_string()
+        );
+        assert_eq!(
+            payload["packet_materialization"]["artifacts"][0]["runtime_role"],
+            "worker"
+        );
+        assert_eq!(
+            payload["packet_materialization"]["artifacts"][0]["task_class"],
+            "test_authoring"
         );
         assert!(
             payload["packet_materialization"]["artifacts"][0]["agent_init_execute_command"]
@@ -6100,22 +6157,14 @@ mod tests {
             payload["operator_contracts"]["contract_id"],
             "host-agent-bridge-adapter-v1"
         );
-        assert!(payload["host_bridge"]["completion_command"]
+        let completion_command = payload["host_bridge"]["completion_command"]
             .as_str()
-            .unwrap()
-            .starts_with("vida agent host-bridge --request request.json "));
-        assert!(payload["host_bridge"]["completion_command"]
-            .as_str()
-            .unwrap()
-            .contains("--submit-result result.json"));
-        assert!(payload["host_bridge"]["completion_command"]
-            .as_str()
-            .unwrap()
-            .contains("--receipt-id run-1-implementer-host-bridge-receipt"));
-        assert!(!payload["host_bridge"]["completion_command"]
-            .as_str()
-            .unwrap()
-            .contains("--json"));
+            .expect("completion command should render");
+        assert!(completion_command.starts_with("vida agent host-bridge --request request.json "));
+        assert!(completion_command.contains("--submit-result '<host-bridge-result-file>'"));
+        assert!(!completion_command.contains("--submit-result result.json"));
+        assert!(completion_command.contains("--receipt-id run-1-implementer-host-bridge-receipt"));
+        assert!(!completion_command.contains("--json"));
         let calls = payload["host_bridge"]["host_tool_calls"]
             .as_array()
             .expect("host tool calls should render");
@@ -6169,6 +6218,7 @@ mod tests {
             .to_string(),
         )
         .expect("write packet");
+        let canonical_result_path = state_root.join("host-tool-bridge/results/result.json");
         let request = serde_json::json!({
             "schema_version": 1,
             "status": "pending",
@@ -6188,7 +6238,7 @@ mod tests {
             "adapter_capability_id": "codex.multi_agent_v1",
             "invocation_mode": "parent_host_tool_api",
             "request_path": request_path.display().to_string(),
-            "result_path": state_root.join("host-tool-bridge/results/result.json").display().to_string(),
+            "result_path": canonical_result_path.display().to_string(),
             "receipt_path": state_root.join("host-tool-bridge/receipts/receipt.json").display().to_string()
         });
         std::fs::write(&request_path, request.to_string()).expect("write request");
@@ -6204,6 +6254,11 @@ mod tests {
         assert!(completion_command.contains("--receipt-id run-analyst-analyst-host-bridge-receipt"));
         assert!(completion_command.contains("--host-agent-id '<host-agent-id>'"));
         assert!(completion_command.contains("--submit-result"));
+        assert!(completion_command.contains("--submit-result '<host-bridge-result-file>'"));
+        assert!(
+            !completion_command.contains(&canonical_result_path.display().to_string()),
+            "completion command must not use canonical result_path as submit-result input: {completion_command}"
+        );
         assert!(!completion_command.contains("--host-bridge-summary"));
         assert!(
             !completion_command.contains("--allowed-next-node"),

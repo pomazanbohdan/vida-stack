@@ -764,18 +764,8 @@ fn ready_head_repairs_blocked_runtime_run(
     active_run_id: Option<&str>,
     active_task_id: Option<&str>,
 ) -> bool {
-    let distinct_active_run = active_run_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_some_and(|run_id| run_id != ready_head.id);
-    let distinct_active_task = active_task_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_none_or(|task_id| task_id != ready_head.id);
-    if !distinct_active_run || !distinct_active_task {
-        return false;
-    }
-    ready_head.issue_type.trim() == "defect" && ready_head.id.starts_with("runtime-defect-")
+    let _ = (ready_head, active_run_id, active_task_id);
+    false
 }
 
 fn authoritative_dispatch_blocker_codes(
@@ -13093,7 +13083,7 @@ agent_system:
     }
 
     #[test]
-    fn taskflow_next_decision_admits_runtime_defect_ready_head_for_blocked_run_repair() {
+    fn taskflow_next_decision_blocks_runtime_defect_ready_head_for_blocked_run_repair() {
         let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
             "run-blocked",
             "task-blocked",
@@ -13122,27 +13112,29 @@ agent_system:
             &[],
         );
 
-        assert_eq!(decision.status, "pass");
+        assert_eq!(decision.status, "blocked");
+        assert!(decision.primary_ready_task.is_none());
         assert_eq!(
             decision
-                .primary_ready_task
+                .candidate_task_context
+                .ready_head
                 .as_ref()
                 .map(|task| task.id.as_str()),
             Some("runtime-defect-open-delegated-cycle-blocks-dispatch-next-20260630")
         );
-        assert!(decision.candidate_task_context.admissible_now);
+        assert!(!decision.candidate_task_context.admissible_now);
         assert_eq!(
             decision.candidate_task_context.admissibility_gate,
-            "ready_now"
+            "latest_run_graph_status_blocked"
         );
-        assert!(!decision
+        assert!(decision
             .blocker_codes
             .iter()
             .any(|code| code == "latest_run_graph_status_blocked"));
     }
 
     #[test]
-    fn taskflow_next_decision_admits_runtime_defect_ready_head_with_dispatch_only_cycle() {
+    fn taskflow_next_decision_blocks_runtime_defect_ready_head_with_dispatch_only_cycle() {
         let dispatch = exception_takeover_dispatch("task-zombie-d-testing-analysis-and-task-plan");
         let mut ready =
             sample_task("runtime-defect-open-delegated-cycle-blocks-dispatch-next-20260630");
@@ -13165,20 +13157,22 @@ agent_system:
             &[],
         );
 
-        assert_eq!(decision.status, "pass");
+        assert_eq!(decision.status, "blocked");
+        assert!(decision.primary_ready_task.is_none());
         assert_eq!(
             decision
-                .primary_ready_task
+                .candidate_task_context
+                .ready_head
                 .as_ref()
                 .map(|task| task.id.as_str()),
             Some("runtime-defect-open-delegated-cycle-blocks-dispatch-next-20260630")
         );
-        assert!(decision.candidate_task_context.admissible_now);
+        assert!(!decision.candidate_task_context.admissible_now);
         assert_eq!(
             decision.candidate_task_context.admissibility_gate,
-            "ready_now"
+            "delegated_cycle_runtime_gate"
         );
-        assert!(!decision
+        assert!(decision
             .blocker_codes
             .iter()
             .any(|code| code == "open_delegated_cycle"));

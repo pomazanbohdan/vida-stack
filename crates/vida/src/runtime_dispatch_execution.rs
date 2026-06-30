@@ -2378,6 +2378,18 @@ fn dispatch_packet_string_field(dispatch_packet_path: &str, field: &str) -> Opti
         })
 }
 
+fn dispatch_packet_handoff_runtime_role(dispatch_packet_path: &str) -> Option<String> {
+    dispatch_packet_string_field(dispatch_packet_path, "handoff_runtime_role")
+        .or_else(|| dispatch_packet_string_field(dispatch_packet_path, "activation_runtime_role"))
+        .or_else(|| dispatch_packet_string_field(dispatch_packet_path, "runtime_role"))
+}
+
+fn dispatch_packet_handoff_task_class(dispatch_packet_path: &str) -> Option<String> {
+    dispatch_packet_string_field(dispatch_packet_path, "handoff_task_class")
+        .or_else(|| dispatch_packet_string_field(dispatch_packet_path, "task_class"))
+        .or_else(|| dispatch_packet_string_field(dispatch_packet_path, "route_task_class"))
+}
+
 fn dispatch_packet_value_field(
     dispatch_packet_path: &str,
     field: &str,
@@ -2633,6 +2645,10 @@ fn materialize_host_tool_bridge_request(
     } else {
         serde_json::json!(["patch_proposal", "isolated_worktree_manifest"])
     };
+    let request_runtime_role = dispatch_packet_handoff_runtime_role(dispatch_packet_path)
+        .or_else(|| receipt.activation_runtime_role.clone());
+    let request_task_class = dispatch_packet_handoff_task_class(dispatch_packet_path)
+        .unwrap_or_else(|| canonical_dispatch_target_for_admissibility(&receipt.dispatch_target));
     let request = serde_json::json!({
         "schema_version": 1,
         "status": "pending",
@@ -2641,8 +2657,8 @@ fn materialize_host_tool_bridge_request(
         "task_id": receipt.run_id,
         "dispatch_target": receipt.dispatch_target,
         "packet_path": dispatch_packet_path,
-        "runtime_role": receipt.activation_runtime_role,
-        "task_class": canonical_dispatch_target_for_admissibility(&receipt.dispatch_target),
+        "runtime_role": request_runtime_role,
+        "task_class": request_task_class,
         "backend_id": backend_id,
         "carrier_id": carrier_id,
         "execution_boundary": "parent_host_session",
@@ -9227,6 +9243,96 @@ host_tool_bridge:
             request["implementation_isolation"],
             implementation_isolation
         );
+
+        let _ = std::fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn host_bridge_request_carries_autotester_configured_role_and_task_class() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-autotester-contract-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create temp root");
+        let state_root = project_root.join(".vida").join("data").join("state");
+        let packet_dir = state_root
+            .join("runtime-consumption")
+            .join("dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("autotester.json");
+        let owned_paths = serde_json::json!(["lib/src/activity_screen.dart", "test"]);
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "dispatch_target": "autotester",
+                "handoff_runtime_role": "worker",
+                "handoff_task_class": "test_authoring",
+                "runtime_role": "business_analyst",
+                "task_class": "specification",
+                "owned_paths": owned_paths,
+                "read_only_paths": ["docs/process"],
+                "proof_target": "autotester proof",
+                "delivery_task_packet": {
+                    "handoff_runtime_role": "worker",
+                    "handoff_task_class": "test_authoring",
+                    "owned_paths": owned_paths,
+                    "implementation_isolation": serde_json::Value::Null,
+                    "proof_target": "autotester proof"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        let selected_cli_entry = serde_yaml::from_str(
+            r#"
+host_tool_bridge:
+  request_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  result_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  receipt_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  adapter_kind: codex_host_tools
+  adapter_capability_id: codex.multi_agent_v1
+  invocation_mode: parent_host_tool_api
+"#,
+        )
+        .expect("host bridge config should parse");
+        let mut receipt = internal_codex_fallback_receipt(
+            packet_path.to_str().expect("packet path should render"),
+        );
+        receipt.run_id = "activity-meeting-event-form-fields".to_string();
+        receipt.dispatch_target = "autotester".to_string();
+        receipt.activation_runtime_role = Some("business_analyst".to_string());
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            &state_root,
+            Some(&selected_cli_entry),
+            packet_path.to_str().expect("packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("host bridge request should materialize");
+
+        assert_eq!(request["runtime_role"], "worker");
+        assert_eq!(request["task_class"], "test_authoring");
+        assert_eq!(request["dispatch_target"], "autotester");
+        assert_eq!(request["implementation_isolation"], serde_json::Value::Null);
+        assert_eq!(
+            request["expected_implementation_artifact_kinds"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            request["owned_paths"],
+            serde_json::json!(["lib/src/activity_screen.dart", "test"])
+        );
+        assert_eq!(request["proof_target"], "autotester proof");
 
         let _ = std::fs::remove_dir_all(project_root);
     }

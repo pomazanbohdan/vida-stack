@@ -1657,6 +1657,9 @@ pub(crate) fn backend_is_admissible_or_runtime_selected_carrier_for_dispatch_tar
     if backend_is_admissible_for_dispatch_target(execution_plan, backend_id, dispatch_target) {
         return true;
     }
+    if dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target) {
+        return false;
+    }
     let route_assignment_match =
         execution_plan_route_for_dispatch_target(execution_plan, dispatch_target)
             .map(runtime_assignment_from_route)
@@ -1832,7 +1835,7 @@ pub(crate) fn admissible_selected_backend_for_dispatch_target(
     let strict_required =
         dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target);
     let route = execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
-    let (candidates, route_is_backend_agnostic) = if let Some(route) = route {
+    let (candidates, _route_is_backend_agnostic) = if let Some(route) = route {
         (
             admissible_backend_candidates_for_dispatch_target(
                 execution_plan,
@@ -1883,9 +1886,6 @@ pub(crate) fn admissible_selected_backend_for_dispatch_target(
                 .iter()
                 .any(|backend| backend == candidate))
             || route_activation_backend.as_deref() == Some(candidate.as_str())
-            || (route_is_backend_agnostic
-                && backend_class_from_execution_plan(execution_plan, candidate).as_deref()
-                    == Some("internal"))
     });
     selected
         .or_else(|| admissible_matrix_backend_for_dispatch_target(execution_plan, dispatch_target))
@@ -7539,7 +7539,7 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
         ));
         downstream_dispatch_ready = false;
         downstream_dispatch_blockers = vec![invalid_allowed_next_node_for_execution_plan_blocker()];
-    } else if receipt_has_terminal_lane_evidence {
+    } else if receipt_has_terminal_lane_evidence && downstream_dispatch_target.is_none() {
         if let Some(explicit_target) = result_explicit_downstream_dispatch_target {
             let missing_owned_scope =
                 dispatch_target_requires_owned_write_scope(role_selection, &explicit_target)
@@ -18881,6 +18881,145 @@ host_environment:
     }
 
     #[test]
+    fn refresh_downstream_dispatch_preview_preserves_blocked_preview_over_result_allowed_next_target(
+    ) {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        let result_dir = state_root
+            .join("runtime-consumption")
+            .join("dispatch-results");
+        fs::create_dir_all(&result_dir).expect("dispatch-results dir should exist");
+        let result_path = result_dir.join("analyst-result.json");
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "status": "pass",
+                "execution_state": "executed",
+                "decision": "approve",
+                "verdict": "pass",
+                "completion_verdict": "pass",
+                "run_id": "run-result-blocked-preview",
+                "dispatch_target": "analyst",
+                "allowed_next_node": "designer",
+                "source_dispatch_packet_path": "/tmp/analyst-packet.json",
+                "host_tool_bridge_request": {
+                    "run_id": "run-result-blocked-preview",
+                    "dispatch_target": "analyst",
+                    "packet_path": "/tmp/analyst-packet.json"
+                },
+                "activation_semantics": {
+                    "records_completion_receipt": true
+                },
+                "execution_evidence": {
+                    "receipt_backed": true
+                }
+            }))
+            .expect("result json should encode"),
+        )
+        .expect("result artifact should write");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let mut role_selection =
+                configured_first_step_role_selection(Some("analyst"), Some("analyst"));
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_sequence"] = json!(["analyst", "designer", "autotester"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["execution_lane_sequence"] = json!(["analyst", "autotester"]);
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_catalog"]["designer"] = json!({
+                "dispatch_target": "designer",
+                "task_class": "design",
+                "closure_class": "design",
+                "stage": "design_gate",
+                "activation": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "designer"
+                }
+            });
+            role_selection.execution_plan["development_flow"]["dispatch_contract"]
+                ["lane_catalog"]["autotester"] = json!({
+                "dispatch_target": "autotester",
+                "task_class": "verification",
+                "closure_class": "proof",
+                "stage": "execution",
+                "activation": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "tester"
+                }
+            });
+            let run_graph_bootstrap = json!({ "run_id": "run-result-blocked-preview" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-result-blocked-preview".to_string(),
+                dispatch_target: "analyst".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
+                dispatch_command: Some("vida lane complete".to_string()),
+                dispatch_packet_path: Some("/tmp/analyst-packet.json".to_string()),
+                dispatch_result_path: Some(
+                    result_path
+                        .strip_prefix(&state_root)
+                        .expect("result path should be inside state root")
+                        .display()
+                        .to_string(),
+                ),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-30T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview_with_owned_paths(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+                &[],
+            )
+            .await
+            .expect("preview should preserve the derived blocked preview");
+
+            assert_eq!(
+                receipt.downstream_dispatch_target.as_deref(),
+                Some("work-pool-pack")
+            );
+            assert!(!receipt.downstream_dispatch_ready);
+            assert_eq!(
+                receipt.downstream_dispatch_blockers,
+                vec![
+                    "pending_design_finalize".to_string(),
+                    "pending_spec_task_close".to_string()
+                ]
+            );
+            assert!(receipt.downstream_dispatch_packet_path.is_none());
+            assert_ne!(
+                receipt.downstream_dispatch_status.as_deref(),
+                Some("packet_ready")
+            );
+        });
+    }
+
+    #[test]
     fn refresh_downstream_dispatch_preview_blocks_invalid_result_allowed_next_target() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let state_root = harness.path().join(crate::state_store::default_state_dir());
@@ -24661,6 +24800,75 @@ agent_system:
         );
 
         assert_eq!(selected.as_deref(), Some("writer"));
+    }
+
+    #[test]
+    fn strict_lane_rejects_route_scoped_internal_assignment_when_matrix_disallows_backend() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true,
+                        "verification": false
+                    }
+                },
+                {
+                    "backend_id": "readonly_verifier",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "implementation": false,
+                        "verification": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "autotester": {
+                            "dispatch_target": "autotester",
+                            "runtime_role": "tester",
+                            "task_class": "verification",
+                            "carrier_runtime_assignment": {
+                                "enabled": true,
+                                "runtime_role": "tester",
+                                "task_class": "verification",
+                                "activation_runtime_role": "tester",
+                                "selected_backend_id": "internal_subagents",
+                                "selected_dispatch_backend_id": "internal_subagents"
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        assert!(
+            !backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "internal_subagents",
+                "autotester"
+            ),
+            "the backend matrix must remain authoritative for strict verification lanes"
+        );
+        assert!(
+            !backend_is_admissible_or_runtime_selected_carrier_for_dispatch_target(
+                &execution_plan,
+                "internal_subagents",
+                "autotester"
+            ),
+            "a route-scoped internal carrier assignment must not bypass strict lane admissibility"
+        );
+
+        let selected = admissible_selected_backend_for_dispatch_target(
+            &execution_plan,
+            "autotester",
+            None,
+            Some("internal_subagents"),
+        );
+
+        assert_eq!(selected.as_deref(), Some("readonly_verifier"));
     }
 
     #[test]
