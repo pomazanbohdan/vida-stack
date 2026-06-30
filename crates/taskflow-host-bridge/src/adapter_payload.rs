@@ -459,6 +459,24 @@ mod tests {
     }
 
     #[test]
+    fn host_bridge_adapter_payload_advertises_attach_for_developer_downgraded_task_class() {
+        let mut request = request();
+        request["dispatch_target"] = json!("developer");
+        request["task_class"] = json!("coach");
+        request["implementation_artifacts"] = json!([]);
+
+        let payload = payload_for(&request);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["host_bridge"]["dispatch_target"], "developer");
+        assert_eq!(payload["host_bridge"]["artifact_attach_required"], true);
+        assert_eq!(
+            payload["host_bridge"]["artifact_attach_command"],
+            "vida agent host-bridge --request request.json --attach-artifact <artifact-path> --changed-file <changed-file> --artifact-kind patch_proposal"
+        );
+    }
+
+    #[test]
     fn host_bridge_adapter_payload_blocks_missing_core_payload_fields() {
         let mut request = request();
         request.as_object_mut().unwrap().remove("packet_path");

@@ -522,13 +522,15 @@ pub fn host_bridge_request_requires_implementation_artifacts(
     dispatch_target: &str,
     task_class: Option<&str>,
 ) -> bool {
-    matches!(dispatch_target.trim(), "implementer" | "implementation")
-        || task_class.map(str::trim).is_some_and(|value| {
-            matches!(
-                value,
-                "implementation" | "delivery_task" | "execution_block" | "writer"
-            )
-        })
+    matches!(
+        dispatch_target.trim(),
+        "developer" | "implementer" | "implementation"
+    ) || task_class.map(str::trim).is_some_and(|value| {
+        matches!(
+            value,
+            "implementation" | "delivery_task" | "execution_block" | "writer"
+        )
+    })
 }
 
 #[must_use]
@@ -1049,7 +1051,7 @@ mod tests {
             "developer",
             Some(" delivery_task ")
         ));
-        assert!(!host_bridge_request_requires_implementation_artifacts(
+        assert!(host_bridge_request_requires_implementation_artifacts(
             "developer",
             Some("coach")
         ));

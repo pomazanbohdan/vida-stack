@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -122,19 +122,25 @@ where
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("read {journal_name} journal {}", path.display()))?;
-    raw.lines()
+    let file = fs::File::open(path)
+        .with_context(|| format!("open {journal_name} journal {}", path.display()))?;
+
+    BufReader::new(file)
+        .lines()
         .enumerate()
-        .filter_map(|(index, line)| {
-            if line.trim().is_empty() {
-                None
-            } else {
-                Some((index + 1, line))
-            }
+        .filter_map(|(index, line)| match line {
+            Ok(line) if line.trim().is_empty() => None,
+            Ok(line) => Some((index + 1, Ok(line))),
+            Err(error) => Some((index + 1, Err(error))),
         })
         .map(|(line_number, line)| {
-            serde_json::from_str::<T>(line).with_context(|| {
+            let line = line.with_context(|| {
+                format!(
+                    "read {journal_name} journal line {line_number} in {}",
+                    path.display()
+                )
+            })?;
+            serde_json::from_str::<T>(&line).with_context(|| {
                 format!(
                     "parse {journal_name} journal line {line_number} in {}",
                     path.display()
@@ -379,6 +385,30 @@ mod tests {
             .expect_err("malformed line blocks replay");
 
         assert!(err.to_string().contains("parse pending-job journal"));
+    }
+
+    #[test]
+    fn journal_replay_reports_malformed_first_line() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let journal_path = temp.path().join("accepted.jsonl");
+        fs::write(
+            &journal_path,
+            concat!(
+                "{malformed-json}\n",
+                "{\"request_id\":\"req-1\",\"operation\":\"vida.service.status\",\"replay_state\":\"accepted_replayable\"}\n"
+            ),
+        )
+        .expect("write journal");
+
+        let err = AcceptedCommandJournal::open(&journal_path)
+            .replayable_commands()
+            .expect_err("malformed first line blocks replay");
+
+        assert!(
+            err.to_string()
+                .contains("parse accepted-command journal line 1"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
