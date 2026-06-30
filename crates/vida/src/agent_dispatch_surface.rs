@@ -6444,6 +6444,71 @@ mod tests {
             .is_empty());
     }
 
+    fn host_bridge_submit_result_role_selection(
+        dev_task_id: &str,
+    ) -> crate::RuntimeConsumptionLaneSelection {
+        crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "tracked_flow_bootstrap": {
+                    "dev_task": {
+                        "task_id": dev_task_id,
+                        "ensure_command": "vida task ensure feature-x-dev \"Dev pack\" --type task --status open --json"
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["analyst", "designer", "autotester", "developer"],
+                        "lane_catalog": {
+                            "autotester": {
+                                "dispatch_target": "autotester",
+                                "stage": "verification",
+                                "task_class": "verification",
+                                "closure_class": "verification",
+                                "completion_blocker": "pending_autotest_evidence",
+                                "packet_template_kind": "verifier_proof_packet",
+                                "activation_agent_type": "middle",
+                                "activation_runtime_role": "worker",
+                                "runtime_assignment": {
+                                    "selected_backend_id": "internal_subagents",
+                                    "selected_carrier_id": "middle"
+                                }
+                            },
+                            "developer": {
+                                "dispatch_target": "developer",
+                                "stage": "execution",
+                                "task_class": "implementation",
+                                "closure_class": "implementation",
+                                "completion_blocker": "pending_implementation_evidence",
+                                "packet_template_kind": "delivery_task_packet",
+                                "activation_agent_type": "junior",
+                                "activation_runtime_role": "worker",
+                                "runtime_assignment": {
+                                    "selected_backend_id": "internal_subagents",
+                                    "selected_carrier_id": "junior"
+                                }
+                            }
+                        }
+                    }
+                },
+                "orchestration_contract": {}
+            }),
+            reason: "test".to_string(),
+        }
+    }
+
     #[test]
     fn host_bridge_provenance_blocks_request_outside_state_root() {
         let nanos = std::time::SystemTime::now()
@@ -7132,6 +7197,286 @@ mod tests {
             receipt["submitted_result_source"],
             "operator_supplied_result_file"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_submit_result_pass_reconciles_autotester_lane_projection() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::current_dir()
+            .expect("current dir")
+            .join("target/tmp")
+            .join(format!(
+                "vida-host-bridge-submit-autotester-pass-{}-{nanos}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create host bridge state root");
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let run_id = "activity-meeting-event-form-fields";
+        let request_id = "activity-autotester-request";
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: run_id,
+                title: "Autotester submit-result pass reconciles stale projection",
+                display_id: None,
+                description: "",
+                issue_type: "defect",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec![
+                        "test/activity_meeting_event_form_fields_test.dart".to_string()
+                    ],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "design", "design");
+        status.task_id = run_id.to_string();
+        status.active_node = "designer".to_string();
+        status.next_node = Some("autotester".to_string());
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "designer_blocked".to_string();
+        status.policy_gate = "host_tool_bridge_adapter_required".to_string();
+        status.handoff_state = "awaiting_autotester".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.autotester_lane".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist stale run graph status");
+
+        let packet_path =
+            root.join("runtime-consumption/downstream-dispatch-packets/activity-autotester.json");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/activity-autotester-activation.json");
+        let request_path = root.join("host-tool-bridge/requests/activity-autotester-request.json");
+        let canonical_result_path =
+            root.join("host-tool-bridge/results/activity-autotester-result.json");
+        let staged_result_path =
+            root.join("host-tool-bridge/staged-results/activity-autotester-result.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/activity-autotester-receipt.json");
+        for path in [
+            &packet_path,
+            &activation_result_path,
+            &request_path,
+            &canonical_result_path,
+            &staged_result_path,
+            &receipt_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(
+            &packet_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "run_id": run_id,
+                "source_dispatch_target": "autotester",
+                "source_dispatch_status": "bridge_request_pending",
+                "source_blocker_code": "host_tool_bridge_adapter_required",
+                "dispatch_target": "autotester",
+                "activation_runtime_role": "worker",
+                "packet_template_kind": "verifier_proof_packet",
+                "owned_paths": ["test/activity_meeting_event_form_fields_test.dart"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "verifier_proof_packet": {
+                    "proof_goal": "Verify autotester pass can hand off to developer.",
+                    "goal": "Complete the autotester lane evidence.",
+                    "scope_in": ["dispatch_target:autotester"],
+                    "handoff_task_class": "verification",
+                    "handoff_runtime_role": "worker",
+                    "owned_paths": ["test/activity_meeting_event_form_fields_test.dart"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["autotester pass advances to developer"],
+                    "verification_command": "vida agent host-bridge --submit-result",
+                    "proof_target": "autotester submit-result pass materializes developer packet",
+                    "stop_rules": ["stop if packet contract is invalid"],
+                    "blocking_question": "none"
+                },
+                "role_selection_full": host_bridge_submit_result_role_selection(run_id),
+                "run_graph_bootstrap": {
+                    "run_id": run_id
+                },
+                "downstream_dispatch_active_target": "autotester",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["pending_autotest_evidence"],
+                "downstream_dispatch_status": "blocked",
+                "downstream_lane_status": "lane_blocked"
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("write packet");
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": request_id,
+                "run_id": run_id,
+                "task_id": run_id,
+                "dispatch_target": "autotester",
+                "task_class": "verification",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "carrier_id": "middle",
+                "execution_boundary": "parent_host_session",
+                "dispatch_transport": "host_tool_bridge",
+                "receipt_mode": "host_bridge_receipt",
+                "request_path": request_path.display().to_string(),
+                "result_path": canonical_result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string(),
+                "allowed_next_node": "developer"
+            }))
+            .expect("request should serialize"),
+        )
+        .expect("write request");
+        std::fs::write(
+            &staged_result_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "pass",
+                "execution_state": "executed",
+                "request_id": request_id,
+                "run_id": run_id,
+                "dispatch_target": "autotester",
+                "decision": "pass",
+                "verdict": "pass",
+                "blocker_codes": [],
+                "allowed_next_node": "developer",
+                "execution_evidence": {
+                    "receipt_backed": true,
+                    "backend_id": "internal_subagents"
+                },
+                "source_dispatch_packet_path": packet_path.display().to_string()
+            }))
+            .expect("result should serialize"),
+        )
+        .expect("write submitted result");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "packet_path": packet_path.display().to_string(),
+                    "result_path": canonical_result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }
+            }))
+            .expect("activation result should serialize"),
+        )
+        .expect("write activation result");
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "autotester".to_string(),
+                dispatch_status: "bridge_request_pending".to_string(),
+                lane_status: crate::LaneStatus::LaneOpen.as_str().to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+                dispatch_packet_path: Some(packet_path.display().to_string()),
+                dispatch_result_path: Some(activation_result_path.display().to_string()),
+                blocker_code: Some("host_tool_bridge_adapter_required".to_string()),
+                downstream_dispatch_target: Some("developer".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some(
+                    "after autotester evidence is recorded, activate developer".to_string(),
+                ),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_autotest_evidence".to_string()],
+                downstream_dispatch_packet_path: Some(packet_path.display().to_string()),
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("autotester".to_string()),
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-06-30T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("record lane receipt");
+        drop(store);
+
+        let exit = run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: Vec::new(),
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: None,
+            consolidation_receipt_id: None,
+            complete: false,
+            host_agent_id: Some("agent-autotester-1".to_string()),
+            summary: Some("parent host completed autotester bridge".to_string()),
+            decision: None,
+            verdict: None,
+            allowed_next_node: Some("developer".to_string()),
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            submit_result: Some(staged_result_path.clone()),
+            result_file: None,
+            receipt_id: Some("completion-autotester-pass-1".to_string()),
+            json: true,
+            state_dir: Some(root.clone()),
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let store = state_store::StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt")
+            .expect("receipt should exist");
+        assert_eq!(after.dispatch_status, "executed");
+        assert_eq!(after.lane_status, crate::LaneStatus::LaneCompleted.as_str());
+        assert_eq!(after.blocker_code, None);
+        assert_eq!(
+            after.downstream_dispatch_target.as_deref(),
+            Some("developer")
+        );
+        assert!(after.downstream_dispatch_ready);
+        assert!(after.downstream_dispatch_blockers.is_empty());
+
+        let advanced_status = store
+            .run_graph_status(run_id)
+            .await
+            .expect("read advanced run graph status");
+        assert_eq!(advanced_status.active_node, "autotester");
+        assert_eq!(advanced_status.next_node.as_deref(), Some("developer"));
+        assert_eq!(advanced_status.status, "ready");
+        assert_eq!(advanced_status.lifecycle_stage, "autotester_complete");
+        assert_eq!(advanced_status.lane_id, "autotester_lane");
+        assert_eq!(advanced_status.resume_target, "dispatch.developer_lane");
 
         let _ = std::fs::remove_dir_all(&root);
     }
