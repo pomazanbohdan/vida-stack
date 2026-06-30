@@ -1657,6 +1657,9 @@ pub(crate) fn backend_is_admissible_or_runtime_selected_carrier_for_dispatch_tar
     if backend_is_admissible_for_dispatch_target(execution_plan, backend_id, dispatch_target) {
         return true;
     }
+    if dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target) {
+        return false;
+    }
     let route_assignment_match =
         execution_plan_route_for_dispatch_target(execution_plan, dispatch_target)
             .map(runtime_assignment_from_route)
@@ -1832,7 +1835,7 @@ pub(crate) fn admissible_selected_backend_for_dispatch_target(
     let strict_required =
         dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target);
     let route = execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
-    let (candidates, route_is_backend_agnostic) = if let Some(route) = route {
+    let (candidates, _route_is_backend_agnostic) = if let Some(route) = route {
         (
             admissible_backend_candidates_for_dispatch_target(
                 execution_plan,
@@ -1883,9 +1886,6 @@ pub(crate) fn admissible_selected_backend_for_dispatch_target(
                 .iter()
                 .any(|backend| backend == candidate))
             || route_activation_backend.as_deref() == Some(candidate.as_str())
-            || (route_is_backend_agnostic
-                && backend_class_from_execution_plan(execution_plan, candidate).as_deref()
-                    == Some("internal"))
     });
     selected
         .or_else(|| admissible_matrix_backend_for_dispatch_target(execution_plan, dispatch_target))
@@ -24427,6 +24427,75 @@ agent_system:
         );
 
         assert_eq!(selected.as_deref(), Some("writer"));
+    }
+
+    #[test]
+    fn strict_lane_rejects_route_scoped_internal_assignment_when_matrix_disallows_backend() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true,
+                        "verification": false
+                    }
+                },
+                {
+                    "backend_id": "readonly_verifier",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "implementation": false,
+                        "verification": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "autotester": {
+                            "dispatch_target": "autotester",
+                            "runtime_role": "tester",
+                            "task_class": "verification",
+                            "carrier_runtime_assignment": {
+                                "enabled": true,
+                                "runtime_role": "tester",
+                                "task_class": "verification",
+                                "activation_runtime_role": "tester",
+                                "selected_backend_id": "internal_subagents",
+                                "selected_dispatch_backend_id": "internal_subagents"
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        assert!(
+            !backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "internal_subagents",
+                "autotester"
+            ),
+            "the backend matrix must remain authoritative for strict verification lanes"
+        );
+        assert!(
+            !backend_is_admissible_or_runtime_selected_carrier_for_dispatch_target(
+                &execution_plan,
+                "internal_subagents",
+                "autotester"
+            ),
+            "a route-scoped internal carrier assignment must not bypass strict lane admissibility"
+        );
+
+        let selected = admissible_selected_backend_for_dispatch_target(
+            &execution_plan,
+            "autotester",
+            None,
+            Some("internal_subagents"),
+        );
+
+        assert_eq!(selected.as_deref(), Some("readonly_verifier"));
     }
 
     #[test]
