@@ -483,7 +483,7 @@ impl LocalRuntimeVidaClient {
                             path.display()
                         ),
                     ),
-                    Err(error) => unavailable_job_status(job_id, error),
+                    Err(error) => unavailable_job_status(job_id, error.to_string()),
                 }
             }
             Some(path) => unavailable_job_status(
