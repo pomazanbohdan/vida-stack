@@ -370,6 +370,21 @@ function Resolve-CommandPath {
     return $Name
 }
 
+function Resolve-PowerShellHostPath {
+    $hostPath = Resolve-CommandPath "pwsh" @(
+        "C:\Program Files\PowerShell\7\pwsh.exe",
+        "$env:ProgramFiles\PowerShell\7\pwsh.exe"
+    )
+    if ($hostPath -ne "pwsh") {
+        return $hostPath
+    }
+
+    return Resolve-CommandPath "powershell" @(
+        "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe",
+        "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    )
+}
+
 function ConvertTo-WindowsProcessArgument {
     param([AllowNull()][string]$Argument)
 
@@ -448,10 +463,7 @@ function New-CargoTimingContract {
 }
 
 $GitPath = Resolve-CommandPath "git" @("C:\Program Files\Git\cmd\git.exe")
-$PwshPath = Resolve-CommandPath "pwsh" @(
-    "C:\Program Files\PowerShell\7\pwsh.exe",
-    "$env:ProgramFiles\PowerShell\7\pwsh.exe"
-)
+$PwshPath = Resolve-PowerShellHostPath
 $BashPath = Resolve-CommandPath "bash" @(
     "C:\Program Files\Git\bin\bash.exe",
     "$env:ProgramFiles\Git\bin\bash.exe"

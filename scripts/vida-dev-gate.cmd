@@ -18,9 +18,11 @@ set "PWSH="
 if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe" set "PWSH=%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe"
 if not defined PWSH for %%P in (pwsh.exe) do if not "%%~$PATH:P"=="" set "PWSH=%%~$PATH:P"
 if not defined PWSH if exist "%ProgramFiles%\PowerShell\7\pwsh.exe" set "PWSH=%ProgramFiles%\PowerShell\7\pwsh.exe"
+if not defined PWSH for %%P in (powershell.exe) do if not "%%~$PATH:P"=="" set "PWSH=%%~$PATH:P"
+if not defined PWSH if exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" set "PWSH=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 if not defined PWSH (
-  echo [vida-dev-gate] ERROR: PowerShell Core pwsh.exe was not found after Windows PATH bootstrap. Install Microsoft.PowerShell with winget or set VIDA_PWSH. 1>&2
+  echo [vida-dev-gate] ERROR: No PowerShell host was found after Windows PATH bootstrap. Install Microsoft.PowerShell with winget or repair WindowsPowerShell powershell.exe. 1>&2
   exit /b 1
 )
 
