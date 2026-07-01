@@ -4226,138 +4226,6 @@ fn host_bridge_request_artifacts_are_taskflow_authorized(
         })
 }
 
-fn host_bridge_request_artifact_authority_keys(
-    request: &serde_json::Value,
-    state_root: &Path,
-) -> Vec<crate::runtime_dispatch_packets::TaskflowImplementationArtifactAuthority> {
-    let request_artifacts = request
-        .get("implementation_artifacts")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!([]));
-    let normalized_refs = request
-        .get("implementation_artifact_refs")
-        .and_then(serde_json::Value::as_array)
-        .map(|refs| {
-            refs.iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    request_artifacts
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|artifact| {
-            let object = artifact.as_object()?;
-            if !host_bridge_request_artifact_has_matching_normalized_ref(
-                artifact,
-                &normalized_refs,
-                state_root,
-            ) {
-                return None;
-            }
-            let receipt_backed = object
-                .get("receipt_backed")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if !receipt_backed {
-                return None;
-            }
-            let schema_version = object
-                .get("schema_version")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim);
-            if !matches!(
-                schema_version,
-                Some("host-bridge-implementation-artifact-v1")
-                    | Some("stage-attempt-implementation-artifact-v1")
-            ) {
-                return None;
-            }
-            object
-                .get("source_artifact_ref")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())?;
-            object
-                .get("source_artifact_kind")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())?;
-            Some(
-                crate::runtime_dispatch_packets::TaskflowImplementationArtifactAuthority {
-                    attempt_id: object
-                        .get("attempt_id")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())?
-                        .to_string(),
-                    task_id: object
-                        .get("task_id")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())?
-                        .to_string(),
-                    stage_id: object
-                        .get("stage_id")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())?
-                        .to_string(),
-                    freshness: object
-                        .get("freshness")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())?
-                        .to_string(),
-                    consolidation_receipt_id: object
-                        .get("consolidation_receipt_id")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())?
-                        .to_string(),
-                },
-            )
-        })
-        .fold(Vec::new(), |mut keys, key| {
-            if !keys.iter().any(|existing| existing == &key) {
-                keys.push(key);
-            }
-            keys
-        })
-}
-
-fn host_bridge_request_artifact_has_matching_normalized_ref(
-    artifact: &serde_json::Value,
-    normalized_refs: &[String],
-    state_root: &Path,
-) -> bool {
-    normalized_refs.iter().any(|artifact_ref| {
-        if !host_bridge_artifact_ref_is_normalized_implementation_artifact(artifact_ref) {
-            return false;
-        }
-        let Ok(path) = crate::runtime_dispatch_packets::validate_attempt_artifact_ref(
-            artifact_ref,
-            state_root,
-        ) else {
-            return false;
-        };
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-            .is_some_and(|stored| stored == *artifact)
-    })
-}
-
-fn host_bridge_artifact_ref_is_normalized_implementation_artifact(artifact_ref: &str) -> bool {
-    let normalized = artifact_ref.trim().replace('\\', "/");
-    normalized.starts_with("host-tool-bridge/implementation-artifacts/")
-        || normalized.contains("/host-tool-bridge/implementation-artifacts/")
-}
-
 fn host_bridge_implementation_scope_validation(
     request: &serde_json::Value,
     artifacts: &serde_json::Value,
@@ -4461,7 +4329,7 @@ async fn taskflow_implementation_artifacts_for_host_bridge_request(
         task_id: task.id.clone(),
         task_updated_at: task.updated_at.clone(),
     };
-    let mut taskflow_artifacts = match store.task_stage_attempts(run_id, "implementation").await {
+    let taskflow_artifacts = match store.task_stage_attempts(run_id, "implementation").await {
         Ok(attempts) => {
             match crate::runtime_dispatch_packets::taskflow_attempt_implementation_artifacts(
                 &attempts,
@@ -4479,17 +4347,6 @@ async fn taskflow_implementation_artifacts_for_host_bridge_request(
         }
         Err(_) => crate::runtime_dispatch_packets::TaskflowImplementationArtifacts::default(),
     };
-    if taskflow_artifacts.artifacts.is_empty() {
-        for authority_key in host_bridge_request_artifact_authority_keys(&request, store.root()) {
-            if !taskflow_artifacts
-                .authority_keys
-                .iter()
-                .any(|existing| existing == &authority_key)
-            {
-                taskflow_artifacts.authority_keys.push(authority_key);
-            }
-        }
-    }
     HostBridgeTaskflowImplementationEvidence {
         authority: Some(authority),
         taskflow_artifacts,
