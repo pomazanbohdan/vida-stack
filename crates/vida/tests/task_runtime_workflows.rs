@@ -29,6 +29,47 @@ fn run_failure(fixture: &PersistentRuntimeFixture, args: &[&str]) -> Output {
 }
 
 #[test]
+fn task_create_duplicate_id_with_invalid_parent_kind_sentinel_uses_generic_error() {
+    let fixture = PersistentRuntimeFixture::state_only("duplicate-invalid-parent-kind-sentinel");
+    fixture.boot();
+
+    let duplicate_sentinel_id = "duplicate_invalid_parent_child_kind";
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "create",
+            duplicate_sentinel_id,
+            "Duplicate Sentinel",
+            "--type",
+            "epic",
+            "--json",
+        ],
+    );
+
+    let duplicate_sentinel = run_failure(
+        &fixture,
+        &[
+            "task",
+            "create",
+            duplicate_sentinel_id,
+            "Duplicate Sentinel",
+            "--type",
+            "epic",
+            "--json",
+        ],
+    );
+    let duplicate_sentinel_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&duplicate_sentinel.stdout),
+        String::from_utf8_lossy(&duplicate_sentinel.stderr)
+    );
+    assert!(duplicate_sentinel_text.contains("task already exists"));
+    assert!(!duplicate_sentinel_text.contains("dependency_graph_issues"));
+    assert!(!duplicate_sentinel_text.contains("graph_issue"));
+}
+
+#[test]
 fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item() {
     let fixture = PersistentRuntimeFixture::state_only("step-subtask-workflow");
     fixture.boot();
