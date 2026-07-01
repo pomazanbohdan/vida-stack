@@ -9616,7 +9616,7 @@ fn task_close_missing_proof_emits_actionable_envelope() {
         serde_json::json!([proof_target])
     );
     let expected_attach_command = format!(
-        "vida task proof attach-evidence {task_id} --proof-target \"{}\" --result pass",
+        "vida task proof attach-evidence {task_id} --proof-target '{}' --result pass",
         proof_target.to_ascii_lowercase()
     );
     assert!(
