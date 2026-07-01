@@ -358,6 +358,60 @@ party_chat:
       backend: internal_subagents
       model: codex_gpt55_high_readonly
 
+requirement_analysis:
+  party_chat_route:
+    enabled: true
+    route_owner: problem-party projection
+    route_id: party_chat_challenge_round
+    board_flow_id: party_chat_council_modern_full
+    activation_policy: optional_explicit_or_risk_triggered
+    default_for_routine_requirements: false
+    structured_output_contract:
+      - findings
+      - conflicts
+      - questions
+      - options
+      - synthesis
+    guardrails:
+      - do_not_bypass_taskflow_writer
+      - do_not_bypass_coach
+      - do_not_bypass_verifier
+      - do_not_bypass_approval
+      - do_not_bypass_closure_law
+    triggers:
+      - trigger_id: critical_depth
+        kind: depth_mode
+        values:
+          - critical
+      - trigger_id: explicit_multi_perspective_request
+        kind: source_terms
+        terms:
+          - multi-perspective
+          - multiple perspectives
+          - council
+          - party chat
+          - problem-party
+          - challenge round
+      - trigger_id: unresolved_role_conflict
+        kind: source_terms
+        terms:
+          - role conflict
+          - conflicting roles
+          - unresolved role
+      - trigger_id: cross_boundary_ambiguity
+        kind: source_terms
+        terms:
+          - architecture ambiguity
+          - security ambiguity
+          - data ambiguity
+          - api ambiguity
+      - trigger_id: low_confidence_readiness
+        kind: source_terms
+        terms:
+          - low confidence
+          - readiness uncertain
+          - not confident
+
 agent_extensions:
   enabled: true
   map_doc: docs/process/agent-extensions/index.md

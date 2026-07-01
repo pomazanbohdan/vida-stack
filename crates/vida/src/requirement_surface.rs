@@ -2,6 +2,9 @@ use std::process::ExitCode;
 
 use serde_json::{json, Value};
 
+use crate::config_value_utils::{
+    load_project_overlay_yaml, yaml_bool, yaml_lookup, yaml_string, yaml_string_list,
+};
 use crate::{RequirementAnalyzeArgs, RequirementArgs, RequirementCommand};
 
 const SURFACE: &str = "vida requirement analyze";
@@ -119,6 +122,8 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
         .unwrap_or("unbound-requirement");
     let combined_input = source_inputs.join("\n");
     let atoms = requirement_atoms(&source_inputs);
+    let conflicts = detected_conflicts(&combined_input);
+    let party_chat_route = requirement_party_chat_route(&args, &combined_input, &conflicts);
 
     Ok(json!({
         "artifact_kind": "requirement_analysis",
@@ -175,7 +180,8 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
                 "summary": "Developer handoff is bounded by requirement atoms, acceptance criteria, and test matrix."
             }
         ],
-        "detected_conflicts": detected_conflicts(&combined_input),
+        "detected_conflicts": conflicts,
+        "challenge_route": party_chat_route,
         "open_questions": {
             "critical": [],
             "important": [],
@@ -289,6 +295,7 @@ fn requirement_analysis_payload(artifact: Value) -> Value {
         "selected_roles",
         "role_findings_summary",
         "detected_conflicts",
+        "challenge_route",
         "open_questions",
         "working_assumptions",
         "solution_options",
@@ -395,6 +402,113 @@ fn detected_conflicts(source: &str) -> Vec<Value> {
     } else {
         Vec::new()
     }
+}
+
+fn requirement_party_chat_route(
+    args: &RequirementAnalyzeArgs,
+    combined_input: &str,
+    detected_conflicts: &[Value],
+) -> Value {
+    let Ok(config) = load_project_overlay_yaml() else {
+        return json!({
+            "recommended": false,
+            "route_id": null,
+            "reason": "project_config_unavailable"
+        });
+    };
+    let Some(route_config) = yaml_lookup(&config, &["requirement_analysis", "party_chat_route"])
+    else {
+        return json!({
+            "recommended": false,
+            "route_id": null,
+            "reason": "party_chat_route_not_configured"
+        });
+    };
+    if !yaml_bool(yaml_lookup(route_config, &["enabled"]), false) {
+        return json!({
+            "recommended": false,
+            "route_id": yaml_string(yaml_lookup(route_config, &["route_id"])),
+            "reason": "party_chat_route_disabled"
+        });
+    }
+
+    let trigger_matches =
+        party_chat_trigger_matches(route_config, args, combined_input, detected_conflicts);
+    let recommended = !trigger_matches.is_empty();
+
+    json!({
+        "recommended": recommended,
+        "route_owner": yaml_string(yaml_lookup(route_config, &["route_owner"])),
+        "route_id": yaml_string(yaml_lookup(route_config, &["route_id"])),
+        "board_flow_id": yaml_string(yaml_lookup(route_config, &["board_flow_id"])),
+        "activation_policy": yaml_string(yaml_lookup(route_config, &["activation_policy"])),
+        "default_for_routine_requirements": yaml_bool(yaml_lookup(route_config, &["default_for_routine_requirements"]), false),
+        "trigger_matches": trigger_matches,
+        "structured_output_contract": yaml_string_list(yaml_lookup(route_config, &["structured_output_contract"])),
+        "guardrails": yaml_string_list(yaml_lookup(route_config, &["guardrails"])),
+        "next_action": if recommended {
+            "Shape an optional Party Chat challenge-round packet through the configured board flow; TaskFlow writer, coach, verifier, approval, and closure law remain authoritative."
+        } else {
+            "Do not run Party Chat for this routine requirement."
+        }
+    })
+}
+
+fn party_chat_trigger_matches(
+    route_config: &serde_yaml::Value,
+    args: &RequirementAnalyzeArgs,
+    combined_input: &str,
+    detected_conflicts: &[Value],
+) -> Vec<Value> {
+    let normalized_input = combined_input.to_lowercase();
+    let mut matches = Vec::new();
+    let Some(serde_yaml::Value::Sequence(triggers)) = yaml_lookup(route_config, &["triggers"])
+    else {
+        return matches;
+    };
+
+    for trigger in triggers {
+        let trigger_id = yaml_string(yaml_lookup(trigger, &["trigger_id"]))
+            .unwrap_or_else(|| "unnamed_trigger".to_string());
+        let kind = yaml_string(yaml_lookup(trigger, &["kind"])).unwrap_or_default();
+        match kind.as_str() {
+            "depth_mode" => {
+                let values = yaml_string_list(yaml_lookup(trigger, &["values"]));
+                if values.iter().any(|value| value == args.depth_mode.as_str()) {
+                    matches.push(json!({
+                        "trigger_id": trigger_id,
+                        "kind": kind,
+                        "matched": args.depth_mode.as_str()
+                    }));
+                }
+            }
+            "source_terms" => {
+                let matched_terms = yaml_string_list(yaml_lookup(trigger, &["terms"]))
+                    .into_iter()
+                    .filter(|term| normalized_input.contains(&term.to_lowercase()))
+                    .collect::<Vec<_>>();
+                if !matched_terms.is_empty() {
+                    matches.push(json!({
+                        "trigger_id": trigger_id,
+                        "kind": kind,
+                        "matched_terms": matched_terms
+                    }));
+                }
+            }
+            "detected_conflicts" => {
+                if !detected_conflicts.is_empty() {
+                    matches.push(json!({
+                        "trigger_id": trigger_id,
+                        "kind": kind,
+                        "matched": detected_conflicts.len()
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    matches
 }
 
 const REQUIRED_FIELD_SUMMARY: [(&str, &str); 22] = [

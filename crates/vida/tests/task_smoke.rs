@@ -170,6 +170,45 @@ fn project_bound_state_dir() -> (String, String) {
             "          readiness:\n",
             "            required: false\n",
             "            ready: true\n",
+            "requirement_analysis:\n",
+            "  party_chat_route:\n",
+            "    enabled: true\n",
+            "    route_owner: problem-party projection\n",
+            "    route_id: party_chat_challenge_round\n",
+            "    board_flow_id: party_chat_council_modern_full\n",
+            "    activation_policy: optional_explicit_or_risk_triggered\n",
+            "    default_for_routine_requirements: false\n",
+            "    structured_output_contract:\n",
+            "      - findings\n",
+            "      - conflicts\n",
+            "      - questions\n",
+            "      - options\n",
+            "      - synthesis\n",
+            "    guardrails:\n",
+            "      - do_not_bypass_taskflow_writer\n",
+            "      - do_not_bypass_coach\n",
+            "      - do_not_bypass_verifier\n",
+            "      - do_not_bypass_approval\n",
+            "      - do_not_bypass_closure_law\n",
+            "    triggers:\n",
+            "      - trigger_id: critical_depth\n",
+            "        kind: depth_mode\n",
+            "        values:\n",
+            "          - critical\n",
+            "      - trigger_id: explicit_multi_perspective_request\n",
+            "        kind: source_terms\n",
+            "        terms:\n",
+            "          - multi-perspective\n",
+            "          - party chat\n",
+            "          - problem-party\n",
+            "          - challenge round\n",
+            "      - trigger_id: cross_boundary_ambiguity\n",
+            "        kind: source_terms\n",
+            "        terms:\n",
+            "          - architecture ambiguity\n",
+            "          - security ambiguity\n",
+            "          - data ambiguity\n",
+            "          - api ambiguity\n",
             "agent_extensions:\n",
             "  role_selection:\n",
             "    mode: default\n",
@@ -560,6 +599,12 @@ fn requirement_analysis_cli_contract() {
         artifact["output_contract"]["json"]["mode"],
         "machine_readable"
     );
+    assert_eq!(artifact["challenge_route"]["recommended"], true);
+    assert!(artifact["challenge_route"]["trigger_matches"]
+        .as_array()
+        .expect("challenge route trigger matches should render")
+        .iter()
+        .any(|trigger| trigger["trigger_id"] == "critical_depth"));
     assert!(artifact["developer_handoff"]["proof_targets"]
         .as_array()
         .expect("developer_handoff proof targets should render")
@@ -626,6 +671,106 @@ fn requirement_analysis_cli_contract() {
     assert!(plain_text.contains("developer_handoff: Implement against the requirement atoms"));
 
     let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn requirement_analysis_party_chat_route() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let (routine, routine_success) = run_command_json_allow_failure_in_cwd(
+        &[
+            "requirement",
+            "analyze",
+            "--task-id",
+            "routine-requirement",
+            "--input",
+            "Add editable meeting event fields.",
+            "--json",
+        ],
+        &state_dir,
+        &project_root,
+    );
+    assert!(
+        routine_success,
+        "routine requirement should pass: {routine}"
+    );
+    assert_eq!(routine["status"], "pass");
+    assert_eq!(routine["artifact"]["challenge_route"]["recommended"], false);
+    assert_eq!(
+        routine["artifact"]["challenge_route"]["route_id"],
+        "party_chat_challenge_round"
+    );
+    assert_eq!(
+        routine["artifact"]["challenge_route"]["next_action"],
+        "Do not run Party Chat for this routine requirement."
+    );
+
+    let (routine_cross_boundary, routine_cross_boundary_success) =
+        run_command_json_allow_failure_in_cwd(
+            &[
+                "requirement",
+                "analyze",
+                "--task-id",
+                "routine-cross-boundary-requirement",
+                "--input",
+                "Coordinate cross-boundary release notes for a clear routine update.",
+                "--json",
+            ],
+            &state_dir,
+            &project_root,
+        );
+    assert!(
+        routine_cross_boundary_success,
+        "routine cross-boundary requirement should pass: {routine_cross_boundary}"
+    );
+    assert_eq!(
+        routine_cross_boundary["artifact"]["challenge_route"]["recommended"],
+        false
+    );
+
+    let (critical, critical_success) = run_command_json_allow_failure_in_cwd(
+        &[
+            "requirement",
+            "analyze",
+            "--task-id",
+            "critical-requirement",
+            "--input",
+            "Resolve cross-boundary API ambiguity with a multi-perspective challenge round.",
+            "--depth-mode",
+            "critical",
+            "--json",
+        ],
+        &state_dir,
+        &project_root,
+    );
+    assert!(
+        critical_success,
+        "critical requirement should pass: {critical}"
+    );
+    assert_eq!(critical["status"], "pass");
+    let challenge_route = &critical["artifact"]["challenge_route"];
+    assert_eq!(challenge_route["recommended"], true);
+    assert_eq!(challenge_route["route_owner"], "problem-party projection");
+    assert_eq!(
+        challenge_route["board_flow_id"],
+        "party_chat_council_modern_full"
+    );
+    assert!(challenge_route["guardrails"]
+        .as_array()
+        .expect("guardrails should render")
+        .iter()
+        .any(|guardrail| guardrail == "do_not_bypass_taskflow_writer"));
+    let trigger_ids = challenge_route["trigger_matches"]
+        .as_array()
+        .expect("trigger matches should render")
+        .iter()
+        .filter_map(|trigger| trigger["trigger_id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(trigger_ids.contains(&"critical_depth"));
+    assert!(trigger_ids.contains(&"explicit_multi_perspective_request"));
+    assert!(trigger_ids.contains(&"cross_boundary_ambiguity"));
+
+    let _ = fs::remove_dir_all(&project_root);
 }
 
 fn assert_public_surface_matrix_json_case(
