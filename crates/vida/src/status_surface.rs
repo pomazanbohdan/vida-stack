@@ -1735,12 +1735,7 @@ fn render_cached_status_projection_for_operator(summary_only: bool, cached: &str
 
 fn compact_cached_status_summary_projection(payload: &mut serde_json::Value) {
     if let Some(object) = payload.as_object_mut() {
-        for key in [
-            "latest_run_graph_delegation_gate",
-            "latest_run_graph_checkpoint",
-            "latest_run_graph_dispatch_receipt",
-            "projection_cache",
-        ] {
+        for key in ["projection_cache"] {
             object.remove(key);
         }
     }
@@ -2227,54 +2222,12 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         Some(receipt)
             if latest_run_graph_recovery
                 .as_ref()
-                .is_none_or(|recovery| recovery.run_id != receipt.run_id)
-                && latest_run_graph_status
-                    .as_ref()
-                    .is_some_and(|status| status.run_id == receipt.run_id) =>
+                .is_none_or(|recovery| recovery.run_id != receipt.run_id) =>
         {
             store.run_graph_recovery_summary(&receipt.run_id).await.ok()
         }
         _ => latest_run_graph_recovery,
     };
-    let latest_run_graph_effective_run_id = latest_run_graph_status
-        .as_ref()
-        .map(|status| status.run_id.as_str())
-        .or_else(|| {
-            latest_run_graph_dispatch_receipt
-                .as_ref()
-                .map(|receipt| receipt.run_id.as_str())
-        });
-    let latest_run_graph_snapshot_inconsistent = !dispatch_receipt_checkpoint_leakage
-        && !state_store::latest_run_graph_evidence_snapshot_is_consistent(
-            latest_run_graph_effective_run_id,
-            latest_run_graph_recovery
-                .as_ref()
-                .map(|summary| summary.run_id.as_str()),
-            latest_run_graph_checkpoint
-                .as_ref()
-                .map(|summary| summary.run_id.as_str()),
-            latest_run_graph_gate
-                .as_ref()
-                .map(|summary| summary.run_id.as_str()),
-            latest_run_graph_dispatch_receipt
-                .as_ref()
-                .map(|receipt| receipt.run_id.as_str()),
-        );
-    let latest_run_graph_dispatch_receipt_signal_ambiguous = latest_run_graph_dispatch_receipt
-        .as_ref()
-        .is_some_and(|receipt| {
-            state_store::latest_run_graph_dispatch_receipt_signal_is_ambiguous(receipt)
-        });
-    let latest_run_graph_dispatch_receipt_summary_inconsistent =
-        !dispatch_receipt_checkpoint_leakage
-            && state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
-                latest_run_graph_status
-                    .as_ref()
-                    .map(|status| status.run_id.as_str()),
-                latest_run_graph_dispatch_receipt
-                    .as_ref()
-                    .map(|receipt| receipt.run_id.as_str()),
-            );
     let explicit_continuation_binding = match store
         .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
@@ -2311,20 +2264,21 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         }
         None => false,
     };
-    let latest_global_run_graph_terminal_closure_has_truth =
-        match latest_global_run_graph_status.as_ref() {
-            Some(status)
-                if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
-                    status,
-                ) =>
-            {
-                store
-                    .run_graph_terminal_closure_has_task_close_truth(status)
-                    .await
-                    .ok()?
-            }
-            _ => false,
-        };
+    let latest_global_run_graph_terminal_closure_has_truth = match latest_global_run_graph_status
+        .as_ref()
+    {
+        Some(status)
+            if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                status,
+            ) =>
+        {
+            store
+                .run_graph_terminal_closure_has_task_close_truth(status)
+                .await
+                .ok()?
+        }
+        _ => false,
+    };
     let taskflow_active_candidates =
         crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
     let no_active_taskflow_work =
@@ -2347,52 +2301,51 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
                 .map(|receipt| receipt.run_id.as_str()),
             &taskflow_active_candidates,
         );
-    let latest_run_graph_dispatch_receipt =
-        if !exception_takeover_matches_active_taskflow_work
-            && latest_run_graph_task_orthogonal_to_taskflow
-        {
-            let mut candidate_run_ids = Vec::new();
-            for candidate in &taskflow_active_candidates {
-                if let Some(task_id) = candidate
-                    .get("task_id")
-                    .and_then(serde_json::Value::as_str)
+    let latest_run_graph_dispatch_receipt = if !exception_takeover_matches_active_taskflow_work
+        && latest_run_graph_task_orthogonal_to_taskflow
+    {
+        let mut candidate_run_ids = Vec::new();
+        for candidate in &taskflow_active_candidates {
+            if let Some(task_id) = candidate
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                candidate_run_ids.push(task_id.to_string());
+            }
+            candidate_run_ids.extend(
+                candidate
+                    .get("parent_task_ids")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                {
-                    candidate_run_ids.push(task_id.to_string());
-                }
-                candidate_run_ids.extend(
-                    candidate
-                        .get("parent_task_ids")
-                        .and_then(serde_json::Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(str::to_string),
-                );
+                    .map(str::to_string),
+            );
+        }
+        let mut matched_receipt = None;
+        for candidate_run_id in candidate_run_ids {
+            let receipt = store
+                .run_graph_dispatch_receipt(&candidate_run_id)
+                .await
+                .ok()?
+                .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt);
+            if exception_takeover_metadata_matches_taskflow_active_work(
+                store.root(),
+                receipt.as_ref(),
+                &taskflow_active_candidates,
+            ) {
+                matched_receipt = receipt;
+                break;
             }
-            let mut matched_receipt = None;
-            for candidate_run_id in candidate_run_ids {
-                let receipt = store
-                    .run_graph_dispatch_receipt(&candidate_run_id)
-                    .await
-                    .ok()?
-                    .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt);
-                if exception_takeover_metadata_matches_taskflow_active_work(
-                    store.root(),
-                    receipt.as_ref(),
-                    &taskflow_active_candidates,
-                ) {
-                    matched_receipt = receipt;
-                    break;
-                }
-            }
-            matched_receipt.or(latest_run_graph_dispatch_receipt)
-        } else {
-            latest_run_graph_dispatch_receipt
-        };
+        }
+        matched_receipt.or(latest_run_graph_dispatch_receipt)
+    } else {
+        latest_run_graph_dispatch_receipt
+    };
     let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
         crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root()).ok()?
     } else {
@@ -2402,15 +2355,18 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         Some(receipt)
             if latest_run_graph_recovery
                 .as_ref()
-                .is_none_or(|recovery| recovery.run_id != receipt.run_id)
-                && latest_run_graph_status
-                    .as_ref()
-                    .is_some_and(|status| status.run_id == receipt.run_id) =>
+                .is_none_or(|recovery| recovery.run_id != receipt.run_id) =>
         {
             store.run_graph_recovery_summary(&receipt.run_id).await.ok()
         }
         _ => latest_run_graph_recovery,
     };
+    let exception_takeover_matches_active_taskflow_work =
+        exception_takeover_metadata_matches_taskflow_active_work(
+            store.root(),
+            latest_run_graph_dispatch_receipt.as_ref(),
+            &taskflow_active_candidates,
+        );
     let latest_run_graph_effective_run_id = latest_run_graph_status
         .as_ref()
         .map(|status| status.run_id.as_str())
@@ -3007,6 +2963,130 @@ mod tests {
             .expect("current dir")
             .join("target")
             .join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
+    async fn create_status_overlay_parent(store: &state_store::StateStore, task_id: &str) {
+        store
+            .create_task(state_store::CreateTaskRequest {
+                task_id,
+                title: "Status overlay parent",
+                display_id: None,
+                description: "status overlay test parent",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: state_store::TaskExecutionSemantics::default(),
+                planner_metadata: state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create status overlay parent");
+    }
+
+    async fn create_status_overlay_task(
+        store: &state_store::StateStore,
+        task_id: &str,
+        title: &str,
+        status: &str,
+        parent_id: Option<&str>,
+    ) {
+        store
+            .create_task(state_store::CreateTaskRequest {
+                task_id,
+                title,
+                display_id: None,
+                description: "status overlay test task",
+                issue_type: "task",
+                status,
+                priority: 1,
+                parent_id,
+                labels: &[],
+                execution_semantics: state_store::TaskExecutionSemantics::default(),
+                planner_metadata: state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create status overlay task");
+    }
+
+    fn ready_exception_takeover_status(run_id: &str, task_id: &str) -> state_store::RunGraphStatus {
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "coach", "implementation");
+        status.task_id = task_id.to_string();
+        status.active_node = "coach".to_string();
+        status.next_node = None;
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "coach_ready".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        status
+    }
+
+    fn exception_takeover_receipt(
+        run_id: &str,
+        dispatch_target: &str,
+        receipt_id: &str,
+        recorded_at: &str,
+    ) -> state_store::RunGraphDispatchReceipt {
+        state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: dispatch_target.to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some(format!("supersede-{receipt_id}")),
+            exception_path_receipt_id: Some(receipt_id.to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
+            dispatch_command: Some(format!("vida lane complete {run_id} --json")),
+            dispatch_packet_path: Some(format!("/tmp/{run_id}-packet.json")),
+            dispatch_result_path: Some(format!("/tmp/{run_id}-result.json")),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: recorded_at.to_string(),
+        }
+    }
+
+    fn write_exception_takeover_metadata(
+        root: &std::path::Path,
+        run_id: &str,
+        dispatch_target: &str,
+        receipt_id: &str,
+    ) {
+        let metadata_dir = root.join("lane-exception-path-metadata");
+        fs::create_dir_all(&metadata_dir).expect("exception metadata dir should create");
+        fs::write(
+            metadata_dir.join(format!("{run_id}.json")),
+            serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": dispatch_target,
+                "source_exception_path_receipt_id": receipt_id,
+                "active_bounded_unit": format!("{run_id}:{dispatch_target}:exception-takeover"),
+                "owned_write_scope": ["crates/vida/src/status_surface.rs"]
+            })
+            .to_string(),
+        )
+        .expect("exception metadata should write");
     }
 
     #[test]
@@ -3777,8 +3857,11 @@ mod tests {
         for key in [
             "latest_run_graph_status",
             "latest_terminal_task_active_run_graph_status",
+            "latest_run_graph_delegation_gate",
             "latest_run_graph_recovery",
+            "latest_run_graph_checkpoint",
             "latest_run_graph_gate",
+            "latest_run_graph_dispatch_receipt",
             "latest_run_graph_dispatch_route_truth",
             "latest_run_graph_downstream_dispatch_preview",
             "latest_run_graph_dispatch_compact_summary",
@@ -3788,12 +3871,7 @@ mod tests {
                 "summary cache render should preserve summary field {key}"
             );
         }
-        for key in [
-            "latest_run_graph_delegation_gate",
-            "latest_run_graph_checkpoint",
-            "latest_run_graph_dispatch_receipt",
-            "projection_cache",
-        ] {
+        for key in ["projection_cache"] {
             assert!(
                 payload.get(key).is_none(),
                 "summary cache render should omit full-only field {key}"
@@ -4058,14 +4136,7 @@ mod tests {
         unsafe {
             std::env::remove_var("VIDA_SESSION_ID");
         }
-        let nanos = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-status-live-overlay-{}-{nanos}",
-            std::process::id()
-        ));
+        let root = unique_status_packet_test_root("vida-status-live-overlay");
         let store = state_store::StateStore::open(root.clone())
             .await
             .expect("open state store");
@@ -4185,6 +4256,233 @@ mod tests {
         assert_eq!(
             payload["projection_cache"]["status"],
             "state_marker_stale_recent_projection_with_live_runtime_overlay"
+        );
+
+        let _ = fs::remove_dir_all(root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_stale_projection_overlay_loads_recovery_for_exception_takeover_fallback_without_status(
+    ) {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "status-cache-foreign-takeover-no-status");
+        }
+        let root = unique_status_packet_test_root("vida-status-takeover-no-status");
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open state store");
+        create_status_overlay_parent(&store, "task-cache-parent").await;
+        create_status_overlay_task(
+            &store,
+            "task-cache-takeover",
+            "Cached takeover task",
+            "in_progress",
+            Some("task-cache-parent"),
+        )
+        .await;
+        let status = ready_exception_takeover_status("task-cache-takeover", "task-cache-takeover");
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("record active takeover status");
+        store
+            .record_run_graph_dispatch_receipt(&exception_takeover_receipt(
+                "task-cache-takeover",
+                "coach",
+                "exception-cache-no-status",
+                "2026-06-12T09:00:00Z",
+            ))
+            .await
+            .expect("record active takeover receipt");
+        write_exception_takeover_metadata(
+            &root,
+            "task-cache-takeover",
+            "coach",
+            "exception-cache-no-status",
+        );
+        drop(store);
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "status-cache-takeover-no-status");
+        }
+        let cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "root_session_write_guard": {},
+            "continuation_binding": {
+                "status": "ambiguous",
+                "active_bounded_unit": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "sequential_vs_parallel_posture": "unknown_until_explicit_taskflow_binding"
+            }
+        });
+        let refreshed =
+            super::refresh_cached_status_projection_runtime_fields(&root, &cached.to_string())
+                .await
+                .expect("stale cached status should refresh fallback receipt recovery");
+        let payload: serde_json::Value =
+            serde_json::from_str(&refreshed).expect("refreshed status should remain json");
+
+        assert!(payload["latest_run_graph_status"].is_null());
+        assert_eq!(
+            payload["latest_run_graph_dispatch_receipt"]["run_id"],
+            "task-cache-takeover"
+        );
+        assert_eq!(
+            payload["latest_run_graph_recovery"]["run_id"],
+            "task-cache-takeover"
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["latest_run_graph_task_stale"],
+            false
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["local_exception_takeover_state"],
+            "active"
+        );
+
+        let _ = fs::remove_dir_all(root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_stale_projection_overlay_recomputes_takeover_match_after_task_bound_fallback() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var(
+                "VIDA_SESSION_ID",
+                "status-cache-foreign-task-bound-fallback",
+            );
+        }
+        let root = unique_status_packet_test_root("vida-status-task-bound-fallback");
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open state store");
+        create_status_overlay_parent(&store, "task-cache-parent").await;
+        create_status_overlay_task(
+            &store,
+            "task-cache-takeover",
+            "Cached takeover task",
+            "in_progress",
+            Some("task-cache-parent"),
+        )
+        .await;
+        create_status_overlay_task(
+            &store,
+            "task-cache-orthogonal",
+            "Cached orthogonal task",
+            "open",
+            Some("task-cache-parent"),
+        )
+        .await;
+
+        let active_status =
+            ready_exception_takeover_status("task-cache-takeover", "task-cache-takeover");
+        store
+            .record_run_graph_status(&active_status)
+            .await
+            .expect("record active takeover status");
+        store
+            .record_run_graph_dispatch_receipt(&exception_takeover_receipt(
+                "task-cache-takeover",
+                "coach",
+                "exception-cache-task-bound",
+                "2026-06-12T09:00:00Z",
+            ))
+            .await
+            .expect("record active takeover receipt");
+        write_exception_takeover_metadata(
+            &root,
+            "task-cache-takeover",
+            "coach",
+            "exception-cache-task-bound",
+        );
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "status-cache-task-bound-fallback");
+        }
+        let mut orthogonal_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-cache-orthogonal",
+            "implementation",
+            "implementation",
+        );
+        orthogonal_status.task_id = "task-cache-orthogonal".to_string();
+        orthogonal_status.status = "in_progress".to_string();
+        orthogonal_status.lifecycle_stage = "coach_active".to_string();
+        store
+            .record_run_graph_status(&orthogonal_status)
+            .await
+            .expect("record orthogonal current-session status");
+        store
+            .acquire_orchestrator_claim(state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "status-cache-task-bound-fallback-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "status-cache-task-bound-fallback".to_string(),
+                process_id: None,
+                task_id: Some("task-cache-orthogonal".to_string()),
+                run_id: Some("run-cache-orthogonal".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("status-cache".to_string()),
+                owned_paths: vec!["crates/vida/src/status_surface.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: state_store::LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire orthogonal current-session claim");
+        drop(store);
+
+        let cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "root_session_write_guard": {
+                "status": "blocked_by_default",
+                "reason": "latest_run_graph_task_stale",
+                "root_local_write_allowed": false
+            },
+            "continuation_binding": {
+                "status": "ambiguous",
+                "active_bounded_unit": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "sequential_vs_parallel_posture": "unknown_until_explicit_taskflow_binding"
+            }
+        });
+        let refreshed =
+            super::refresh_cached_status_projection_runtime_fields(&root, &cached.to_string())
+                .await
+                .expect("stale cached status should refresh task-bound takeover receipt");
+        let payload: serde_json::Value =
+            serde_json::from_str(&refreshed).expect("refreshed status should remain json");
+
+        assert_eq!(
+            payload["latest_run_graph_status"]["run_id"],
+            "run-cache-orthogonal"
+        );
+        assert_eq!(
+            payload["latest_run_graph_dispatch_receipt"]["run_id"],
+            "task-cache-takeover"
+        );
+        assert_eq!(
+            payload["latest_run_graph_recovery"]["run_id"],
+            "task-cache-takeover"
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["latest_run_graph_task_stale"],
+            false
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["status"],
+            "exception_takeover_active"
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["root_local_write_allowed"],
+            true
         );
 
         let _ = fs::remove_dir_all(root);
@@ -4319,14 +4617,7 @@ mod tests {
     async fn status_stale_projection_overlay_does_not_import_foreign_run_graph_evidence() {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
-        let nanos = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-status-foreign-overlay-{}-{nanos}",
-            std::process::id()
-        ));
+        let root = unique_status_packet_test_root("vida-status-foreign-overlay");
 
         unsafe {
             std::env::set_var("VIDA_SESSION_ID", "foreign-status-overlay-session");
