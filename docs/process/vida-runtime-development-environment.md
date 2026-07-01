@@ -13,7 +13,8 @@ This document covers active `vida-stack` development sessions that touch:
 3. DocFlow documentation validation and proof,
 4. GitHub issue triage in `pomazanbohdan/vida-stack`,
 5. project-local skills under `.agents/skills/**`,
-6. command-output and operator-efficiency follow-up work.
+6. validation-gated agent skill learning protocol work,
+7. command-output and operator-efficiency follow-up work.
 
 It does not replace framework runtime law, TaskFlow authority, DocFlow owner law, or GitHub public repository law.
 
@@ -37,7 +38,8 @@ For every runtime development session:
 3. record `active_bounded_unit`, `why_this_unit`, and `sequential_vs_parallel_posture`,
 4. load the relevant skill body before packet shaping or writes,
 5. create a DB-backed `step` before any write-producing mutation,
-6. validate TaskFlow graph after mutations.
+6. use `docs/process/agent-skill-learning-protocol.md` before shaping skill update or skill-learning runtime work,
+7. validate TaskFlow graph after mutations.
 
 ## Current Installed Runtime Environment
 

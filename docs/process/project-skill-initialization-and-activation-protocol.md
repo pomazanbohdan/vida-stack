@@ -18,7 +18,8 @@ This protocol does not define:
 1. framework lane law,
 2. one specific skill body,
 3. one specific task packet,
-4. permanent activation of all skills at once.
+4. permanent activation of all skills at once,
+5. validation-gated updates to skill bodies.
 
 ## Core Rule
 
@@ -117,7 +118,8 @@ No session is launch-ready until both are true:
 3. for top-level routing, read `docs/process/project-orchestrator-operating-protocol.md`,
 4. for delegated packet/team law, read `docs/process/team-development-and-orchestration-protocol.md`,
 5. for Codex role/runtime settings, read `docs/process/codex-agent-configuration-guide.md`,
-6. for project-local runtime development skills and GitHub issue processing skills, read `docs/process/vida-runtime-development-environment.md`.
+6. for project-local runtime development skills and GitHub issue processing skills, read `docs/process/vida-runtime-development-environment.md`,
+7. for evidence-backed skill body updates, rejected skill edits, held-out validation, or protocol-only skill learning, read `docs/process/agent-skill-learning-protocol.md`.
 
 -----
 artifact_path: process/project-skill-initialization-and-activation-protocol

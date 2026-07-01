@@ -40,10 +40,12 @@ Purpose: provide the project-level agent instruction overlay for the repository 
    - `docs/process/command-timing-and-gate-optimization-protocol.md`
 13. Project Error Search runtime diagnostics protocol:
     - `docs/process/project-error-search-runtime-diagnostics-protocol.md`
-14. Project-local TaskFlow runtime state and operator surfaces:
+14. Agent skill learning protocol:
+    - `docs/process/agent-skill-learning-protocol.md`
+15. Project-local TaskFlow runtime state and operator surfaces:
     - `.vida/data/state/`
     - `vida taskflow help`
-15. Project ZOMBIE-D test-writing protocol:
+16. Project ZOMBIE-D test-writing protocol:
     - `docs/process/zombie-d-test-writing-protocol.md`
 ## Bootstrap Read Path
 
@@ -65,37 +67,39 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 11. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/index.md`.
 12. For command timing, slow gates, script optimization, CI/local proof latency, or operator-friction diagnostics, continue to `docs/process/command-timing-and-gate-optimization-protocol.md`.
 13. For runtime defects, multi-defect pools, TaskFlow/DocFlow contradictions, run-graph/recovery/lane/dispatch/receipt blockers, session/worktree ownership conflicts, provider/model/carrier routing blockers, or CI failure clusters, continue to `docs/process/project-error-search-runtime-diagnostics-protocol.md`.
-14. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.
-15. After bootstrap, prefer the default `vida taskflow ...` shell path with project-local runtime resolution; do not reintroduce installed shim roots that point outside this repository.
-16. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
-17. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
-18. For repeatable development-session startup, prefer the compact startup bundle:
+14. For agent skill learning, validation-gated skill updates, rejected skill edits, or protocol-only skill learning in projects without runtime support, continue to `docs/process/agent-skill-learning-protocol.md`.
+15. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.
+16. After bootstrap, prefer the default `vida taskflow ...` shell path with project-local runtime resolution; do not reintroduce installed shim roots that point outside this repository.
+17. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
+18. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
+19. For repeatable development-session startup, prefer the compact startup bundle:
    - `docs/process/project-orchestrator-startup-bundle.md`
-19. Expand to the full session-start protocol and reusable prompt only when the bundle does not settle the startup question:
+20. Expand to the full session-start protocol and reusable prompt only when the bundle does not settle the startup question:
    - `docs/process/project-orchestrator-session-start-protocol.md`
    - `docs/process/project-orchestrator-reusable-prompt.md`
-20. If startup readiness, skill gating, packet rendering, or packet/lane defaults remain unclear after the bundle, expand only the needed compact project runtime capsules:
+21. If startup readiness, skill gating, packet rendering, or packet/lane defaults remain unclear after the bundle, expand only the needed compact project runtime capsules:
    - `docs/process/project-start-readiness-runtime-capsule.md`
    - `docs/process/project-packet-rendering-runtime-capsule.md`
    - `docs/process/project-packet-and-lane-runtime-capsule.md`
-21. Open deeper owner docs only when those compact project surfaces still leave an edge case unresolved:
+22. Open deeper owner docs only when those compact project surfaces still leave an edge case unresolved:
    - `docs/process/project-skill-initialization-and-activation-protocol.md`
+   - `docs/process/agent-skill-learning-protocol.md`
    - `docs/process/project-development-packet-template-protocol.md`
    - `docs/process/project-agent-prompt-stack-protocol.md`
    - `docs/process/project-orchestrator-session-start-protocol.md`
-22. For long-running epic execution, model/cost optimization, per-task
+23. For long-running epic execution, model/cost optimization, per-task
     executor/validator scorecards, wave-first closure, post-task optimization,
     or task-completion checklists, continue early to:
    - `docs/process/project-orchestrator-operating-protocol.md`
    - `docs/process/team-development-and-orchestration-protocol.md`
-23. For Rust test, CLI smoke/integration test, fixture/golden test, coverage-gate test, runtime defect proof test, or test-task planning work, continue early to:
+24. For Rust test, CLI smoke/integration test, fixture/golden test, coverage-gate test, runtime defect proof test, or test-task planning work, continue early to:
    - `docs/process/zombie-d-test-writing-protocol.md`
-24. On Windows, run cargo proof commands that need the MSVC toolchain through the project wrapper:
+25. On Windows, run cargo proof commands that need the MSVC toolchain through the project wrapper:
    - `.\scripts\vida-cargo-msvc.ps1 test -p vida --bin vida <filter> --nocapture`
    - The wrapper dot-sources `scripts/vida-windows-env.ps1`, sets a writable `VIDA_MSVC_TEMP_DIR` default under `.vida\build-temp\msvc`, imports `Import-VidaMsvcEnvironment`, validates `cl.exe`/`link.exe`/Windows SDK availability, and forwards all remaining arguments to `cargo`.
    - The wrapper also inserts cargo's test-harness delimiter before common harness flags such as `--nocapture` and `--test-threads`, because PowerShell scripts consume a bare `--` delimiter before it reaches cargo.
    - Prefer this PowerShell wrapper for local Rust proof runs before hand-rolled `cmd.exe`, `VsDevCmd.bat`, or `vcvars64.bat` command strings.
-25. This path set is mandatory bootstrap context, not an optional later lookup.
+26. This path set is mandatory bootstrap context, not an optional later lookup.
 
 Project-routing rule:
 
