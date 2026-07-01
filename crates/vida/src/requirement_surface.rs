@@ -247,14 +247,16 @@ fn requirement_source_secret_assignment_line(line: &str) -> bool {
     let Some(delimiter_index) = line.find(['=', ':']) else {
         return false;
     };
-    requirement_source_secret_key(&line[..delimiter_index])
+    let key = &line[..delimiter_index];
+    requirement_source_assignment_key_like(key) && requirement_source_secret_key(key)
 }
 
 fn requirement_source_secret_assignment_opens_multiline(line: &str) -> bool {
     let Some(delimiter_index) = line.find(['=', ':']) else {
         return false;
     };
-    if !requirement_source_secret_key(&line[..delimiter_index]) {
+    let key = &line[..delimiter_index];
+    if !requirement_source_assignment_key_like(key) || !requirement_source_secret_key(key) {
         return false;
     }
     let value = line[delimiter_index + 1..].trim_start();
@@ -280,6 +282,14 @@ fn requirement_source_secret_token(token: &str) -> bool {
         return false;
     };
     requirement_source_secret_key(key)
+}
+
+fn requirement_source_assignment_key_like(key: &str) -> bool {
+    let key = key.trim().trim_matches(['"', '\'']);
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
 }
 
 fn requirement_source_secret_key(key: &str) -> bool {

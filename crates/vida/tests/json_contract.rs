@@ -38,6 +38,16 @@ fn unique_local_dir(prefix: &str) -> std::path::PathBuf {
         .join(format!("{prefix}-{}-{nanos}-{counter}", std::process::id()))
 }
 
+fn write_requirement_project_markers(project_root: &std::path::Path) {
+    fs::write(project_root.join("AGENTS.md"), "# test project\n")
+        .expect("project bootstrap marker should be written");
+    fs::write(project_root.join("vida.config.yaml"), "project: {}\n")
+        .expect("project marker should be written");
+    for marker in [".vida/config", ".vida/db", ".vida/project"] {
+        fs::create_dir_all(project_root.join(marker)).expect("project runtime marker should exist");
+    }
+}
+
 fn run_json(state_dir: &str, args: &[&str]) -> serde_json::Value {
     let output = vida()
         .args(args)
@@ -180,13 +190,7 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
     let state_dir = unique_local_dir("vida-json-contract-source-state");
     let project_root = unique_local_dir("vida-json-contract-source-project");
     fs::create_dir_all(&project_root).expect("project root should exist");
-    fs::write(project_root.join("AGENTS.md"), "# test project\n")
-        .expect("project bootstrap marker should be written");
-    fs::write(project_root.join("vida.config.yaml"), "project: {}\n")
-        .expect("project marker should be written");
-    for marker in [".vida/config", ".vida/db", ".vida/project"] {
-        fs::create_dir_all(project_root.join(marker)).expect("project runtime marker should exist");
-    }
+    write_requirement_project_markers(&project_root);
     fs::write(
         project_root.join("requirements.md"),
         "SECRET_TOKEN=must-not-be-serialized\nBuild the feature.",
@@ -202,6 +206,8 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
             "PRIVATE_KEY=\"-----BEGIN TEST KEY-----",
             "MIISECRETBODYSHOULDNOTLEAK",
             "-----END TEST KEY-----\"",
+            "Password reset: allow users to rotate credentials.",
+            "Token-based auth: add OAuth.",
             "Build the feature.",
             "Keep operator output compact.",
             "Add JSON proof.",
@@ -315,6 +321,16 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         "source metadata should disclose that public source text was redacted: {source_metadata}"
     );
     assert!(
+        source_text.contains("Password reset: allow users to rotate credentials.")
+            && source_text.contains("Token-based auth: add OAuth."),
+        "prose requirement headings mentioning password/token should be preserved: {source_text}"
+    );
+    assert!(
+        public_analysis_text.contains("Password reset: allow users to rotate credentials.")
+            && public_analysis_text.contains("Token-based auth: add OAuth."),
+        "analysis text should preserve prose requirement headings mentioning password/token: {public_analysis_text}"
+    );
+    assert!(
         public_analysis_text.contains("Preserve requirement thirteen"),
         "redacted analysis should preserve requirements beyond the atom cap: {public_analysis_text}"
     );
@@ -339,6 +355,23 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
                     || text.contains("MIISECRETBODYSHOULDNOTLEAK")
                     || text.contains("[redacted-test-value]"))),
         "source-file secrets must not leak through requirement atoms"
+    );
+    assert!(
+        artifact["requirement_atoms"]
+            .as_array()
+            .expect("atoms should render")
+            .iter()
+            .any(|atom| atom["text"].as_str().is_some_and(
+                |text| text.contains("Password reset: allow users to rotate credentials")
+            ))
+            && artifact["requirement_atoms"]
+                .as_array()
+                .expect("atoms should render")
+                .iter()
+                .any(|atom| atom["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("Token-based auth: add OAuth"))),
+        "requirement atoms should preserve prose headings mentioning password/token"
     );
 
     let nested_dir = project_root.join("nested");
@@ -458,6 +491,7 @@ fn requirement_analysis_source_file_rejects_symlinks() {
     let state_dir = unique_state_dir();
     let project_root = format!("{}-project", unique_state_dir());
     fs::create_dir_all(&project_root).expect("project root should exist");
+    write_requirement_project_markers(std::path::Path::new(&project_root));
     let sensitive_path = format!("{}-sensitive.env", unique_state_dir());
     fs::write(
         &sensitive_path,
