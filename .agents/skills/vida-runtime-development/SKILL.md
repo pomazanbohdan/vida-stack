@@ -64,6 +64,15 @@ After each coherent runtime work pool, check whether the session required avoida
 
 If yes, create or update an operator-efficiency TaskFlow item under the current runtime/quality epic.
 
+For parallel task packs, run one explicit finalize sequence:
+
+1. Attach structured proof evidence to every task before `vida task close`; close reason text is not proof authority.
+2. Close pack tasks sequentially because TaskFlow graph mutation is a shared runtime domain.
+3. Run `vida task reconcile-closed-runs --limit 25 --json`, then `vida orchestrator-init --json`.
+4. Treat a remaining `closed_task_active_run_projection_mismatch` as a runtime blocker or follow-up, not as a clean pack close.
+5. Record broad test deltas as `inside_pack`, `adjacent_regression`, or `outside_pack_residual` before closing tasks.
+6. Create or update runtime follow-ups for repeated command-output loss, repo-root temp leakage, missing pack-level proof/close commands, or shell PATH drift.
+
 ## Agent Research Ring
 
 For complex runtime defects, use an adaptive agent research ring instead of a fixed number of research loops.
@@ -122,3 +131,15 @@ Minimal proof for this skill's work:
 19. After fixing the root cause and any adjacent defects inside a task, run a read-only agent pattern sweep before task closure. This is a closure gate, not an optional review. The agent must search for the same error pattern across related files, shared helpers, command surfaces, tests, fixtures, persisted-state snapshots, operator outputs, and next-action text. Capture and classify the result in the task note; if the pattern exists outside the current bounded fix, create or update a follow-up TaskFlow task with acceptance criteria before closing the current task. If no wider pattern is found, record explicit negative evidence before closure.
 
 Do not close GitHub issues, epics, or TaskFlow parents until the relevant children and proof targets are current.
+
+-----
+artifact_path: .agents/skills/vida-runtime-development
+artifact_type: agent_skill
+artifact_version: '1'
+artifact_revision: '2026-07-01'
+schema_version: '1'
+status: canonical
+source_path: .agents/skills/vida-runtime-development/SKILL.md
+created_at: '2026-07-01T00:00:00+03:00'
+updated_at: 2026-07-01T18:14:00+03:00
+changelog_ref: vida-runtime-development.changelog.jsonl

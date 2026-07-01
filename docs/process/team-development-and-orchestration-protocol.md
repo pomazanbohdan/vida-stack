@@ -87,6 +87,17 @@ Runtime-first execution rule:
 6. Defective Runtime Emulation Mode must preserve the same configured evidence chain manually: analyst/spec evidence, test-author proof, implementation, coach/review, independent verification, TaskFlow note, PR protocol, commit/push, and any required release/system-binary update.
 7. Manual emulation never converts into permission to skip the runtime defect. The blocking runtime issue must be created or updated, prioritized, and linked to the current task before unrelated implementation continues.
 
+Parallel pack execution rule:
+
+1. A parallel pack is one explicit `order_bucket` with every included task marked `execution_mode=parallel_safe`, the same `parallel_group`, and a distinct `conflict_domain`.
+2. The pack is analyzed as one unit before dispatch: owned paths, proof targets, expected shared contracts, and likely integration conflicts must be known before the first write lane starts.
+3. Write lanes may run at the same time only when their owned paths and conflict domains are disjoint. TaskFlow graph mutation, proof attachment, task close, release install, and git publication remain sequential.
+4. The orchestrator must not implement one task, test it, close it, then start the next task when the operator requested simultaneous pack development. The intended order is pack analysis, parallel lane dispatch, one root integration batch, one focused proof batch, one broad diagnostic gate, then pack closeout.
+5. Completed lane returns are synthesized together. Root integration may fix cross-pack regressions, but those fixes must stay inside the pack's shared invariant or become a separate TaskFlow item.
+6. Pack closeout requires structured proof evidence on each task before `vida task close`. Close reason text is not proof authority.
+7. After all task closes, run a post-pack runtime reconciliation gate: `vida task reconcile-closed-runs --limit 25 --json`, then `vida orchestrator-init --json`. A remaining `closed_task_active_run_projection_mismatch` is a runtime blocker or follow-up, not a clean close.
+8. If the broad package/workspace gate fails after focused proof is green, classify the failures as `inside_pack`, `adjacent_regression`, or `outside_pack_residual` before closeout. Close only the tasks whose acceptance and focused proof are satisfied, and record the residual count and boundary in structured proof evidence.
+
 ## Canonical Work Unit
 
 The canonical delegated work unit is one `delivery_task` or one `execution_block` packet.
