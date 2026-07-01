@@ -449,7 +449,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     }
 
     if as_json && !selected_output && summary_only {
-        if let Some(cached) = read_fresh_admissible_status_json_projection(&state_dir, summary_only)
+        if let Some(cached) =
+            read_fresh_runtime_validated_status_json_projection(&state_dir, summary_only).await
         {
             println!(
                 "{}",
@@ -459,7 +460,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         }
         if summary_only {
             if let Some(cached) =
-                read_state_fresh_admissible_status_json_projection(&state_dir, summary_only)
+                read_state_fresh_runtime_validated_status_json_projection(&state_dir, summary_only)
+                    .await
             {
                 println!(
                     "{}",
@@ -1664,26 +1666,45 @@ async fn build_operator_session_projection_for_status(
     }
 }
 
-fn read_fresh_admissible_status_json_projection(
+async fn read_fresh_runtime_validated_status_json_projection(
     state_dir: &std::path::Path,
     summary_only: bool,
 ) -> Option<String> {
-    crate::operator_projection_cache::read_fresh_json_projection(
+    let cached = crate::operator_projection_cache::read_fresh_json_projection(
         state_dir,
         status_json_projection_name(summary_only),
     )
-    .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached))
+    .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached))?;
+    runtime_validate_and_refresh_cached_status_projection(state_dir, &cached).await
 }
 
-fn read_state_fresh_admissible_status_json_projection(
+async fn read_state_fresh_runtime_validated_status_json_projection(
     state_dir: &std::path::Path,
     summary_only: bool,
 ) -> Option<String> {
-    crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
-        state_dir,
-        status_json_projection_name(summary_only),
+    let cached =
+        crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
+            state_dir,
+            status_json_projection_name(summary_only),
+        )
+        .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached))?;
+    runtime_validate_and_refresh_cached_status_projection(state_dir, &cached).await
+}
+
+async fn runtime_validate_and_refresh_cached_status_projection(
+    state_dir: &std::path::Path,
+    cached: &str,
+) -> Option<String> {
+    let store = StateStore::open_existing_read_only_with_strict_timeout(
+        state_dir.to_path_buf(),
+        std::time::Duration::from_millis(250),
     )
-    .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached))
+    .await
+    .ok()?;
+    if !cached_status_projection_current_runtime_admissible_with_store(&store, cached).await {
+        return None;
+    }
+    refresh_cached_status_projection_runtime_fields_with_store(&store, cached).await
 }
 
 fn render_cached_status_projection_for_operator(summary_only: bool, cached: &str) -> String {
