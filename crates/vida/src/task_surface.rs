@@ -17587,9 +17587,10 @@ mod tests {
             .as_str()
             .expect("next command should render");
 
-        assert!(next_required_command
-            .contains("vida task proof status 'safe; touch /tmp/vida_pwned #'"));
-        assert!(!next_required_command.contains("vida task proof status safe; touch"));
+        assert!(next_required_command.contains(
+            "Structured proof evidence is missing on already closed task `safe; touch /tmp/vida_pwned #`"
+        ));
+        assert!(!next_required_command.contains("vida task proof status"));
     }
 
     #[test]
