@@ -794,6 +794,17 @@ fn host_bridge_adapter_payload(
             let dispatch_target = request.dispatch_target.as_str();
             format!("{run_id}-{dispatch_target}-host-bridge-receipt")
         };
+        let submit_result_path = if provenance_blockers.len() == 1
+            && provenance_blockers.first().is_some_and(|blocker| {
+                blocker
+                    == taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing.as_str()
+            })
+            && !request.result_path.as_os_str().is_empty()
+        {
+            request.result_path.display().to_string()
+        } else {
+            "<host-bridge-result-file>".to_string()
+        };
         let retry_arg = if retryable_completion_request {
             " --retry-completion"
         } else {
@@ -804,7 +815,7 @@ fn host_bridge_adapter_payload(
             crate::shell_quote(&request_path.display().to_string()),
             retry_arg,
             crate::shell_quote("<host-agent-id>"),
-            crate::shell_quote("<host-bridge-result-file>"),
+            crate::shell_quote(&submit_result_path),
             crate::shell_quote(&receipt_id)
         );
         command

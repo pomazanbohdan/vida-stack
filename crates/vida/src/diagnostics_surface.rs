@@ -549,22 +549,16 @@ async fn build_post_commit_diagnostics(
     .await
     .map_err(|error| format!("open state store for diagnostics: {error}"))?;
 
-    let latest_run_graph_status = store
-        .latest_run_graph_status_for_current_session()
+    let current_runtime_projection = crate::status_surface::current_runtime_projection(&store)
         .await
-        .map_err(|error| format!("read latest run graph status: {error}"))?;
-    let latest_terminal_task_active_run_graph_status = store
-        .latest_terminal_task_active_run_graph_status()
-        .await
-        .map_err(|error| format!("read latest terminal-task run graph status: {error}"))?;
-    let latest_run_graph_recovery = store
-        .latest_run_graph_recovery_summary_for_current_session()
-        .await
-        .map_err(|error| format!("read latest run graph recovery: {error}"))?;
-    let latest_dispatch_receipt = store
-        .latest_run_graph_dispatch_receipt_summary_for_current_session()
-        .await
-        .map_err(|error| format!("read latest run graph dispatch receipt: {error}"))?;
+        .map_err(|error| format!("read current runtime projection: {error}"))?;
+    let crate::status_surface::CurrentRuntimeProjection {
+        current_session_status: latest_run_graph_status,
+        terminal_task_active_status: latest_terminal_task_active_run_graph_status,
+        recovery: latest_run_graph_recovery,
+        dispatch_receipt: latest_dispatch_receipt,
+        ..
+    } = current_runtime_projection;
     let tasks = store
         .all_tasks()
         .await

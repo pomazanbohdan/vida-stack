@@ -1038,8 +1038,12 @@ fn extend_graph_summary_next_actions(
     } else if decision.primary_ready_task.is_some() {
         if let Some(task_id) = ready_task_id {
             let task_id = shell_quote_arg(task_id);
-            let show_command =
-                operator_output::command_text::human_command(&format!("vida task show {task_id}"));
+            let task_label = crate::cli::command_metadata_by_name("task")
+                .expect("task metadata exists")
+                .label;
+            let show_command = operator_output::command_text::human_command(&format!(
+                "{task_label} show {task_id}"
+            ));
             next_actions.push(format!(
                 "Inspect the primary ready task with `{show_command}` before dispatch."
             ));
@@ -1054,8 +1058,11 @@ fn extend_graph_summary_next_actions(
         ));
     }
     if critical_path_length > 0 {
+        let task_label = crate::cli::command_metadata_by_name("task")
+            .expect("task metadata exists")
+            .label;
         let critical_path_command =
-            operator_output::command_text::human_command("vida task critical-path");
+            operator_output::command_text::human_command(&format!("{task_label} critical-path"));
         next_actions.push(format!(
             "Inspect the current graph bottleneck with `{critical_path_command}` before parallelizing additional work."
         ));
@@ -1229,13 +1236,23 @@ fn sanitize_graph_summary_recommendation(
 fn authoritative_run_state_action(run_id: Option<&str>, reason: &str) -> TaskflowNextAction {
     match run_id.filter(|value| !value.trim().is_empty()) {
         Some(run_id) => TaskflowNextAction {
-            command: format!("vida taskflow run-graph status {run_id}"),
-            surface: "vida taskflow run-graph status".to_string(),
+            command: format!(
+                "{} run-graph status {run_id}",
+                crate::cli::command_metadata_by_name("taskflow")
+                    .expect("taskflow metadata exists")
+                    .label
+            ),
+            surface: format!(
+                "{} run-graph status",
+                crate::cli::command_metadata_by_name("taskflow")
+                    .expect("taskflow metadata exists")
+                    .label
+            ),
             reason: reason.to_string(),
         },
         None => TaskflowNextAction {
-            command: "vida status".to_string(),
-            surface: "vida status".to_string(),
+            command: crate::cli::command_hint("status").to_string(),
+            surface: crate::cli::command_hint("status").to_string(),
             reason: reason.to_string(),
         },
     }
@@ -1244,13 +1261,33 @@ fn authoritative_run_state_action(run_id: Option<&str>, reason: &str) -> Taskflo
 fn blocked_recovery_action(run_id: Option<&str>, reason: &str) -> TaskflowNextAction {
     match run_id.filter(|value| !value.trim().is_empty()) {
         Some(run_id) => TaskflowNextAction {
-            command: format!("vida taskflow recovery status {run_id}"),
-            surface: "vida taskflow recovery status".to_string(),
+            command: format!(
+                "{} recovery status {run_id}",
+                crate::cli::command_metadata_by_name("taskflow")
+                    .expect("taskflow metadata exists")
+                    .label
+            ),
+            surface: format!(
+                "{} recovery status",
+                crate::cli::command_metadata_by_name("taskflow")
+                    .expect("taskflow metadata exists")
+                    .label
+            ),
             reason: reason.to_string(),
         },
         None => TaskflowNextAction {
-            command: "vida taskflow recovery latest".to_string(),
-            surface: "vida taskflow recovery latest".to_string(),
+            command: format!(
+                "{} recovery latest",
+                crate::cli::command_metadata_by_name("taskflow")
+                    .expect("taskflow metadata exists")
+                    .label
+            ),
+            surface: format!(
+                "{} recovery latest",
+                crate::cli::command_metadata_by_name("taskflow")
+                    .expect("taskflow metadata exists")
+                    .label
+            ),
             reason: reason.to_string(),
         },
     }
@@ -4196,10 +4233,15 @@ fn taskflow_graph_summary_blocked_payload(error_stage: &str, error: &str) -> ser
         crate::release1_contracts::BlockerCode::DependencyGraphIssues,
     )
     .unwrap_or_else(|| "dependency_graph_issues".to_string())];
-    let next_actions = vec![
-        "Run `vida task validate-graph` and repair the reported dependency graph issues before using graph-summary."
-            .to_string(),
-    ];
+    let next_actions = vec![format!(
+        "Run `{}` and repair the reported dependency graph issues before using graph-summary.",
+        operator_output::command_text::human_command(&format!(
+            "{} validate-graph",
+            crate::cli::command_metadata_by_name("task")
+                .expect("task metadata exists")
+                .label
+        ))
+    )];
     let (shared_fields, operator_contracts, artifact_refs) =
         taskflow_graph_summary_operator_contracts(
             crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status,

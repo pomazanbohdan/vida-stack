@@ -5077,13 +5077,19 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     }
                 }
             };
-            let latest_status = match store.latest_run_graph_status().await {
-                Ok(status) => status,
-                Err(error) => {
-                    eprintln!("Failed to read latest run-graph status: {error}");
-                    return ExitCode::from(1);
-                }
-            };
+            let current_runtime_projection =
+                match crate::status_surface::current_runtime_projection(&store).await {
+                    Ok(projection) => projection,
+                    Err(error) => {
+                        eprintln!("Failed to read current runtime projection: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            let crate::status_surface::CurrentRuntimeProjection {
+                status: latest_status,
+                current_session_dispatch_receipt,
+                ..
+            } = current_runtime_projection;
             let summary = match latest_scoped_lane_summary(&store, &scoped_task_ids).await {
                 Ok(Some(summary)) => Ok(Some(summary)),
                 Ok(None) => match store
@@ -5093,12 +5099,9 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     Ok(Some(receipt)) => Ok(Some(
                         crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt),
                     )),
-                    Ok(None) => match store
-                        .latest_run_graph_dispatch_receipt_summary_for_current_session()
-                        .await
-                    {
-                        Ok(Some(summary)) => Ok(Some(summary)),
-                        Ok(None) => match latest_status.as_ref() {
+                    Ok(None) => match current_session_dispatch_receipt {
+                        Some(summary) => Ok(Some(summary)),
+                        None => match latest_status.as_ref() {
                             Some(status) => {
                                 store
                                     .run_graph_dispatch_receipt_summary_for_status(status)
@@ -5106,7 +5109,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                             }
                             None => Ok(None),
                         },
-                        Err(error) => Err(error),
                     },
                     Err(error) => Err(error),
                 },

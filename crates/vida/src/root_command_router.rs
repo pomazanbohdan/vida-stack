@@ -9,6 +9,7 @@ use super::{
     task_surface, AgentArgs, AgentCommand, Cli, CoderCommand, Command, ReleaseCommand, SessionArgs,
     SessionCommand, StateArgs, StateCommand, StateResetArgs, TaskArgs, TaskCommand,
 };
+use crate::cli::{command_metadata_by_name, command_metadata_for_command};
 use crate::root_state_binding::{
     bind_runtime_state_dir_for_project_bound_command,
     bind_runtime_state_dir_override_for_project_bound_command,
@@ -218,47 +219,12 @@ fn state_reset_error_operator_payload(
 
 fn command_label(command: &Option<Command>) -> String {
     match command {
-        None => "vida".to_string(),
-        Some(Command::Init(_)) => "vida init".to_string(),
-        Some(Command::Boot(_)) => "vida boot".to_string(),
-        Some(Command::OrchestratorInit(_)) => "vida orchestrator-init".to_string(),
-        Some(Command::AgentInit(_)) => "vida agent-init".to_string(),
-        Some(Command::Agent(_)) => "vida agent".to_string(),
-        Some(Command::Coder(_)) => "vida coder".to_string(),
-        Some(Command::Protocol(_)) => "vida protocol".to_string(),
-        Some(Command::ProjectActivator(_)) => "vida project-activator".to_string(),
-        Some(Command::AgentFeedback(_)) => "vida agent-feedback".to_string(),
-        Some(Command::Task(_)) => "vida task".to_string(),
-        Some(Command::Memory(_)) => "vida memory".to_string(),
-        Some(Command::Status(_)) => "vida status".to_string(),
-        Some(Command::State(_)) => "vida state".to_string(),
-        Some(Command::Runtime(_)) => "vida runtime".to_string(),
-        Some(Command::Doctor(_)) => "vida doctor".to_string(),
-        Some(Command::Diagnostics(_)) => "vida diagnostics".to_string(),
-        Some(Command::Proof(_)) => "vida proof".to_string(),
-        Some(Command::Service(_)) => "vida service".to_string(),
-        Some(Command::Project(_)) => "vida project".to_string(),
-        Some(Command::Wizard(_)) => "vida wizard".to_string(),
-        Some(Command::Job(_)) => "vida job".to_string(),
-        Some(Command::Receipt(_)) => "vida receipt".to_string(),
-        Some(Command::Docs(_)) => "vida docs".to_string(),
-        Some(Command::OrchestratorSession(_)) => "vida orchestrator-session".to_string(),
-        Some(Command::Session(_)) => "vida session".to_string(),
-        Some(Command::Quality(_)) => "vida quality".to_string(),
-        Some(Command::Requirement(_)) => "vida requirement".to_string(),
-        Some(Command::Pack(_)) => "vida pack".to_string(),
-        Some(Command::Consume(_)) => "vida consume".to_string(),
-        Some(Command::Lane(_)) => "vida lane".to_string(),
-        Some(Command::Approval(_)) => "vida approval".to_string(),
-        Some(Command::Recovery(_)) => "vida recovery".to_string(),
-        Some(Command::Route(_)) => "vida route".to_string(),
         Some(Command::Release(args)) => release_command_label(args),
-        Some(Command::Taskflow(_)) => "vida taskflow".to_string(),
-        Some(Command::Docflow(_)) => "vida docflow".to_string(),
         Some(Command::External(args)) => args
             .first()
             .map(|name| format!("vida {name}"))
             .unwrap_or_else(|| "vida external".to_string()),
+        _ => command_metadata_for_command(command).label.to_string(),
     }
 }
 
@@ -466,6 +432,10 @@ fn workflow_metric(
 }
 
 pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) -> bool {
+    let metadata = command_metadata_for_command(command);
+    if !metadata.binds_project_state_dir {
+        return false;
+    }
     match command {
         Some(Command::Task(args)) => task_command_needs_project_root(args),
         Some(Command::Agent(args)) => agent_command_needs_project_root(args),
@@ -488,18 +458,14 @@ pub(crate) fn command_needs_project_root_state_dir(command: &Option<Command>) ->
         Some(Command::OrchestratorSession(args)) => {
             orchestrator_session_command_explicit_state_dir(args).is_none()
         }
-        Some(
-            Command::AgentFeedback(_)
-            | Command::Requirement(_)
-            | Command::Pack(_)
-            | Command::Runtime(_)
-            | Command::Proof(_)
-            | Command::Service(_)
-            | Command::Project(_)
-            | Command::Wizard(_)
-            | Command::Job(_)
-            | Command::Receipt(_),
-        ) => true,
+        Some(Command::AgentFeedback(_)) => metadata.binds_project_state_dir,
+        Some(Command::Runtime(_)) => metadata.binds_project_state_dir,
+        Some(Command::Proof(_)) => metadata.binds_project_state_dir,
+        Some(Command::Service(_)) => metadata.binds_project_state_dir,
+        Some(Command::Project(_)) => metadata.binds_project_state_dir,
+        Some(Command::Wizard(_)) => metadata.binds_project_state_dir,
+        Some(Command::Job(_)) => metadata.binds_project_state_dir,
+        Some(Command::Receipt(_)) => metadata.binds_project_state_dir,
         Some(Command::Session(args)) => session_command_needs_project_root(args),
         Some(Command::Doctor(args)) => args.state_dir.is_none(),
         _ => false,
@@ -591,28 +557,11 @@ fn command_explicit_state_dir(command: &Option<Command>) -> Option<&std::path::P
 }
 
 fn command_preserves_explicit_env_state_dir(command: &Option<Command>) -> bool {
-    matches!(
-        command,
-        Some(Command::Status(_) | Command::Taskflow(_))
-            | Some(Command::State(_))
-            | Some(Command::Consume(_) | Command::Recovery(_) | Command::Route(_))
-            | Some(Command::Lane(_) | Command::Approval(_))
-            | Some(Command::OrchestratorInit(_))
-            | Some(Command::ProjectActivator(_) | Command::Memory(_))
-            | Some(Command::Doctor(_) | Command::Diagnostics(_))
-            | Some(Command::OrchestratorSession(_))
-            | Some(Command::Session(_))
-            | Some(Command::Agent(AgentArgs {
-                command: AgentCommand::DispatchNext(_)
-                    | AgentCommand::Select(_)
-                    | AgentCommand::HostBridge(_)
-                    | AgentCommand::Status(_)
-            }))
-    )
+    command_metadata_for_command(command).preserves_env_state_dir
 }
 
 fn command_preserves_parse_only_env_state_dir(command: &Option<Command>) -> bool {
-    matches!(command, Some(Command::AgentInit(_)))
+    command_metadata_for_command(command).preserves_parse_only_env_state_dir
 }
 
 fn raw_args_need_project_root_state_dir(args: &[OsString]) -> bool {
@@ -627,34 +576,9 @@ fn raw_args_need_project_root_state_dir(args: &[OsString]) -> bool {
     if raw_args_request_help_or_version(args) || raw_args_have_explicit_state_dir(args) {
         return false;
     }
-    matches!(
-        command,
-        "orchestrator-init"
-            | "agent-init"
-            | "agent"
-            | "project-activator"
-            | "agent-feedback"
-            | "task"
-            | "memory"
-            | "status"
-            | "state"
-            | "runtime"
-            | "doctor"
-            | "diagnostics"
-            | "proof"
-            | "service"
-            | "project"
-            | "wizard"
-            | "job"
-            | "receipt"
-            | "orchestrator-session"
-            | "consume"
-            | "lane"
-            | "approval"
-            | "recovery"
-            | "route"
-            | "taskflow"
-    )
+    command_metadata_by_name(command)
+        .map(|metadata| metadata.binds_project_state_dir)
+        .unwrap_or(false)
 }
 
 fn raw_args_are_env_authoritative_state_surface(args: &[OsString]) -> bool {
@@ -666,26 +590,15 @@ fn raw_args_are_env_authoritative_state_surface(args: &[OsString]) -> bool {
         .skip(1)
         .filter_map(|arg| arg.to_str())
         .filter(|arg| !arg.starts_with('-'));
-    match positional.next() {
+    let command = positional.next();
+    match command {
         Some("agent") => matches!(
             positional.next(),
             Some("dispatch-next" | "select" | "status" | "host-bridge")
         ),
-        Some(
-            "orchestrator-init"
-            | "task"
-            | "taskflow"
-            | "project-activator"
-            | "memory"
-            | "status"
-            | "state"
-            | "doctor"
-            | "diagnostics"
-            | "orchestrator-session"
-            | "lane"
-            | "approval",
-        ) => true,
-        Some("consume" | "recovery" | "route") => true,
+        Some(command) => command_metadata_by_name(command)
+            .map(|metadata| metadata.preserves_env_state_dir)
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -702,7 +615,9 @@ fn raw_args_are_env_parse_only_state_surface(args: &[OsString]) -> bool {
     else {
         return false;
     };
-    matches!(command, "agent-init")
+    command_metadata_by_name(command)
+        .map(|metadata| metadata.preserves_parse_only_env_state_dir)
+        .unwrap_or(false)
 }
 
 fn raw_args_are_agent_state_dir_bound_surface(args: &[OsString]) -> bool {

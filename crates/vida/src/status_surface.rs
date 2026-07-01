@@ -171,6 +171,155 @@ fn effective_latest_run_graph_status(
     global_status.cloned()
 }
 
+pub(crate) struct CurrentRuntimeProjection {
+    pub(crate) current_session_status: Option<crate::state_store::RunGraphStatus>,
+    pub(crate) global_status: Option<crate::state_store::RunGraphStatus>,
+    pub(crate) terminal_task_active_status: Option<crate::state_store::RunGraphStatus>,
+    pub(crate) status: Option<crate::state_store::RunGraphStatus>,
+    pub(crate) current_session_dispatch_receipt:
+        Option<crate::state_store::RunGraphDispatchReceiptSummary>,
+    pub(crate) recovery: Option<crate::state_store::RunGraphRecoverySummary>,
+    pub(crate) checkpoint: Option<crate::state_store::RunGraphCheckpointSummary>,
+    pub(crate) gate: Option<crate::state_store::RunGraphGateSummary>,
+    pub(crate) dispatch_receipt: Option<crate::state_store::RunGraphDispatchReceiptSummary>,
+    pub(crate) effective_run_id: Option<String>,
+    pub(crate) dispatch_receipt_checkpoint_leakage: bool,
+    pub(crate) dispatch_receipt_matches_status: bool,
+    pub(crate) dispatch_receipt_summary_inconsistent: bool,
+    pub(crate) snapshot_inconsistent: bool,
+}
+
+pub(crate) async fn current_runtime_projection(
+    store: &StateStore,
+) -> Result<CurrentRuntimeProjection, state_store::StateStoreError> {
+    let current_session_status = store.latest_run_graph_status_for_current_session().await?;
+    let global_status = store.latest_run_graph_status().await?;
+    let terminal_task_active_status = store.latest_terminal_task_active_run_graph_status().await?;
+    let mut current_session_dispatch_receipt_checkpoint_leakage = false;
+    let current_session_dispatch_receipt = match current_session_status.as_ref() {
+        Some(status) => match store
+            .run_graph_dispatch_receipt_summary_for_status(status)
+            .await
+        {
+            Ok(summary) => summary,
+            Err(error)
+                if error
+                    .to_string()
+                    .contains("latest checkpoint evidence must share the same run_id") =>
+            {
+                current_session_dispatch_receipt_checkpoint_leakage = true;
+                None
+            }
+            Err(error) => return Err(error),
+        },
+        None => None,
+    };
+    let status =
+        effective_latest_run_graph_status(current_session_status.clone(), global_status.as_ref());
+    let status_run_id = status.as_ref().map(|status| status.run_id.as_str());
+    let mut recovery = match status_run_id {
+        Some(run_id) => Some(store.run_graph_recovery_summary(run_id).await?),
+        None => None,
+    };
+    let checkpoint = match status_run_id {
+        Some(run_id) => Some(store.run_graph_checkpoint_summary(run_id).await?),
+        None => None,
+    };
+    let gate = match status_run_id {
+        Some(run_id) => Some(store.run_graph_gate_summary(run_id).await?),
+        None => None,
+    };
+    let mut dispatch_receipt_checkpoint_leakage = false;
+    let status_dispatch_receipt = match status.as_ref() {
+        Some(status) => match store
+            .run_graph_dispatch_receipt_summary_for_status(status)
+            .await
+        {
+            Ok(summary) => summary,
+            Err(error)
+                if error
+                    .to_string()
+                    .contains("latest checkpoint evidence must share the same run_id") =>
+            {
+                dispatch_receipt_checkpoint_leakage = true;
+                None
+            }
+            Err(error) => return Err(error),
+        },
+        None => None,
+    };
+    if current_session_dispatch_receipt_checkpoint_leakage {
+        dispatch_receipt_checkpoint_leakage = true;
+    }
+    let dispatch_receipt = if status_dispatch_receipt.is_none()
+        && (status.is_none() || dispatch_receipt_checkpoint_leakage)
+    {
+        store
+            .latest_active_exception_takeover_dispatch_receipt()
+            .await?
+            .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt)
+    } else {
+        status_dispatch_receipt
+    };
+    if let Some(receipt) = dispatch_receipt.as_ref() {
+        if recovery
+            .as_ref()
+            .is_none_or(|summary| summary.run_id != receipt.run_id)
+        {
+            recovery = Some(store.run_graph_recovery_summary(&receipt.run_id).await?);
+        }
+    }
+    let effective_run_id = status
+        .as_ref()
+        .map(|status| status.run_id.clone())
+        .or_else(|| {
+            dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.clone())
+        });
+    let dispatch_receipt_matches_status = dispatch_receipt_checkpoint_leakage
+        || state_store::latest_run_graph_dispatch_receipt_matches_status(
+            status.as_ref().map(|status| status.run_id.as_str()),
+            dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str()),
+        );
+    let dispatch_receipt_summary_inconsistent = !dispatch_receipt_checkpoint_leakage
+        && state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
+            status.as_ref().map(|status| status.run_id.as_str()),
+            dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str()),
+        );
+    let snapshot_inconsistent = !dispatch_receipt_checkpoint_leakage
+        && !state_store::latest_run_graph_evidence_snapshot_is_consistent(
+            effective_run_id.as_deref(),
+            recovery.as_ref().map(|summary| summary.run_id.as_str()),
+            checkpoint.as_ref().map(|summary| summary.run_id.as_str()),
+            gate.as_ref().map(|summary| summary.run_id.as_str()),
+            dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str()),
+        );
+
+    Ok(CurrentRuntimeProjection {
+        current_session_status,
+        global_status,
+        terminal_task_active_status,
+        status,
+        current_session_dispatch_receipt,
+        recovery,
+        checkpoint,
+        gate,
+        dispatch_receipt,
+        effective_run_id,
+        dispatch_receipt_checkpoint_leakage,
+        dispatch_receipt_matches_status,
+        dispatch_receipt_summary_inconsistent,
+        snapshot_inconsistent,
+    })
+}
+
 pub(crate) fn first_non_empty_artifact_ref<'a>(
     candidates: &[(Option<&'a str>, StatusRunGraphArtifactSource)],
 ) -> (Option<&'a str>, Option<StatusRunGraphArtifactSource>) {
@@ -631,182 +780,30 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-                let latest_run_graph_status =
-                    match store.latest_run_graph_status_for_current_session().await {
-                        Ok(summary) => summary,
-                        Err(error) => {
-                            eprintln!("Failed to read latest run graph status: {error}");
-                            return ExitCode::from(1);
-                        }
-                    };
-                let latest_global_run_graph_status = match store.latest_run_graph_status().await {
-                    Ok(summary) => summary,
+                let current_runtime_projection = match current_runtime_projection(&store).await {
+                    Ok(projection) => projection,
                     Err(error) => {
-                        eprintln!("Failed to read global latest run graph status: {error}");
+                        eprintln!("Failed to read current runtime projection: {error}");
                         return ExitCode::from(1);
                     }
                 };
-                let latest_terminal_task_active_run_graph_status = match store
-                    .latest_terminal_task_active_run_graph_status()
-                    .await
-                {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("Failed to read latest terminal-task run graph status: {error}");
-                        return ExitCode::from(1);
-                    }
-                };
-                let latest_run_graph_status = effective_latest_run_graph_status(
-                    latest_run_graph_status,
-                    latest_global_run_graph_status.as_ref(),
-                );
-                let latest_run_graph_run_id = latest_run_graph_status
-                    .as_ref()
-                    .map(|status| status.run_id.as_str());
-                let latest_run_graph_recovery = match latest_run_graph_run_id {
-                    Some(run_id) => match store.run_graph_recovery_summary(run_id).await {
-                        Ok(summary) => summary,
-                        Err(error) => {
-                            eprintln!("Failed to read latest run graph recovery summary: {error}");
-                            return ExitCode::from(1);
-                        }
-                    }
-                    .into(),
-                    None => None,
-                };
-                let latest_run_graph_checkpoint = match latest_run_graph_run_id {
-                    Some(run_id) => match store.run_graph_checkpoint_summary(run_id).await {
-                        Ok(summary) => summary,
-                        Err(error) => {
-                            eprintln!(
-                                "Failed to read latest run graph checkpoint summary: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    }
-                    .into(),
-                    None => None,
-                };
-                let latest_run_graph_gate = match latest_run_graph_run_id {
-                    Some(run_id) => match store.run_graph_gate_summary(run_id).await {
-                        Ok(summary) => summary,
-                        Err(error) => {
-                            eprintln!("Failed to read latest run graph gate summary: {error}");
-                            return ExitCode::from(1);
-                        }
-                    }
-                    .into(),
-                    None => None,
-                };
-                let mut latest_run_graph_dispatch_receipt_checkpoint_leakage = false;
-                let latest_run_graph_dispatch_receipt = match latest_run_graph_status.as_ref() {
-                    Some(status) => match store
-                        .run_graph_dispatch_receipt_summary_for_status(status)
-                        .await
-                    {
-                        Ok(summary) => summary,
-                        Err(error) => {
-                            if error
-                                .to_string()
-                                .contains("latest checkpoint evidence must share the same run_id")
-                            {
-                                latest_run_graph_dispatch_receipt_checkpoint_leakage = true;
-                                None
-                            } else {
-                                eprintln!(
-                                    "Failed to read latest run graph dispatch receipt summary: {error}"
-                                );
-                                return ExitCode::from(1);
-                            }
-                        }
-                    },
-                    None => None,
-                };
-                let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt
-                    .is_none()
-                    && (latest_run_graph_status.is_none()
-                        || latest_run_graph_dispatch_receipt_checkpoint_leakage)
-                {
-                    match store
-                        .latest_active_exception_takeover_dispatch_receipt()
-                        .await
-                    {
-                        Ok(receipt) => receipt
-                            .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt),
-                        Err(error) => {
-                            eprintln!(
-                                "Failed to read latest active exception takeover dispatch receipt: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    }
-                } else {
-                    latest_run_graph_dispatch_receipt
-                };
-                let latest_run_graph_effective_run_id = latest_run_graph_status
-                    .as_ref()
-                    .map(|status| status.run_id.as_str())
-                    .or_else(|| {
-                        latest_run_graph_dispatch_receipt
-                            .as_ref()
-                            .map(|receipt| receipt.run_id.as_str())
-                    });
-                let latest_run_graph_recovery = if latest_run_graph_recovery.is_none() {
-                    match latest_run_graph_dispatch_receipt.as_ref() {
-                        Some(receipt) => {
-                            match store.run_graph_recovery_summary(&receipt.run_id).await {
-                                Ok(summary) => summary,
-                                Err(error) => {
-                                    eprintln!(
-                                        "Failed to read latest run graph recovery summary: {error}"
-                                    );
-                                    return ExitCode::from(1);
-                                }
-                            }
-                            .into()
-                        }
-                        None => latest_run_graph_recovery,
-                    }
-                } else {
-                    latest_run_graph_recovery
-                };
-                let latest_run_graph_dispatch_receipt_matches_status =
-                    latest_run_graph_dispatch_receipt_checkpoint_leakage
-                        || state_store::latest_run_graph_dispatch_receipt_matches_status(
-                            latest_run_graph_status
-                                .as_ref()
-                                .map(|status| status.run_id.as_str()),
-                            latest_run_graph_dispatch_receipt
-                                .as_ref()
-                                .map(|receipt| receipt.run_id.as_str()),
-                        );
-                let latest_run_graph_dispatch_receipt_summary_inconsistent =
-                    !latest_run_graph_dispatch_receipt_checkpoint_leakage
-                        && state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
-                            latest_run_graph_status
-                                .as_ref()
-                                .map(|status| status.run_id.as_str()),
-                            latest_run_graph_dispatch_receipt
-                                .as_ref()
-                                .map(|receipt| receipt.run_id.as_str()),
-                        );
-                let latest_run_graph_snapshot_inconsistent =
-                    !latest_run_graph_dispatch_receipt_checkpoint_leakage
-                        && !state_store::latest_run_graph_evidence_snapshot_is_consistent(
-                            latest_run_graph_effective_run_id,
-                            latest_run_graph_recovery
-                                .as_ref()
-                                .map(|summary| summary.run_id.as_str()),
-                            latest_run_graph_checkpoint
-                                .as_ref()
-                                .map(|summary| summary.run_id.as_str()),
-                            latest_run_graph_gate
-                                .as_ref()
-                                .map(|summary| summary.run_id.as_str()),
-                            latest_run_graph_dispatch_receipt
-                                .as_ref()
-                                .map(|receipt| receipt.run_id.as_str()),
-                        );
+                let CurrentRuntimeProjection {
+                    global_status: latest_global_run_graph_status,
+                    terminal_task_active_status: latest_terminal_task_active_run_graph_status,
+                    status: latest_run_graph_status,
+                    recovery: latest_run_graph_recovery,
+                    checkpoint: latest_run_graph_checkpoint,
+                    gate: latest_run_graph_gate,
+                    dispatch_receipt: latest_run_graph_dispatch_receipt,
+                    dispatch_receipt_checkpoint_leakage:
+                        latest_run_graph_dispatch_receipt_checkpoint_leakage,
+                    dispatch_receipt_matches_status:
+                        latest_run_graph_dispatch_receipt_matches_status,
+                    dispatch_receipt_summary_inconsistent:
+                        latest_run_graph_dispatch_receipt_summary_inconsistent,
+                    snapshot_inconsistent: latest_run_graph_snapshot_inconsistent,
+                    ..
+                } = current_runtime_projection;
                 let latest_run_graph_dispatch_receipt_signal_ambiguous =
                     latest_run_graph_dispatch_receipt
                         .as_ref()
@@ -2296,78 +2293,18 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
     let mut payload = serde_json::from_str::<serde_json::Value>(cached).ok()?;
     let protocol_binding = store.protocol_binding_summary().await.ok()?;
     refresh_cached_protocol_binding_projection(&mut payload, &protocol_binding)?;
-    let latest_run_graph_status = match store.latest_run_graph_status_for_current_session().await {
-        Ok(summary) => summary,
-        Err(_) => return None,
-    };
-    let latest_global_run_graph_status = match store.latest_run_graph_status().await {
-        Ok(summary) => summary,
-        Err(_) => return None,
-    };
-    let latest_terminal_task_active_run_graph_status =
-        match store.latest_terminal_task_active_run_graph_status().await {
-            Ok(summary) => summary,
-            Err(_) => return None,
-        };
-    let latest_run_graph_status = effective_latest_run_graph_status(
-        latest_run_graph_status,
-        latest_global_run_graph_status.as_ref(),
-    );
-    let latest_run_graph_run_id = latest_run_graph_status
-        .as_ref()
-        .map(|status| status.run_id.as_str());
-    let latest_run_graph_recovery = match latest_run_graph_run_id {
-        Some(run_id) => store.run_graph_recovery_summary(run_id).await.ok(),
-        None => None,
-    };
-    let latest_run_graph_checkpoint = match latest_run_graph_run_id {
-        Some(run_id) => store.run_graph_checkpoint_summary(run_id).await.ok(),
-        None => None,
-    };
-    let latest_run_graph_gate = match latest_run_graph_run_id {
-        Some(run_id) => store.run_graph_gate_summary(run_id).await.ok(),
-        None => None,
-    };
-    let mut dispatch_receipt_checkpoint_leakage = false;
-    let latest_run_graph_dispatch_receipt = match latest_run_graph_status.as_ref() {
-        Some(status) => match store
-            .run_graph_dispatch_receipt_summary_for_status(status)
-            .await
-        {
-            Ok(summary) => summary,
-            Err(error)
-                if error
-                    .to_string()
-                    .contains("latest checkpoint evidence must share the same run_id") =>
-            {
-                dispatch_receipt_checkpoint_leakage = true;
-                None
-            }
-            Err(_) => return None,
-        },
-        None => None,
-    };
-    let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none()
-        && (latest_run_graph_status.is_none() || dispatch_receipt_checkpoint_leakage)
-    {
-        store
-            .latest_active_exception_takeover_dispatch_receipt()
-            .await
-            .ok()?
-            .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt)
-    } else {
-        latest_run_graph_dispatch_receipt
-    };
-    let latest_run_graph_recovery = match latest_run_graph_dispatch_receipt.as_ref() {
-        Some(receipt)
-            if latest_run_graph_recovery
-                .as_ref()
-                .is_none_or(|recovery| recovery.run_id != receipt.run_id) =>
-        {
-            store.run_graph_recovery_summary(&receipt.run_id).await.ok()
-        }
-        _ => latest_run_graph_recovery,
-    };
+    let current_runtime_projection = current_runtime_projection(store).await.ok()?;
+    let CurrentRuntimeProjection {
+        global_status: latest_global_run_graph_status,
+        terminal_task_active_status: latest_terminal_task_active_run_graph_status,
+        status: latest_run_graph_status,
+        recovery: latest_run_graph_recovery,
+        checkpoint: latest_run_graph_checkpoint,
+        gate: latest_run_graph_gate,
+        dispatch_receipt: latest_run_graph_dispatch_receipt,
+        dispatch_receipt_checkpoint_leakage,
+        ..
+    } = current_runtime_projection;
     let explicit_continuation_binding = match store
         .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await

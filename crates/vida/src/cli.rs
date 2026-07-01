@@ -99,6 +99,528 @@ impl TaskHandoffStatusArg {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CommandMetadata {
+    pub(crate) label: &'static str,
+    pub(crate) canonical_hint: &'static str,
+    pub(crate) supports_state_dir: bool,
+    pub(crate) binds_project_state_dir: bool,
+    pub(crate) preserves_env_state_dir: bool,
+    pub(crate) preserves_parse_only_env_state_dir: bool,
+    pub(crate) output_mode_help: &'static str,
+    pub(crate) recovery_hint: &'static str,
+}
+
+const COMPACT_TOON_OUTPUT_HELP: &str =
+    "Default output is compact TOON/plain for operators; use --json for machine-readable payloads.";
+const JSON_OUTPUT_HELP: &str = "Default output is JSON-oriented; use --json for automation.";
+const PROXY_OUTPUT_HELP: &str =
+    "Default output is family-owned compact output; use --json only for machine-readable payloads.";
+
+const fn command_metadata(
+    label: &'static str,
+    canonical_hint: &'static str,
+    supports_state_dir: bool,
+    binds_project_state_dir: bool,
+    preserves_env_state_dir: bool,
+    preserves_parse_only_env_state_dir: bool,
+    output_mode_help: &'static str,
+    recovery_hint: &'static str,
+) -> CommandMetadata {
+    CommandMetadata {
+        label,
+        canonical_hint,
+        supports_state_dir,
+        binds_project_state_dir,
+        preserves_env_state_dir,
+        preserves_parse_only_env_state_dir,
+        output_mode_help,
+        recovery_hint,
+    }
+}
+
+pub(crate) fn command_metadata_by_name(name: &str) -> Option<CommandMetadata> {
+    Some(match name {
+        "vida" => command_metadata(
+            "vida",
+            "vida --help",
+            false,
+            false,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida --help` to inspect available runtime families.",
+        ),
+        "init" => command_metadata(
+            "vida init",
+            "vida init",
+            false,
+            false,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida boot` if framework bootstrap state is missing.",
+        ),
+        "boot" => command_metadata(
+            "vida boot",
+            "vida boot",
+            false,
+            false,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida boot` from the project root.",
+        ),
+        "orchestrator-init" => command_metadata(
+            "vida orchestrator-init",
+            "vida orchestrator-init",
+            true,
+            true,
+            true,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida orchestrator-init` from the project root or pass --state-dir.",
+        ),
+        "agent-init" => command_metadata(
+            "vida agent-init",
+            "vida agent-init",
+            true,
+            true,
+            false,
+            true,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida agent-init --help` before activating a worker packet.",
+        ),
+        "agent" => command_metadata(
+            "vida agent",
+            "vida agent status",
+            true,
+            true,
+            true,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida agent status` to inspect delegated lane state.",
+        ),
+        "coder" => command_metadata(
+            "vida coder",
+            "vida coder capabilities",
+            false,
+            false,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida coder capabilities` to inspect available provider support.",
+        ),
+        "protocol" => command_metadata(
+            "vida protocol",
+            "vida protocol view <id>",
+            false,
+            false,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida protocol view <id>` for bounded framework guidance.",
+        ),
+        "project-activator" => command_metadata(
+            "vida project-activator",
+            "vida project-activator",
+            true,
+            true,
+            true,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida project-activator` only when init reports pending_activation.",
+        ),
+        "agent-feedback" => command_metadata(
+            "vida agent-feedback",
+            "vida agent-feedback",
+            false,
+            true,
+            false,
+            false,
+            JSON_OUTPUT_HELP,
+            "Re-run the bounded agent feedback command with current evidence.",
+        ),
+        "task" => command_metadata(
+            "vida task",
+            "vida task ready",
+            true,
+            true,
+            true,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida task --help` for state-backed backlog commands.",
+        ),
+        "memory" => command_metadata(
+            "vida memory",
+            "vida memory",
+            true,
+            true,
+            true,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida memory --help` from a VIDA project root.",
+        ),
+        "status" => command_metadata(
+            "vida status",
+            "vida status",
+            true,
+            true,
+            true,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida status` for compact runtime recovery context.",
+        ),
+        "state" => command_metadata(
+            "vida state",
+            "vida state reset",
+            true,
+            true,
+            true,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida state reset --help` before mutating runtime state.",
+        ),
+        "runtime" => command_metadata(
+            "vida runtime",
+            "vida runtime web status",
+            false,
+            true,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida runtime web status` to inspect local runtime services.",
+        ),
+        "doctor" => command_metadata(
+            "vida doctor",
+            "vida doctor",
+            true,
+            true,
+            true,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida doctor` for bounded runtime integrity checks.",
+        ),
+        "diagnostics" => command_metadata(
+            "vida diagnostics",
+            "vida diagnostics",
+            true,
+            true,
+            true,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida diagnostics --help` for diagnostic subcommands.",
+        ),
+        "proof" => command_metadata(
+            "vida proof",
+            "vida proof browser",
+            false,
+            true,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida proof browser --help` for proof collection options.",
+        ),
+        "service" => command_metadata(
+            "vida service",
+            "vida service status",
+            false,
+            true,
+            false,
+            false,
+            JSON_OUTPUT_HELP,
+            "Run `vida service status` to inspect service client reachability.",
+        ),
+        "project" => command_metadata(
+            "vida project",
+            "vida project list",
+            false,
+            true,
+            false,
+            false,
+            JSON_OUTPUT_HELP,
+            "Run `vida project list` to inspect project service records.",
+        ),
+        "wizard" => command_metadata(
+            "vida wizard",
+            "vida wizard inspect",
+            false,
+            true,
+            false,
+            false,
+            JSON_OUTPUT_HELP,
+            "Run `vida wizard inspect` for wizard diagnostics.",
+        ),
+        "job" => command_metadata(
+            "vida job",
+            "vida job status",
+            false,
+            true,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida job status` for job runner state.",
+        ),
+        "receipt" => command_metadata(
+            "vida receipt",
+            "vida receipt get",
+            false,
+            true,
+            false,
+            false,
+            JSON_OUTPUT_HELP,
+            "Run `vida receipt get --help` for receipt lookup options.",
+        ),
+        "docs" => command_metadata(
+            "vida docs",
+            "vida docs update",
+            false,
+            false,
+            false,
+            false,
+            JSON_OUTPUT_HELP,
+            "Run `vida docs update --help` for documentation update options.",
+        ),
+        "orchestrator-session" => command_metadata(
+            "vida orchestrator-session",
+            "vida orchestrator-session show",
+            true,
+            true,
+            true,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida orchestrator-session show` to inspect ownership evidence.",
+        ),
+        "session" => command_metadata(
+            "vida session",
+            "vida session triage",
+            true,
+            true,
+            true,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida session triage` to inspect active bounded-unit context.",
+        ),
+        "quality" => command_metadata(
+            "vida quality",
+            "vida quality gate --prepush",
+            false,
+            false,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida quality gate --prepush --advise` before publication.",
+        ),
+        "requirement" => command_metadata(
+            "vida requirement",
+            "vida requirement analyze",
+            false,
+            false,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida requirement analyze --help` for requirement shaping.",
+        ),
+        "pack" => command_metadata(
+            "vida pack",
+            "vida pack list",
+            false,
+            false,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida pack list` to inspect active project role packs.",
+        ),
+        "consume" => command_metadata(
+            "vida consume",
+            "vida taskflow consume",
+            false,
+            true,
+            true,
+            false,
+            PROXY_OUTPUT_HELP,
+            "Use canonical `vida taskflow consume ...` instead of the root alias.",
+        ),
+        "lane" => command_metadata(
+            "vida lane",
+            "vida lane status",
+            false,
+            true,
+            true,
+            false,
+            PROXY_OUTPUT_HELP,
+            "Run `vida lane status` to inspect lane/takeover state.",
+        ),
+        "approval" => command_metadata(
+            "vida approval",
+            "vida approval status",
+            false,
+            true,
+            true,
+            false,
+            PROXY_OUTPUT_HELP,
+            "Run `vida approval status` for approval runtime state.",
+        ),
+        "recovery" => command_metadata(
+            "vida recovery",
+            "vida taskflow recovery latest",
+            false,
+            true,
+            true,
+            false,
+            PROXY_OUTPUT_HELP,
+            "Use canonical `vida taskflow recovery ...` for recovery inspection.",
+        ),
+        "route" => command_metadata(
+            "vida route",
+            "vida taskflow route explain",
+            false,
+            true,
+            true,
+            false,
+            PROXY_OUTPUT_HELP,
+            "Use canonical `vida taskflow route explain` for routing diagnostics.",
+        ),
+        "release" => command_metadata(
+            "vida release",
+            "vida release install",
+            false,
+            false,
+            false,
+            false,
+            COMPACT_TOON_OUTPUT_HELP,
+            "Run `vida release install --help` before release mutations.",
+        ),
+        "taskflow" => command_metadata(
+            "vida taskflow",
+            "vida taskflow graph-summary",
+            false,
+            true,
+            true,
+            false,
+            PROXY_OUTPUT_HELP,
+            "Run `vida taskflow help` for canonical TaskFlow command families.",
+        ),
+        "docflow" => command_metadata(
+            "vida docflow",
+            "vida docflow help",
+            false,
+            false,
+            false,
+            false,
+            PROXY_OUTPUT_HELP,
+            "Run `vida docflow help` for documentation readiness commands.",
+        ),
+        _ => return None,
+    })
+}
+
+pub(crate) fn command_metadata_for_command(command: &Option<Command>) -> CommandMetadata {
+    match command {
+        None => command_metadata_by_name("vida").expect("root metadata exists"),
+        Some(Command::Init(_)) => command_metadata_by_name("init").expect("init metadata exists"),
+        Some(Command::Boot(_)) => command_metadata_by_name("boot").expect("boot metadata exists"),
+        Some(Command::OrchestratorInit(_)) => command_metadata_by_name("orchestrator-init")
+            .expect("orchestrator-init metadata exists"),
+        Some(Command::AgentInit(_)) => {
+            command_metadata_by_name("agent-init").expect("agent-init metadata exists")
+        }
+        Some(Command::Agent(_)) => {
+            command_metadata_by_name("agent").expect("agent metadata exists")
+        }
+        Some(Command::Coder(_)) => {
+            command_metadata_by_name("coder").expect("coder metadata exists")
+        }
+        Some(Command::Protocol(_)) => {
+            command_metadata_by_name("protocol").expect("protocol metadata exists")
+        }
+        Some(Command::ProjectActivator(_)) => command_metadata_by_name("project-activator")
+            .expect("project-activator metadata exists"),
+        Some(Command::AgentFeedback(_)) => {
+            command_metadata_by_name("agent-feedback").expect("agent-feedback metadata exists")
+        }
+        Some(Command::Task(_)) => command_metadata_by_name("task").expect("task metadata exists"),
+        Some(Command::Memory(_)) => {
+            command_metadata_by_name("memory").expect("memory metadata exists")
+        }
+        Some(Command::Status(_)) => {
+            command_metadata_by_name("status").expect("status metadata exists")
+        }
+        Some(Command::State(_)) => {
+            command_metadata_by_name("state").expect("state metadata exists")
+        }
+        Some(Command::Runtime(_)) => {
+            command_metadata_by_name("runtime").expect("runtime metadata exists")
+        }
+        Some(Command::Doctor(_)) => {
+            command_metadata_by_name("doctor").expect("doctor metadata exists")
+        }
+        Some(Command::Diagnostics(_)) => {
+            command_metadata_by_name("diagnostics").expect("diagnostics metadata exists")
+        }
+        Some(Command::Proof(_)) => {
+            command_metadata_by_name("proof").expect("proof metadata exists")
+        }
+        Some(Command::Service(_)) => {
+            command_metadata_by_name("service").expect("service metadata exists")
+        }
+        Some(Command::Project(_)) => {
+            command_metadata_by_name("project").expect("project metadata exists")
+        }
+        Some(Command::Wizard(_)) => {
+            command_metadata_by_name("wizard").expect("wizard metadata exists")
+        }
+        Some(Command::Job(_)) => command_metadata_by_name("job").expect("job metadata exists"),
+        Some(Command::Receipt(_)) => {
+            command_metadata_by_name("receipt").expect("receipt metadata exists")
+        }
+        Some(Command::Docs(_)) => command_metadata_by_name("docs").expect("docs metadata exists"),
+        Some(Command::OrchestratorSession(_)) => command_metadata_by_name("orchestrator-session")
+            .expect("orchestrator-session metadata exists"),
+        Some(Command::Session(_)) => {
+            command_metadata_by_name("session").expect("session metadata exists")
+        }
+        Some(Command::Quality(_)) => {
+            command_metadata_by_name("quality").expect("quality metadata exists")
+        }
+        Some(Command::Requirement(_)) => {
+            command_metadata_by_name("requirement").expect("requirement metadata exists")
+        }
+        Some(Command::Pack(_)) => command_metadata_by_name("pack").expect("pack metadata exists"),
+        Some(Command::Consume(_)) => {
+            command_metadata_by_name("consume").expect("consume metadata exists")
+        }
+        Some(Command::Lane(_)) => command_metadata_by_name("lane").expect("lane metadata exists"),
+        Some(Command::Approval(_)) => {
+            command_metadata_by_name("approval").expect("approval metadata exists")
+        }
+        Some(Command::Recovery(_)) => {
+            command_metadata_by_name("recovery").expect("recovery metadata exists")
+        }
+        Some(Command::Route(_)) => {
+            command_metadata_by_name("route").expect("route metadata exists")
+        }
+        Some(Command::Release(_)) => {
+            command_metadata_by_name("release").expect("release metadata exists")
+        }
+        Some(Command::Taskflow(_)) => {
+            command_metadata_by_name("taskflow").expect("taskflow metadata exists")
+        }
+        Some(Command::Docflow(_)) => {
+            command_metadata_by_name("docflow").expect("docflow metadata exists")
+        }
+        Some(Command::External(_)) => {
+            command_metadata_by_name("vida").expect("root metadata exists")
+        }
+    }
+}
+
+pub(crate) fn command_hint(command_name: &str) -> &'static str {
+    command_metadata_by_name(command_name)
+        .map(|metadata| metadata.canonical_hint)
+        .unwrap_or("vida --help")
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "vida",
@@ -4906,5 +5428,35 @@ mod tests {
         assert_eq!(create.task_id, "task-b");
         assert_eq!(create.positional_title, None);
         assert_eq!(create.title.as_deref(), Some("Task B"));
+    }
+
+    #[test]
+    fn command_metadata_registry_covers_state_output_and_recovery_contracts() {
+        let task = super::command_metadata_by_name("task").expect("task metadata");
+        assert_eq!(task.label, "vida task");
+        assert_eq!(task.canonical_hint, "vida task ready");
+        assert!(task.supports_state_dir);
+        assert!(task.binds_project_state_dir);
+        assert!(task.preserves_env_state_dir);
+        assert!(task.output_mode_help.contains("compact TOON/plain"));
+        assert!(task.recovery_hint.contains("vida task --help"));
+
+        let taskflow = super::command_metadata_by_name("taskflow").expect("taskflow metadata");
+        assert_eq!(taskflow.label, "vida taskflow");
+        assert_eq!(taskflow.canonical_hint, "vida taskflow graph-summary");
+        assert!(taskflow.binds_project_state_dir);
+        assert!(taskflow.preserves_env_state_dir);
+        assert!(taskflow.recovery_hint.contains("vida taskflow help"));
+
+        let agent_init =
+            super::command_metadata_by_name("agent-init").expect("agent-init metadata");
+        assert!(agent_init.supports_state_dir);
+        assert!(agent_init.binds_project_state_dir);
+        assert!(!agent_init.preserves_env_state_dir);
+        assert!(agent_init.preserves_parse_only_env_state_dir);
+        assert!(agent_init.output_mode_help.contains("--json"));
+
+        assert_eq!(super::command_hint("status"), "vida status");
+        assert_eq!(super::command_hint("missing-command"), "vida --help");
     }
 }

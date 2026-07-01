@@ -11,7 +11,7 @@ use crate::runtime_dispatch_packets::{
     runtime_escalation_packet, runtime_execution_block_packet, runtime_verifier_proof_packet,
 };
 use crate::{
-    derive_lane_status, dispatch_contract_execution_lane_sequence, dispatch_contract_lane,
+    derive_lane_status, dispatch_contract_allowed_next_lane_sequence, dispatch_contract_lane,
     downstream_activation_fields, json_string, validate_runtime_dispatch_packet_contract,
     RuntimeConsumptionLaneSelection,
 };
@@ -42,7 +42,7 @@ fn infer_downstream_lane_id_for_dispatch_target(
         return explicit_lane_id;
     }
     let dispatch_contract = &role_selection.execution_plan["development_flow"]["dispatch_contract"];
-    let sequence = dispatch_contract_execution_lane_sequence(dispatch_contract);
+    let sequence = dispatch_contract_allowed_next_lane_sequence(dispatch_contract);
     let current_index = sequence.iter().position(|lane_id| {
         lane_id == current_dispatch_target
             || crate::runtime_dispatch_state::resolve_runtime_dispatch_target(

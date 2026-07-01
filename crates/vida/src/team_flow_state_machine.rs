@@ -126,6 +126,62 @@ impl TeamFlowStateMachine {
             Some(TeamFlowStateMachine { flow_id, steps })
         }
     }
+
+    pub fn from_dispatch_contract(dispatch_contract: &Value, sequence_field: &str) -> Option<Self> {
+        let sequence = dispatch_contract
+            .get(sequence_field)
+            .and_then(Value::as_array)
+            .or_else(|| {
+                dispatch_contract
+                    .get("lane_sequence")
+                    .and_then(Value::as_array)
+            })?;
+        let steps = sequence
+            .iter()
+            .filter_map(Value::as_str)
+            .map(crate::runtime_assignment_policy::canonical_dispatch_target_name)
+            .filter(|role_id| !role_id.trim().is_empty())
+            .map(|role_id| {
+                let lane = dispatch_contract
+                    .get("lane_catalog")
+                    .and_then(|catalog| catalog.get(role_id.as_str()));
+                let activation = lane.and_then(|lane| lane.get("activation"));
+                let runtime_role = activation
+                    .and_then(|activation| activation.get("activation_runtime_role"))
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        lane.and_then(|lane| lane.get("runtime_role"))
+                            .and_then(Value::as_str)
+                    })
+                    .unwrap_or(role_id.as_str())
+                    .to_string();
+                let task_class = lane
+                    .and_then(|lane| lane.get("task_class"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("implementation")
+                    .to_string();
+                let stage = lane
+                    .and_then(|lane| lane.get("stage"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("execution")
+                    .to_string();
+                StateMachineStep {
+                    role_id,
+                    runtime_role,
+                    task_class,
+                    stage,
+                }
+            })
+            .collect::<Vec<_>>();
+        if steps.is_empty() {
+            None
+        } else {
+            Some(TeamFlowStateMachine {
+                flow_id: sequence_field.to_string(),
+                steps,
+            })
+        }
+    }
 }
 
 /// Extract the team-flow state machine from an activation bundle.
@@ -178,6 +234,23 @@ pub fn validate_transition_config_backed(
     }
 }
 
+pub fn resolve_dispatch_contract_lane_sequence(
+    dispatch_contract: &Value,
+    sequence_field: &str,
+) -> Option<Vec<String>> {
+    TeamFlowStateMachine::from_dispatch_contract(dispatch_contract, sequence_field)
+        .map(|sm| sm.resolve_execution_lane_sequence())
+}
+
+pub fn validate_dispatch_contract_transition(
+    dispatch_contract: &Value,
+    current_role: &str,
+    requested_next_node: &str,
+) -> Option<TransitionVerdict> {
+    TeamFlowStateMachine::from_dispatch_contract(dispatch_contract, "lane_sequence")
+        .map(|sm| sm.validate_transition(current_role, requested_next_node))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +267,36 @@ mod tests {
                             {"role_id": "coach_implementation_gate", "runtime_role": "coach", "task_class": "coach", "stage": "execution"},
                             {"role_id": "tester", "runtime_role": "verifier", "task_class": "verification", "stage": "execution"}
                         ]
+                    }
+                }
+            }
+        })
+    }
+
+    fn sample_dispatch_contract() -> Value {
+        serde_json::json!({
+            "lane_sequence": ["analyst", "designer", "autotester"],
+            "execution_lane_sequence": ["analyst", "autotester"],
+            "lane_catalog": {
+                "analyst": {
+                    "task_class": "analysis",
+                    "stage": "design_gate",
+                    "activation": {
+                        "activation_runtime_role": "business_analyst"
+                    }
+                },
+                "designer": {
+                    "task_class": "design",
+                    "stage": "design_gate",
+                    "activation": {
+                        "activation_runtime_role": "designer"
+                    }
+                },
+                "autotester": {
+                    "task_class": "verification",
+                    "stage": "execution",
+                    "activation": {
+                        "activation_runtime_role": "tester"
                     }
                 }
             }
@@ -298,5 +401,40 @@ mod tests {
             "flow_id": "no_steps"
         });
         assert!(TeamFlowStateMachine::from_flow_config(&config).is_none());
+    }
+
+    #[test]
+    fn test_dispatch_contract_lane_sequence_uses_full_state_machine_order() {
+        let contract = sample_dispatch_contract();
+        assert_eq!(
+            resolve_dispatch_contract_lane_sequence(&contract, "lane_sequence"),
+            Some(vec![
+                "analyst".to_string(),
+                "designer".to_string(),
+                "autotester".to_string()
+            ])
+        );
+        assert_eq!(
+            resolve_dispatch_contract_lane_sequence(&contract, "execution_lane_sequence"),
+            Some(vec!["analyst".to_string(), "autotester".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_dispatch_contract_transition_validates_against_full_lane_order() {
+        let contract = sample_dispatch_contract();
+        assert_eq!(
+            validate_dispatch_contract_transition(&contract, "analyst", "designer"),
+            Some(TransitionVerdict::Allowed {
+                next_lane: "designer".to_string()
+            })
+        );
+        assert_eq!(
+            validate_dispatch_contract_transition(&contract, "analyst", "autotester"),
+            Some(TransitionVerdict::Blocked {
+                blocker_code: "invalid_allowed_next_node_for_execution_plan".to_string(),
+                allowed_next_node: "designer".to_string()
+            })
+        );
     }
 }

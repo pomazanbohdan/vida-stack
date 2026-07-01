@@ -7,7 +7,10 @@ use crate::contract_profile_adapter::{
     classify_compatibility_boundary, shared_operator_output_contract_parity_error, BlockerCode,
     CompatibilityBoundary, CompatibilityClass,
 };
-use crate::status_surface::{first_non_empty_artifact_ref, StatusRunGraphArtifactSource};
+use crate::status_surface::{
+    current_runtime_projection as build_current_runtime_projection, first_non_empty_artifact_ref,
+    StatusRunGraphArtifactSource,
+};
 use crate::status_surface_operator_contracts::{
     latest_run_graph_artifact_refs, LatestRunGraphArtifactRefsInputs,
 };
@@ -815,43 +818,23 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-            let current_session_run_graph_status =
-                match store.latest_run_graph_status_for_current_session().await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("current-session run graph status: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                };
+            let current_runtime_projection = match build_current_runtime_projection(&store).await {
+                Ok(projection) => projection,
+                Err(error) => {
+                    eprintln!("current runtime projection: failed ({error})");
+                    return ExitCode::from(1);
+                }
+            };
+            let crate::status_surface::CurrentRuntimeProjection {
+                current_session_status: current_session_run_graph_status,
+                current_session_dispatch_receipt: current_session_run_graph_status_dispatch_receipt,
+                dispatch_receipt_checkpoint_leakage:
+                    current_session_run_graph_dispatch_receipt_checkpoint_leakage,
+                ..
+            } = current_runtime_projection;
             let current_session_run_graph_run_id = current_session_run_graph_status
                 .as_ref()
                 .map(|status| status.run_id.as_str());
-            let mut current_session_run_graph_dispatch_receipt_checkpoint_leakage = false;
-            let current_session_run_graph_status_dispatch_receipt =
-                match current_session_run_graph_status.as_ref() {
-                    Some(status) => match store
-                        .run_graph_dispatch_receipt_summary_for_status(status)
-                        .await
-                    {
-                        Ok(summary) => summary,
-                        Err(error) => {
-                            if error
-                                .to_string()
-                                .contains("latest checkpoint evidence must share the same run_id")
-                            {
-                                current_session_run_graph_dispatch_receipt_checkpoint_leakage =
-                                    true;
-                                None
-                            } else {
-                                eprintln!(
-                                    "current-session run graph dispatch receipt: failed ({error})"
-                                );
-                                return ExitCode::from(1);
-                            }
-                        }
-                    },
-                    None => None,
-                };
             let latest_run_graph_dispatch_receipt =
                 match store.latest_run_graph_dispatch_receipt_summary().await {
                     Ok(summary) => summary,

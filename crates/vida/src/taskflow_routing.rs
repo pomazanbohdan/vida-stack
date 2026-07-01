@@ -5,6 +5,7 @@ use crate::runtime_contract_vocab::{
     RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM, RUNTIME_ROLE_PROVER, RUNTIME_ROLE_SOLUTION_ARCHITECT,
     RUNTIME_ROLE_VERIFIER, RUNTIME_ROLE_WORKER,
 };
+use crate::team_flow_state_machine::resolve_dispatch_contract_lane_sequence;
 use crate::{json_string, json_string_list};
 
 const REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
@@ -193,6 +194,11 @@ pub(crate) fn dispatch_contract_lane_activation(lane: &serde_json::Value) -> &se
 pub(crate) fn dispatch_contract_lane_sequence(
     dispatch_contract: &serde_json::Value,
 ) -> Vec<String> {
+    if let Some(sequence) =
+        resolve_dispatch_contract_lane_sequence(dispatch_contract, "lane_sequence")
+    {
+        return sequence;
+    }
     let explicit = dispatch_contract["lane_sequence"]
         .as_array()
         .into_iter()
@@ -225,6 +231,11 @@ pub(crate) fn dispatch_contract_lane_sequence(
 pub(crate) fn dispatch_contract_execution_lane_sequence(
     dispatch_contract: &serde_json::Value,
 ) -> Vec<String> {
+    if let Some(sequence) =
+        resolve_dispatch_contract_lane_sequence(dispatch_contract, "execution_lane_sequence")
+    {
+        return sequence;
+    }
     let explicit = dispatch_contract["execution_lane_sequence"]
         .as_array()
         .into_iter()
@@ -244,15 +255,10 @@ pub(crate) fn dispatch_contract_execution_lane_sequence(
 pub(crate) fn dispatch_contract_allowed_next_lane_sequence(
     dispatch_contract: &serde_json::Value,
 ) -> Vec<String> {
-    let explicit_lane_sequence = dispatch_contract["lane_sequence"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(canonical_dispatch_target_name)
-        .collect::<Vec<_>>();
-    if !explicit_lane_sequence.is_empty() {
-        return explicit_lane_sequence;
+    if let Some(sequence) =
+        resolve_dispatch_contract_lane_sequence(dispatch_contract, "lane_sequence")
+    {
+        return sequence;
     }
     dispatch_contract_execution_lane_sequence(dispatch_contract)
 }
