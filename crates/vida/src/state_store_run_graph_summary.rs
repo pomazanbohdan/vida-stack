@@ -4836,8 +4836,18 @@ impl StateStore {
                 receipt.exception_path_receipt_id.as_deref(),
             )
         };
+        let stale_blocked_lane_label = receipt.dispatch_status == "blocked"
+            && receipt.downstream_dispatch_status.as_deref() == Some("blocked")
+            && raw_lane_status.ends_with("_lane")
+            && receipt.blocker_code.as_deref().is_some_and(|value| {
+                matches!(
+                    value.trim(),
+                    "host_bridge_completion_result_blocked" | "host_bridge_completion_blocked"
+                )
+            });
         if receipt.downstream_dispatch_status.is_some()
             && canonical_lane_status != effective_derived_lane_status
+            && !stale_blocked_lane_label
         {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(

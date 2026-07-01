@@ -5001,10 +5001,24 @@ fn projection_surfaces_fail_closed_for_closed_task_downstream_handoff_after_exce
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("run-graph status should run");
-    assert_success(&run_graph, "run-graph status");
+    assert!(
+        !run_graph.stdout.is_empty(),
+        "run-graph status should emit structured json even when blocked: stderr={}",
+        String::from_utf8_lossy(&run_graph.stderr)
+    );
     let run_graph_json: serde_json::Value =
         serde_json::from_slice(&run_graph.stdout).expect("run-graph json should parse");
     assert_eq!(run_graph_json["status"], "blocked");
+    assert_eq!(
+        run_graph_json["projection_truth"]["stale_state_suspected"],
+        true
+    );
+    let run_graph_text =
+        serde_json::to_string(&run_graph_json).expect("run-graph json should render");
+    assert!(
+        run_graph_text.contains("vida task reconcile-closed-runs"),
+        "run-graph status should expose the canonical closed-run repair action: {run_graph_text}"
+    );
     assert_eq!(
         run_graph_json["blocker_codes"],
         serde_json::json!(["closed_task_active_run_projection_mismatch"])
@@ -5516,7 +5530,11 @@ fn projection_surfaces_fail_closed_for_receipt_backed_missing_execution_row_host
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("orchestrator-init should run");
-    assert_success(&orchestrator, "orchestrator-init");
+    assert!(
+        !orchestrator.stdout.is_empty(),
+        "orchestrator-init should emit structured json even when blocked: stderr={}",
+        String::from_utf8_lossy(&orchestrator.stderr)
+    );
     let orchestrator_json: serde_json::Value =
         serde_json::from_slice(&orchestrator.stdout).expect("orchestrator json should parse");
     assert!(
@@ -5558,5 +5576,94 @@ fn projection_surfaces_fail_closed_for_receipt_backed_missing_execution_row_host
         "consume continue must not leak generic run-graph MissingTask stderr"
     );
 
+    let _ = std::fs::remove_dir_all(project_root);
+}
+
+#[test]
+fn run_graph_status_recovers_stale_blocked_receipt_without_exception_takeover() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let run_id = "zzzz-run-stale-blocked-autotester-receipt";
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+    sync_protocol_binding(&state_dir);
+    persist_host_bridge_lane_receipt_with_target_and_active_node(
+        &state_dir,
+        run_id,
+        "autotester",
+        "designer",
+        "developer",
+        "blocked",
+        "autotester_lane",
+        "host_bridge_completion_result_blocked",
+        "designer_blocked",
+    );
+
+    let run_graph = vida()
+        .args(["taskflow", "run-graph", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph status should run");
+    assert!(
+        !run_graph.stdout.is_empty(),
+        "run-graph status should emit structured json even when blocked: stderr={}",
+        String::from_utf8_lossy(&run_graph.stderr)
+    );
+    let run_graph_json: serde_json::Value =
+        serde_json::from_slice(&run_graph.stdout).expect("run-graph json should parse");
+    assert_eq!(run_graph_json["status"], "blocked");
+
+    let recovery = vida()
+        .args(["taskflow", "recovery", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("recovery status should run");
+    assert_failure(
+        &recovery,
+        "recovery status should fail closed for stale blocked receipt",
+    );
+    let recovery_json: serde_json::Value =
+        serde_json::from_slice(&recovery.stdout).expect("recovery json should parse");
+    assert_eq!(recovery_json["status"], "blocked");
+    let recovery_text = serde_json::to_string(&recovery_json).expect("recovery json should render");
+    assert!(
+        !recovery_text.contains("exception-takeover"),
+        "stale blocked receipt recovery must not recommend exception takeover as the only lawful path: {recovery_text}"
+    );
+    assert!(
+        recovery_text.contains("vida lane retire") || recovery_text.contains("packet repair"),
+        "stale blocked receipt recovery should expose a lawful stale-state repair action: {recovery_text}"
+    );
+    assert_eq!(
+        recovery_json["projection_truth"]["stale_state_suspected"],
+        true
+    );
+
+    let orchestrator = vida()
+        .args(["orchestrator-init", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("orchestrator-init should run");
+    assert!(
+        !orchestrator.stdout.is_empty(),
+        "orchestrator-init should emit structured json even when blocked: stderr={}",
+        String::from_utf8_lossy(&orchestrator.stderr)
+    );
+    let orchestrator_json: serde_json::Value =
+        serde_json::from_slice(&orchestrator.stdout).expect("orchestrator json should parse");
+    let orchestrator_text =
+        serde_json::to_string(&orchestrator_json).expect("orchestrator json should render");
+    assert!(
+        !orchestrator_text.contains("exception-takeover"),
+        "orchestrator-init must not leave exception takeover as the only continuation for stale blocked receipt: {orchestrator_text}"
+    );
+    assert!(
+        orchestrator_text.contains("vida task reconcile-closed-runs")
+            || orchestrator_text.contains("vida lane retire"),
+        "orchestrator-init should surface a lawful non-exception recovery action: {orchestrator_text}"
+    );
     let _ = std::fs::remove_dir_all(project_root);
 }

@@ -2498,6 +2498,15 @@ fn next_lawful_operator_action_for_projection(
             status.run_id
         )));
     }
+    if receipt.is_some_and(|receipt| {
+        stale_blocked_dispatch_receipt_mismatches_active_lane(status, receipt)
+    }) {
+        return Some(format!(
+            "vida lane retire {} --receipt-id {} --reason \"stale blocked dispatch receipt\" --json",
+            shell_quote(&status.run_id),
+            shell_quote(&status.run_id)
+        ));
+    }
     if let Some(command) = receipt.and_then(|value| {
         if value
             .downstream_dispatch_blockers
@@ -3825,13 +3834,16 @@ fn projection_truth_from_state_surface(
             request_text: None,
             recorded_at: String::new(),
         });
-    let stale_state_suspected = projection_stale_state_suspected(
-        state_root,
-        receipt
-            .as_ref()
-            .map(|summary| dispatch_receipt_from_state_surface(summary))
-            .as_ref(),
-    );
+    let status_surface_receipt_for_stale = receipt
+        .as_ref()
+        .map(|summary| dispatch_receipt_from_state_surface(summary));
+    let stale_state_suspected =
+        projection_stale_state_suspected(state_root, status_surface_receipt_for_stale.as_ref())
+            || status_surface_receipt_for_stale
+                .as_ref()
+                .is_some_and(|receipt| {
+                    stale_blocked_dispatch_receipt_mismatches_active_lane(status, receipt)
+                });
     let projection_truth = RunGraphProjectionTruth {
         projection_source: if receipt.is_some() {
             "reconciled_run_graph_status".to_string()
@@ -4021,6 +4033,35 @@ fn projection_stale_state_suspected(
     age_seconds > stale_after_seconds
 }
 
+fn stale_blocked_dispatch_receipt_mismatches_active_lane(
+    status: &RunGraphStatus,
+    receipt: &RunGraphDispatchReceipt,
+) -> bool {
+    if receipt.exception_path_receipt_id.is_some() || receipt.supersedes_receipt_id.is_some() {
+        return false;
+    }
+    let receipt_blocked = receipt.dispatch_status == "blocked"
+        || receipt.blocker_code.as_deref().is_some_and(|value| {
+            matches!(
+                value.trim(),
+                "host_bridge_completion_result_blocked" | "host_bridge_completion_blocked"
+            )
+        });
+    if !receipt_blocked {
+        return false;
+    }
+    let active_node = status.active_node.trim();
+    let dispatch_target = receipt.dispatch_target.trim();
+    if active_node.is_empty() || dispatch_target.is_empty() {
+        return false;
+    }
+    let lifecycle = status.lifecycle_stage.trim();
+    let lifecycle_mismatch = !lifecycle.is_empty() && !lifecycle.starts_with(dispatch_target);
+    let active_node_mismatch = active_node != dispatch_target;
+    let historical_lane_label = receipt.lane_status.trim().ends_with("_lane");
+    active_node_mismatch && (lifecycle_mismatch || historical_lane_label)
+}
+
 pub(crate) async fn run_graph_projection_truth(
     store: &StateStore,
     status: &RunGraphStatus,
@@ -4055,7 +4096,10 @@ pub(crate) async fn run_graph_projection_truth(
         None
     };
     let stale_state_suspected = task_authority.stale_for_active_projection()
-        || projection_stale_state_suspected(store.root(), dispatch_receipt.as_ref());
+        || projection_stale_state_suspected(store.root(), dispatch_receipt.as_ref())
+        || dispatch_receipt.as_ref().is_some_and(|receipt| {
+            stale_blocked_dispatch_receipt_mismatches_active_lane(status, receipt)
+        });
     Ok(RunGraphProjectionTruth {
         projection_source: if dispatch_receipt.is_some() {
             "reconciled_run_graph_status".to_string()
