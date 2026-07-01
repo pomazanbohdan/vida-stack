@@ -208,6 +208,8 @@ pub struct ReadinessCheckArgs {
     pub profile: String,
     #[arg(long = "format", default_value = "jsonl")]
     pub format: String,
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
     #[arg()]
     pub files: Vec<String>,
 }
@@ -495,6 +497,7 @@ struct DoctorRow {
 #[derive(Debug, Serialize)]
 struct ProofcheckSummaryRow {
     command: String,
+    status: String,
     profile: String,
     layer: Option<usize>,
     files_mode: String,
@@ -504,6 +507,8 @@ struct ProofcheckSummaryRow {
     doctor_error_rows: usize,
     doctor_warning_rows: usize,
     verdict: String,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1127,10 +1132,13 @@ pub fn run_with_exit(cli: Cli) -> RunResult {
                 ),
             }
         }
-        Command::ReadinessCheck(args) => match readiness_rows(args.root.as_deref(), &args.profile, &args.files) {
-            Ok(rows) => render_readiness_check_rows(&rows, &args.format),
-            Err(error) => render_readiness_check_error(&error, &args.format),
-        },
+        Command::ReadinessCheck(args) => {
+            let format = if args.json { "json" } else { &args.format };
+            match readiness_rows(args.root.as_deref(), &args.profile, &args.files) {
+                Ok(rows) => render_readiness_check_rows(&rows, format),
+                Err(error) => render_readiness_check_error(&error, format),
+            }
+        }
         Command::ReadinessWrite(args) => {
             let output = resolve_readiness_output(&args);
             let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
@@ -1976,6 +1984,7 @@ fn proofcheck_layer_summary(layer: usize, paths: &[String]) -> ProofcheckSummary
     };
     ProofcheckSummaryRow {
         command: "proofcheck".to_string(),
+        status: proofcheck_status(verdict).to_string(),
         profile: String::new(),
         layer: Some(layer),
         files_mode: "layer".to_string(),
@@ -1985,6 +1994,8 @@ fn proofcheck_layer_summary(layer: usize, paths: &[String]) -> ProofcheckSummary
         doctor_error_rows,
         doctor_warning_rows,
         verdict: verdict.to_string(),
+        blocker_codes: proofcheck_blocker_codes(verdict),
+        next_actions: proofcheck_next_actions(verdict),
     }
 }
 
@@ -2016,6 +2027,7 @@ fn proofcheck_profile_summary(
     };
     Ok(ProofcheckSummaryRow {
         command: "proofcheck".to_string(),
+        status: proofcheck_status(verdict).to_string(),
         profile: profile.to_string(),
         layer: None,
         files_mode: "profile".to_string(),
@@ -2025,7 +2037,32 @@ fn proofcheck_profile_summary(
         doctor_error_rows,
         doctor_warning_rows,
         verdict: verdict.to_string(),
+        blocker_codes: proofcheck_blocker_codes(verdict),
+        next_actions: proofcheck_next_actions(verdict),
     })
+}
+
+fn proofcheck_status(verdict: &str) -> &'static str {
+    if verdict == "ok" { "pass" } else { "blocked" }
+}
+
+fn proofcheck_blocker_codes(verdict: &str) -> Vec<String> {
+    if verdict == "ok" {
+        Vec::new()
+    } else {
+        vec!["docflow_proofcheck_blocking".to_string()]
+    }
+}
+
+fn proofcheck_next_actions(verdict: &str) -> Vec<String> {
+    if verdict == "ok" {
+        Vec::new()
+    } else {
+        vec![
+            "Inspect fastcheck, protocol coverage, readiness, and doctor row counts.".to_string(),
+            "Repair blocking DocFlow artifacts, then rerun `vida docflow proofcheck --profile active-canon --json`.".to_string(),
+        ]
+    }
 }
 
 fn render_proofcheck_profile(root: Option<&str>, profile: &str) -> Result<String, String> {
@@ -4492,6 +4529,31 @@ fn render_readiness_check_rows(rows: &[ReadinessRow], format: &str) -> String {
                         .to_string()
                 })
             }),
+        "json" => {
+            let verdict = summarize_verdict(rows);
+            serde_json::to_string_pretty(&serde_json::json!({
+                "command": "readiness-check",
+                "surface": "vida docflow readiness-check",
+                "status": if matches!(verdict, ReadinessVerdict::Ok) { "pass" } else { "blocked" },
+                "verdict": verdict_label(verdict),
+                "row_count": rows.len(),
+                "rows": rows,
+                "blocker_codes": if matches!(verdict, ReadinessVerdict::Ok) {
+                    Vec::<String>::new()
+                } else {
+                    vec!["docflow_readiness_blocking".to_string()]
+                },
+                "next_actions": if matches!(verdict, ReadinessVerdict::Ok) {
+                    Vec::<String>::new()
+                } else {
+                    vec!["Inspect readiness rows and repair blocking documentation artifacts.".to_string()]
+                },
+            }))
+            .unwrap_or_else(|_| {
+                "{\"command\":\"readiness-check\",\"status\":\"blocked\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                    .to_string()
+            })
+        }
         "toon" => {
             let verdict = summarize_verdict(rows);
             let mut lines = vec![
@@ -4523,6 +4585,21 @@ fn render_readiness_check_rows(rows: &[ReadinessRow], format: &str) -> String {
 fn render_readiness_check_error(error: &str, format: &str) -> String {
     match format {
         "toon" => format!("readiness-check\n  rows: 0\n  verdict: blocking\n  error: {error}"),
+        "json" => serde_json::to_string_pretty(&serde_json::json!({
+            "command": "readiness-check",
+            "surface": "vida docflow readiness-check",
+            "status": "blocked",
+            "verdict": "blocking",
+            "row_count": 0,
+            "rows": [],
+            "blocker_codes": ["docflow_readiness_check_failed"],
+            "next_actions": ["Fix the DocFlow readiness-check input/root/profile and rerun the command."],
+            "error": error,
+        }))
+        .unwrap_or_else(|_| {
+            "{\"command\":\"readiness-check\",\"status\":\"blocked\",\"verdict\":\"blocking\",\"error\":\"serialization_error\"}"
+                .to_string()
+        }),
         _ => serde_json::to_string(&serde_json::json!({
             "artifact_path": "",
             "verdict": "blocking",
@@ -4838,11 +4915,12 @@ fn collect_tree_issues(
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, activation_issue_for, protocol_coverage_issue_for, run};
+    use super::{Cli, activation_issue_for, protocol_coverage_issue_for, run, run_with_exit};
     use clap::Parser;
     use serde_json::Value;
     use std::fs;
     use std::path::PathBuf;
+    use std::process::ExitCode;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_path(name: &str) -> String {
@@ -5691,6 +5769,115 @@ mod tests {
         assert!(rendered.contains("\"verdict\":\"blocking\""));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn readiness_check_command_accepts_json_flag() {
+        let root = temp_dir("readiness-json-root");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(root.join("docs/process/a.md"), "# a\n").expect("process markdown");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "readiness-check",
+            "--root",
+            root.to_string_lossy().as_ref(),
+            "--json",
+        ]);
+        let rendered = run(cli);
+        let payload: Value = serde_json::from_str(&rendered)
+            .unwrap_or_else(|error| panic!("readiness-check --json should parse: {error}"));
+        assert_eq!(
+            payload.get("command").and_then(Value::as_str),
+            Some("readiness-check")
+        );
+        assert_eq!(
+            payload.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            payload.get("verdict").and_then(Value::as_str),
+            Some("blocking")
+        );
+        assert_eq!(payload.get("row_count").and_then(Value::as_u64), Some(3));
+        assert!(
+            payload
+                .get("blocker_codes")
+                .and_then(Value::as_array)
+                .expect("blocker_codes should be an array")
+                .iter()
+                .any(|code| code.as_str() == Some("docflow_readiness_blocking"))
+        );
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn closeout_and_proofcheck_failures_emit_actionable_output() {
+        let closeout = run_with_exit(Cli::parse_from([
+            "docflow",
+            "closeout",
+            "--changed",
+            "--json",
+        ]));
+        assert_eq!(closeout.exit_code, ExitCode::from(1));
+        let closeout_payload: Value = serde_json::from_str(&closeout.output)
+            .unwrap_or_else(|error| panic!("closeout --json should parse: {error}"));
+        assert_eq!(
+            closeout_payload.get("command").and_then(Value::as_str),
+            Some("closeout")
+        );
+        assert_eq!(
+            closeout_payload.get("verdict").and_then(Value::as_str),
+            Some("blocking")
+        );
+        assert!(
+            closeout_payload
+                .get("blocker_codes")
+                .and_then(Value::as_array)
+                .is_some_and(|codes| !codes.is_empty())
+        );
+        assert!(
+            closeout_payload
+                .get("next_actions")
+                .and_then(Value::as_array)
+                .is_some_and(|actions| !actions.is_empty())
+        );
+
+        let proofcheck = run_with_exit(Cli::parse_from([
+            "docflow",
+            "proofcheck",
+            "--profile",
+            "active-canon",
+            "--json",
+        ]));
+        assert_eq!(proofcheck.exit_code, ExitCode::from(1));
+        let proofcheck_payload: Value = serde_json::from_str(&proofcheck.output)
+            .unwrap_or_else(|error| panic!("proofcheck --json should parse: {error}"));
+        assert_eq!(
+            proofcheck_payload.get("command").and_then(Value::as_str),
+            Some("proofcheck")
+        );
+        assert_eq!(
+            proofcheck_payload.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            proofcheck_payload.get("verdict").and_then(Value::as_str),
+            Some("blocking")
+        );
+        assert!(
+            proofcheck_payload
+                .get("blocker_codes")
+                .and_then(Value::as_array)
+                .is_some_and(|codes| !codes.is_empty())
+        );
+        assert!(
+            proofcheck_payload
+                .get("next_actions")
+                .and_then(Value::as_array)
+                .is_some_and(|actions| !actions.is_empty())
+        );
     }
 
     #[test]

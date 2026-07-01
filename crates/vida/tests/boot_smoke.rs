@@ -15681,6 +15681,32 @@ fn docflow_proxy_runs_readiness_check_in_process_when_profile_is_supported() {
 }
 
 #[test]
+fn docflow_proxy_runs_readiness_check_json_in_process_when_profile_is_supported() {
+    let output = vida()
+        .args([
+            "docflow",
+            "readiness-check",
+            "--profile",
+            "active-canon",
+            "--json",
+        ])
+        .output()
+        .expect("docflow in-process readiness-check json should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|error| panic!("readiness-check --json should parse: {error}: {stdout}"));
+    assert_eq!(payload["command"], "readiness-check");
+    assert!(matches!(
+        payload["status"].as_str(),
+        Some("pass" | "blocked")
+    ));
+    assert!(payload["row_count"].as_u64().is_some());
+}
+
+#[test]
 fn docflow_proxy_runs_proofcheck_in_process_when_profile_is_supported() {
     let output = vida()
         .args(["docflow", "proofcheck", "--profile", "active-canon-strict"])
