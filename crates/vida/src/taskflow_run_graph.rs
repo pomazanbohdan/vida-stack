@@ -635,6 +635,41 @@ pub(crate) fn missing_task_run_graph_requires_stale_cleanup(
             .unwrap_or(false)
 }
 
+fn stale_guard_status(
+    status: &RunGraphStatus,
+) -> taskflow_authority::stale_guard::StaleRunGraphStatus<'_> {
+    taskflow_authority::stale_guard::StaleRunGraphStatus {
+        status: status.status.as_str(),
+        lifecycle_stage: status.lifecycle_stage.as_str(),
+        next_node: status.next_node.as_deref(),
+        resume_target: status.resume_target.as_str(),
+    }
+}
+
+fn stale_guard_receipt(
+    receipt: &RunGraphDispatchReceipt,
+) -> taskflow_authority::stale_guard::StaleRunGraphReceipt<'_> {
+    taskflow_authority::stale_guard::StaleRunGraphReceipt {
+        dispatch_status: receipt.dispatch_status.as_str(),
+        lane_status: receipt.lane_status.as_str(),
+        downstream_dispatch_status: receipt.downstream_dispatch_status.as_deref(),
+    }
+}
+
+fn recovery_lane_retire_admissibility(
+    status: &RunGraphStatus,
+    receipt: Option<&RunGraphDispatchReceipt>,
+    task_state: taskflow_authority::stale_guard::StaleRunTaskState,
+) -> taskflow_authority::stale_guard::StaleRunRetireAdmissibility {
+    let status = stale_guard_status(status);
+    let receipt = receipt.map(stale_guard_receipt);
+    taskflow_authority::stale_guard::stale_run_retire_admissibility(
+        &status,
+        receipt.as_ref(),
+        task_state,
+    )
+}
+
 fn closed_task_active_run_projection_mismatch_command() -> String {
     "vida task reconcile-closed-runs --limit 25".to_string()
 }
@@ -2478,10 +2513,18 @@ fn next_lawful_operator_action_for_projection(
     task_closed_stale_run: bool,
 ) -> Option<String> {
     if missing_task_run_graph_requires_stale_cleanup(Some(status), task_missing) {
-        return Some(format!(
-            "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json",
-            status.run_id, status.run_id
-        ));
+        if recovery_lane_retire_admissibility(
+            status,
+            receipt,
+            taskflow_authority::stale_guard::StaleRunTaskState::Missing,
+        )
+        .is_allowed()
+        {
+            return Some(format!(
+                "vida lane retire {} --receipt-id {} --reason \"missing TaskFlow task stale run\" --json",
+                status.run_id, status.run_id
+            ));
+        }
     }
     if task_missing {
         return None;

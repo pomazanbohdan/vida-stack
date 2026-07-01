@@ -20,6 +20,39 @@ pub struct TaskflowActiveCandidate<'a> {
     pub task_id: &'a str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleRunTaskState {
+    Missing,
+    Closed,
+    Open,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleRunRetireAdmissibility {
+    AllowedMissingTask,
+    AllowedClosedTask,
+    BlockedTerminalRun,
+    BlockedTaskNotClosed,
+    BlockedMissingTaskReceiptShape,
+}
+
+impl StaleRunRetireAdmissibility {
+    pub fn is_allowed(self) -> bool {
+        matches!(self, Self::AllowedMissingTask | Self::AllowedClosedTask)
+    }
+
+    pub fn blocker_code(self) -> Option<&'static str> {
+        match self {
+            Self::AllowedMissingTask | Self::AllowedClosedTask => None,
+            Self::BlockedTerminalRun => Some("lane_retire_terminal_run"),
+            Self::BlockedTaskNotClosed => Some("lane_retire_task_not_closed"),
+            Self::BlockedMissingTaskReceiptShape => {
+                Some("lane_retire_missing_task_receipt_not_retireable")
+            }
+        }
+    }
+}
+
 pub fn missing_task_stale_blocked_run_can_retire(
     status: &StaleRunGraphStatus<'_>,
     receipt: &StaleRunGraphReceipt<'_>,
@@ -32,8 +65,29 @@ pub fn missing_task_stale_blocked_run_can_retire(
     let prelaunch_packet_ready = receipt.dispatch_status == "executed"
         && receipt.lane_status == "lane_completed"
         && receipt.downstream_dispatch_status == Some("packet_ready");
-
     (receipt.dispatch_status == "blocked" && blocked_or_running) || prelaunch_packet_ready
+}
+
+pub fn stale_run_retire_admissibility(
+    status: &StaleRunGraphStatus<'_>,
+    receipt: Option<&StaleRunGraphReceipt<'_>>,
+    task_state: StaleRunTaskState,
+) -> StaleRunRetireAdmissibility {
+    if run_graph_status_is_terminal_closure(status) {
+        return StaleRunRetireAdmissibility::BlockedTerminalRun;
+    }
+
+    match task_state {
+        StaleRunTaskState::Closed => StaleRunRetireAdmissibility::AllowedClosedTask,
+        StaleRunTaskState::Open => StaleRunRetireAdmissibility::BlockedTaskNotClosed,
+        StaleRunTaskState::Missing => match receipt {
+            Some(receipt) if missing_task_stale_blocked_run_can_retire(status, receipt) => {
+                StaleRunRetireAdmissibility::AllowedMissingTask
+            }
+            None => StaleRunRetireAdmissibility::AllowedMissingTask,
+            Some(_) => StaleRunRetireAdmissibility::BlockedMissingTaskReceiptShape,
+        },
+    }
 }
 
 pub fn latest_run_graph_task_orthogonal_to_taskflow_active_work(
@@ -75,9 +129,10 @@ fn run_graph_status_is_terminal_closure(status: &StaleRunGraphStatus<'_>) -> boo
 #[cfg(test)]
 mod tests {
     use super::{
-        StaleRunGraphReceipt, StaleRunGraphStatus, TaskflowActiveCandidate,
-        latest_run_graph_task_orthogonal_to_taskflow_active_work,
+        StaleRunGraphReceipt, StaleRunGraphStatus, StaleRunRetireAdmissibility, StaleRunTaskState,
+        TaskflowActiveCandidate, latest_run_graph_task_orthogonal_to_taskflow_active_work,
         latest_run_graph_task_stale_for_write_guard, missing_task_stale_blocked_run_can_retire,
+        stale_run_retire_admissibility,
     };
 
     fn active_status() -> StaleRunGraphStatus<'static> {
@@ -154,6 +209,62 @@ mod tests {
             &active_status(),
             &receipt
         ));
+    }
+
+    #[test]
+    fn stale_run_retire_admissibility_matches_task_state_and_receipt_shape() {
+        let retireable_receipt = StaleRunGraphReceipt {
+            dispatch_status: "blocked",
+            lane_status: "lane_blocked",
+            downstream_dispatch_status: None,
+        };
+        let bridge_pending_receipt = StaleRunGraphReceipt {
+            dispatch_status: "bridge_request_pending",
+            lane_status: "lane_open",
+            downstream_dispatch_status: None,
+        };
+
+        assert_eq!(
+            stale_run_retire_admissibility(
+                &active_status(),
+                Some(&retireable_receipt),
+                StaleRunTaskState::Missing,
+            ),
+            StaleRunRetireAdmissibility::AllowedMissingTask
+        );
+        assert_eq!(
+            stale_run_retire_admissibility(&active_status(), None, StaleRunTaskState::Missing),
+            StaleRunRetireAdmissibility::AllowedMissingTask
+        );
+        assert_eq!(
+            stale_run_retire_admissibility(
+                &active_status(),
+                Some(&bridge_pending_receipt),
+                StaleRunTaskState::Missing,
+            ),
+            StaleRunRetireAdmissibility::BlockedMissingTaskReceiptShape
+        );
+        assert_eq!(
+            stale_run_retire_admissibility(
+                &active_status(),
+                Some(&retireable_receipt),
+                StaleRunTaskState::Open,
+            ),
+            StaleRunRetireAdmissibility::BlockedTaskNotClosed
+        );
+        assert_eq!(
+            stale_run_retire_admissibility(
+                &terminal_closure_status(),
+                Some(&retireable_receipt),
+                StaleRunTaskState::Closed,
+            ),
+            StaleRunRetireAdmissibility::BlockedTerminalRun
+        );
+        assert_eq!(
+            StaleRunRetireAdmissibility::BlockedTaskNotClosed.blocker_code(),
+            Some("lane_retire_task_not_closed")
+        );
+        assert!(StaleRunRetireAdmissibility::AllowedClosedTask.is_allowed());
     }
 
     #[test]

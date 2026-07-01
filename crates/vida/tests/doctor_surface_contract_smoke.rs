@@ -5708,6 +5708,91 @@ fn open_active_blocked_receipt_mismatch_does_not_recommend_lane_retire() {
 }
 
 #[test]
+fn recovery_latest_open_task_stale_receipt_does_not_recommend_unretirable_lane() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let parent_id = "zzzz-recovery-open-stale-parent";
+    let run_id = "zzzz-recovery-open-stale-receipt";
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+    sync_protocol_binding(&state_dir);
+    create_session_triage_task(
+        &state_dir,
+        parent_id,
+        "Recovery open stale parent",
+        "epic",
+        "open",
+        "1",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        run_id,
+        "Recovery open stale task",
+        "task",
+        "in_progress",
+        "1",
+        Some(parent_id),
+    );
+    persist_host_bridge_lane_receipt_with_target_and_active_node(
+        &state_dir,
+        run_id,
+        "autotester",
+        "designer",
+        "developer",
+        "blocked",
+        "autotester_lane",
+        "host_bridge_completion_result_blocked",
+        "designer_blocked",
+    );
+
+    let recovery_latest = vida()
+        .args(["taskflow", "recovery", "latest", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("recovery latest should run");
+    assert_failure(
+        &recovery_latest,
+        "recovery latest should fail closed for open-task stale receipt",
+    );
+    let recovery_json: serde_json::Value =
+        serde_json::from_slice(&recovery_latest.stdout).expect("recovery latest json should parse");
+    let recovery_text = serde_json::to_string(&recovery_json).expect("recovery json should render");
+    assert!(
+        !recovery_text.contains("vida lane retire"),
+        "recovery latest must not recommend unretirable lane retire for open task: {recovery_text}"
+    );
+
+    let retire = vida()
+        .args([
+            "lane",
+            "retire",
+            run_id,
+            "--receipt-id",
+            run_id,
+            "--reason",
+            "stale blocked dispatch receipt",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("lane retire should run");
+    assert_failure(&retire, "lane retire should reject open task stale receipt");
+    let retire_json: serde_json::Value =
+        serde_json::from_slice(&retire.stdout).expect("lane retire json should parse");
+    assert_eq!(retire_json["status"], "blocked");
+    assert_eq!(
+        retire_json["blocker_codes"],
+        serde_json::json!(["lane_retire_task_not_closed"])
+    );
+
+    let _ = std::fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn run_graph_status_recovers_stale_blocked_receipt_without_exception_takeover() {
     let (project_root, state_dir) = project_bound_state_dir();
     let run_id = "zzzz-run-stale-blocked-autotester-receipt";

@@ -2833,18 +2833,44 @@ pub(crate) fn missing_task_stale_blocked_run_can_retire(
     status: &crate::state_store::RunGraphStatus,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    let status = taskflow_authority::stale_guard::StaleRunGraphStatus {
+    let status = stale_guard_status(status);
+    let receipt = stale_guard_receipt(receipt);
+    taskflow_authority::stale_guard::missing_task_stale_blocked_run_can_retire(&status, &receipt)
+}
+
+fn stale_guard_status(
+    status: &crate::state_store::RunGraphStatus,
+) -> taskflow_authority::stale_guard::StaleRunGraphStatus<'_> {
+    taskflow_authority::stale_guard::StaleRunGraphStatus {
         status: status.status.as_str(),
         lifecycle_stage: status.lifecycle_stage.as_str(),
         next_node: status.next_node.as_deref(),
         resume_target: status.resume_target.as_str(),
-    };
-    let receipt = taskflow_authority::stale_guard::StaleRunGraphReceipt {
+    }
+}
+
+fn stale_guard_receipt(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> taskflow_authority::stale_guard::StaleRunGraphReceipt<'_> {
+    taskflow_authority::stale_guard::StaleRunGraphReceipt {
         dispatch_status: receipt.dispatch_status.as_str(),
         lane_status: receipt.lane_status.as_str(),
         downstream_dispatch_status: receipt.downstream_dispatch_status.as_deref(),
-    };
-    taskflow_authority::stale_guard::missing_task_stale_blocked_run_can_retire(&status, &receipt)
+    }
+}
+
+fn stale_run_retire_admissibility(
+    status: &crate::state_store::RunGraphStatus,
+    receipt: Option<&crate::state_store::RunGraphDispatchReceipt>,
+    task_state: taskflow_authority::stale_guard::StaleRunTaskState,
+) -> taskflow_authority::stale_guard::StaleRunRetireAdmissibility {
+    let status = stale_guard_status(status);
+    let receipt = receipt.map(stale_guard_receipt);
+    taskflow_authority::stale_guard::stale_run_retire_admissibility(
+        &status,
+        receipt.as_ref(),
+        task_state,
+    )
 }
 
 const MAX_LANE_PACKET_READ_BYTES: u64 = 1024 * 1024;
@@ -6334,27 +6360,65 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     }
                 };
             match store.show_task(&status.task_id).await {
-                Ok(task) if task.status == "closed" => {}
                 Ok(task) => {
-                    return emit_lane_retire_blocked_envelope(
-                        as_json,
-                        run_id,
-                        receipt_id,
-                        "lane_retire_task_not_closed",
-                        format!(
-                            "Lane `{run_id}` can only be retired after task `{}` is closed; current task status is `{}`.",
-                            status.task_id, task.status
-                        ),
-                        receipt.dispatch_packet_path.clone(),
-                        receipt.dispatch_result_path.clone(),
-                    );
+                    let task_state =
+                        if crate::state_store::StateStore::task_status_is_closed_like(&task.status)
+                        {
+                            taskflow_authority::stale_guard::StaleRunTaskState::Closed
+                        } else {
+                            taskflow_authority::stale_guard::StaleRunTaskState::Open
+                        };
+                    let admissibility =
+                        stale_run_retire_admissibility(&status, Some(&receipt), task_state);
+                    if !admissibility.is_allowed() {
+                        return emit_lane_retire_blocked_envelope(
+                            as_json,
+                            run_id,
+                            receipt_id,
+                            admissibility
+                                .blocker_code()
+                                .unwrap_or("lane_retire_task_verification_failed"),
+                            format!(
+                                "Lane `{run_id}` can only be retired after task `{}` is closed; current task status is `{}`.",
+                                status.task_id, task.status
+                            ),
+                            receipt.dispatch_packet_path.clone(),
+                            receipt.dispatch_result_path.clone(),
+                        );
+                    }
                 }
                 Err(error) => {
-                    let missing_task_stale_blocked_run = matches!(
+                    let missing_task = matches!(
                         error,
                         crate::state_store::StateStoreError::MissingTask { .. }
-                    )
-                        && missing_task_stale_blocked_run_can_retire(&status, &receipt);
+                    );
+                    let missing_task_admissibility = missing_task.then(|| {
+                        stale_run_retire_admissibility(
+                            &status,
+                            Some(&receipt),
+                            taskflow_authority::stale_guard::StaleRunTaskState::Missing,
+                        )
+                    });
+                    let missing_task_stale_blocked_run =
+                        missing_task_admissibility.is_some_and(|value| value.is_allowed());
+                    if let Some(admissibility) = missing_task_admissibility {
+                        if !admissibility.is_allowed() {
+                            return emit_lane_retire_blocked_envelope(
+                                as_json,
+                                run_id,
+                                receipt_id,
+                                admissibility
+                                    .blocker_code()
+                                    .unwrap_or("lane_retire_task_verification_failed"),
+                                format!(
+                                    "Lane `{run_id}` cannot retire missing task `{}` because the dispatch receipt is not a stale blocked retireable shape.",
+                                    status.task_id
+                                ),
+                                receipt.dispatch_packet_path.clone(),
+                                receipt.dispatch_result_path.clone(),
+                            );
+                        }
+                    }
                     if !missing_task_stale_blocked_run {
                         let metadata_task_id = if receipt.lane_status
                             == crate::LaneStatus::LaneExceptionTakeover.as_str()
