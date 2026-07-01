@@ -220,7 +220,7 @@ If a downstream defect blocks an upstream proof, it moves into the earliest pool
 
 Parallel execution is opt-in.
 
-A task is not parallel-safe unless all required execution semantics are explicit:
+A task pool is not parallel-safe unless all required execution semantics are explicit for every included task:
 
 1. `execution_mode`,
 2. `order_bucket`,
@@ -229,7 +229,33 @@ A task is not parallel-safe unless all required execution semantics are explicit
 
 Missing or incompatible semantics block parallel admission.
 
-Tasks may share a parallel group only when their conflict domains and owned runtime transitions are disjoint.
+Tasks may share a parallel group only when live evidence proves all of these conditions:
+
+1. the tasks are in the same dependency layer,
+2. no direct dependency edge exists between them,
+3. no transitive dependency path orders one before another,
+4. conflict domains are disjoint,
+5. owned paths or owned runtime transitions do not overlap,
+6. one shared proof bundle can validate the pack without hiding task-specific blockers.
+
+Multiple ready tasks are not enough to prove parallel admission.
+
+Adjacent or same-surface tasks form a `sequential_coherent_pack`, not a parallel pack, when they are ordered by:
+
+1. dependency edges,
+2. runtime-transition order,
+3. proof-gate order,
+4. conflict-domain overlap,
+5. owned-path overlap,
+6. owner-boundary coupling.
+
+Every actualization that changes parallelism metadata must record one pack classification in task notes:
+
+1. `parallel_safe`,
+2. `sequential_coherent_pack`,
+3. `blocked`.
+
+The note must include dependency evidence, conflict-domain evidence, owned-path or runtime-transition evidence, and proof-bundle evidence.
 
 ## Mutation Batch Law
 
@@ -278,7 +304,9 @@ Every actualization run reports:
 5. blocked mutations,
 6. validation proof,
 7. remaining caveats,
-8. next lawful TaskFlow command.
+8. parallel-safe versus sequential-pack classifications,
+9. any parallelism downgrades caused by dependency or conflict evidence,
+10. next lawful TaskFlow command.
 
 Preview runs report proposed semantics and blockers.
 
@@ -296,7 +324,9 @@ An actualization run is accepted when:
 6. critical path begins with current foundation or blocker work,
 7. ready set matches intended next lawful work,
 8. blocked set explains downstream pools,
-9. parallelism decisions fail closed on missing semantics.
+9. parallelism decisions fail closed on missing semantics,
+10. no ready pool is promoted to parallel admission without explicit non-conflict evidence,
+11. adjacent task pools with dependency, proof-gate, conflict-domain, owned-path, or owner-boundary coupling are classified as sequential coherent packs.
 
 ## Test Matrix
 
@@ -311,7 +341,9 @@ The runtime implementation must cover:
 7. closed-task immutability,
 8. invalid graph fail-closed output,
 9. conflicting mode rejection,
-10. parallelism fail-closed behavior.
+10. parallelism fail-closed behavior,
+11. parallel-safe pack admission with disjoint dependency, conflict-domain, owned-path, and proof-bundle evidence,
+12. sequential coherent pack downgrade when adjacent ready tasks are ordered by dependency, proof, conflict, owned path, or owner boundary.
 
 ## Operator Checklist
 
@@ -323,11 +355,12 @@ The runtime implementation must cover:
 6. Classify duplicates.
 7. Add blocker edges for hard ordering.
 8. Normalize priority and execution semantics.
-9. Rehome only with live tree evidence.
-10. Apply one coherent mutation batch.
-11. Validate graph.
-12. Repeat until the graph reports a coherent next lawful path.
-13. Report changed tasks, skipped closed tasks, duplicate decisions, blockers, and validation proof.
+9. Classify adjacent task pools as `parallel_safe`, `sequential_coherent_pack`, or `blocked`.
+10. Rehome only with live tree evidence.
+11. Apply one coherent mutation batch.
+12. Validate graph.
+13. Repeat until the graph reports a coherent next lawful path.
+14. Report changed tasks, skipped closed tasks, duplicate decisions, blockers, validation proof, pack classifications, and parallelism downgrades.
 
 -----
 artifact_path: process/taskflow-actualization-protocol
@@ -338,5 +371,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/taskflow-actualization-protocol.md
 created_at: '2026-07-01T00:00:00+02:00'
-updated_at: 2026-07-01T18:30:00+02:00
+updated_at: 2026-07-01T18:30:01.771678Z
 changelog_ref: taskflow-actualization-protocol.changelog.jsonl

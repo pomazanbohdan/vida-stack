@@ -88,6 +88,8 @@ Canonical entrypoints:
     - project-owned protocol for evidence-backed repository audits, advisory implementation plans, isolated executor review, plan reconciliation, and external tracker publication
 36. `docs/process/project-artifact-cleanup-protocol.md`
     - project-owned protocol for safe repository, project-adjacent, and filesystem artifact cleanup produced by `vida-stack` work
+37. `docs/process/taskflow-actualization-protocol.md`
+    - runtime protocol for refreshing TaskFlow graph ownership, dependencies, ordering, duplicate handling, and parallel-safe versus sequential coherent pack classification from live evidence
 
 -----
 artifact_path: process/index
@@ -98,5 +100,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/index.md
 created_at: '2026-06-13T00:00:00+03:00'
-updated_at: 2026-07-01T00:00:00+03:00
+updated_at: 2026-07-01T18:30:01.7724948Z
 changelog_ref: index.changelog.jsonl
