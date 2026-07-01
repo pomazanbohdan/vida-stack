@@ -829,9 +829,7 @@ fn release_install_status_receipt_from_event(
         .get("progress_path")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
-        .or_else(|| {
-            fs::read_to_string(release_install_progress_latest_path().with_extension("path")).ok()
-        })
+        .or_else(release_install_progress_latest_path_marker_contents)
         .or(fallback_progress_path);
     if let Some(path) = progress_path.as_ref() {
         if !artifact_refs.iter().any(|artifact| artifact == path) {
@@ -903,6 +901,16 @@ fn release_install_progress_readable_dir(path: &Path) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+fn release_install_progress_latest_path_marker_contents() -> Option<String> {
+    let path_marker = release_install_progress_latest_path().with_extension("path");
+    let metadata = fs::symlink_metadata(&path_marker).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return None;
+    }
+
+    read_release_install_progress_file_without_following_symlinks(&path_marker).ok()
 }
 
 fn read_release_install_progress_file_without_following_symlinks(
@@ -2495,6 +2503,97 @@ mod tests {
         assert!(receipt.latest_event.is_none());
         assert!(receipt.progress_path.is_none());
         assert!(receipt.artifact_refs.is_empty());
+    }
+
+    #[test]
+    fn release_install_status_reads_regular_latest_path_marker_during_durable_fallback() {
+        let _guard = release_progress_test_lock();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let progress_dir = release_install_progress_dir();
+        fs::create_dir_all(&progress_dir).expect("progress dir should write");
+        let fallback_progress = progress_dir.join("release-install-fallback.jsonl");
+        fs::write(
+            &fallback_progress,
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "surface": "vida release install",
+                    "status": "pass",
+                    "phase": "install",
+                    "child_state": "completed",
+                    "recorded_at_unix_ms": 100_u64,
+                })
+            ),
+        )
+        .expect("fallback progress should write");
+        let recorded_path = progress_dir.join("recorded-progress.jsonl");
+        fs::write(
+            release_install_progress_latest_path().with_extension("path"),
+            recorded_path.display().to_string(),
+        )
+        .expect("latest.path marker should write");
+
+        let receipt = release_install_status_receipt();
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.latest_phase.as_deref(), Some("install"));
+        assert_eq!(
+            receipt.progress_path.as_deref(),
+            Some(recorded_path.display().to_string().as_str())
+        );
+        assert_eq!(
+            receipt.artifact_refs,
+            vec![recorded_path.display().to_string()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_install_status_ignores_symlinked_latest_path_marker_during_durable_fallback() {
+        let _guard = release_progress_test_lock();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let progress_dir = release_install_progress_dir();
+        fs::create_dir_all(&progress_dir).expect("progress dir should write");
+        let fallback_progress = progress_dir.join("release-install-fallback.jsonl");
+        fs::write(
+            &fallback_progress,
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "surface": "vida release install",
+                    "status": "pass",
+                    "phase": "install",
+                    "child_state": "completed",
+                    "recorded_at_unix_ms": 100_u64,
+                })
+            ),
+        )
+        .expect("fallback progress should write");
+        let victim = harness.path().join("victim-latest-path-secret.txt");
+        fs::write(&victim, "SENSITIVE_TOKEN_ABC123")
+            .expect("victim latest.path secret should write");
+        std::os::unix::fs::symlink(
+            &victim,
+            release_install_progress_latest_path().with_extension("path"),
+        )
+        .expect("latest.path symlink should write");
+
+        let receipt = release_install_status_receipt();
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.latest_phase.as_deref(), Some("install"));
+        assert_eq!(
+            receipt.progress_path.as_deref(),
+            Some(fallback_progress.display().to_string().as_str())
+        );
+        assert_eq!(
+            receipt.artifact_refs,
+            vec![fallback_progress.display().to_string()]
+        );
     }
 
     #[cfg(unix)]
