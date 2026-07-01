@@ -116,6 +116,11 @@ struct RequirementSourceInput {
     public_analysis_text: String,
 }
 
+struct RequirementSourceRedaction {
+    public_text: String,
+    redacted: bool,
+}
+
 impl RequirementSourceInput {
     fn operator_text(text: String) -> Self {
         Self {
@@ -162,17 +167,22 @@ fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, S
     let mut content = String::new();
     file.read_to_string(&mut content)
         .map_err(|error| format!("{}: {error}", path.display()))?;
-    let digest = blake3::hash(content.as_bytes());
     let display_path = relative_path.display().to_string();
-    let public_analysis_text = redact_requirement_source_content(content.trim());
+    let redaction = redact_requirement_source_content(content.trim());
+    let digest = blake3::hash(redaction.public_text.as_bytes());
+    let redacted_flag = if redaction.redacted {
+        ":redacted=true"
+    } else {
+        ""
+    };
     Ok(RequirementSourceInput {
         kind: "source_file",
-        serialized_text: public_analysis_text.clone(),
+        serialized_text: redaction.public_text.clone(),
         source_metadata: Some(format!(
-            "file:{display_path}:bytes={}:blake3={digest}",
-            content.len()
+            "file:{display_path}:bytes={}:blake3={digest}{redacted_flag}",
+            redaction.public_text.len()
         )),
-        public_analysis_text,
+        public_analysis_text: redaction.public_text,
     })
 }
 
@@ -203,24 +213,33 @@ fn apply_requirement_source_no_follow_open_options(_options: &mut OpenOptions) {
 
 fn requirement_source_project_root() -> Result<PathBuf, String> {
     crate::resolve_runtime_project_root()
-        .or_else(|_| std::env::current_dir().map_err(|error| format!("project root: {error}")))
 }
 
-fn redact_requirement_source_content(content: &str) -> String {
-    content
-        .lines()
-        .map(redact_requirement_source_line)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn redact_requirement_source_line(line: &str) -> String {
-    if requirement_source_secret_assignment_line(line)
-        || line.split_whitespace().any(requirement_source_secret_token)
-    {
-        "[redacted source-file secret line]".to_string()
-    } else {
-        line.to_string()
+fn redact_requirement_source_content(content: &str) -> RequirementSourceRedaction {
+    let mut in_secret_block = false;
+    let mut redacted = false;
+    let mut public_lines = Vec::new();
+    for line in content.lines() {
+        let starts_secret_block = requirement_source_secret_assignment_opens_multiline(line);
+        let secret_line = in_secret_block
+            || starts_secret_block
+            || requirement_source_secret_assignment_line(line)
+            || line.split_whitespace().any(requirement_source_secret_token);
+        if secret_line {
+            redacted = true;
+            public_lines.push("[redacted source-file secret line]".to_string());
+            if in_secret_block && requirement_source_secret_block_closes(line) {
+                in_secret_block = false;
+            } else if starts_secret_block {
+                in_secret_block = true;
+            }
+        } else {
+            public_lines.push(line.to_string());
+        }
+    }
+    RequirementSourceRedaction {
+        public_text: public_lines.join("\n"),
+        redacted,
     }
 }
 
@@ -229,6 +248,31 @@ fn requirement_source_secret_assignment_line(line: &str) -> bool {
         return false;
     };
     requirement_source_secret_key(&line[..delimiter_index])
+}
+
+fn requirement_source_secret_assignment_opens_multiline(line: &str) -> bool {
+    let Some(delimiter_index) = line.find(['=', ':']) else {
+        return false;
+    };
+    if !requirement_source_secret_key(&line[..delimiter_index]) {
+        return false;
+    }
+    let value = line[delimiter_index + 1..].trim_start();
+    (value.contains("-----BEGIN") && !value.contains("-----END"))
+        || value
+            .strip_prefix('"')
+            .is_some_and(|rest| !rest.contains('"'))
+        || value
+            .strip_prefix('\'')
+            .is_some_and(|rest| !rest.contains('\''))
+}
+
+fn requirement_source_secret_block_closes(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.is_empty()
+        || trimmed.contains("-----END")
+        || trimmed.ends_with('"')
+        || trimmed.ends_with('\'')
 }
 
 fn requirement_source_secret_token(token: &str) -> bool {
@@ -241,7 +285,8 @@ fn requirement_source_secret_token(token: &str) -> bool {
 fn requirement_source_secret_key(key: &str) -> bool {
     let key = key
         .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
-        .to_ascii_lowercase();
+        .to_ascii_lowercase()
+        .replace('-', "_");
     key.contains("secret")
         || key.contains("token")
         || key.contains("password")

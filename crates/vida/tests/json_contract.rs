@@ -198,6 +198,10 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
             "SECRET_TOKEN=[redacted-test-value]",
             "SECRET_TOKEN = [redacted-test-value]",
             "api_key: [redacted-test-value]",
+            "private-key: [redacted-test-value]",
+            "PRIVATE_KEY=\"-----BEGIN TEST KEY-----",
+            "MIISECRETBODYSHOULDNOTLEAK",
+            "-----END TEST KEY-----\"",
             "Build the feature.",
             "Keep operator output compact.",
             "Add JSON proof.",
@@ -253,6 +257,18 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         !source_text.contains("api_key") && !source_text.contains("[redacted-test-value]"),
         "spaced and YAML-style source-file secrets must be redacted: {source_text}"
     );
+    for marker in [
+        "private-key",
+        "PRIVATE_KEY",
+        "MIISECRETBODYSHOULDNOTLEAK",
+        "-----BEGIN TEST KEY-----",
+        "-----END TEST KEY-----",
+    ] {
+        assert!(
+            !source_text.contains(marker),
+            "source-file secret marker {marker} must be redacted: {source_text}"
+        );
+    }
     let source_metadata = artifact["source_inputs"][0]["source_metadata"]
         .as_str()
         .expect("source metadata should render");
@@ -269,6 +285,34 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         !public_analysis_text.contains("api_key")
             && !public_analysis_text.contains("[redacted-test-value]"),
         "redacted analysis must hide spaced and YAML-style source-file secrets: {public_analysis_text}"
+    );
+    for marker in [
+        "private-key",
+        "PRIVATE_KEY",
+        "MIISECRETBODYSHOULDNOTLEAK",
+        "-----BEGIN TEST KEY-----",
+        "-----END TEST KEY-----",
+    ] {
+        assert!(
+            !public_analysis_text.contains(marker),
+            "redacted analysis must hide source-file secret marker {marker}: {public_analysis_text}"
+        );
+    }
+    let raw_source = fs::read_to_string(project_root.join("requirements.md"))
+        .expect("source fixture should still be readable");
+    let raw_digest = blake3::hash(raw_source.as_bytes()).to_string();
+    let public_digest = blake3::hash(public_analysis_text.as_bytes()).to_string();
+    assert!(
+        !source_metadata.contains(&raw_digest),
+        "source metadata must not hash unredacted source-file contents: {source_metadata}"
+    );
+    assert!(
+        source_metadata.contains(&public_digest),
+        "source metadata should hash the public redacted source text: {source_metadata}"
+    );
+    assert!(
+        source_metadata.contains(":redacted=true"),
+        "source metadata should disclose that public source text was redacted: {source_metadata}"
     );
     assert!(
         public_analysis_text.contains("Preserve requirement thirteen"),
@@ -290,6 +334,9 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
                 .as_str()
                 .is_some_and(|text| text.contains("SECRET_TOKEN")
                     || text.contains("api_key")
+                    || text.contains("private-key")
+                    || text.contains("PRIVATE_KEY")
+                    || text.contains("MIISECRETBODYSHOULDNOTLEAK")
                     || text.contains("[redacted-test-value]"))),
         "source-file secrets must not leak through requirement atoms"
     );
@@ -366,7 +413,40 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         "parent traversal source paths should fail closed"
     );
 
+    let stray_root = std::path::PathBuf::from(unique_state_dir());
+    fs::create_dir_all(&stray_root).expect("stray cwd should exist");
+    fs::write(stray_root.join("requirements.md"), "Build outside project.")
+        .expect("stray source should write");
+    let stray_output = vida()
+        .current_dir(&stray_root)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "stray-source",
+            "--source-file",
+            "requirements.md",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("stray source rejection should run");
+    assert!(
+        !stray_output.status.success(),
+        "source files should fail closed when project root resolution fails"
+    );
+    let stray_value = parse_json_output(
+        &["requirement", "analyze", "--source-file", "--json"],
+        &stray_output,
+    );
+    assert_eq!(stray_value["status"], "blocked");
+    assert_eq!(
+        stray_value["blocker_codes"],
+        json!(["requirement_source_unreadable"])
+    );
+
     let _ = fs::remove_dir_all(&project_root);
+    let _ = fs::remove_dir_all(&stray_root);
     let _ = fs::remove_dir_all(&state_dir);
 }
 
