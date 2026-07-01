@@ -331,6 +331,11 @@ pub(crate) fn resolve_protocol_view_target(
     }
 
     let source_root = resolve_protocol_view_source_root()?;
+    if !normalized.contains('/') {
+        if let Some(resolved) = resolve_protocol_view_target_from_index(&source_root, normalized)? {
+            return Ok(resolved);
+        }
+    }
     let relative = normalized
         .strip_prefix("vida/config/instructions/")
         .unwrap_or(normalized);
@@ -354,6 +359,94 @@ pub(crate) fn resolve_protocol_view_target(
         ],
     };
     Ok((resolved, resolved_path))
+}
+
+fn resolve_protocol_view_target_from_index(
+    source_root: &std::path::Path,
+    normalized: &str,
+) -> Result<Option<(ResolvedProtocolViewTarget, PathBuf)>, String> {
+    let index_path = source_root.join("vida/config/instructions/system-maps/protocol.index.md");
+    let index = std::fs::read_to_string(&index_path)
+        .map_err(|error| format!("Failed to read {}: {error}", index_path.display()))?;
+    for line in index.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') || trimmed.contains("|---") {
+            continue;
+        }
+        let cells = trimmed
+            .trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .collect::<Vec<_>>();
+        if cells.len() < 2 || cells[0].eq_ignore_ascii_case("domain") {
+            continue;
+        }
+        let domain = cells[0];
+        let Some(canonical_id) = first_backtick_value(cells[1]) else {
+            continue;
+        };
+        if !canonical_id.contains('/') || !canonical_id.starts_with("runtime-instructions/") {
+            continue;
+        }
+        let short_alias = protocol_short_alias(&canonical_id);
+        if normalized != slugify_markdown_heading(domain) && normalized != short_alias {
+            continue;
+        }
+        let source_path = format!("vida/config/instructions/{canonical_id}.md");
+        let resolved_path = source_root.join(&source_path);
+        if !resolved_path.is_file() {
+            continue;
+        }
+        let resolved = ResolvedProtocolViewTarget {
+            canonical_id: canonical_id.clone(),
+            source_path,
+            kind: infer_protocol_view_kind(&canonical_id).to_string(),
+            aliases: unique_protocol_aliases(vec![
+                normalized.to_string(),
+                short_alias,
+                canonical_id.clone(),
+                format!("{canonical_id}.md"),
+                format!("vida/config/instructions/{canonical_id}.md"),
+            ]),
+        };
+        return Ok(Some((resolved, resolved_path)));
+    }
+    Ok(None)
+}
+
+fn unique_protocol_aliases(aliases: Vec<String>) -> Vec<String> {
+    let mut unique = Vec::new();
+    for alias in aliases {
+        if !unique.contains(&alias) {
+            unique.push(alias);
+        }
+    }
+    unique
+}
+
+fn first_backtick_value(cell: &str) -> Option<String> {
+    let (_, tail) = cell.split_once('`')?;
+    let (value, _) = tail.split_once('`')?;
+    Some(value.trim().trim_end_matches(".md").to_string())
+}
+
+fn protocol_short_alias(canonical_id: &str) -> String {
+    canonical_id
+        .rsplit('/')
+        .next()
+        .unwrap_or(canonical_id)
+        .strip_prefix("work.")
+        .unwrap_or_else(|| canonical_id.rsplit('/').next().unwrap_or(canonical_id))
+        .strip_suffix("-protocol")
+        .unwrap_or_else(|| {
+            canonical_id
+                .rsplit('/')
+                .next()
+                .unwrap_or(canonical_id)
+                .strip_prefix("work.")
+                .unwrap_or(canonical_id)
+        })
+        .to_string()
 }
 
 pub(crate) fn render_protocol_view_target(name: &str) -> Result<ProtocolViewRender, String> {
@@ -502,6 +595,27 @@ mod tests {
                 "vida/config/instructions/instruction-contracts/core.orchestration-protocol.md"
             ),
             "generic protocol path should resolve"
+        );
+    }
+
+    #[test]
+    fn resolve_protocol_view_target_supports_index_backed_short_ids() {
+        let (target, path) = resolve_protocol_view_target("requirement-analysis")
+            .expect("index-backed short id should resolve");
+        assert_eq!(
+            target.canonical_id,
+            "runtime-instructions/work.requirement-analysis-protocol"
+        );
+        assert_eq!(target.kind, "runtime_instruction");
+        assert!(target
+            .aliases
+            .iter()
+            .any(|alias| alias == "requirement-analysis"));
+        assert!(
+            path.ends_with(
+                "vida/config/instructions/runtime-instructions/work.requirement-analysis-protocol.md"
+            ),
+            "requirement-analysis protocol path should resolve"
         );
     }
 
