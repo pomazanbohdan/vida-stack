@@ -1721,6 +1721,23 @@ fn render_cached_status_projection_for_operator(summary_only: bool, cached: &str
 }
 
 fn compact_cached_status_summary_projection(payload: &mut serde_json::Value) {
+    if let Some(object) = payload.as_object_mut() {
+        for key in [
+            "latest_run_graph_status",
+            "latest_terminal_task_active_run_graph_status",
+            "latest_run_graph_delegation_gate",
+            "latest_run_graph_recovery",
+            "latest_run_graph_checkpoint",
+            "latest_run_graph_gate",
+            "latest_run_graph_dispatch_receipt",
+            "latest_run_graph_dispatch_route_truth",
+            "latest_run_graph_downstream_dispatch_preview",
+            "latest_run_graph_dispatch_compact_summary",
+        ] {
+            object.remove(key);
+        }
+    }
+
     let Some(host_agents) = payload
         .get_mut("host_agents")
         .and_then(serde_json::Value::as_object_mut)
@@ -3590,6 +3607,55 @@ mod tests {
     }
 
     #[test]
+    fn status_summary_cached_projection_removes_full_run_graph_overlay_fields() {
+        let cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "host_agents": {
+                "budget": {"event_count": 1},
+                "agents": {"worker": {"status": "ready"}}
+            },
+            "active_bounded_unit": {"task_id": "summary-task"},
+            "why_this_unit": "summary reason",
+            "sequential_vs_parallel_posture": "sequential",
+            "latest_run_graph_status": {"run_id": "run-summary"},
+            "latest_terminal_task_active_run_graph_status": {"run_id": "run-terminal"},
+            "latest_run_graph_delegation_gate": {"status": "blocked"},
+            "latest_run_graph_recovery": {"run_id": "run-summary"},
+            "latest_run_graph_checkpoint": {"run_id": "run-summary"},
+            "latest_run_graph_gate": {"run_id": "run-summary"},
+            "latest_run_graph_dispatch_receipt": {"run_id": "run-summary"},
+            "latest_run_graph_dispatch_route_truth": {"allowed_next_node": "developer"},
+            "latest_run_graph_downstream_dispatch_preview": {"status": "ready"},
+            "latest_run_graph_dispatch_compact_summary": {"status": "blocked"}
+        })
+        .to_string();
+
+        let rendered = super::render_cached_status_projection_for_operator(true, &cached);
+        let payload: serde_json::Value =
+            serde_json::from_str(&rendered).expect("cached summary should render as json");
+
+        assert_eq!(payload["active_bounded_unit"]["task_id"], "summary-task");
+        for key in [
+            "latest_run_graph_status",
+            "latest_terminal_task_active_run_graph_status",
+            "latest_run_graph_delegation_gate",
+            "latest_run_graph_recovery",
+            "latest_run_graph_checkpoint",
+            "latest_run_graph_gate",
+            "latest_run_graph_dispatch_receipt",
+            "latest_run_graph_dispatch_route_truth",
+            "latest_run_graph_downstream_dispatch_preview",
+            "latest_run_graph_dispatch_compact_summary",
+        ] {
+            assert!(
+                payload.get(key).is_none(),
+                "summary cache render should omit full-only field {key}"
+            );
+        }
+    }
+
+    #[test]
     fn runtime_continuation_overlay_does_not_keep_stale_root_session_write_guard() {
         let nanos = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3745,7 +3811,14 @@ mod tests {
             )
             .is_some()
         );
-        assert!(super::read_fresh_admissible_status_json_projection(&root, false).is_none());
+        let cached = crate::operator_projection_cache::read_fresh_json_projection(
+            &root,
+            super::status_json_projection_name(false),
+        )
+        .expect("fresh projection should read");
+        assert!(!super::cached_status_projection_admissible(
+            &root, false, &cached
+        ));
 
         let _ = fs::remove_dir_all(root);
     }
