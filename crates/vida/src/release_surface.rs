@@ -692,8 +692,16 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
 }
 
 fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
+    let progress_dir = release_install_progress_dir();
     let latest_path = release_install_progress_latest_path();
     let latest_path_string = latest_path.display().to_string();
+    if let Err(error) = release_install_progress_readable_dir(&progress_dir) {
+        return release_install_progress_unreadable_status_receipt(
+            latest_path_string,
+            &latest_path,
+            error.to_string(),
+        );
+    }
     match fs::symlink_metadata(&latest_path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return release_install_progress_unreadable_status_receipt(
@@ -881,6 +889,22 @@ fn release_install_progress_readable_regular_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn release_install_progress_readable_dir(path: &Path) -> io::Result<()> {
+    reject_existing_symlinks_in_path(path)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "release install progress directory is not a directory: {}",
+                path.display()
+            ),
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 fn read_release_install_progress_file_without_following_symlinks(
     path: &Path,
 ) -> io::Result<String> {
@@ -921,7 +945,9 @@ fn read_release_install_progress_file_without_following_symlinks(
 }
 
 fn latest_release_install_progress_artifact_event() -> Option<(serde_json::Value, String)> {
-    let mut candidates = fs::read_dir(release_install_progress_dir())
+    let progress_dir = release_install_progress_dir();
+    release_install_progress_readable_dir(&progress_dir).ok()?;
+    let mut candidates = fs::read_dir(progress_dir)
         .ok()?
         .filter_map(Result::ok)
         .filter_map(|entry| {
@@ -2531,6 +2557,66 @@ mod tests {
             vec![latest_path.display().to_string()]
         );
         clean_release_progress_latest_markers();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_install_status_rejects_symlinked_progress_directory_before_reads() {
+        let _guard = release_progress_test_lock();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let attacker_progress_dir = harness.path().join("attacker-progress");
+        let progress_link = harness.path().join("progress-link");
+        fs::create_dir_all(&attacker_progress_dir).expect("attacker progress dir should write");
+        std::os::unix::fs::symlink(&attacker_progress_dir, &progress_link)
+            .expect("progress dir symlink should write");
+        let _progress_dir = release_progress_dir_override(progress_link);
+        let latest_path = release_install_progress_latest_path();
+        fs::write(
+            attacker_progress_dir.join("latest.json"),
+            serde_json::json!({
+                "surface": "vida release install",
+                "status": "pass",
+                "phase": "install",
+                "child_state": "completed",
+                "recorded_at_unix_ms": 100_u64,
+                "attacker_secret": "SENSITIVE_TOKEN_ABC123",
+            })
+            .to_string(),
+        )
+        .expect("attacker latest marker should write");
+        fs::write(
+            attacker_progress_dir.join("release-install-fallback.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "surface": "vida release install",
+                    "status": "pass",
+                    "phase": "install",
+                    "child_state": "completed",
+                    "recorded_at_unix_ms": 101_u64,
+                    "attacker_secret": "SENSITIVE_TOKEN_DEF456",
+                })
+            ),
+        )
+        .expect("attacker fallback progress should write");
+
+        let receipt = release_install_status_receipt();
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(
+            receipt.blocker_codes,
+            vec!["release_install_progress_unreadable".to_string()]
+        );
+        assert!(receipt
+            .next_actions
+            .iter()
+            .any(|action| action.contains("symlink")));
+        assert!(receipt.latest_event.is_none());
+        assert!(receipt.progress_path.is_none());
+        assert_eq!(
+            receipt.artifact_refs,
+            vec![latest_path.display().to_string()]
+        );
     }
 
     #[test]
