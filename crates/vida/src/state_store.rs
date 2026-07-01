@@ -516,13 +516,13 @@ impl StateStore {
         }
 
         let archive_path = if root.exists() {
-            if state_reset_dir_has_existing_datastore_payload(&root)? {
-                validate_state_reset_existing_root(&root)?;
-                {
-                    let _authoritative_open_guard =
-                        state_store_open::AuthoritativeOpenGuard::acquire(&root).await?;
-                }
-            }
+            let _authoritative_open_guard =
+                if state_reset_dir_has_existing_datastore_payload(&root)? {
+                    validate_state_reset_existing_root(&root)?;
+                    Some(state_store_open::AuthoritativeOpenGuard::acquire(&root).await?)
+                } else {
+                    None
+                };
             let archive_path = Self::next_state_archive_path(&root);
             Self::rename_state_root_to_archive_with_retry(&root, &archive_path).await?;
             Some(archive_path)
