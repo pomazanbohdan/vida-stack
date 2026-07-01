@@ -241,12 +241,17 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         .as_str()
         .expect("source text should render");
     assert_eq!(artifact["source_inputs"][0]["kind"], "source_file");
-    assert!(source_text.starts_with("file:requirements.md:bytes="));
-    assert!(source_text.contains(":blake3="));
+    assert!(source_text.contains("Build the feature"));
+    assert!(source_text.contains("Preserve requirement thirteen"));
     assert!(
         !source_text.contains("SECRET_TOKEN"),
         "raw source-file content must not be serialized: {source_text}"
     );
+    let source_metadata = artifact["source_inputs"][0]["source_metadata"]
+        .as_str()
+        .expect("source metadata should render");
+    assert!(source_metadata.starts_with("file:requirements.md:bytes="));
+    assert!(source_metadata.contains(":blake3="));
     let public_analysis_text = artifact["source_inputs"][0]["analysis_text"]
         .as_str()
         .expect("redacted source analysis should render");

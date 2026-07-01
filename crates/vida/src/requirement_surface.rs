@@ -111,6 +111,7 @@ fn blocked_requirement_payload(
 struct RequirementSourceInput {
     kind: &'static str,
     serialized_text: String,
+    source_metadata: Option<String>,
     public_analysis_text: String,
 }
 
@@ -119,6 +120,7 @@ impl RequirementSourceInput {
         Self {
             kind: "operator_text",
             serialized_text: text.clone(),
+            source_metadata: None,
             public_analysis_text: text,
         }
     }
@@ -158,10 +160,11 @@ fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, S
     let public_analysis_text = redact_requirement_source_content(content.trim());
     Ok(RequirementSourceInput {
         kind: "source_file",
-        serialized_text: format!(
+        serialized_text: public_analysis_text.clone(),
+        source_metadata: Some(format!(
             "file:{display_path}:bytes={}:blake3={digest}",
             content.len()
-        ),
+        )),
         public_analysis_text,
     })
 }
@@ -292,12 +295,16 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
         "request_id": args.request_id,
         "artifact_path": args.artifact_path.as_ref().map(|path| path.display().to_string()),
         "source_inputs": source_inputs.iter().enumerate().map(|(index, input)| {
-            json!({
+            let mut source_input = json!({
                 "id": format!("source-{}", index + 1),
                 "kind": input.kind,
                 "text": input.serialized_text,
                 "analysis_text": input.public_analysis_text,
-            })
+            });
+            if let Some(metadata) = &input.source_metadata {
+                source_input["source_metadata"] = json!(metadata);
+            }
+            source_input
         }).collect::<Vec<_>>(),
         "requirement_classification": {
             "primary_class": requirement_primary_class(&combined_input),
