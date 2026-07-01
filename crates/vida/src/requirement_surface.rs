@@ -194,8 +194,10 @@ fn redact_requirement_source_content(content: &str) -> RequirementSourceRedactio
     let mut public_lines = Vec::new();
     for line in content.lines() {
         let starts_secret_block = requirement_source_secret_assignment_opens_multiline(line);
+        let starts_secret_pem_block = requirement_source_secret_pem_block_opens(line);
         let secret_line = in_secret_block
             || starts_secret_block
+            || starts_secret_pem_block
             || requirement_source_secret_assignment_line(line)
             || line.split_whitespace().any(requirement_source_secret_token);
         if secret_line {
@@ -203,7 +205,7 @@ fn redact_requirement_source_content(content: &str) -> RequirementSourceRedactio
             public_lines.push("[redacted source-file secret line]".to_string());
             if in_secret_block && requirement_source_secret_block_closes(line) {
                 in_secret_block = false;
-            } else if starts_secret_block {
+            } else if starts_secret_block || starts_secret_pem_block {
                 in_secret_block = true;
             }
         } else {
@@ -240,6 +242,22 @@ fn requirement_source_secret_assignment_opens_multiline(line: &str) -> bool {
         || value
             .strip_prefix('\'')
             .is_some_and(|rest| !rest.contains('\''))
+}
+
+fn requirement_source_secret_pem_block_opens(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("-----BEGIN ")
+        && trimmed.ends_with("-----")
+        && requirement_source_secret_pem_label(trimmed)
+}
+
+fn requirement_source_secret_pem_label(line: &str) -> bool {
+    let label = line
+        .trim_matches('-')
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', " ");
+    label.contains("private key") || label.contains("secret key")
 }
 
 fn requirement_source_secret_block_closes(line: &str) -> bool {

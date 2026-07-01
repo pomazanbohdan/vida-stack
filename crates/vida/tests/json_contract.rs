@@ -196,9 +196,18 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         "SECRET_TOKEN=must-not-be-serialized\nBuild the feature.",
     )
     .expect("source fixture should be written");
-    fs::write(
-        project_root.join("requirements.md"),
+    fs::write(project_root.join("requirements.md"), {
+        let bare_pem_label = "PRIVATE KEY";
+        let bare_pem_begin = format!("-----BEGIN {bare_pem_label}-----");
+        let bare_pem_body = "BAREPEMBODYSHOULDNOTLEAK";
+        let bare_pem_end = format!("-----END {bare_pem_label}-----");
         [
+            bare_pem_begin.as_str(),
+            bare_pem_body,
+            bare_pem_end.as_str(),
+            "Build the feature.",
+            "Password reset: allow users to rotate credentials.",
+            "Token-based auth: add OAuth.",
             "SECRET_TOKEN=[redacted-test-value]",
             "SECRET_TOKEN = [redacted-test-value]",
             "api_key: [redacted-test-value]",
@@ -206,9 +215,6 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
             "PRIVATE_KEY=\"-----BEGIN TEST KEY-----",
             "MIISECRETBODYSHOULDNOTLEAK",
             "-----END TEST KEY-----\"",
-            "Password reset: allow users to rotate credentials.",
-            "Token-based auth: add OAuth.",
-            "Build the feature.",
             "Keep operator output compact.",
             "Add JSON proof.",
             "Validate blocked source paths.",
@@ -221,8 +227,8 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
             "Preserve requirement twelve.",
             "Preserve requirement thirteen.",
         ]
-        .join("\n"),
-    )
+        .join("\n")
+    })
     .expect("source fixture should be rewritten");
 
     let json_output = vida()
@@ -252,6 +258,8 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
     let source_text = artifact["source_inputs"][0]["text"]
         .as_str()
         .expect("source text should render");
+    let bare_pem_begin_marker = format!("-----BEGIN {}-----", "PRIVATE KEY");
+    let bare_pem_end_marker = format!("-----END {}-----", "PRIVATE KEY");
     assert_eq!(artifact["source_inputs"][0]["kind"], "source_file");
     assert!(source_text.contains("Build the feature"));
     assert!(source_text.contains("Preserve requirement thirteen"));
@@ -269,6 +277,9 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         "MIISECRETBODYSHOULDNOTLEAK",
         "-----BEGIN TEST KEY-----",
         "-----END TEST KEY-----",
+        bare_pem_begin_marker.as_str(),
+        "BAREPEMBODYSHOULDNOTLEAK",
+        bare_pem_end_marker.as_str(),
     ] {
         assert!(
             !source_text.contains(marker),
@@ -298,6 +309,9 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         "MIISECRETBODYSHOULDNOTLEAK",
         "-----BEGIN TEST KEY-----",
         "-----END TEST KEY-----",
+        bare_pem_begin_marker.as_str(),
+        "BAREPEMBODYSHOULDNOTLEAK",
+        bare_pem_end_marker.as_str(),
     ] {
         assert!(
             !public_analysis_text.contains(marker),
@@ -353,6 +367,7 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
                     || text.contains("private-key")
                     || text.contains("PRIVATE_KEY")
                     || text.contains("MIISECRETBODYSHOULDNOTLEAK")
+                    || text.contains("BAREPEMBODYSHOULDNOTLEAK")
                     || text.contains("[redacted-test-value]"))),
         "source-file secrets must not leak through requirement atoms"
     );
