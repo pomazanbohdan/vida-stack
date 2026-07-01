@@ -29,6 +29,14 @@ use taskflow_core::task::verify::{
     TaskBrowserProofArtifact,
 };
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskReplaceJsonlContinuationSummary {
+    status: String,
+    run_id: Option<String>,
+    task_id: Option<String>,
+    binding_source: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub(crate) struct TaskReadMetadata {
     pub mode: &'static str,
@@ -2439,6 +2447,40 @@ fn task_import_jsonl_error_payload(path: &str, error: &str) -> serde_json::Value
         }),
     )
     .expect("task import-jsonl error payload should preserve release-1 operator contract")
+}
+
+async fn sync_replace_jsonl_continuation_binding(
+    store: &StateStore,
+) -> Result<TaskReplaceJsonlContinuationSummary, String> {
+    let Some(status) = store.latest_run_graph_status().await.map_err(|error| {
+        format!("Failed to read latest run-graph status after replace-jsonl: {error}")
+    })?
+    else {
+        return Ok(TaskReplaceJsonlContinuationSummary {
+            status: "no_active_run_graph_status".to_string(),
+            run_id: None,
+            task_id: None,
+            binding_source: None,
+        });
+    };
+    let run_id = status.run_id.clone();
+    let task_id = Some(status.task_id.clone()).filter(|value| !value.trim().is_empty());
+    let binding = crate::taskflow_continuation::sync_run_graph_continuation_binding(
+        store,
+        &status,
+        "task_replace_jsonl_snapshot_restore",
+    )
+    .await?;
+    Ok(TaskReplaceJsonlContinuationSummary {
+        status: if binding.is_some() {
+            "bound".to_string()
+        } else {
+            "cleared".to_string()
+        },
+        run_id: Some(run_id),
+        task_id,
+        binding_source: binding.map(|binding| binding.binding_source),
+    })
 }
 
 fn task_next_lawful_projection_name() -> &'static str {
@@ -11018,19 +11060,42 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         {
                             return code;
                         }
+                        let continuation_summary =
+                            match sync_replace_jsonl_continuation_binding(&store).await {
+                                Ok(summary) => summary,
+                                Err(error) => {
+                                    eprintln!("{error}");
+                                    return ExitCode::from(1);
+                                }
+                            };
                         let source_path = command.path.display().to_string();
                         if command.json {
-                            crate::print_json_pretty(&task_replace_jsonl_success_fields(
+                            let mut payload = task_replace_jsonl_success_fields(
                                 task_json_success_status(),
                                 &TaskReplaceJsonlSummary {
                                     source_path: source_path.clone(),
                                 },
-                            ));
+                            );
+                            payload["continuation_binding"] =
+                                serde_json::to_value(&continuation_summary)
+                                    .expect("replace-jsonl continuation summary should serialize");
+                            crate::print_json_pretty(&payload);
                         } else {
                             print_surface_header(command.render, "vida task replace-jsonl");
                             print_surface_line(command.render, "status", "pass");
                             print_surface_line(command.render, "operation", "replace_snapshot");
                             print_surface_line(command.render, "source path", &source_path);
+                            print_surface_line(
+                                command.render,
+                                "continuation binding",
+                                &continuation_summary.status,
+                            );
+                            if let Some(run_id) = continuation_summary.run_id.as_deref() {
+                                print_surface_line(command.render, "run id", run_id);
+                            }
+                            if let Some(task_id) = continuation_summary.task_id.as_deref() {
+                                print_surface_line(command.render, "task id", task_id);
+                            }
                         }
                         ExitCode::SUCCESS
                     }

@@ -12157,6 +12157,162 @@ fn run_graph_status_failure_emits_operator_envelope() {
 }
 
 #[test]
+fn task_replace_jsonl_rebinds_latest_run_graph_continuation() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    create_run_graph_backing_task(&state_dir, "replace-jsonl-bound-run");
+    let _ = run_command_json(
+        &[
+            "task",
+            "update",
+            "replace-jsonl-bound-run",
+            "--owned-path",
+            "crates/vida/src/task_surface.rs",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_and_assert_success(
+        &[
+            "taskflow",
+            "run-graph",
+            "init",
+            "replace-jsonl-bound-run",
+            "implementation",
+        ],
+        &state_dir,
+    );
+    let snapshot_path = format!("{state_dir}/tasks.snapshot.jsonl");
+    let _ = run_and_assert_success(
+        &["task", "export-jsonl", &snapshot_path, "--json"],
+        &state_dir,
+    );
+
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(&state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        db.query(
+            "DELETE type::record('run_graph_continuation_binding', 'replace-jsonl-bound-run')",
+        )
+        .await
+        .expect("delete stale/missing continuation binding");
+        drop(db);
+    });
+
+    let restored = run_command_json(
+        &["task", "replace-jsonl", &snapshot_path, "--json"],
+        &state_dir,
+    );
+    assert_eq!(restored["status"], "pass");
+    assert_eq!(restored["continuation_binding"]["status"], "bound");
+    assert_eq!(
+        restored["continuation_binding"]["run_id"],
+        "replace-jsonl-bound-run"
+    );
+    assert_eq!(
+        restored["continuation_binding"]["task_id"],
+        "replace-jsonl-bound-run"
+    );
+    assert_eq!(
+        restored["continuation_binding"]["binding_source"],
+        "task_replace_jsonl_snapshot_restore"
+    );
+
+    let next_lawful = run_command_json(&["task", "next-lawful", "--json"], &state_dir);
+    assert_eq!(next_lawful["status"], "pass");
+    assert_eq!(
+        next_lawful["active_bounded_unit"]["task_id"],
+        "replace-jsonl-bound-run"
+    );
+
+    let orchestrator = run_command_json(&["orchestrator-init", "--json"], &state_dir);
+    assert_eq!(
+        orchestrator["active_bounded_unit"]["task_id"],
+        "replace-jsonl-bound-run"
+    );
+    assert_eq!(orchestrator["continuation_binding"]["status"], "bound");
+
+    let plain = run_and_assert_success(&["task", "replace-jsonl", &snapshot_path], &state_dir);
+    assert!(
+        plain.contains("continuation binding: bound"),
+        "default output should report continuation binding status: {plain}"
+    );
+    assert!(
+        plain.contains("run id: replace-jsonl-bound-run"),
+        "default output should report rebound run id: {plain}"
+    );
+    assert!(
+        plain.contains("task id: replace-jsonl-bound-run"),
+        "default output should report rebound task id: {plain}"
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
+fn task_replace_jsonl_reports_missing_run_graph_without_rebinding() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "replace-jsonl-no-run-epic";
+    create_epic_parent(
+        &state_dir,
+        parent_id,
+        "Replace JSONL no run backing epic",
+        "open",
+    );
+    let task_id = "replace-jsonl-no-run-task";
+    create_task_fixture_row(
+        &state_dir,
+        task_id,
+        "Replace JSONL no run backing task",
+        "task",
+        "open",
+        Some(parent_id),
+    );
+    let snapshot_path = format!("{state_dir}/tasks-no-run.snapshot.jsonl");
+    let _ = run_and_assert_success(
+        &["task", "export-jsonl", &snapshot_path, "--json"],
+        &state_dir,
+    );
+
+    let restored = run_command_json(
+        &["task", "replace-jsonl", &snapshot_path, "--json"],
+        &state_dir,
+    );
+    assert_eq!(restored["status"], "pass");
+    assert_eq!(
+        restored["continuation_binding"]["status"],
+        "no_active_run_graph_status"
+    );
+    assert!(restored["continuation_binding"]["run_id"].is_null());
+    assert!(restored["continuation_binding"]["task_id"].is_null());
+    assert!(restored["continuation_binding"]["binding_source"].is_null());
+
+    let plain = run_and_assert_success(&["task", "replace-jsonl", &snapshot_path], &state_dir);
+    assert!(
+        plain.contains("continuation binding: no_active_run_graph_status"),
+        "default output should report missing run-graph status: {plain}"
+    );
+    assert!(
+        !plain.contains("run id:"),
+        "default output must not invent a rebound run id: {plain}"
+    );
+    assert!(
+        !plain.contains("task id:"),
+        "default output must not invent a rebound task id: {plain}"
+    );
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn run_graph_and_recovery_status_output_contract_matrix() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
