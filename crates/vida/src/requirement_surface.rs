@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{json, Value};
@@ -9,6 +11,7 @@ use crate::{RequirementAnalyzeArgs, RequirementArgs, RequirementCommand};
 
 const SURFACE: &str = "vida requirement analyze";
 const SCHEMA_VERSION: &str = "requirement-analysis-artifact.v1";
+const MAX_SOURCE_FILE_BYTES: u64 = 64 * 1024;
 
 pub(crate) async fn run_requirement(args: RequirementArgs) -> ExitCode {
     match args.command {
@@ -104,15 +107,129 @@ fn blocked_requirement_payload(
     .expect("requirement blocked payload should satisfy release-1 operator shape")
 }
 
+#[derive(Debug, Clone)]
+struct RequirementSourceInput {
+    kind: &'static str,
+    serialized_text: String,
+    analysis_text: String,
+}
+
+impl RequirementSourceInput {
+    fn operator_text(text: String) -> Self {
+        Self {
+            kind: "operator_text",
+            serialized_text: text.clone(),
+            analysis_text: text,
+        }
+    }
+}
+
+fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, String> {
+    let project_root = std::env::current_dir().map_err(|error| format!("project root: {error}"))?;
+    let relative_path = validate_requirement_source_path(path)?;
+    let source_path = project_root.join(&relative_path);
+    reject_symlink_components(&project_root, &relative_path)?;
+
+    let metadata = fs::symlink_metadata(&source_path)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "{}: source file must not be a symlink",
+            path.display()
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(format!(
+            "{}: source file must be a regular file",
+            path.display()
+        ));
+    }
+    if metadata.len() > MAX_SOURCE_FILE_BYTES {
+        return Err(format!(
+            "{}: source file exceeds {MAX_SOURCE_FILE_BYTES} byte limit",
+            path.display()
+        ));
+    }
+
+    let content =
+        fs::read_to_string(&source_path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let digest = blake3::hash(content.as_bytes());
+    let display_path = relative_path.display().to_string();
+    Ok(RequirementSourceInput {
+        kind: "source_file",
+        serialized_text: format!(
+            "file:{display_path}:bytes={}:blake3={digest}",
+            content.len()
+        ),
+        analysis_text: content.trim().to_string(),
+    })
+}
+
+fn validate_requirement_source_path(path: &Path) -> Result<PathBuf, String> {
+    if path.is_absolute() {
+        return Err(format!(
+            "{}: source file must be relative to the project root",
+            path.display()
+        ));
+    }
+
+    let mut relative = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => relative.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(format!(
+                    "{}: source file must not contain parent-directory traversal",
+                    path.display()
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "{}: source file must be relative to the project root",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    if relative.as_os_str().is_empty() {
+        return Err("source file path must not be empty".to_string());
+    }
+
+    Ok(relative)
+}
+
+fn reject_symlink_components(project_root: &Path, relative_path: &Path) -> Result<(), String> {
+    let mut current = PathBuf::from(project_root);
+    for component in relative_path.components() {
+        current.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&current)
+            .map_err(|error| format!("{}: {error}", relative_path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "{}: source file path must not contain symlinks",
+                relative_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value, String> {
-    let mut source_inputs = args.input.clone();
+    let mut source_inputs = args
+        .input
+        .iter()
+        .cloned()
+        .map(RequirementSourceInput::operator_text)
+        .collect::<Vec<_>>();
     if let Some(path) = &args.source_file {
-        let content = std::fs::read_to_string(path)
-            .map_err(|error| format!("{}: {error}", path.display()))?;
-        source_inputs.push(format!("file:{}:{}", path.display(), content.trim()));
+        source_inputs.push(read_requirement_source_file(path)?);
     }
     if source_inputs.is_empty() {
-        source_inputs.push("operator_request_text_or_artifact_path".to_string());
+        source_inputs.push(RequirementSourceInput::operator_text(
+            "operator_request_text_or_artifact_path".to_string(),
+        ));
     }
 
     let identity = args
@@ -120,7 +237,11 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
         .as_deref()
         .or(args.request_id.as_deref())
         .unwrap_or("unbound-requirement");
-    let combined_input = source_inputs.join("\n");
+    let combined_input = source_inputs
+        .iter()
+        .map(|source| source.analysis_text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     let atoms = requirement_atoms(&source_inputs);
     let conflicts = detected_conflicts(&combined_input);
     let party_chat_route = requirement_party_chat_route(&args, &combined_input, &conflicts);
@@ -135,8 +256,8 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
         "source_inputs": source_inputs.iter().enumerate().map(|(index, input)| {
             json!({
                 "id": format!("source-{}", index + 1),
-                "kind": if input.starts_with("file:") { "source_file" } else { "operator_text" },
-                "text": input,
+                "kind": input.kind,
+                "text": input.serialized_text,
             })
         }).collect::<Vec<_>>(),
         "requirement_classification": {
@@ -358,10 +479,10 @@ fn print_compact_contract(artifact: &Value) {
     println!("developer_handoff: Implement against the requirement atoms");
 }
 
-fn requirement_atoms(source_inputs: &[String]) -> Vec<Value> {
+fn requirement_atoms(source_inputs: &[RequirementSourceInput]) -> Vec<Value> {
     source_inputs
         .iter()
-        .flat_map(|input| input.split(['.', ';', '\n']))
+        .flat_map(|input| input.analysis_text.split(['.', ';', '\n']))
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .take(12)

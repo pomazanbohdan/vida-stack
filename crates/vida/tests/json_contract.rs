@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -159,6 +161,164 @@ fn json_contract_harness_rejects_missing_operator_fields() {
         support::release1_operator_shape_error(&missing_actions).as_deref(),
         Some("missing next_actions")
     );
+}
+
+#[test]
+fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
+    let state_dir = unique_state_dir();
+    let project_root = format!("{}-project", unique_state_dir());
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    fs::write(
+        format!("{project_root}/requirements.md"),
+        "SECRET_TOKEN=must-not-be-serialized\nBuild the feature.",
+    )
+    .expect("source fixture should be written");
+
+    let json_output = vida()
+        .current_dir(&project_root)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "source-file-redaction",
+            "--source-file",
+            "requirements.md",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("requirement analyze json should run");
+    assert!(
+        json_output.status.success(),
+        "project-relative regular source should succeed: {}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let value = parse_json_output(
+        &["requirement", "analyze", "--source-file", "--json"],
+        &json_output,
+    );
+    let artifact = &value["artifact"];
+    let source_text = artifact["source_inputs"][0]["text"]
+        .as_str()
+        .expect("source text should render");
+    assert_eq!(artifact["source_inputs"][0]["kind"], "source_file");
+    assert!(source_text.starts_with("file:requirements.md:bytes="));
+    assert!(source_text.contains(":blake3="));
+    assert!(
+        !source_text.contains("SECRET_TOKEN"),
+        "raw source-file content must not be serialized: {source_text}"
+    );
+    assert!(artifact["requirement_atoms"]
+        .as_array()
+        .expect("atoms should render")
+        .iter()
+        .any(|atom| atom["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Build the feature"))));
+
+    let absolute_source = Path::new(&project_root).join("requirements.md");
+    let absolute_output = vida()
+        .current_dir(&project_root)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "absolute-source",
+            "--source-file",
+            absolute_source
+                .to_str()
+                .expect("absolute source path should be utf8"),
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("absolute source rejection should run");
+    assert!(
+        !absolute_output.status.success(),
+        "absolute source paths should fail closed"
+    );
+    let absolute_value = parse_json_output(
+        &["requirement", "analyze", "--source-file", "--json"],
+        &absolute_output,
+    );
+    assert_eq!(absolute_value["status"], "blocked");
+    assert_eq!(
+        absolute_value["blocker_codes"],
+        json!(["requirement_source_unreadable"])
+    );
+
+    let traversal_output = vida()
+        .current_dir(&project_root)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "traversal-source",
+            "--source-file",
+            "../requirements.md",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("traversal source rejection should run");
+    assert!(
+        !traversal_output.status.success(),
+        "parent traversal source paths should fail closed"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn requirement_analysis_source_file_rejects_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let state_dir = unique_state_dir();
+    let project_root = format!("{}-project", unique_state_dir());
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    let sensitive_path = format!("{}-sensitive.env", unique_state_dir());
+    fs::write(
+        &sensitive_path,
+        "VIDA_SECRET_TOKEN=local-file-disclosure-proof",
+    )
+    .expect("sensitive fixture should be written");
+    symlink(&sensitive_path, format!("{project_root}/requirements.md"))
+        .expect("symlink fixture should be created");
+
+    let output = vida()
+        .current_dir(&project_root)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "symlink-source",
+            "--source-file",
+            "requirements.md",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("symlink source rejection should run");
+    assert!(!output.status.success(), "symlinks should fail closed");
+    let value = parse_json_output(
+        &["requirement", "analyze", "--source-file", "--json"],
+        &output,
+    );
+    assert_eq!(value["status"], "blocked");
+    assert_eq!(
+        value["blocker_codes"],
+        json!(["requirement_source_unreadable"])
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("VIDA_SECRET_TOKEN"),
+        "blocked payload must not disclose symlink target content"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+    let _ = fs::remove_file(&sensitive_path);
+    let _ = fs::remove_dir_all(&state_dir);
 }
 
 #[test]
