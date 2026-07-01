@@ -1506,11 +1506,11 @@ fn task_close_structured_proof_gate_payload(
     let next_actions = missing_targets
         .iter()
         .map(|target| {
-            let quoted_target = target.replace('"', "\\\"");
+            let quoted_target = crate::shell_quote(target);
             format!(
                 "Attach structured proof evidence with `{}`.",
                 operator_output::command_text::human_command(&format!(
-                    "vida task proof attach-evidence {} --proof-target \"{}\" --result pass --artifact-ref <artifact-ref> --evidence \"<evidence summary>\"",
+                    "vida task proof attach-evidence {} --proof-target {} --result pass --artifact-ref <artifact-ref> --evidence '<evidence summary>'",
                     quoted_task_id, quoted_target
                 ))
             )
@@ -16766,6 +16766,27 @@ mod tests {
             "task_proof_evidence_registry"
         );
         assert_eq!(payload["missing_targets"][0], "cargo build -p vida");
+    }
+
+    #[test]
+    fn task_close_structured_proof_gate_shell_quotes_missing_targets() {
+        let mut task = owned_task_record("proof-task", vec![]);
+        let target = "ok $(touch /tmp/vida-pwned) `touch /tmp/vida-pwned2`";
+        task.planner_metadata.proof_targets = vec![target.to_string()];
+
+        let payload = super::task_close_structured_proof_gate_payload(&task, None)
+            .expect("missing structured proof should block close");
+        let action = payload["next_actions"][0]
+            .as_str()
+            .expect("next action should render");
+
+        assert!(
+            action
+                .contains("--proof-target 'ok $(touch /tmp/vida-pwned) `touch /tmp/vida-pwned2`'"),
+            "rendered action should shell-quote proof target: {action}"
+        );
+        assert!(!action.contains("--proof-target \"ok $(touch"));
+        assert_eq!(payload["missing_targets"][0], target);
     }
 
     #[test]
