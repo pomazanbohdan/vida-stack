@@ -449,69 +449,82 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     }
 
     if as_json && !selected_output && summary_only {
-        if let Some(cached) =
-            read_fresh_runtime_validated_status_json_projection(&state_dir, summary_only).await
-        {
-            println!(
-                "{}",
-                render_cached_status_projection_for_operator(summary_only, &cached)
-            );
-            return ExitCode::SUCCESS;
-        }
-        if summary_only {
-            if let Some(cached) =
-                read_state_fresh_runtime_validated_status_json_projection(&state_dir, summary_only)
-                    .await
-            {
+        let mut fresh_cache_refresh_failed = false;
+        match read_fresh_runtime_validated_status_json_projection(&state_dir, summary_only).await {
+            CachedStatusProjectionRefresh::Hit(cached) => {
                 println!(
                     "{}",
                     render_cached_status_projection_for_operator(summary_only, &cached)
                 );
                 return ExitCode::SUCCESS;
             }
+            CachedStatusProjectionRefresh::RefreshFailed => fresh_cache_refresh_failed = true,
+            CachedStatusProjectionRefresh::Miss => {}
+        }
+        if summary_only && !fresh_cache_refresh_failed {
+            match read_state_fresh_runtime_validated_status_json_projection(
+                &state_dir,
+                summary_only,
+            )
+            .await
+            {
+                CachedStatusProjectionRefresh::Hit(cached) => {
+                    println!(
+                        "{}",
+                        render_cached_status_projection_for_operator(summary_only, &cached)
+                    );
+                    return ExitCode::SUCCESS;
+                }
+                CachedStatusProjectionRefresh::RefreshFailed => fresh_cache_refresh_failed = true,
+                CachedStatusProjectionRefresh::Miss => {}
+            }
         }
         let mut recent_candidates = Vec::new();
-        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
-            &state_dir,
-            status_json_projection_name(summary_only),
-            STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
-        )
-        .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
-        {
-            recent_candidates.push(cached);
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
+        if !fresh_cache_refresh_failed {
+            if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
                 &state_dir,
                 status_json_projection_name(summary_only),
                 STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
             )
             .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
-        {
-            recent_candidates.push(cached);
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                status_json_projection_name(summary_only),
-                STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
-            )
-            .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
-        {
-            let rendered = if let Some(overlay) =
-                crate::operator_projection_cache::read_runtime_continuation_binding_overlay(
+            {
+                recent_candidates.push(cached);
+            }
+            if let Some(cached) =
+                crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
                     &state_dir,
-                ) {
-                crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
-                    &state_dir,
-                    &cached,
-                    &overlay,
+                    status_json_projection_name(summary_only),
+                    STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
                 )
-                .unwrap_or_else(|| cached.clone())
-            } else {
-                cached.clone()
-            };
-            recent_candidates.push(rendered);
+                .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
+            {
+                recent_candidates.push(cached);
+            }
+            if let Some(cached) =
+                crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                    &state_dir,
+                    status_json_projection_name(summary_only),
+                    STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
+                )
+                .filter(|cached| {
+                    cached_status_projection_admissible(&state_dir, summary_only, cached)
+                })
+            {
+                let rendered = if let Some(overlay) =
+                    crate::operator_projection_cache::read_runtime_continuation_binding_overlay(
+                        &state_dir,
+                    ) {
+                    crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
+                        &state_dir,
+                        &cached,
+                        &overlay,
+                    )
+                    .unwrap_or_else(|| cached.clone())
+                } else {
+                    cached.clone()
+                };
+                recent_candidates.push(rendered);
+            }
         }
         if !recent_candidates.is_empty() {
             if let Ok(store) = StateStore::open_existing_read_only_with_strict_timeout(
@@ -1666,29 +1679,50 @@ async fn build_operator_session_projection_for_status(
     }
 }
 
+enum CachedStatusProjectionRefresh {
+    Hit(String),
+    Miss,
+    RefreshFailed,
+}
+
 async fn read_fresh_runtime_validated_status_json_projection(
     state_dir: &std::path::Path,
     summary_only: bool,
-) -> Option<String> {
-    let cached = crate::operator_projection_cache::read_fresh_json_projection(
+) -> CachedStatusProjectionRefresh {
+    let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
         state_dir,
         status_json_projection_name(summary_only),
     )
-    .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached))?;
-    runtime_validate_and_refresh_cached_status_projection(state_dir, &cached, summary_only).await
+    .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached)) else {
+        return CachedStatusProjectionRefresh::Miss;
+    };
+    match runtime_validate_and_refresh_cached_status_projection(state_dir, &cached, summary_only)
+        .await
+    {
+        Some(cached) => CachedStatusProjectionRefresh::Hit(cached),
+        None => CachedStatusProjectionRefresh::RefreshFailed,
+    }
 }
 
 async fn read_state_fresh_runtime_validated_status_json_projection(
     state_dir: &std::path::Path,
     summary_only: bool,
-) -> Option<String> {
-    let cached =
+) -> CachedStatusProjectionRefresh {
+    let Some(cached) =
         crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
             state_dir,
             status_json_projection_name(summary_only),
         )
-        .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached))?;
-    runtime_validate_and_refresh_cached_status_projection(state_dir, &cached, summary_only).await
+        .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached))
+    else {
+        return CachedStatusProjectionRefresh::Miss;
+    };
+    match runtime_validate_and_refresh_cached_status_projection(state_dir, &cached, summary_only)
+        .await
+    {
+        Some(cached) => CachedStatusProjectionRefresh::Hit(cached),
+        None => CachedStatusProjectionRefresh::RefreshFailed,
+    }
 }
 
 async fn runtime_validate_and_refresh_cached_status_projection(
@@ -1992,6 +2026,106 @@ fn refresh_cached_closed_task_active_run_projection_mismatch(
     }
 
     Some(())
+}
+
+fn refresh_cached_run_graph_operator_contracts(
+    payload: &mut serde_json::Value,
+    latest_run_graph_snapshot_inconsistent: bool,
+    latest_run_graph_dispatch_receipt_signal_ambiguous: bool,
+    latest_run_graph_dispatch_receipt_summary_inconsistent: bool,
+    latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
+) -> Option<()> {
+    let signals = [
+        (
+            "run_graph_latest_snapshot_inconsistent",
+            crate::status_surface_signals::run_graph_latest_snapshot_inconsistent_next_action(),
+            latest_run_graph_snapshot_inconsistent,
+        ),
+        (
+            "run_graph_latest_dispatch_receipt_signal_ambiguous",
+            crate::status_surface_signals::run_graph_latest_dispatch_receipt_signal_ambiguous_next_action(),
+            latest_run_graph_dispatch_receipt_signal_ambiguous,
+        ),
+        (
+            "run_graph_latest_dispatch_receipt_summary_inconsistent",
+            crate::status_surface_signals::run_graph_latest_dispatch_receipt_summary_inconsistent_next_action(),
+            latest_run_graph_dispatch_receipt_summary_inconsistent,
+        ),
+        (
+            "run_graph_latest_dispatch_receipt_checkpoint_leakage",
+            crate::status_surface_signals::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action(),
+            latest_run_graph_dispatch_receipt_checkpoint_leakage,
+        ),
+    ];
+
+    for (blocker_code, next_action, active) in signals {
+        for path in [
+            &["blocker_codes"][..],
+            &["shared_fields", "blocker_codes"][..],
+            &["operator_contracts", "blocker_codes"][..],
+        ] {
+            let pointer = format!("/{}", path.join("/"));
+            let Some(current) = payload.pointer_mut(&pointer) else {
+                continue;
+            };
+            if active {
+                push_unique_string_to_json_array(current, blocker_code);
+            } else {
+                remove_string_from_json_array(current, blocker_code);
+            }
+        }
+
+        for path in [
+            &["next_actions"][..],
+            &["shared_fields", "next_actions"][..],
+            &["operator_contracts", "next_actions"][..],
+        ] {
+            let pointer = format!("/{}", path.join("/"));
+            let Some(current) = payload.pointer_mut(&pointer) else {
+                continue;
+            };
+            if active {
+                push_unique_string_to_json_array(current, &next_action);
+            } else {
+                remove_string_from_json_array(current, &next_action);
+            }
+        }
+    }
+
+    let object = payload.as_object_mut()?;
+    refresh_json_object_status_from_blockers(object);
+    if let Some(shared_fields) = object
+        .get_mut("shared_fields")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        refresh_json_object_status_from_blockers(shared_fields);
+    }
+    if let Some(operator_contracts) = object
+        .get_mut("operator_contracts")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        refresh_json_object_status_from_blockers(operator_contracts);
+    }
+
+    Some(())
+}
+
+fn status_run_id_for_receipt_consistency<'a>(
+    latest_run_graph_status_run_id: Option<&'a str>,
+    latest_run_graph_dispatch_receipt_run_id: Option<&str>,
+    latest_run_graph_task_orthogonal_to_taskflow: bool,
+    exception_takeover_matches_active_taskflow_work: bool,
+) -> Option<&'a str> {
+    if latest_run_graph_task_orthogonal_to_taskflow
+        && exception_takeover_matches_active_taskflow_work
+        && latest_run_graph_status_run_id.is_some()
+        && latest_run_graph_dispatch_receipt_run_id.is_some()
+        && latest_run_graph_status_run_id != latest_run_graph_dispatch_receipt_run_id
+    {
+        None
+    } else {
+        latest_run_graph_status_run_id
+    }
 }
 
 fn refresh_cached_protocol_binding_projection(
@@ -2367,9 +2501,18 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
             latest_run_graph_dispatch_receipt.as_ref(),
             &taskflow_active_candidates,
         );
-    let latest_run_graph_effective_run_id = latest_run_graph_status
-        .as_ref()
-        .map(|status| status.run_id.as_str())
+    let latest_run_graph_status_run_id_for_receipt_consistency =
+        status_run_id_for_receipt_consistency(
+            latest_run_graph_status
+                .as_ref()
+                .map(|status| status.run_id.as_str()),
+            latest_run_graph_dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str()),
+            latest_run_graph_task_orthogonal_to_taskflow,
+            exception_takeover_matches_active_taskflow_work,
+        );
+    let latest_run_graph_effective_run_id = latest_run_graph_status_run_id_for_receipt_consistency
         .or_else(|| {
             latest_run_graph_dispatch_receipt
                 .as_ref()
@@ -2399,9 +2542,7 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
     let latest_run_graph_dispatch_receipt_summary_inconsistent =
         !dispatch_receipt_checkpoint_leakage
             && state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
-                latest_run_graph_status
-                    .as_ref()
-                    .map(|status| status.run_id.as_str()),
+                latest_run_graph_status_run_id_for_receipt_consistency,
                 latest_run_graph_dispatch_receipt
                     .as_ref()
                     .map(|receipt| receipt.run_id.as_str()),
@@ -2573,6 +2714,13 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
     refresh_cached_closed_task_active_run_projection_mismatch(
         &mut payload,
         closed_task_active_run_projection_mismatch,
+    )?;
+    refresh_cached_run_graph_operator_contracts(
+        &mut payload,
+        latest_run_graph_snapshot_inconsistent,
+        latest_run_graph_dispatch_receipt_signal_ambiguous,
+        latest_run_graph_dispatch_receipt_summary_inconsistent,
+        dispatch_receipt_checkpoint_leakage,
     )?;
     let latest_run_graph_surface_truth =
         latest_run_graph_dispatch_receipt
@@ -5386,6 +5534,86 @@ host_environment:
         assert_eq!(payload["blocker_codes"], serde_json::json!([blocker]));
         assert_eq!(payload["next_actions"], serde_json::json!([next_action]));
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn cached_run_graph_overlay_recomputes_blockers_and_contract_status() {
+        let mut payload = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "shared_fields": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {}
+            },
+            "operator_contracts": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {}
+            }
+        });
+
+        super::refresh_cached_run_graph_operator_contracts(&mut payload, true, false, false, false)
+            .expect("cached overlay should update run-graph blockers");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["run_graph_latest_snapshot_inconsistent"])
+        );
+        assert_eq!(
+            payload["next_actions"],
+            serde_json::json!([run_graph_latest_snapshot_inconsistent_next_action()])
+        );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+
+        super::refresh_cached_run_graph_operator_contracts(
+            &mut payload,
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect("cached overlay should clear stale run-graph blockers");
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+        assert_eq!(payload["next_actions"], serde_json::json!([]));
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn fallback_receipt_consistency_ignores_orthogonal_status_run_id() {
+        assert_eq!(
+            super::status_run_id_for_receipt_consistency(
+                Some("orthogonal-status-run"),
+                Some("active-task-receipt-run"),
+                true,
+                true,
+            ),
+            None
+        );
+        assert_eq!(
+            super::status_run_id_for_receipt_consistency(
+                Some("same-run"),
+                Some("same-run"),
+                true,
+                true,
+            ),
+            Some("same-run")
+        );
+        assert_eq!(
+            super::status_run_id_for_receipt_consistency(
+                Some("orthogonal-status-run"),
+                Some("active-task-receipt-run"),
+                true,
+                false,
+            ),
+            Some("orthogonal-status-run")
+        );
     }
 
     #[test]
