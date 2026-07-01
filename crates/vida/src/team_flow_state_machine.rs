@@ -1,0 +1,302 @@
+/// Team-Flow State-Machine Ownership Boundary
+///
+/// This module is the canonical owner of team-flow continuation logic.
+/// All crates must use these functions instead of hardcoded literals for:
+/// - lane_sequence resolution
+/// - execution_lane_sequence extraction
+/// - allowed_next_node validation
+/// - role-to-lane mapping
+///
+/// Related ADR: docs/product/spec/adr-team-flow-state-machine-owner.md
+use serde_json::Value;
+
+/// Verdict for state-machine transition validation
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransitionVerdict {
+    /// The requested next node is lawful per the execution plan
+    Allowed { next_lane: String },
+    /// The requested next node violates the execution plan
+    Blocked {
+        blocker_code: String,
+        allowed_next_node: String,
+    },
+}
+
+/// Represents a single step in the team-flow state machine
+#[derive(Debug, Clone)]
+pub struct StateMachineStep {
+    pub role_id: String,
+    pub runtime_role: String,
+    pub task_class: String,
+    pub stage: String,
+}
+
+/// The canonical team-flow state machine definition
+#[derive(Debug, Clone)]
+pub struct TeamFlowStateMachine {
+    pub flow_id: String,
+    pub steps: Vec<StateMachineStep>,
+}
+
+impl TeamFlowStateMachine {
+    /// Resolve the execution lane sequence from a dev_team flow configuration.
+    /// This is the single source of truth for what lanes execute in order.
+    pub fn resolve_execution_lane_sequence(&self) -> Vec<String> {
+        self.steps.iter().map(|s| s.role_id.clone()).collect()
+    }
+
+    /// Get the next lawful lane after a given role_id.
+    /// Returns None if the current role is not in the state machine or is the last step.
+    pub fn resolve_next_lane(&self, current_role: &str) -> Option<String> {
+        let current_index = self.steps.iter().position(|s| s.role_id == current_role);
+        current_index.and_then(|idx| self.steps.get(idx + 1).map(|next| next.role_id.clone()))
+    }
+
+    /// Validate whether a requested next node is lawful after the current role.
+    pub fn validate_transition(
+        &self,
+        current_role: &str,
+        requested_next_node: &str,
+    ) -> TransitionVerdict {
+        let expected_next = self.resolve_next_lane(current_role);
+
+        match expected_next {
+            Some(ref expected) if expected == requested_next_node => TransitionVerdict::Allowed {
+                next_lane: expected.clone(),
+            },
+            Some(expected) => TransitionVerdict::Blocked {
+                blocker_code: "invalid_allowed_next_node_for_execution_plan".to_string(),
+                allowed_next_node: expected,
+            },
+            None => {
+                // Current role is the last step — closure is expected
+                if requested_next_node == "closure" {
+                    TransitionVerdict::Allowed {
+                        next_lane: "closure".to_string(),
+                    }
+                } else {
+                    TransitionVerdict::Blocked {
+                        blocker_code: "no_next_lane_after_last_step".to_string(),
+                        allowed_next_node: "closure".to_string(),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check if a role_id is a valid step in this state machine.
+    pub fn is_valid_role(&self, role_id: &str) -> bool {
+        self.steps.iter().any(|s| s.role_id == role_id)
+    }
+
+    /// Get the stage for a given role_id.
+    pub fn get_stage_for_role(&self, role_id: &str) -> Option<&str> {
+        self.steps
+            .iter()
+            .find(|s| s.role_id == role_id)
+            .map(|s| s.stage.as_str())
+    }
+
+    /// Build a state machine from a dev_team flow configuration JSON.
+    pub fn from_flow_config(flow_config: &Value) -> Option<Self> {
+        let flow_id = flow_config.get("flow_id")?.as_str()?.to_string();
+        let steps_value = flow_config.get("steps")?;
+        let steps_array = steps_value.as_array()?;
+
+        let steps: Vec<StateMachineStep> = steps_array
+            .iter()
+            .filter_map(|step| {
+                let role_id = step.get("role_id")?.as_str()?.to_string();
+                let runtime_role = step.get("runtime_role")?.as_str()?.to_string();
+                let task_class = step.get("task_class")?.as_str()?.to_string();
+                let stage = step.get("stage")?.as_str()?.to_string();
+
+                Some(StateMachineStep {
+                    role_id,
+                    runtime_role,
+                    task_class,
+                    stage,
+                })
+            })
+            .collect();
+
+        if steps.is_empty() {
+            None
+        } else {
+            Some(TeamFlowStateMachine { flow_id, steps })
+        }
+    }
+}
+
+/// Extract the team-flow state machine from an activation bundle.
+/// This function reads from vida.config.yaml -> dev_team.flows and returns
+/// the canonical state machine for the given work item type.
+pub fn extract_team_flow_state_machine(
+    activation_bundle: &Value,
+    work_item_type: Option<&str>,
+) -> Option<TeamFlowStateMachine> {
+    let flows = activation_bundle
+        .get("dev_team")?
+        .get("flows")?
+        .as_object()?;
+
+    // Default flow for tasks is task_delivery_verified
+    let flow_id = match work_item_type {
+        Some("task") | None => "task_delivery_verified",
+        Some("defect") => "defect_repair_verified",
+        Some("runtime_defect") => "runtime_defect_remediation",
+        Some("pull_request") | Some("pr_repair") => "pr_processing_team",
+        Some("architecture") => "architecture_design",
+        Some("release_readiness") => "release_readiness_gate",
+        _ => "task_delivery_verified", // fallback
+    };
+
+    let flow_config = flows.get(flow_id)?;
+    TeamFlowStateMachine::from_flow_config(flow_config)
+}
+
+/// Resolve the allowed next node for a given role using config-backed logic.
+/// This replaces all hardcoded literals like "developer", "tester", "closure"
+/// that were previously scattered across runtime_dispatch*, taskflow_routing*, etc.
+pub fn resolve_allowed_next_node(activation_bundle: &Value, current_role: &str) -> Option<String> {
+    extract_team_flow_state_machine(activation_bundle, None)
+        .and_then(|sm| sm.resolve_next_lane(current_role))
+}
+
+/// Validate a transition using config-backed state machine logic.
+pub fn validate_transition_config_backed(
+    activation_bundle: &Value,
+    current_role: &str,
+    requested_next_node: &str,
+) -> TransitionVerdict {
+    match extract_team_flow_state_machine(activation_bundle, None) {
+        Some(sm) => sm.validate_transition(current_role, requested_next_node),
+        None => TransitionVerdict::Blocked {
+            blocker_code: "team_flow_state_machine_not_configured".to_string(),
+            allowed_next_node: "developer".to_string(), // legacy fallback
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_activation_bundle() -> Value {
+        serde_json::json!({
+            "dev_team": {
+                "flows": {
+                    "task_delivery_verified": {
+                        "flow_id": "task_delivery_verified",
+                        "steps": [
+                            {"role_id": "analyst", "runtime_role": "business_analyst", "task_class": "specification", "stage": "design_gate"},
+                            {"role_id": "developer", "runtime_role": "worker", "task_class": "implementation", "stage": "execution"},
+                            {"role_id": "coach_implementation_gate", "runtime_role": "coach", "task_class": "coach", "stage": "execution"},
+                            {"role_id": "tester", "runtime_role": "verifier", "task_class": "verification", "stage": "execution"}
+                        ]
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn test_resolve_execution_lane_sequence() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        let sequence = sm.resolve_execution_lane_sequence();
+        assert_eq!(
+            sequence,
+            vec![
+                "analyst",
+                "developer",
+                "coach_implementation_gate",
+                "tester"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_resolve_next_lane() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        assert_eq!(
+            sm.resolve_next_lane("analyst"),
+            Some("developer".to_string())
+        );
+        assert_eq!(
+            sm.resolve_next_lane("developer"),
+            Some("coach_implementation_gate".to_string())
+        );
+        assert_eq!(sm.resolve_next_lane("tester"), None); // last step
+    }
+
+    #[test]
+    fn test_validate_transition_allowed() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        let verdict = sm.validate_transition("analyst", "developer");
+        assert_eq!(
+            verdict,
+            TransitionVerdict::Allowed {
+                next_lane: "developer".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_validate_transition_blocked() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        let verdict = sm.validate_transition("analyst", "tester");
+        match verdict {
+            TransitionVerdict::Blocked {
+                blocker_code,
+                allowed_next_node,
+            } => {
+                assert_eq!(blocker_code, "invalid_allowed_next_node_for_execution_plan");
+                assert_eq!(allowed_next_node, "developer");
+            }
+            _ => panic!("Expected Blocked verdict"),
+        }
+    }
+
+    #[test]
+    fn test_validate_transition_closure_from_last_step() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        let verdict = sm.validate_transition("tester", "closure");
+        assert_eq!(
+            verdict,
+            TransitionVerdict::Allowed {
+                next_lane: "closure".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_is_valid_role() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        assert!(sm.is_valid_role("analyst"));
+        assert!(sm.is_valid_role("developer"));
+        assert!(!sm.is_valid_role("unknown_role"));
+    }
+
+    #[test]
+    fn test_from_flow_config_empty_steps() {
+        let config = serde_json::json!({
+            "flow_id": "empty",
+            "steps": []
+        });
+        assert!(TeamFlowStateMachine::from_flow_config(&config).is_none());
+    }
+
+    #[test]
+    fn test_from_flow_config_missing_steps() {
+        let config = serde_json::json!({
+            "flow_id": "no_steps"
+        });
+        assert!(TeamFlowStateMachine::from_flow_config(&config).is_none());
+    }
+}

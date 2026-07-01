@@ -328,3 +328,15 @@ The runtime implementation must cover:
 11. Validate graph.
 12. Repeat until the graph reports a coherent next lawful path.
 13. Report changed tasks, skipped closed tasks, duplicate decisions, blockers, and validation proof.
+
+-----
+artifact_path: process/taskflow-actualization-protocol
+artifact_type: runtime_protocol
+artifact_version: '1'
+artifact_revision: '2026-07-01'
+schema_version: '1'
+status: canonical
+source_path: docs/process/taskflow-actualization-protocol.md
+created_at: '2026-07-01T00:00:00+02:00'
+updated_at: 2026-07-01T18:30:00+02:00
+changelog_ref: taskflow-actualization-protocol.changelog.jsonl

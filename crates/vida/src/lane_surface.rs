@@ -142,6 +142,7 @@ enum LaneCommand<'a> {
         host_agent_id: Option<&'a str>,
         host_bridge_summary: Option<&'a str>,
         host_bridge_result_file: Option<&'a str>,
+        retry_host_bridge_completion: bool,
         decision: Option<&'a str>,
         verdict: Option<&'a str>,
         allowed_next_node: Option<&'a str>,
@@ -486,6 +487,7 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
             let mut host_bridge_summary = None;
             let mut state_dir = None;
             let mut host_bridge_result_file = None;
+            let mut retry_host_bridge_completion = false;
             let mut decision = None;
             let mut verdict = None;
             let mut allowed_next_node = None;
@@ -497,6 +499,10 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                 match rest[index].as_str() {
                     "--json" => {
                         as_json = true;
+                        index += 1;
+                    }
+                    "--retry-host-bridge-completion" => {
+                        retry_host_bridge_completion = true;
                         index += 1;
                     }
                     "--receipt-id" => {
@@ -596,6 +602,7 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                 host_agent_id,
                 host_bridge_summary,
                 host_bridge_result_file,
+                retry_host_bridge_completion,
                 decision,
                 verdict,
                 allowed_next_node,
@@ -4498,6 +4505,7 @@ fn materialize_host_bridge_completion_evidence(
     authoritative_owned_paths: &[String],
     replace_existing_evidence: bool,
     allow_reconciled_request_paths: bool,
+    retry_completion_override: bool,
 ) -> Result<HostBridgeCompletionEvidence, String> {
     let pending_receipt_has_persisted_dispatch_evidence = persisted_receipt.dispatch_status
         == "bridge_request_pending"
@@ -4551,8 +4559,8 @@ fn materialize_host_bridge_completion_evidence(
         expected_task_id: Some(run_id.to_string()),
         expected_dispatch_target: Some(dispatch_target.to_string()),
     });
-    let retryable_completion_request =
-        host_bridge_request_has_retryable_completion_evidence(state_root, request_path);
+    let retryable_completion_request = retry_completion_override
+        || host_bridge_request_has_retryable_completion_evidence(state_root, request_path);
     let shared_provenance =
         normalize_host_bridge_provenance_for_completion(&provenance, retryable_completion_request);
     if !shared_provenance.blocker_codes.is_empty() {
@@ -5514,6 +5522,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             host_agent_id,
             host_bridge_summary,
             host_bridge_result_file,
+            retry_host_bridge_completion,
             decision,
             verdict,
             allowed_next_node,
@@ -5842,6 +5851,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     &authoritative_owned_paths,
                     retrying_summary_guard || retrying_request_guard,
                     allow_reconciled_request_paths,
+                    retry_host_bridge_completion,
                 ) {
                     Ok(evidence) => Some(evidence),
                     Err(error) => {
@@ -12540,6 +12550,7 @@ mod tests {
             &[],
             false,
             true,
+            false,
         )
         .expect_err("request target must not override persisted pending dispatch result target");
 
@@ -16157,6 +16168,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         )
         .expect_err("redirected request should fail closed");
         assert!(
@@ -16286,6 +16298,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         )
         .expect("configured in-state bridge paths should be accepted");
 
@@ -16376,6 +16389,7 @@ mod tests {
             true,
             HostBridgeTaskflowImplementationEvidence::default(),
             &[],
+            false,
             false,
             false,
         )
@@ -16498,6 +16512,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         )
         .expect("valid canonical submitted result should be accepted");
 
@@ -16612,6 +16627,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         )
         .expect("blocked completion evidence should materialize");
 
@@ -16721,6 +16737,7 @@ mod tests {
             &[],
             false,
             false,
+            false,
         )
         .expect_err("supplied route must not override persisted route");
 
@@ -16814,6 +16831,7 @@ mod tests {
             false,
             HostBridgeTaskflowImplementationEvidence::default(),
             &[],
+            false,
             false,
             false,
         )
@@ -16913,6 +16931,7 @@ mod tests {
             true,
             HostBridgeTaskflowImplementationEvidence::default(),
             &[],
+            false,
             false,
             false,
         )

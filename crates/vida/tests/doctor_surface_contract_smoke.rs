@@ -1365,7 +1365,7 @@ fn agent_host_bridge_outputs_default_toon_json_and_help_contracts() {
     );
     let payload: serde_json::Value =
         serde_json::from_slice(&json_output.stdout).expect("host-bridge json should parse");
-    assert_eq!(payload["surface"], "vida agent host-bridge");
+    assert_eq!(payload["surface"], "vida lane complete");
     assert_eq!(payload["status"], "blocked");
     assert_eq!(
         payload["blocker_codes"],
@@ -1836,7 +1836,7 @@ fn agent_host_bridge_trusted_missing_receipt_fails_closed_within_latency_budget(
     );
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("host bridge json should parse");
-    assert_eq!(payload["surface"], "vida agent host-bridge");
+    assert_eq!(payload["surface"], "vida lane");
     assert_eq!(payload["status"], "blocked");
     assert_eq!(
         payload["blocker_codes"],
@@ -2889,10 +2889,37 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
             .contains("exception-takeover"),
         "retryable host bridge blockers must not recommend exception takeover first"
     );
+    let corrected_result_path = std::path::PathBuf::from(&fixture.state_dir)
+        .join("host-tool-bridge/results/retry-corrected-result.json");
+    std::fs::create_dir_all(
+        corrected_result_path
+            .parent()
+            .expect("corrected result parent"),
+    )
+    .expect("corrected result parent should exist");
     std::fs::remove_file(&fixture.result_path)
-        .expect("retry completion should own a fresh host bridge result path");
+        .expect("retry completion should replace the stale host bridge result path");
     std::fs::remove_file(&fixture.bridge_receipt_path)
-        .expect("retry completion should own a fresh host bridge receipt path");
+        .expect("retry completion should replace the stale host bridge receipt path");
+    std::fs::write(
+        &corrected_result_path,
+        serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "status": "pass",
+            "request_id": "host-bridge-public-retry",
+            "run_id": &fixture.run_id,
+            "dispatch_target": "implementer",
+            "decision": "pass",
+            "verdict": "pass",
+            "blocker_codes": [],
+            "execution_evidence": {
+                "receipt_backed": true
+            }
+        })
+        .to_string(),
+    )
+    .expect("corrected bridge result should write");
+    let corrected_result_path = corrected_result_path.display().to_string();
 
     let output = vida()
         .args([
@@ -2900,26 +2927,23 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
             "host-bridge",
             "--request",
             &fixture.request_path,
-            "--complete",
+            "--retry-completion",
             "--host-agent-id",
             "agent-public-retry-proof",
-            "--summary",
-            "retry after accepted implementation attempt artifact",
+            "--submit-result",
+            &corrected_result_path,
             "--state-dir",
             &fixture.state_dir,
             "--json",
         ])
         .output()
         .expect("agent host-bridge retry should run");
-    assert_failure(
-        &output,
-        "agent host-bridge retry after retryable blocker should fail closed when request is not pending",
-    );
+    assert_success(&output, "agent host-bridge retry after retryable blocker");
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
-    assert_eq!(payload["surface"], "vida agent host-bridge");
-    assert_eq!(payload["status"], "blocked");
-    assert!(payload["blocker_codes"]
+    assert_eq!(payload["surface"], "vida lane");
+    assert_eq!(payload["status"], "pass");
+    assert!(!payload["blocker_codes"]
         .as_array()
         .expect("blocker codes should render")
         .iter()
@@ -3027,10 +3051,15 @@ fn host_bridge_public_cli_fails_closed_when_receipt_target_differs_from_request_
         &output,
         "agent host-bridge should fail closed when stale receipt target differs from request target",
     );
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("receipt_dispatch_target_mismatch"),
-        "stale receipt mismatch should be explicit: stderr={}",
+    let combined_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined_output.contains("receipt_dispatch_target_mismatch")
+            || combined_output.contains("does not belong to dispatch target"),
+        "stale receipt mismatch should be explicit: output={combined_output}"
     );
 }
 

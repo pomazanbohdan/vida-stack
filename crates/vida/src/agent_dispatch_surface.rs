@@ -20,8 +20,9 @@ use runtime_path_policy::{
 };
 use taskflow_host_bridge::{
     build_host_bridge_adapter_payload, build_host_bridge_normalized_implementation_artifact,
-    host_bridge_artifact_file, host_bridge_artifact_has_retryable_completion_blocker,
-    host_bridge_changed_files_from_artifact, host_bridge_completed_artifact_status_is_admissible,
+    decide_host_bridge_completion_authority, host_bridge_artifact_file,
+    host_bridge_artifact_has_retryable_completion_blocker, host_bridge_changed_files_from_artifact,
+    host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_has_preview_refresh_evidence,
     host_bridge_completed_result_status_is_admissible, host_bridge_completion_retryable_blocker,
     host_bridge_normalized_implementation_artifact_path, host_bridge_operator_fields,
@@ -33,8 +34,8 @@ use taskflow_host_bridge::{
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
     validate_host_bridge_request_provenance, validate_implementation_artifact_scope,
     write_host_bridge_normalized_implementation_artifact, write_host_bridge_request,
-    DispatchReceiptBindingInput, HostBridgeAdapterPayloadInput, HostBridgeProvenanceInput,
-    HostBridgeRequest, HostBridgeRequestPath,
+    DispatchReceiptBindingInput, HostBridgeAdapterPayloadInput, HostBridgeCompletionAuthorityInput,
+    HostBridgeProvenanceInput, HostBridgeRequest, HostBridgeRequestPath,
 };
 
 const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
@@ -312,13 +313,20 @@ async fn host_bridge_request_provenance_blockers(
     request_path: &Path,
     request: &serde_json::Value,
     state_root: Option<&Path>,
+    retry_completion_override: bool,
 ) -> Vec<String> {
     let state_root = match state_root {
         Some(provided) => provided.to_path_buf(),
         None => infer_host_bridge_state_root_from_request_path(request_path)
             .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir),
     };
-    host_bridge_request_provenance_blockers_for_state_root(&state_root, request_path, request).await
+    host_bridge_request_provenance_blockers_for_state_root(
+        &state_root,
+        request_path,
+        request,
+        retry_completion_override,
+    )
+    .await
 }
 
 fn infer_host_bridge_state_root_from_request_path(
@@ -362,6 +370,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     state_root: &Path,
     request_path: &Path,
     request: &serde_json::Value,
+    retry_completion_override: bool,
 ) -> Vec<String> {
     let mut blockers = Vec::new();
     if std::fs::canonicalize(&state_root).is_err() {
@@ -429,6 +438,8 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         return blockers;
     };
     if let Ok(typed_request) = HostBridgeRequest::from_value(request.clone()) {
+        let retryable_completion = retry_completion_override
+            || retryable_host_bridge_completion_request_for_state_root(state_root, request);
         let decision = validate_host_bridge_request_provenance(&HostBridgeProvenanceInput {
             request: typed_request,
             expected_run_id: Some(run_id.to_string()),
@@ -436,10 +447,8 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
             expected_dispatch_target: host_bridge_request_string(request, "dispatch_target")
                 .map(ToOwned::to_owned),
         });
-        let decision = normalize_host_bridge_provenance_for_completion(
-            &decision,
-            retryable_host_bridge_completion_request_for_state_root(state_root, request),
-        );
+        let decision =
+            normalize_host_bridge_provenance_for_completion(&decision, retryable_completion);
         if !decision.accepted {
             for code in decision.blocker_codes {
                 blockers.push(host_bridge_provenance_public_blocker_code(&code).to_string());
@@ -773,9 +782,10 @@ fn host_bridge_adapter_payload(
     request: &serde_json::Value,
     provenance_blockers: Vec<String>,
     state_root: Option<&Path>,
+    retry_completion_override: bool,
 ) -> serde_json::Value {
-    let retryable_completion_request =
-        retryable_host_bridge_completion_request(request_path, request, state_root);
+    let retryable_completion_request = retry_completion_override
+        || retryable_host_bridge_completion_request(request_path, request, state_root);
     let effective_request = taskflow_host_bridge::effective_host_bridge_request(request);
     let typed_request = HostBridgeRequest::from_value(effective_request.clone()).ok();
     let completion_command = if let Some(request) = typed_request.as_ref() {
@@ -784,9 +794,15 @@ fn host_bridge_adapter_payload(
             let dispatch_target = request.dispatch_target.as_str();
             format!("{run_id}-{dispatch_target}-host-bridge-receipt")
         };
+        let retry_arg = if retryable_completion_request {
+            " --retry-completion"
+        } else {
+            ""
+        };
         let command = format!(
-            "vida agent host-bridge --request {} --host-agent-id {} --submit-result {} --receipt-id {}",
+            "vida agent host-bridge --request {}{} --host-agent-id {} --submit-result {} --receipt-id {}",
             crate::shell_quote(&request_path.display().to_string()),
+            retry_arg,
             crate::shell_quote("<host-agent-id>"),
             crate::shell_quote("<host-bridge-result-file>"),
             crate::shell_quote(&receipt_id)
@@ -916,6 +932,7 @@ fn host_bridge_completion_lane_args(
     blocker_codes: Option<&str>,
     blocker_code: &[String],
     rework_target: Option<&str>,
+    retry_completion: bool,
     as_json: bool,
 ) -> Result<Vec<String>, String> {
     let run_id = payload["host_bridge"]["run_id"]
@@ -990,10 +1007,170 @@ fn host_bridge_completion_lane_args(
         args.push("--state-dir".to_string());
         args.push(state_dir.display().to_string());
     }
+    if retry_completion {
+        args.push("--retry-host-bridge-completion".to_string());
+    }
     if as_json {
         args.push("--json".to_string());
     }
     Ok(args)
+}
+
+fn host_bridge_result_string<'a>(result: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+    result
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn host_bridge_result_blocker_codes(result: &serde_json::Value) -> Vec<String> {
+    result
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn validate_host_bridge_result_dry_run(
+    request_path: &Path,
+    request: &serde_json::Value,
+    result_path: &Path,
+    result: &serde_json::Value,
+) -> serde_json::Value {
+    let effective_request = taskflow_host_bridge::effective_host_bridge_request(request);
+    let typed_request = match HostBridgeRequest::from_value(effective_request) {
+        Ok(request) => request,
+        Err(error) => {
+            return host_bridge_result_validation_payload(
+                release1_blocked_status(),
+                vec!["host_bridge_request_schema_invalid".to_string()],
+                vec![format!(
+                    "repair host bridge request before validation: {error}"
+                )],
+                request_path,
+                result_path,
+                serde_json::Value::Null,
+            );
+        }
+    };
+    let mut blockers = Vec::new();
+    for field in &typed_request.required_result_fields {
+        if result.get(field).is_none() {
+            blockers.push(format!("host_bridge_result_missing_{field}"));
+        }
+    }
+    for (field, expected) in [
+        ("request_id", typed_request.request_id.as_str()),
+        ("run_id", typed_request.run_id.as_str()),
+        ("dispatch_target", typed_request.dispatch_target.as_str()),
+    ] {
+        if host_bridge_result_string(result, field) != Some(expected) {
+            blockers.push(format!("host_bridge_result_{field}_mismatch"));
+        }
+    }
+    if host_bridge_result_string(result, "artifact_kind") != Some("host_tool_bridge_result") {
+        blockers.push("host_bridge_result_artifact_kind_invalid".to_string());
+    }
+    if result
+        .get("execution_evidence")
+        .and_then(|evidence| evidence.get("receipt_backed"))
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        blockers.push("host_bridge_result_execution_evidence_not_receipt_backed".to_string());
+    }
+    if host_bridge_result_string(result, "allowed_next_node")
+        != request
+            .get("allowed_next_node")
+            .and_then(serde_json::Value::as_str)
+    {
+        blockers.push("invalid_allowed_next_node_for_execution_plan".to_string());
+    }
+    let decision = decide_host_bridge_completion_authority(HostBridgeCompletionAuthorityInput {
+        decision: host_bridge_result_string(result, "decision")
+            .unwrap_or_default()
+            .to_string(),
+        verdict: host_bridge_result_string(result, "verdict")
+            .unwrap_or_default()
+            .to_string(),
+        blocker_codes: host_bridge_result_blocker_codes(result),
+        summary: host_bridge_result_string(result, "summary").map(ToOwned::to_owned),
+        provenance_valid: true,
+        receipt_bound: true,
+        next_step_packet_requested: true,
+    });
+    if !decision.accepted
+        && host_bridge_result_string(result, "verdict").is_some_and(|verdict| verdict == "pass")
+    {
+        blockers.extend(decision.blocker_codes.clone());
+    }
+    blockers.sort();
+    blockers.dedup();
+    if blockers.is_empty() {
+        host_bridge_result_validation_payload(
+            release1_pass_status(),
+            Vec::new(),
+            Vec::new(),
+            request_path,
+            result_path,
+            serde_json::json!({
+                "accepted_completion": decision.accepted,
+                "final_state": format!("{:?}", decision.final_state),
+                "authority_blocker_codes": decision.blocker_codes
+            }),
+        )
+    } else {
+        host_bridge_result_validation_payload(
+            release1_blocked_status(),
+            blockers,
+            vec!["repair the host bridge result before submit-result".to_string()],
+            request_path,
+            result_path,
+            serde_json::json!({
+                "accepted_completion": decision.accepted,
+                "final_state": format!("{:?}", decision.final_state),
+                "authority_blocker_codes": decision.blocker_codes
+            }),
+        )
+    }
+}
+
+fn host_bridge_result_validation_payload(
+    status: &str,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    request_path: &Path,
+    result_path: &Path,
+    validation: serde_json::Value,
+) -> serde_json::Value {
+    let artifact_refs = serde_json::json!({
+        "request_path": request_path.display().to_string(),
+        "result_path": result_path.display().to_string()
+    });
+    let (shared_fields, operator_contracts) = host_bridge_operator_fields(
+        status,
+        blocker_codes.clone(),
+        next_actions.clone(),
+        next_actions,
+        artifact_refs.clone(),
+    );
+    serde_json::json!({
+        "surface": "vida agent host-bridge",
+        "mode": "result_validate",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": shared_fields["next_actions"].clone(),
+        "artifact_refs": artifact_refs,
+        "validation": validation,
+        "shared_fields": shared_fields,
+        "operator_contracts": operator_contracts
+    })
 }
 
 async fn attach_host_bridge_implementation_artifacts(
@@ -1287,9 +1464,11 @@ async fn attach_host_bridge_implementation_artifacts(
             &command.request,
             &request,
             command.state_dir.as_deref(),
+            false,
         )
         .await,
         command.state_dir.as_deref(),
+        false,
     );
     let completion_command = refreshed_payload["host_bridge"]["completion_command"]
         .as_str()
@@ -4807,6 +4986,7 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                 &command.request,
                 &request,
                 command.state_dir.as_deref(),
+                command.retry_completion,
             )
             .await;
             if !command.attach_artifacts.is_empty() {
@@ -4825,10 +5005,34 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                 &request,
                 provenance_blockers,
                 command.state_dir.as_deref(),
+                command.retry_completion,
             );
             if !command.attach_artifacts.is_empty() {
                 return attach_host_bridge_implementation_artifacts(command, request, payload)
                     .await;
+            }
+            if let Some(result_path) = command.validate_result.as_ref() {
+                let result = match read_canonical_host_bridge_json_artifact(result_path, "result") {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let blocked = host_bridge_result_validation_payload(
+                            release1_blocked_status(),
+                            vec!["host_bridge_result_unreadable".to_string()],
+                            vec!["provide a readable host bridge result JSON artifact".to_string()],
+                            &command.request,
+                            result_path,
+                            serde_json::json!({ "error": error }),
+                        );
+                        return emit_host_bridge_payload(&blocked, command.json);
+                    }
+                };
+                let validation = validate_host_bridge_result_dry_run(
+                    &command.request,
+                    &request,
+                    result_path,
+                    &result,
+                );
+                return emit_host_bridge_payload(&validation, command.json);
             }
             if command.complete {
                 if payload["status"].as_str() != Some(release1_pass_status()) {
@@ -4892,6 +5096,7 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     command.blocker_codes.as_deref(),
                     &command.blocker_code,
                     command.rework_target.as_deref(),
+                    command.retry_completion,
                     command.json,
                 ) {
                     Ok(args) => args,
@@ -6149,6 +6354,7 @@ mod tests {
             &request,
             Vec::new(),
             None,
+            false,
         );
 
         assert_eq!(payload["status"], "pass");
@@ -6252,8 +6458,13 @@ mod tests {
         });
         std::fs::write(&request_path, request.to_string()).expect("write request");
 
-        let payload =
-            host_bridge_adapter_payload(&request_path, &request, Vec::new(), Some(&state_root));
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            Vec::new(),
+            Some(&state_root),
+            false,
+        );
 
         assert_eq!(payload["status"], "pass");
         let completion_command = payload["host_bridge"]["completion_command"]
@@ -6304,6 +6515,7 @@ mod tests {
             &request,
             Vec::new(),
             None,
+            false,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -6351,6 +6563,7 @@ mod tests {
             &request,
             Vec::new(),
             None,
+            false,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -6390,6 +6603,7 @@ mod tests {
             &request,
             Vec::new(),
             None,
+            false,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -6430,6 +6644,7 @@ mod tests {
             &request,
             vec!["host_bridge_request_untrusted_path".to_string()],
             None,
+            false,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -6507,6 +6722,102 @@ mod tests {
             }),
             reason: "test".to_string(),
         }
+    }
+
+    fn host_bridge_validate_request() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-validate-1",
+            "run_id": "run-validate-1",
+            "task_id": "task-validate-1",
+            "dispatch_target": "developer",
+            "packet_path": "packet.json",
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": "host-tool-bridge/requests/request.json",
+            "result_path": "host-tool-bridge/results/result.json",
+            "receipt_path": "host-tool-bridge/receipts/receipt.json",
+            "allowed_next_node": "coach_implementation_gate"
+        })
+    }
+
+    fn host_bridge_validate_result(allowed_next_node: &str) -> serde_json::Value {
+        serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "schema_version": 1,
+            "status": "pass",
+            "execution_state": "executed",
+            "request_id": "req-validate-1",
+            "run_id": "run-validate-1",
+            "dispatch_target": "developer",
+            "decision": "pass",
+            "verdict": "pass",
+            "blocker_codes": [],
+            "rework_target": serde_json::Value::Null,
+            "allowed_next_node": allowed_next_node,
+            "execution_evidence": {
+                "receipt_backed": true
+            },
+            "source_dispatch_packet_path": "packet.json"
+        })
+    }
+
+    #[test]
+    fn host_bridge_result_validate_passes_valid_result_without_mutation() {
+        let payload = super::validate_host_bridge_result_dry_run(
+            std::path::Path::new("request.json"),
+            &host_bridge_validate_request(),
+            std::path::Path::new("result.json"),
+            &host_bridge_validate_result("coach_implementation_gate"),
+        );
+
+        assert_eq!(payload["mode"], "result_validate");
+        assert_eq!(payload["status"], super::release1_pass_status());
+        assert_eq!(payload["validation"]["accepted_completion"], true);
+        assert!(payload["blocker_codes"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn host_bridge_result_validate_reports_schema_field_failure() {
+        let mut result = host_bridge_validate_result("coach_implementation_gate");
+        result.as_object_mut().unwrap().remove("verdict");
+        let payload = super::validate_host_bridge_result_dry_run(
+            std::path::Path::new("request.json"),
+            &host_bridge_validate_request(),
+            std::path::Path::new("result.json"),
+            &result,
+        );
+
+        assert_eq!(payload["status"], super::release1_blocked_status());
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "host_bridge_result_missing_verdict"));
+    }
+
+    #[test]
+    fn host_bridge_result_validate_reports_illegal_next_node() {
+        let payload = super::validate_host_bridge_result_dry_run(
+            std::path::Path::new("request.json"),
+            &host_bridge_validate_request(),
+            std::path::Path::new("result.json"),
+            &host_bridge_validate_result("tester"),
+        );
+
+        assert_eq!(payload["status"], super::release1_blocked_status());
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "invalid_allowed_next_node_for_execution_plan"));
     }
 
     fn host_bridge_submit_result_direct_developer_role_selection(
@@ -6588,6 +6899,7 @@ mod tests {
             &state_root,
             &request_path,
             &request,
+            false,
         ));
 
         assert!(blockers.contains(&"host_bridge_request_untrusted_path".to_string()));
@@ -6777,6 +7089,8 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: None,
             submit_result: None,
+            validate_result: None,
+            retry_completion: false,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -6798,6 +7112,7 @@ mod tests {
             &request_path,
             &request,
             Some(&trusted_state_root),
+            false,
         ));
         assert!(blockers
             .iter()
@@ -6807,6 +7122,7 @@ mod tests {
             &request,
             blockers,
             Some(&trusted_state_root),
+            false,
         );
         assert_eq!(payload["surface"], "vida agent host-bridge");
         assert_eq!(payload["status"], "blocked");
@@ -6928,6 +7244,8 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: None,
             submit_result: None,
+            validate_result: None,
+            retry_completion: false,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -6939,12 +7257,18 @@ mod tests {
             &request_path,
             &request,
             Some(&state_root),
+            false,
         ));
         assert!(blockers
             .iter()
             .any(|code| code == "host_bridge_dispatch_receipt_missing"));
-        let payload =
-            host_bridge_adapter_payload(&request_path, &request, blockers, Some(&state_root));
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            blockers,
+            Some(&state_root),
+            false,
+        );
         assert_eq!(payload["status"], "blocked");
         assert!(payload["blocker_codes"]
             .as_array()
@@ -7192,6 +7516,8 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: None,
             submit_result: Some(staged_result_path.clone()),
+            validate_result: None,
+            retry_completion: false,
             result_file: None,
             receipt_id: Some("host-bridge-wrapper-complete-1".to_string()),
             json: true,
@@ -7495,6 +7821,8 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: None,
             submit_result: Some(staged_result_path.clone()),
+            validate_result: None,
+            retry_completion: false,
             result_file: None,
             receipt_id: Some("completion-autotester-pass-1".to_string()),
             json: true,
@@ -7775,6 +8103,8 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: None,
             submit_result: Some(staged_result_path.clone()),
+            validate_result: None,
+            retry_completion: false,
             result_file: None,
             receipt_id: Some("completion-analyst-pass-1".to_string()),
             json: true,
@@ -8064,14 +8394,20 @@ mod tests {
                 state_root,
                 &request_path,
                 &request,
+                false,
             )
             .await;
             blockers
         });
 
         assert_eq!(blockers, Vec::<String>::new());
-        let payload =
-            host_bridge_adapter_payload(&request_path, &request, blockers, Some(&state_root));
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            blockers,
+            Some(&state_root),
+            false,
+        );
         assert_eq!(payload["status"], "pass");
         assert!(!payload["blocker_codes"]
             .as_array()
@@ -8154,8 +8490,13 @@ mod tests {
         )
         .expect("request file should be written");
 
-        let payload =
-            host_bridge_adapter_payload(&request_path, &request, Vec::new(), Some(&state_root));
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            Vec::new(),
+            Some(&state_root),
+            false,
+        );
 
         assert_eq!(payload["status"], "pass");
         assert!(!payload["blocker_codes"]
@@ -8206,6 +8547,7 @@ mod tests {
                     .to_string(),
             ],
             None,
+            false,
         );
 
         assert_eq!(payload["status"], super::release1_blocked_status());
@@ -8233,6 +8575,7 @@ mod tests {
                 "host_bridge_result_path_unbounded".to_string(),
             ],
             None,
+            false,
         );
         assert!(!super::host_bridge_payload_should_show_completion_command(
             &mixed_blocker_payload
@@ -8243,6 +8586,7 @@ mod tests {
             &request,
             vec!["host_bridge_result_path_unbounded".to_string()],
             None,
+            false,
         );
         assert!(!super::host_bridge_payload_should_show_completion_command(
             &other_blocker_payload
@@ -8313,8 +8657,13 @@ mod tests {
         )
         .expect("request file should be written");
 
-        let payload =
-            host_bridge_adapter_payload(&request_path, &request, Vec::new(), Some(&state_root));
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            Vec::new(),
+            Some(&state_root),
+            false,
+        );
 
         assert_eq!(payload["status"], "blocked");
         assert!(payload["blocker_codes"]
@@ -8347,6 +8696,7 @@ mod tests {
             &request,
             Vec::new(),
             None,
+            false,
         );
         let args = host_bridge_completion_lane_args(
             std::path::Path::new("request.json"),
@@ -8362,6 +8712,7 @@ mod tests {
             None,
             &[],
             None,
+            false,
             false,
         )
         .expect("completion lane args should render");
@@ -8398,6 +8749,7 @@ mod tests {
             None,
             &[],
             None,
+            false,
             true,
         )
         .expect("json completion lane args should render");
@@ -8428,6 +8780,7 @@ mod tests {
             &request,
             Vec::new(),
             None,
+            false,
         );
 
         assert_eq!(payload["status"], "pass");
@@ -8580,6 +8933,8 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: None,
             submit_result: None,
+            validate_result: None,
+            retry_completion: false,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -8769,6 +9124,8 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: None,
             submit_result: None,
+            validate_result: None,
+            retry_completion: false,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -8916,6 +9273,8 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: None,
             submit_result: None,
+            validate_result: None,
+            retry_completion: false,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -9125,6 +9484,8 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: None,
             submit_result: None,
+            validate_result: None,
+            retry_completion: false,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -9245,6 +9606,8 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: None,
             submit_result: None,
+            validate_result: None,
+            retry_completion: false,
             result_file: None,
             receipt_id: None,
             json: true,
@@ -9372,6 +9735,8 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: None,
             submit_result: None,
+            validate_result: None,
+            retry_completion: false,
             result_file: None,
             receipt_id: None,
             json: true,

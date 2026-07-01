@@ -933,6 +933,13 @@ fn resolve_source_root_path(source_root: &str) -> PathBuf {
         return source_root_path;
     }
 
+    if let Ok(current_dir) = std::env::current_dir() {
+        let current_dir_candidate = current_dir.join(&source_root_path);
+        if current_dir_candidate.exists() {
+            return current_dir_candidate;
+        }
+    }
+
     crate::resolve_repo_root()
         .map(|project_root| project_root.join(&source_root_path))
         .unwrap_or_else(|_| repo_root().join(source_root_path))

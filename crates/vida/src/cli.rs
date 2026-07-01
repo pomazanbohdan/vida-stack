@@ -865,6 +865,18 @@ pub(crate) struct AgentHostBridgeArgs {
     pub(crate) submit_result: Option<PathBuf>,
 
     #[arg(
+        long = "validate-result",
+        help = "Dry-run validate one parent-host bridge result JSON file without mutating lane or TaskFlow state"
+    )]
+    pub(crate) validate_result: Option<PathBuf>,
+
+    #[arg(
+        long = "retry-completion",
+        help = "Retry completion for a receipt-backed blocked host bridge request with a corrected result"
+    )]
+    pub(crate) retry_completion: bool,
+
+    #[arg(
         long = "host-bridge-result-file",
         hide = true,
         help = "Path to the parent host bridge result file used for completion"
@@ -4404,6 +4416,8 @@ mod tests {
         assert!(host_bridge_help.contains("--consolidation-receipt"));
         assert!(host_bridge_help.contains("--host-agent-id"));
         assert!(host_bridge_help.contains("--submit-result"));
+        assert!(host_bridge_help.contains("--validate-result"));
+        assert!(host_bridge_help.contains("--retry-completion"));
         assert!(host_bridge_help.contains("--summary"));
         assert!(host_bridge_help.contains("--receipt-id"));
         assert!(host_bridge_help.contains("--state-dir"));
@@ -4453,6 +4467,15 @@ mod tests {
             host_bridge.request.display().to_string(),
             "/tmp/host-bridge-request.json"
         );
+        assert_eq!(
+            host_bridge
+                .validate_result
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            None
+        );
+        assert!(!host_bridge.retry_completion);
+
         assert!(!host_bridge.complete);
         assert_eq!(host_bridge.host_agent_id.as_deref(), Some("agent-1"));
         assert_eq!(
@@ -4472,6 +4495,62 @@ mod tests {
             Some("/tmp/vida-state".to_string())
         );
         assert!(host_bridge.json);
+
+        let parsed_validate = Cli::try_parse_from([
+            "vida",
+            "agent",
+            "host-bridge",
+            "--request",
+            "/tmp/host-bridge-request.json",
+            "--validate-result",
+            "/tmp/host-bridge-result.json",
+            "--json",
+        ])
+        .expect("agent host-bridge validate-result should parse");
+        let Some(super::Command::Agent(agent_args)) = parsed_validate.command else {
+            panic!("agent command should parse");
+        };
+        let crate::AgentCommand::HostBridge(host_bridge) = agent_args.command else {
+            panic!("agent host-bridge command should parse");
+        };
+        assert_eq!(
+            host_bridge
+                .validate_result
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .as_deref(),
+            Some("/tmp/host-bridge-result.json")
+        );
+        assert!(!host_bridge.retry_completion);
+
+        let parsed_retry = Cli::try_parse_from([
+            "vida",
+            "agent",
+            "host-bridge",
+            "--request",
+            "/tmp/host-bridge-request.json",
+            "--retry-completion",
+            "--host-agent-id",
+            "agent-1",
+            "--submit-result",
+            "/tmp/host-bridge-result.json",
+        ])
+        .expect("agent host-bridge retry-completion should parse");
+        let Some(super::Command::Agent(agent_args)) = parsed_retry.command else {
+            panic!("agent command should parse");
+        };
+        let crate::AgentCommand::HostBridge(host_bridge) = agent_args.command else {
+            panic!("agent host-bridge command should parse");
+        };
+        assert!(host_bridge.retry_completion);
+        assert_eq!(
+            host_bridge
+                .submit_result
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .as_deref(),
+            Some("/tmp/host-bridge-result.json")
+        );
 
         let parsed_host_bridge_alias = Cli::try_parse_from([
             "vida",

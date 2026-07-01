@@ -51,14 +51,14 @@ host_environment:
         description: Level 1 Codex lane for cheap bounded implementation packets that own one explicit write scope and return concrete delivery evidence without self-approving closure.
         rate: 1
         reasoning_band: low
-        model: gpt-5.5
+        model: byteshape/qwen3.6-35b-a3b-mtp
         model_reasoning_effort: low
         sandbox_mode: workspace-write
         default_model_profile: codex_gpt55_low_write
         model_profiles:
           codex_gpt55_low_write:
             provider: openai-codex
-            model_ref: gpt-5.5
+            model_ref: byteshape/qwen3.6-35b-a3b-mtp
             reasoning_effort: low
             plan_mode_reasoning_effort: medium
             sandbox_mode: workspace-write
@@ -98,14 +98,14 @@ host_environment:
         description: Level 2 Codex lane for bounded specification, planning, spec-conformance coach review, and medium implementation packets when the work still fits one packet and does not require senior proof or architecture escalation.
         rate: 4
         reasoning_band: medium
-        model: gpt-5.5
+        model: byteshape/qwen3.6-35b-a3b-mtp
         model_reasoning_effort: medium
         sandbox_mode: workspace-write
         default_model_profile: codex_gpt55_medium_write
         model_profiles:
           codex_gpt55_medium_write:
             provider: openai-codex
-            model_ref: gpt-5.5
+            model_ref: byteshape/qwen3.6-35b-a3b-mtp
             reasoning_effort: medium
             plan_mode_reasoning_effort: high
             sandbox_mode: workspace-write
@@ -148,14 +148,14 @@ host_environment:
         description: Level 3 Codex lane for independent verification, proof-strength review, and high-confidence closure gates that fail closed on missing evidence.
         rate: 16
         reasoning_band: high
-        model: gpt-5.5
+        model: byteshape/qwen3.6-35b-a3b-mtp
         model_reasoning_effort: high
         sandbox_mode: read-only
         default_model_profile: codex_gpt55_high_readonly
         model_profiles:
           codex_gpt55_high_readonly:
             provider: openai-codex
-            model_ref: gpt-5.5
+            model_ref: byteshape/qwen3.6-35b-a3b-mtp
             reasoning_effort: high
             plan_mode_reasoning_effort: high
             sandbox_mode: read-only
@@ -188,14 +188,14 @@ host_environment:
         description: Level 4 Codex lane for architecture preparation, hard escalation, and cross-scope conflict resolution when the normal implementer-coach-verifier path cannot close lawfully.
         rate: 48
         reasoning_band: xhigh
-        model: gpt-5.5
+        model: byteshape/qwen3.6-35b-a3b-mtp
         model_reasoning_effort: xhigh
         sandbox_mode: read-only
         default_model_profile: codex_gpt55_xhigh_arch
         model_profiles:
           codex_gpt55_high_arch:
             provider: openai-codex
-            model_ref: gpt-5.5
+            model_ref: byteshape/qwen3.6-35b-a3b-mtp
             reasoning_effort: high
             plan_mode_reasoning_effort: high
             sandbox_mode: read-only
@@ -215,7 +215,7 @@ host_environment:
               required: true
           codex_gpt55_xhigh_arch:
             provider: openai-codex
-            model_ref: gpt-5.5
+            model_ref: byteshape/qwen3.6-35b-a3b-mtp
             reasoning_effort: xhigh
             plan_mode_reasoning_effort: xhigh
             sandbox_mode: read-only
@@ -1807,7 +1807,7 @@ agent_system:
       model_profiles:
         codex_gpt55_low_write:
           provider: openai-codex
-          model_ref: gpt-5.5
+          model_ref: byteshape/qwen3.6-35b-a3b-mtp
           reasoning_effort: low
           normalized_cost_units: 1
           pricing:
@@ -1833,7 +1833,7 @@ agent_system:
             required: true
         codex_gpt55_medium_write:
           provider: openai-codex
-          model_ref: gpt-5.5
+          model_ref: byteshape/qwen3.6-35b-a3b-mtp
           reasoning_effort: medium
           normalized_cost_units: 4
           pricing:
@@ -1865,7 +1865,7 @@ agent_system:
             required: true
         codex_gpt55_high_readonly:
           provider: openai-codex
-          model_ref: gpt-5.5
+          model_ref: byteshape/qwen3.6-35b-a3b-mtp
           reasoning_effort: high
           normalized_cost_units: 16
           speed_tier: medium
@@ -1885,7 +1885,7 @@ agent_system:
             required: true
         codex_gpt55_xhigh_arch:
           provider: openai-codex
-          model_ref: gpt-5.5
+          model_ref: byteshape/qwen3.6-35b-a3b-mtp
           reasoning_effort: xhigh
           normalized_cost_units: 48
           speed_tier: medium

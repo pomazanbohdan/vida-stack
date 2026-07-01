@@ -1464,7 +1464,7 @@ fn run_graph_state_actionable_next_action(
         surface: recommended_surface_for_command(&command),
         command: command.clone(),
         reason: format!(
-            "Inspect dispatch receipt and host-bridge artifacts with `{command}`; artifact_refs identify result paths, downstream dispatch status, and repair target."
+            "inspect dispatch receipt and host-bridge artifacts with `{command}`; artifact_refs identify result paths, downstream dispatch status, and repair target."
         ),
     })
 }
@@ -4362,9 +4362,15 @@ async fn run_taskflow_run_graph_state(
                 } else {
                     let blocker_codes =
                         run_graph_state_surface_issue_codes(&status, &projection_truth);
+                    let next_actions = run_graph_state_operator_next_actions(
+                        &status,
+                        &projection_truth,
+                        &blocker_codes,
+                    );
                     print_surface_header(RenderMode::Plain, "vida taskflow run-graph status");
                     print_surface_line(RenderMode::Plain, "run", &status.run_id);
-                    print_surface_line(RenderMode::Plain, "status", &status.as_display());
+                    print_surface_line(RenderMode::Plain, "status", &status.status);
+                    print_surface_line(RenderMode::Plain, "status_detail", &status.as_display());
                     print_surface_line(
                         RenderMode::Plain,
                         "delegation gate",
@@ -4389,10 +4395,16 @@ async fn run_taskflow_run_graph_state(
                             &run_graph_task_identity_compact(identity),
                         );
                     }
-                    if let Some(next_action) =
-                        projection_truth.next_lawful_operator_action.as_deref()
-                    {
-                        print_surface_line(RenderMode::Plain, "next action", next_action);
+                    if next_actions.is_empty() {
+                        if let Some(next_action) =
+                            projection_truth.next_lawful_operator_action.as_deref()
+                        {
+                            print_surface_line(RenderMode::Plain, "next action", next_action);
+                        }
+                    } else {
+                        for next_action in next_actions {
+                            print_surface_line(RenderMode::Plain, "next action", &next_action);
+                        }
                     }
                     ExitCode::SUCCESS
                 }

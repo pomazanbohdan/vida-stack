@@ -26164,10 +26164,7 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<serde_json::Value, String> {
-    let project_root = taskflow_task_bridge::infer_project_root_from_state_root(state_root)
-        .unwrap_or(std::env::current_dir().map_err(|error| {
-            format!("Failed to resolve current directory for dispatch execution: {error}")
-        })?);
+    let project_root = runtime_dispatch_project_root_from_state_root(state_root).into_owned();
     match receipt.dispatch_target.as_str() {
         "spec-pack" => {
             let store = StateStore::open_existing(state_root.to_path_buf())

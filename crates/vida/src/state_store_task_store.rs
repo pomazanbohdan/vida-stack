@@ -831,12 +831,6 @@ impl StateStore {
     }
 
     pub(crate) fn canonical_task_snapshot_path_for_state_root(state_root: &Path) -> PathBuf {
-        if let Some(project_root) =
-            crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
-        {
-            return project_root.join(".vida/exports/tasks.snapshot.jsonl");
-        }
-
         if state_root.file_name().and_then(|value| value.to_str()) == Some("state") {
             if let Some(data_dir) = state_root.parent() {
                 if data_dir.file_name().and_then(|value| value.to_str()) == Some("data") {
@@ -848,6 +842,16 @@ impl StateStore {
                     }
                     return vida_dir.join("exports/tasks.snapshot.jsonl");
                 }
+            }
+        }
+
+        if let Some(project_root) =
+            crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
+        {
+            let native_state_root =
+                crate::taskflow_task_bridge::taskflow_native_state_root(&project_root);
+            if state_root == native_state_root {
+                return project_root.join(".vida/exports/tasks.snapshot.jsonl");
             }
         }
 
