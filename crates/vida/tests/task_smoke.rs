@@ -459,6 +459,175 @@ fn run_command_json_allow_failure(args: &[&str], state_dir: &str) -> (serde_json
     (json, output.status.success())
 }
 
+#[test]
+fn requirement_analysis_cli_contract() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let help = run_command_capture(&["requirement", "analyze", "--help"], &state_dir);
+    assert!(help.status.success());
+    let help_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&help.stdout),
+        String::from_utf8_lossy(&help.stderr)
+    );
+    for expected in [
+        "--input <TEXT>",
+        "--source-file <SOURCE_FILE>",
+        "--task-id <TASK_ID>",
+        "--request-id <REQUEST_ID>",
+        "--depth-mode <DEPTH_MODE>",
+        "--artifact-path <ARTIFACT_PATH>",
+        "--json",
+        "readiness_verdict",
+        "output_contract",
+        "developer_handoff",
+    ] {
+        assert!(
+            help_text.contains(expected),
+            "requirement analyze help must document {expected}: {help_text}"
+        );
+    }
+
+    let json = run_command_json(
+        &[
+            "requirement",
+            "analyze",
+            "--task-id",
+            "task-1",
+            "--request-id",
+            "request-1",
+            "--input",
+            "Use meeting-specific event form fields. Add widget tests.",
+            "--depth-mode",
+            "critical",
+            "--artifact-path",
+            "artifacts/requirement-analysis/task-1.json",
+            "--codebase-inspected",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(json["surface"], "vida requirement analyze");
+    assert_eq!(json["status"], "pass");
+    vida_test_support::assert_release1_operator_shape("vida requirement analyze", &json);
+    let artifact = &json["artifact"];
+    assert_eq!(
+        artifact["schema_version"],
+        "requirement-analysis-artifact.v1"
+    );
+    assert_eq!(artifact["task_id"], "task-1");
+    assert_eq!(artifact["request_id"], "request-1");
+    assert_eq!(artifact["depth_mode"], "critical");
+    assert_eq!(artifact["readiness_verdict"], "ready_for_developer_handoff");
+    assert_eq!(
+        artifact["artifact_path"],
+        "artifacts/requirement-analysis/task-1.json"
+    );
+    for field in [
+        "source_inputs",
+        "requirement_classification",
+        "requirement_atoms",
+        "selected_methods",
+        "selected_roles",
+        "role_findings_summary",
+        "detected_conflicts",
+        "open_questions",
+        "working_assumptions",
+        "solution_options",
+        "recommended_option",
+        "downstream_routes",
+        "acceptance_criteria",
+        "test_matrix",
+        "output_contract",
+        "codebase_impact",
+        "developer_handoff",
+    ] {
+        assert!(
+            !artifact[field].is_null(),
+            "artifact must expose required field {field}: {artifact}"
+        );
+    }
+    assert!(artifact["open_questions"]["critical"].is_array());
+    assert!(artifact["open_questions"]["important"].is_array());
+    assert!(artifact["open_questions"]["optional"].is_array());
+    assert_eq!(artifact["codebase_impact"]["inspected"], true);
+    assert_eq!(
+        artifact["output_contract"]["default"]["mode"],
+        "compact_toon_plain"
+    );
+    assert_eq!(
+        artifact["output_contract"]["json"]["mode"],
+        "machine_readable"
+    );
+    assert!(artifact["developer_handoff"]["proof_targets"]
+        .as_array()
+        .expect("developer_handoff proof targets should render")
+        .iter()
+        .any(|target| target
+            .as_str()
+            .is_some_and(|text| text.contains("requirement_analysis_cli_contract"))));
+
+    let (missing_identity, missing_identity_success) =
+        run_command_json_allow_failure(&["requirement", "analyze", "--json"], &state_dir);
+    assert!(!missing_identity_success);
+    vida_test_support::assert_release1_operator_shape(
+        "vida requirement analyze",
+        &missing_identity,
+    );
+    assert_eq!(missing_identity["status"], "blocked");
+    assert_eq!(
+        missing_identity["blocker_codes"],
+        serde_json::json!(["missing_requirement_identity"])
+    );
+
+    let (unreadable_source, unreadable_source_success) = run_command_json_allow_failure(
+        &[
+            "requirement",
+            "analyze",
+            "--task-id",
+            "task-1",
+            "--source-file",
+            "missing-requirement-source.md",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!unreadable_source_success);
+    vida_test_support::assert_release1_operator_shape(
+        "vida requirement analyze",
+        &unreadable_source,
+    );
+    assert_eq!(unreadable_source["status"], "blocked");
+    assert_eq!(
+        unreadable_source["blocker_codes"],
+        serde_json::json!(["requirement_source_unreadable"])
+    );
+
+    let plain = run_command_capture(
+        &[
+            "requirement",
+            "analyze",
+            "--request-id",
+            "request-plain-1",
+            "--input",
+            "Use meeting-specific event form fields.",
+            "--artifact-path",
+            "artifacts/requirement-analysis/task-1.json",
+        ],
+        &state_dir,
+    );
+    assert!(plain.status.success());
+    let plain_text = String::from_utf8_lossy(&plain.stdout);
+    assert!(plain_text.starts_with("vida requirement analyze\n"));
+    assert!(plain_text.contains("readiness_verdict: ready_for_developer_handoff"));
+    assert!(plain_text.contains("artifact_path: artifacts/requirement-analysis/task-1.json"));
+    assert!(plain_text.contains("downstream_routes: developer_handoff"));
+    assert!(plain_text.contains("developer_handoff: Implement against the requirement atoms"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
 fn assert_public_surface_matrix_json_case(
     label: &str,
     args: &[&str],

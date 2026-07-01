@@ -28,6 +28,7 @@ const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get --json
 const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route <route> --expect <text> --json\n\nBrowser proof options:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output";
 const SESSION_AFTER_HELP: &str = "Session operations:\n  vida session triage\n  vida session triage --task <task-id>\n  vida session triage --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const QUALITY_AFTER_HELP: &str = "Quality operations:\n  vida quality gate --prepush\n  vida quality gate --prepush --advise\n  vida quality gate --prepush --json --advise\n\nOptions:\n  --prepush                        Evaluate the pre-push quality gate advisor\n  --advise                         Include remediation guidance\n  --coverage-file <path>           Read LCOV coverage evidence from this file\n  --crap-file <path>               Read cargo-crap JSON evidence from this file\n  --crap-baseline-file <path>      Optional previous cargo-crap JSON baseline used to detect CRAP>1000 growth\n  --task-exception-note <note>     TaskFlow exception note allowing touched high-CRAP functions for this push\n  --coverage-threshold <percent>   Coverage threshold used for covered-line deficit math\n  --project-root <path>            Repository root used for git dirty/changed file evidence\n  --json                           Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
+const REQUIREMENT_AFTER_HELP: &str = "Requirement operations:\n  vida requirement analyze --input \"Need editable meeting event fields\" --json\n  vida requirement analyze --task-id task-1 --input \"Build feature\" --artifact-path artifacts/requirement-analysis.json\n\nAnalyze contract:\n  Inputs: --input <text>, --source-file <path>, --task-id <id>, --request-id <id>, --depth-mode quick|standard|critical, --artifact-path <path>, --codebase-inspected.\n  JSON output includes: task_id, request_id, source_inputs, requirement_classification, depth_mode, requirement_atoms, selected_methods, selected_roles, role_findings_summary, detected_conflicts, open_questions, working_assumptions, solution_options, recommended_option, readiness_verdict, downstream_routes, acceptance_criteria, test_matrix, output_contract, codebase_impact, developer_handoff.\n  Default output is compact TOON/plain with readiness, artifact path, required-field summary, output modes, routes, and developer handoff. Use --json for the full machine-readable artifact.";
 const PACK_AFTER_HELP: &str = "Pack operations:\n  vida pack list\n  vida pack list --json\n  vida pack show spec-four-pack\n  vida pack show spec-four-pack --json\n  vida pack validate\n  vida pack validate --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive --reinit\n  vida state reset --archive --reinit --json\n  vida state reset --archive --reinit --state-dir <path> --json\n\nOptions:\n  --archive             Rename the current state root to a timestamped sibling archive before reset\n  --reinit              Recreate the authoritative state spine after archive\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output\n\nOutput:\n  Default output is compact plain text for operators.\n  Use --json for machine-readable automation.";
 const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
@@ -210,6 +211,11 @@ pub(crate) enum Command {
     )]
     Quality(QualityArgs),
     #[command(
+        about = "analyze requirements into a structured runtime artifact",
+        after_help = REQUIREMENT_AFTER_HELP
+    )]
+    Requirement(RequirementArgs),
+    #[command(
         about = "inspect and validate active project role packs",
         after_help = PACK_AFTER_HELP
     )]
@@ -368,6 +374,96 @@ pub(crate) struct QualityGateArgs {
     #[arg(
         long = "json",
         help = "Emit machine-readable JSON output instead of default compact TOON"
+    )]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
+pub(crate) struct RequirementArgs {
+    #[command(subcommand)]
+    pub(crate) command: RequirementCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum RequirementCommand {
+    #[command(
+        about = "derive a structured requirement-analysis artifact and CLI-ready handoff",
+        after_help = REQUIREMENT_AFTER_HELP
+    )]
+    Analyze(RequirementAnalyzeArgs),
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum RequirementDepthModeArg {
+    Quick,
+    #[default]
+    Standard,
+    Critical,
+}
+
+impl RequirementDepthModeArg {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Quick => "quick",
+            Self::Standard => "standard",
+            Self::Critical => "critical",
+        }
+    }
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct RequirementAnalyzeArgs {
+    #[arg(
+        long = "task-id",
+        help = "TaskFlow task id this requirement analysis belongs to"
+    )]
+    pub(crate) task_id: Option<String>,
+
+    #[arg(
+        long = "request-id",
+        help = "External request id when no TaskFlow task exists yet"
+    )]
+    pub(crate) request_id: Option<String>,
+
+    #[arg(
+        long = "input",
+        visible_alias = "request",
+        value_name = "TEXT",
+        help = "Requirement text to analyze"
+    )]
+    pub(crate) input: Vec<String>,
+
+    #[arg(
+        long = "source-file",
+        help = "Read additional requirement text from a source file"
+    )]
+    pub(crate) source_file: Option<PathBuf>,
+
+    #[arg(
+        long = "depth-mode",
+        value_enum,
+        default_value_t = RequirementDepthModeArg::Standard,
+        help = "Analysis depth mode"
+    )]
+    pub(crate) depth_mode: RequirementDepthModeArg,
+
+    #[arg(
+        long = "artifact-path",
+        help = "Intended path for the persisted analysis artifact"
+    )]
+    pub(crate) artifact_path: Option<PathBuf>,
+
+    #[arg(
+        long = "codebase-inspected",
+        visible_alias = "inspect-codebase",
+        help = "Mark that codebase impact was inspected for this analysis"
+    )]
+    pub(crate) codebase_inspected: bool,
+
+    #[arg(
+        long = "json",
+        help = "Emit the full machine-readable requirement analysis artifact"
     )]
     pub(crate) json: bool,
 }

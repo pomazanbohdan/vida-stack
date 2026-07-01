@@ -160,3 +160,135 @@ fn json_contract_harness_rejects_missing_operator_fields() {
         Some("missing next_actions")
     );
 }
+
+#[test]
+fn requirement_analysis_cli_contract() {
+    let json_output = vida()
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "ra-artifact-schema-cli-design-20260630",
+            "--input",
+            "operator request",
+            "--json",
+        ])
+        .output()
+        .expect("requirement analyze json should run");
+    assert!(
+        json_output.status.success(),
+        "requirement analyze json should succeed: {}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let value = parse_json_output(&["requirement", "analyze", "--json"], &json_output);
+    support::assert_release1_operator_shape("vida requirement analyze", &value);
+    assert_eq!(value["status"].as_str(), Some("pass"));
+    let artifact = &value["artifact"];
+    for field in [
+        "source_inputs",
+        "requirement_classification",
+        "depth_mode",
+        "requirement_atoms",
+        "selected_methods",
+        "selected_roles",
+        "role_findings_summary",
+        "detected_conflicts",
+        "open_questions",
+        "working_assumptions",
+        "solution_options",
+        "recommended_option",
+        "readiness_verdict",
+        "downstream_routes",
+        "acceptance_criteria",
+        "test_matrix",
+        "output_contract",
+        "codebase_impact",
+        "developer_handoff",
+    ] {
+        assert!(artifact.get(field).is_some(), "missing field {field}");
+    }
+    assert_eq!(
+        artifact["task_id"].as_str(),
+        Some("ra-artifact-schema-cli-design-20260630")
+    );
+    assert!(artifact["request_id"].is_null());
+    assert!(artifact["open_questions"]["critical"].is_array());
+    assert!(artifact["open_questions"]["important"].is_array());
+    assert!(artifact["open_questions"]["optional"].is_array());
+    assert_eq!(
+        artifact["output_contract"]["default"]["mode"],
+        "compact_toon_plain"
+    );
+    assert_eq!(
+        artifact["output_contract"]["json"]["mode"],
+        "machine_readable"
+    );
+
+    let missing_identity = vida()
+        .args(["requirement", "analyze", "--json"])
+        .output()
+        .expect("requirement analyze missing identity should run");
+    assert!(
+        !missing_identity.status.success(),
+        "missing identity should fail closed"
+    );
+    let missing_identity_value =
+        parse_json_output(&["requirement", "analyze", "--json"], &missing_identity);
+    support::assert_release1_operator_shape("vida requirement analyze", &missing_identity_value);
+    assert_eq!(missing_identity_value["status"].as_str(), Some("blocked"));
+    assert_eq!(
+        missing_identity_value["blocker_codes"],
+        json!(["missing_requirement_identity"])
+    );
+
+    let unreadable_source = vida()
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "task-1",
+            "--source-file",
+            "missing-requirement-source.md",
+            "--json",
+        ])
+        .output()
+        .expect("requirement analyze unreadable source should run");
+    assert!(
+        !unreadable_source.status.success(),
+        "unreadable source should fail closed"
+    );
+    let unreadable_source_value = parse_json_output(
+        &["requirement", "analyze", "--source-file", "--json"],
+        &unreadable_source,
+    );
+    support::assert_release1_operator_shape("vida requirement analyze", &unreadable_source_value);
+    assert_eq!(unreadable_source_value["status"].as_str(), Some("blocked"));
+    assert_eq!(
+        unreadable_source_value["blocker_codes"],
+        json!(["requirement_source_unreadable"])
+    );
+
+    let default_output = vida()
+        .args([
+            "requirement",
+            "analyze",
+            "--request-id",
+            "request-1",
+            "--input",
+            "operator request",
+        ])
+        .output()
+        .expect("requirement analyze default should run");
+    assert!(
+        default_output.status.success(),
+        "requirement analyze default should succeed: {}",
+        String::from_utf8_lossy(&default_output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&default_output.stdout);
+    assert!(stdout.starts_with("vida requirement analyze\n"));
+    assert!(stdout.contains("required_fields[22]{name,meaning}:"));
+    assert!(stdout.contains("readiness_statuses[4]{status,meaning}:"));
+    assert!(stdout.contains("ready,Downstream implementation can start from this artifact."));
+    assert!(stdout.contains("output_modes[2]{mode,contract}:"));
+    assert!(stdout.contains("allowed_next_node: developer"));
+}
