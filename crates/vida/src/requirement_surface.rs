@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
@@ -140,6 +141,11 @@ fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, S
             path.display()
         ));
     }
+    let mut file = open_requirement_source_file_for_read(&source_path)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("{}: {error}", path.display()))?;
     if !metadata.is_file() {
         return Err(format!(
             "{}: source file must be a regular file",
@@ -153,8 +159,9 @@ fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, S
         ));
     }
 
-    let content =
-        fs::read_to_string(&source_path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
     let digest = blake3::hash(content.as_bytes());
     let display_path = relative_path.display().to_string();
     let public_analysis_text = redact_requirement_source_content(content.trim());
@@ -168,6 +175,31 @@ fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, S
         public_analysis_text,
     })
 }
+
+fn open_requirement_source_file_for_read(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    apply_requirement_source_no_follow_open_options(&mut options);
+    options.open(path)
+}
+
+#[cfg(unix)]
+fn apply_requirement_source_no_follow_open_options(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    options.custom_flags(libc::O_NOFOLLOW);
+}
+
+#[cfg(windows)]
+fn apply_requirement_source_no_follow_open_options(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn apply_requirement_source_no_follow_open_options(_options: &mut OpenOptions) {}
 
 fn requirement_source_project_root() -> Result<PathBuf, String> {
     crate::resolve_runtime_project_root()
@@ -183,17 +215,30 @@ fn redact_requirement_source_content(content: &str) -> String {
 }
 
 fn redact_requirement_source_line(line: &str) -> String {
-    if line.split_whitespace().any(requirement_source_secret_token) {
+    if requirement_source_secret_assignment_line(line)
+        || line.split_whitespace().any(requirement_source_secret_token)
+    {
         "[redacted source-file secret line]".to_string()
     } else {
         line.to_string()
     }
 }
 
+fn requirement_source_secret_assignment_line(line: &str) -> bool {
+    let Some(delimiter_index) = line.find(['=', ':']) else {
+        return false;
+    };
+    requirement_source_secret_key(&line[..delimiter_index])
+}
+
 fn requirement_source_secret_token(token: &str) -> bool {
     let Some((key, _)) = token.split_once('=') else {
         return false;
     };
+    requirement_source_secret_key(key)
+}
+
+fn requirement_source_secret_key(key: &str) -> bool {
     let key = key
         .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
         .to_ascii_lowercase();

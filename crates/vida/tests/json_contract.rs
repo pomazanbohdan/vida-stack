@@ -196,6 +196,8 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         project_root.join("requirements.md"),
         [
             "SECRET_TOKEN=[redacted-test-value]",
+            "SECRET_TOKEN = [redacted-test-value]",
+            "api_key: [redacted-test-value]",
             "Build the feature.",
             "Keep operator output compact.",
             "Add JSON proof.",
@@ -247,6 +249,10 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         !source_text.contains("SECRET_TOKEN"),
         "raw source-file content must not be serialized: {source_text}"
     );
+    assert!(
+        !source_text.contains("api_key") && !source_text.contains("[redacted-test-value]"),
+        "spaced and YAML-style source-file secrets must be redacted: {source_text}"
+    );
     let source_metadata = artifact["source_inputs"][0]["source_metadata"]
         .as_str()
         .expect("source metadata should render");
@@ -258,6 +264,11 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
     assert!(
         !public_analysis_text.contains("SECRET_TOKEN"),
         "redacted analysis must not disclose source-file secrets: {public_analysis_text}"
+    );
+    assert!(
+        !public_analysis_text.contains("api_key")
+            && !public_analysis_text.contains("[redacted-test-value]"),
+        "redacted analysis must hide spaced and YAML-style source-file secrets: {public_analysis_text}"
     );
     assert!(
         public_analysis_text.contains("Preserve requirement thirteen"),
@@ -277,7 +288,9 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
             .iter()
             .any(|atom| atom["text"]
                 .as_str()
-                .is_some_and(|text| text.contains("SECRET_TOKEN"))),
+                .is_some_and(|text| text.contains("SECRET_TOKEN")
+                    || text.contains("api_key")
+                    || text.contains("[redacted-test-value]"))),
         "source-file secrets must not leak through requirement atoms"
     );
 
