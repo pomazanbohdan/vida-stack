@@ -97,6 +97,7 @@ Read this map when:
 3. project-doc work must stay inside the active `vida-stack` docs surface while using framework-owned documentation law,
 4. a bounded feature/change design document or linked ADR is being authored, updated, or reviewed.
 5. project-local skill or runtime-development environment documentation is being created or updated.
+6. the task promotes a protocol-only or runtime-backed agent skill learning document into the project process lane.
 
 ## Operational Rule
 
@@ -124,6 +125,7 @@ Read this map when:
 20. use `vida docflow report-check --path <file>` when the bounded proof target is the required runtime reporting prefix shape (`Thinking mode`, `Requests|Tasks`, `Agents`, `Reasoning summary`) rather than markdown footer law.
 21. when a documentation change creates or reroutes a canonical project-visible document surface, update the owning map/index and, when bootstrap-visible topology changed, update `docs/project-root-map.md` and `AGENTS.sidecar.md` in the same bounded change.
 22. when a session creates or updates project-local skills, validate the skill folder and update the owning process map or runtime-development environment runbook in the same bounded batch.
+23. when a session creates or updates a skill-learning runtime protocol, register it in `docs/process/index.md`, `docs/project-root-map.md`, and `AGENTS.sidecar.md`, and preserve links to the original research or implementation references that motivated the protocol.
 
 ## Boundary Rule
 
