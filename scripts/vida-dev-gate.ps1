@@ -371,18 +371,25 @@ function Resolve-CommandPath {
 }
 
 function Resolve-PowerShellHostPath {
-    $hostPath = Resolve-CommandPath "pwsh" @(
+    if (Get-Command "Resolve-VidaPowerShellPath" -ErrorAction SilentlyContinue) {
+        return Resolve-VidaPowerShellPath -Required
+    }
+    $resolved = Resolve-CommandPath "pwsh" @(
         "C:\Program Files\PowerShell\7\pwsh.exe",
         "$env:ProgramFiles\PowerShell\7\pwsh.exe"
     )
-    if ($hostPath -ne "pwsh") {
-        return $hostPath
+    if ($resolved -eq "pwsh") {
+        throw "[vida-dev-gate] PowerShell Core pwsh.exe was not found. Install Microsoft.PowerShell with winget or set VIDA_PWSH to pwsh.exe."
     }
+    return $resolved
+}
 
-    return Resolve-CommandPath "powershell" @(
-        "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe",
-        "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-    )
+function Assert-PowerShellCoreHost {
+    param([string]$ResolvedPwshPath)
+
+    if ((Test-IsWindowsHost) -and $PSVersionTable.PSEdition -ne "Core") {
+        throw "[vida-dev-gate] PowerShell Core is required. Rerun with `"$ResolvedPwshPath`" -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" ..."
+    }
 }
 
 function ConvertTo-WindowsProcessArgument {
@@ -464,6 +471,7 @@ function New-CargoTimingContract {
 
 $GitPath = Resolve-CommandPath "git" @("C:\Program Files\Git\cmd\git.exe")
 $PwshPath = Resolve-PowerShellHostPath
+Assert-PowerShellCoreHost -ResolvedPwshPath $PwshPath
 $BashPath = Resolve-CommandPath "bash" @(
     "C:\Program Files\Git\bin\bash.exe",
     "$env:ProgramFiles\Git\bin\bash.exe"
