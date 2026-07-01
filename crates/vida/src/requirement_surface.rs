@@ -237,6 +237,7 @@ fn requirement_source_secret_assignment_opens_multiline(line: &str) -> bool {
     }
     let value = line[delimiter_index + 1..].trim_start();
     (value.contains("-----BEGIN") && !value.contains("-----END"))
+        || matches!(value.chars().next(), Some('|' | '>'))
         || value
             .strip_prefix('"')
             .is_some_and(|rest| !rest.contains('"'))

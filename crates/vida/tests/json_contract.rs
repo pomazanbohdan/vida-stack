@@ -215,6 +215,9 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
             "PRIVATE_KEY=\"-----BEGIN TEST KEY-----",
             "MIISECRETBODYSHOULDNOTLEAK",
             "-----END TEST KEY-----\"",
+            "api_token: |",
+            "  YAMLBLOCKSECRETBODYSHOULDNOTLEAK",
+            "",
             "Keep operator output compact.",
             "Add JSON proof.",
             "Validate blocked source paths.",
@@ -280,6 +283,7 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         bare_pem_begin_marker.as_str(),
         "BAREPEMBODYSHOULDNOTLEAK",
         bare_pem_end_marker.as_str(),
+        "YAMLBLOCKSECRETBODYSHOULDNOTLEAK",
     ] {
         assert!(
             !source_text.contains(marker),
@@ -312,6 +316,7 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         bare_pem_begin_marker.as_str(),
         "BAREPEMBODYSHOULDNOTLEAK",
         bare_pem_end_marker.as_str(),
+        "YAMLBLOCKSECRETBODYSHOULDNOTLEAK",
     ] {
         assert!(
             !public_analysis_text.contains(marker),
@@ -375,6 +380,7 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
                     || text.contains("PRIVATE_KEY")
                     || text.contains("MIISECRETBODYSHOULDNOTLEAK")
                     || text.contains("BAREPEMBODYSHOULDNOTLEAK")
+                    || text.contains("YAMLBLOCKSECRETBODYSHOULDNOTLEAK")
                     || text.contains("[redacted source-file secret line]")
                     || text.contains("[redacted-test-value]"))),
         "source-file secrets and redaction placeholders must not leak through requirement atoms"
