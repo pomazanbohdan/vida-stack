@@ -9119,7 +9119,7 @@ fn task_browser_proof_progress_close_golden_workflow_satisfies_schema() {
 }
 
 #[test]
-fn task_close_requires_structured_proof_evidence_for_configured_targets() {
+fn task_close_missing_proof_emits_actionable_envelope() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
     let parent_id = unique_test_id("close-proof-parent");
@@ -9179,9 +9179,47 @@ fn task_close_requires_structured_proof_evidence_for_configured_targets() {
         blocked_close["missing_targets"],
         serde_json::json!([proof_target])
     );
+    let expected_attach_command = format!(
+        "vida task proof attach-evidence {task_id} --proof-target \"{}\" --result pass",
+        proof_target.to_ascii_lowercase()
+    );
+    assert!(
+        blocked_close["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .is_some_and(|action| action.contains(&expected_attach_command))),
+        "blocked close next_actions should include attach-evidence remediation: {blocked_close}"
+    );
     assert_eq!(
         blocked_close["proof_status"]["evidence_model"]["legacy_close_reason_text"],
         "migration_context_not_authority"
+    );
+    assert!(blocked_close["artifact_refs"].is_object());
+    assert!(blocked_close["operator_contracts"].is_object());
+    let (default_stdout, default_stderr) = run_and_assert_failure(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Proof: Close/progress proof gate integration tests passed",
+        ],
+        &state_dir,
+    );
+    let default_output = format!("{default_stdout}{default_stderr}");
+    assert!(
+        default_output.starts_with("vida task close\n"),
+        "default close failure should start with surface header: {default_output}"
+    );
+    assert!(default_output.contains("status: blocked"));
+    assert!(default_output.contains("missing_structured_proof_evidence"));
+    assert!(default_output.contains(proof_target));
+    assert!(
+        default_output.contains(&expected_attach_command),
+        "default close failure should include attach-evidence remediation: {default_output}"
     );
     let still_open = run_command_json(&["task", "show", &task_id, "--json"], &state_dir);
     assert_ne!(still_open["task"]["status"], "closed");

@@ -1493,13 +1493,29 @@ fn task_close_structured_proof_gate_payload(
         "missing_structured_proof_evidence"
     };
     let quoted_task_id = crate::shell_quote(&task.id);
-    let next_actions = vec![format!(
-        "Attach structured proof evidence for missing target(s), then rerun `{}`.",
-        operator_output::command_text::human_command(&format!(
-            "vida task proof status {} --json",
-            quoted_task_id
-        ))
-    )];
+    let missing_targets = proof_status["missing_targets"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let next_actions = missing_targets
+        .iter()
+        .map(|target| {
+            let quoted_target = target.replace('"', "\\\"");
+            format!(
+                "Attach structured proof evidence with `{}`.",
+                operator_output::command_text::human_command(&format!(
+                    "vida task proof attach-evidence {} --proof-target \"{}\" --result pass --artifact-ref <artifact-ref> --evidence \"<evidence summary>\"",
+                    quoted_task_id, quoted_target
+                ))
+            )
+        })
+        .collect::<Vec<_>>();
     Some(
         crate::release1_operator_output::Release1OperatorOutputBuilder::new("vida task close")
             .blocker_codes(vec![blocker_code.to_string()])
@@ -1516,7 +1532,7 @@ fn task_close_structured_proof_gate_payload(
                 "feedback_blocked": false,
                 "task_id": task.id,
                 "reason": "task has configured proof targets without matching structured task_proof_evidence pass receipt",
-                "missing_targets": proof_status["missing_targets"].clone(),
+                "missing_targets": missing_targets,
                 "proof_status": proof_status,
                 "task": task,
             }))
