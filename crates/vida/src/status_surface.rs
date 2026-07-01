@@ -449,67 +449,82 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     }
 
     if as_json && !selected_output && summary_only {
-        if let Some(cached) = read_fresh_admissible_status_json_projection(&state_dir, summary_only)
-        {
-            println!(
-                "{}",
-                render_cached_status_projection_for_operator(summary_only, &cached)
-            );
-            return ExitCode::SUCCESS;
-        }
-        if summary_only {
-            if let Some(cached) =
-                read_state_fresh_admissible_status_json_projection(&state_dir, summary_only)
-            {
+        let mut fresh_cache_refresh_failed = false;
+        match read_fresh_runtime_validated_status_json_projection(&state_dir, summary_only).await {
+            CachedStatusProjectionRefresh::Hit(cached) => {
                 println!(
                     "{}",
                     render_cached_status_projection_for_operator(summary_only, &cached)
                 );
                 return ExitCode::SUCCESS;
             }
+            CachedStatusProjectionRefresh::RefreshFailed => fresh_cache_refresh_failed = true,
+            CachedStatusProjectionRefresh::Miss => {}
+        }
+        if summary_only && !fresh_cache_refresh_failed {
+            match read_state_fresh_runtime_validated_status_json_projection(
+                &state_dir,
+                summary_only,
+            )
+            .await
+            {
+                CachedStatusProjectionRefresh::Hit(cached) => {
+                    println!(
+                        "{}",
+                        render_cached_status_projection_for_operator(summary_only, &cached)
+                    );
+                    return ExitCode::SUCCESS;
+                }
+                CachedStatusProjectionRefresh::RefreshFailed => fresh_cache_refresh_failed = true,
+                CachedStatusProjectionRefresh::Miss => {}
+            }
         }
         let mut recent_candidates = Vec::new();
-        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
-            &state_dir,
-            status_json_projection_name(summary_only),
-            STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
-        )
-        .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
-        {
-            recent_candidates.push(cached);
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
+        if !fresh_cache_refresh_failed {
+            if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
                 &state_dir,
                 status_json_projection_name(summary_only),
                 STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
             )
             .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
-        {
-            recent_candidates.push(cached);
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                status_json_projection_name(summary_only),
-                STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
-            )
-            .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
-        {
-            let rendered = if let Some(overlay) =
-                crate::operator_projection_cache::read_runtime_continuation_binding_overlay(
+            {
+                recent_candidates.push(cached);
+            }
+            if let Some(cached) =
+                crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
                     &state_dir,
-                ) {
-                crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
-                    &state_dir,
-                    &cached,
-                    &overlay,
+                    status_json_projection_name(summary_only),
+                    STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
                 )
-                .unwrap_or_else(|| cached.clone())
-            } else {
-                cached.clone()
-            };
-            recent_candidates.push(rendered);
+                .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
+            {
+                recent_candidates.push(cached);
+            }
+            if let Some(cached) =
+                crate::operator_projection_cache::read_state_stale_recent_json_projection(
+                    &state_dir,
+                    status_json_projection_name(summary_only),
+                    STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE,
+                )
+                .filter(|cached| {
+                    cached_status_projection_admissible(&state_dir, summary_only, cached)
+                })
+            {
+                let rendered = if let Some(overlay) =
+                    crate::operator_projection_cache::read_runtime_continuation_binding_overlay(
+                        &state_dir,
+                    ) {
+                    crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
+                        &state_dir,
+                        &cached,
+                        &overlay,
+                    )
+                    .unwrap_or_else(|| cached.clone())
+                } else {
+                    cached.clone()
+                };
+                recent_candidates.push(rendered);
+            }
         }
         if !recent_candidates.is_empty() {
             if let Ok(store) = StateStore::open_existing_read_only_with_strict_timeout(
@@ -1664,22 +1679,75 @@ async fn build_operator_session_projection_for_status(
     }
 }
 
+enum CachedStatusProjectionRefresh {
+    Hit(String),
+    Miss,
+    RefreshFailed,
+}
+
+async fn read_fresh_runtime_validated_status_json_projection(
+    state_dir: &std::path::Path,
+    summary_only: bool,
+) -> CachedStatusProjectionRefresh {
+    let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+        state_dir,
+        status_json_projection_name(summary_only),
+    )
+    .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached)) else {
+        return CachedStatusProjectionRefresh::Miss;
+    };
+    match runtime_validate_and_refresh_cached_status_projection(state_dir, &cached, summary_only)
+        .await
+    {
+        Some(cached) => CachedStatusProjectionRefresh::Hit(cached),
+        None => CachedStatusProjectionRefresh::RefreshFailed,
+    }
+}
+
+async fn read_state_fresh_runtime_validated_status_json_projection(
+    state_dir: &std::path::Path,
+    summary_only: bool,
+) -> CachedStatusProjectionRefresh {
+    let Some(cached) =
+        crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
+            state_dir,
+            status_json_projection_name(summary_only),
+        )
+        .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached))
+    else {
+        return CachedStatusProjectionRefresh::Miss;
+    };
+    match runtime_validate_and_refresh_cached_status_projection(state_dir, &cached, summary_only)
+        .await
+    {
+        Some(cached) => CachedStatusProjectionRefresh::Hit(cached),
+        None => CachedStatusProjectionRefresh::RefreshFailed,
+    }
+}
+
+async fn runtime_validate_and_refresh_cached_status_projection(
+    state_dir: &std::path::Path,
+    cached: &str,
+    summary_only: bool,
+) -> Option<String> {
+    let store = StateStore::open_existing_read_only_with_strict_timeout(
+        state_dir.to_path_buf(),
+        std::time::Duration::from_millis(250),
+    )
+    .await
+    .ok()?;
+    if !cached_status_projection_current_runtime_admissible_with_store(&store, cached).await {
+        return None;
+    }
+    refresh_cached_status_projection_runtime_fields_with_store(&store, cached, summary_only).await
+}
+
+#[cfg(test)]
 fn read_fresh_admissible_status_json_projection(
     state_dir: &std::path::Path,
     summary_only: bool,
 ) -> Option<String> {
     crate::operator_projection_cache::read_fresh_json_projection(
-        state_dir,
-        status_json_projection_name(summary_only),
-    )
-    .filter(|cached| cached_status_projection_admissible(state_dir, summary_only, cached))
-}
-
-fn read_state_fresh_admissible_status_json_projection(
-    state_dir: &std::path::Path,
-    summary_only: bool,
-) -> Option<String> {
-    crate::operator_projection_cache::read_state_fresh_json_projection_for_read_only_operator(
         state_dir,
         status_json_projection_name(summary_only),
     )
@@ -1700,6 +1768,12 @@ fn render_cached_status_projection_for_operator(summary_only: bool, cached: &str
 }
 
 fn compact_cached_status_summary_projection(payload: &mut serde_json::Value) {
+    if let Some(object) = payload.as_object_mut() {
+        for key in ["projection_cache"] {
+            object.remove(key);
+        }
+    }
+
     let Some(host_agents) = payload
         .get_mut("host_agents")
         .and_then(serde_json::Value::as_object_mut)
@@ -1954,6 +2028,112 @@ fn refresh_cached_closed_task_active_run_projection_mismatch(
     Some(())
 }
 
+fn refresh_cached_run_graph_operator_contracts(
+    payload: &mut serde_json::Value,
+    latest_run_graph_missing_dispatch_receipt_operator_evidence: bool,
+    latest_run_graph_snapshot_inconsistent: bool,
+    latest_run_graph_dispatch_receipt_signal_ambiguous: bool,
+    latest_run_graph_dispatch_receipt_summary_inconsistent: bool,
+    latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
+) -> Option<()> {
+    let signals = [
+        (
+            "missing_run_graph_dispatch_receipt_operator_evidence",
+            crate::status_surface_signals::missing_run_graph_dispatch_receipt_operator_evidence_next_action(),
+            latest_run_graph_missing_dispatch_receipt_operator_evidence,
+        ),
+        (
+            "run_graph_latest_snapshot_inconsistent",
+            crate::status_surface_signals::run_graph_latest_snapshot_inconsistent_next_action(),
+            latest_run_graph_snapshot_inconsistent,
+        ),
+        (
+            "run_graph_latest_dispatch_receipt_signal_ambiguous",
+            crate::status_surface_signals::run_graph_latest_dispatch_receipt_signal_ambiguous_next_action(),
+            latest_run_graph_dispatch_receipt_signal_ambiguous,
+        ),
+        (
+            "run_graph_latest_dispatch_receipt_summary_inconsistent",
+            crate::status_surface_signals::run_graph_latest_dispatch_receipt_summary_inconsistent_next_action(),
+            latest_run_graph_dispatch_receipt_summary_inconsistent,
+        ),
+        (
+            "run_graph_latest_dispatch_receipt_checkpoint_leakage",
+            crate::status_surface_signals::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action(),
+            latest_run_graph_dispatch_receipt_checkpoint_leakage,
+        ),
+    ];
+
+    for (blocker_code, next_action, active) in signals {
+        for path in [
+            &["blocker_codes"][..],
+            &["shared_fields", "blocker_codes"][..],
+            &["operator_contracts", "blocker_codes"][..],
+        ] {
+            let pointer = format!("/{}", path.join("/"));
+            let Some(current) = payload.pointer_mut(&pointer) else {
+                continue;
+            };
+            if active {
+                push_unique_string_to_json_array(current, blocker_code);
+            } else {
+                remove_string_from_json_array(current, blocker_code);
+            }
+        }
+
+        for path in [
+            &["next_actions"][..],
+            &["shared_fields", "next_actions"][..],
+            &["operator_contracts", "next_actions"][..],
+        ] {
+            let pointer = format!("/{}", path.join("/"));
+            let Some(current) = payload.pointer_mut(&pointer) else {
+                continue;
+            };
+            if active {
+                push_unique_string_to_json_array(current, &next_action);
+            } else {
+                remove_string_from_json_array(current, &next_action);
+            }
+        }
+    }
+
+    let object = payload.as_object_mut()?;
+    refresh_json_object_status_from_blockers(object);
+    if let Some(shared_fields) = object
+        .get_mut("shared_fields")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        refresh_json_object_status_from_blockers(shared_fields);
+    }
+    if let Some(operator_contracts) = object
+        .get_mut("operator_contracts")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        refresh_json_object_status_from_blockers(operator_contracts);
+    }
+
+    Some(())
+}
+
+fn status_run_id_for_receipt_consistency<'a>(
+    latest_run_graph_status_run_id: Option<&'a str>,
+    latest_run_graph_dispatch_receipt_run_id: Option<&str>,
+    latest_run_graph_task_orthogonal_to_taskflow: bool,
+    exception_takeover_matches_active_taskflow_work: bool,
+) -> Option<&'a str> {
+    if latest_run_graph_task_orthogonal_to_taskflow
+        && exception_takeover_matches_active_taskflow_work
+        && latest_run_graph_status_run_id.is_some()
+        && latest_run_graph_dispatch_receipt_run_id.is_some()
+        && latest_run_graph_status_run_id != latest_run_graph_dispatch_receipt_run_id
+    {
+        None
+    } else {
+        latest_run_graph_status_run_id
+    }
+}
+
 fn refresh_cached_protocol_binding_projection(
     payload: &mut serde_json::Value,
     protocol_binding: &crate::state_store::ProtocolBindingSummary,
@@ -2105,12 +2285,13 @@ async fn refresh_cached_status_projection_runtime_fields(
     )
     .await
     .ok()?;
-    refresh_cached_status_projection_runtime_fields_with_store(&store, cached).await
+    refresh_cached_status_projection_runtime_fields_with_store(&store, cached, false).await
 }
 
 async fn refresh_cached_status_projection_runtime_fields_with_store(
     store: &StateStore,
     cached: &str,
+    summary_only: bool,
 ) -> Option<String> {
     let mut payload = serde_json::from_str::<serde_json::Value>(cached).ok()?;
     let protocol_binding = store.protocol_binding_summary().await.ok()?;
@@ -2166,8 +2347,14 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         },
         None => None,
     };
-    let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
-        crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root()).ok()?
+    let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none()
+        && (latest_run_graph_status.is_none() || dispatch_receipt_checkpoint_leakage)
+    {
+        store
+            .latest_active_exception_takeover_dispatch_receipt()
+            .await
+            .ok()?
+            .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt)
     } else {
         latest_run_graph_dispatch_receipt
     };
@@ -2175,54 +2362,12 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         Some(receipt)
             if latest_run_graph_recovery
                 .as_ref()
-                .is_none_or(|recovery| recovery.run_id != receipt.run_id)
-                && latest_run_graph_status
-                    .as_ref()
-                    .is_some_and(|status| status.run_id == receipt.run_id) =>
+                .is_none_or(|recovery| recovery.run_id != receipt.run_id) =>
         {
             store.run_graph_recovery_summary(&receipt.run_id).await.ok()
         }
         _ => latest_run_graph_recovery,
     };
-    let latest_run_graph_effective_run_id = latest_run_graph_status
-        .as_ref()
-        .map(|status| status.run_id.as_str())
-        .or_else(|| {
-            latest_run_graph_dispatch_receipt
-                .as_ref()
-                .map(|receipt| receipt.run_id.as_str())
-        });
-    let latest_run_graph_snapshot_inconsistent = !dispatch_receipt_checkpoint_leakage
-        && !state_store::latest_run_graph_evidence_snapshot_is_consistent(
-            latest_run_graph_effective_run_id,
-            latest_run_graph_recovery
-                .as_ref()
-                .map(|summary| summary.run_id.as_str()),
-            latest_run_graph_checkpoint
-                .as_ref()
-                .map(|summary| summary.run_id.as_str()),
-            latest_run_graph_gate
-                .as_ref()
-                .map(|summary| summary.run_id.as_str()),
-            latest_run_graph_dispatch_receipt
-                .as_ref()
-                .map(|receipt| receipt.run_id.as_str()),
-        );
-    let latest_run_graph_dispatch_receipt_signal_ambiguous = latest_run_graph_dispatch_receipt
-        .as_ref()
-        .is_some_and(|receipt| {
-            state_store::latest_run_graph_dispatch_receipt_signal_is_ambiguous(receipt)
-        });
-    let latest_run_graph_dispatch_receipt_summary_inconsistent =
-        !dispatch_receipt_checkpoint_leakage
-            && state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
-                latest_run_graph_status
-                    .as_ref()
-                    .map(|status| status.run_id.as_str()),
-                latest_run_graph_dispatch_receipt
-                    .as_ref()
-                    .map(|receipt| receipt.run_id.as_str()),
-            );
     let explicit_continuation_binding = match store
         .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
@@ -2259,6 +2404,21 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         }
         None => false,
     };
+    let latest_global_run_graph_terminal_closure_has_truth = match latest_global_run_graph_status
+        .as_ref()
+    {
+        Some(status)
+            if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                status,
+            ) =>
+        {
+            store
+                .run_graph_terminal_closure_has_task_close_truth(status)
+                .await
+                .ok()?
+        }
+        _ => false,
+    };
     let taskflow_active_candidates =
         crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
     let no_active_taskflow_work =
@@ -2281,6 +2441,127 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
                 .map(|receipt| receipt.run_id.as_str()),
             &taskflow_active_candidates,
         );
+    let latest_run_graph_dispatch_receipt = if !exception_takeover_matches_active_taskflow_work
+        && latest_run_graph_task_orthogonal_to_taskflow
+    {
+        let mut candidate_run_ids = Vec::new();
+        for candidate in &taskflow_active_candidates {
+            if let Some(task_id) = candidate
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                candidate_run_ids.push(task_id.to_string());
+            }
+            candidate_run_ids.extend(
+                candidate
+                    .get("parent_task_ids")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+            );
+        }
+        let mut matched_receipt = None;
+        for candidate_run_id in candidate_run_ids {
+            let receipt = store
+                .run_graph_dispatch_receipt(&candidate_run_id)
+                .await
+                .ok()?
+                .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt);
+            if exception_takeover_metadata_matches_taskflow_active_work(
+                store.root(),
+                receipt.as_ref(),
+                &taskflow_active_candidates,
+            ) {
+                matched_receipt = receipt;
+                break;
+            }
+        }
+        matched_receipt.or(latest_run_graph_dispatch_receipt)
+    } else {
+        latest_run_graph_dispatch_receipt
+    };
+    let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
+        crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root()).ok()?
+    } else {
+        latest_run_graph_dispatch_receipt
+    };
+    let latest_run_graph_recovery = match latest_run_graph_dispatch_receipt.as_ref() {
+        Some(receipt)
+            if latest_run_graph_recovery
+                .as_ref()
+                .is_none_or(|recovery| recovery.run_id != receipt.run_id) =>
+        {
+            store.run_graph_recovery_summary(&receipt.run_id).await.ok()
+        }
+        _ => latest_run_graph_recovery,
+    };
+    let exception_takeover_matches_active_taskflow_work =
+        exception_takeover_metadata_matches_taskflow_active_work(
+            store.root(),
+            latest_run_graph_dispatch_receipt.as_ref(),
+            &taskflow_active_candidates,
+        );
+    let latest_run_graph_status_run_id_for_receipt_consistency =
+        status_run_id_for_receipt_consistency(
+            latest_run_graph_status
+                .as_ref()
+                .map(|status| status.run_id.as_str()),
+            latest_run_graph_dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str()),
+            latest_run_graph_task_orthogonal_to_taskflow,
+            exception_takeover_matches_active_taskflow_work,
+        );
+    let latest_run_graph_effective_run_id = latest_run_graph_status_run_id_for_receipt_consistency
+        .or_else(|| {
+            latest_run_graph_dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str())
+        });
+    let latest_run_graph_snapshot_inconsistent = !dispatch_receipt_checkpoint_leakage
+        && !state_store::latest_run_graph_evidence_snapshot_is_consistent(
+            latest_run_graph_effective_run_id,
+            latest_run_graph_recovery
+                .as_ref()
+                .map(|summary| summary.run_id.as_str()),
+            latest_run_graph_checkpoint
+                .as_ref()
+                .map(|summary| summary.run_id.as_str()),
+            latest_run_graph_gate
+                .as_ref()
+                .map(|summary| summary.run_id.as_str()),
+            latest_run_graph_dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str()),
+        );
+    let latest_run_graph_dispatch_receipt_signal_ambiguous = latest_run_graph_dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
+            state_store::latest_run_graph_dispatch_receipt_signal_is_ambiguous(receipt)
+        });
+    let latest_run_graph_dispatch_receipt_matches_status = dispatch_receipt_checkpoint_leakage
+        || state_store::latest_run_graph_dispatch_receipt_matches_status(
+            latest_run_graph_status_run_id_for_receipt_consistency,
+            latest_run_graph_dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str()),
+        );
+    let latest_run_graph_missing_dispatch_receipt_operator_evidence =
+        latest_run_graph_gate.is_some() && !latest_run_graph_dispatch_receipt_matches_status;
+    let latest_run_graph_dispatch_receipt_summary_inconsistent =
+        !dispatch_receipt_checkpoint_leakage
+            && state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
+                latest_run_graph_status_run_id_for_receipt_consistency,
+                latest_run_graph_dispatch_receipt
+                    .as_ref()
+                    .map(|receipt| receipt.run_id.as_str()),
+            );
     let latest_run_graph_dispatch_receipt_signal_ambiguous =
         latest_run_graph_dispatch_receipt_signal_is_actionable(
             latest_run_graph_dispatch_receipt_signal_ambiguous,
@@ -2329,6 +2610,7 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         taskflow_active_candidates,
     );
     let global_closed_run_is_current = latest_global_run_graph_task_closed
+        && !latest_global_run_graph_terminal_closure_has_truth
         && latest_global_run_graph_status
             .as_ref()
             .is_some_and(|global| {
@@ -2447,6 +2729,14 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
     refresh_cached_closed_task_active_run_projection_mismatch(
         &mut payload,
         closed_task_active_run_projection_mismatch,
+    )?;
+    refresh_cached_run_graph_operator_contracts(
+        &mut payload,
+        latest_run_graph_missing_dispatch_receipt_operator_evidence,
+        latest_run_graph_snapshot_inconsistent,
+        latest_run_graph_dispatch_receipt_signal_ambiguous,
+        latest_run_graph_dispatch_receipt_summary_inconsistent,
+        dispatch_receipt_checkpoint_leakage,
     )?;
     let latest_run_graph_surface_truth =
         latest_run_graph_dispatch_receipt
@@ -2576,14 +2866,19 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         "latest_run_graph_dispatch_compact_summary".to_string(),
         serde_json::to_value(&latest_run_graph_dispatch_compact_summary).ok()?,
     );
-    object.insert(
-        "projection_cache".to_string(),
-        serde_json::json!({
-            "status": "state_marker_stale_recent_projection_with_live_runtime_overlay",
-            "projection_name": projection_name,
-            "freshness_contract": "cached_structural_status_with_live_continuation_run_graph_and_write_guard_overlay"
-        }),
-    );
+    if !summary_only {
+        object.insert(
+            "projection_cache".to_string(),
+            serde_json::json!({
+                "status": "state_marker_stale_recent_projection_with_live_runtime_overlay",
+                "projection_name": projection_name,
+                "freshness_contract": "cached_structural_status_with_live_continuation_run_graph_and_write_guard_overlay"
+            }),
+        );
+    }
+    if summary_only {
+        compact_cached_status_summary_projection(&mut payload);
+    }
     serde_json::to_string_pretty(&payload).ok()
 }
 
@@ -2810,6 +3105,7 @@ mod tests {
     use crate::status_surface_host_cli_summary::host_cli_system_entry_summary;
     use crate::status_surface_host_cli_system::selected_host_cli_system_entry;
     use crate::status_surface_signals::{
+        missing_run_graph_dispatch_receipt_operator_evidence_next_action,
         run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action,
         run_graph_latest_dispatch_receipt_signal_ambiguous_next_action,
         run_graph_latest_dispatch_receipt_summary_inconsistent_next_action,
@@ -2832,6 +3128,130 @@ mod tests {
             .expect("current dir")
             .join("target")
             .join(format!("{name}-{}-{nanos}", std::process::id()))
+    }
+
+    async fn create_status_overlay_parent(store: &state_store::StateStore, task_id: &str) {
+        store
+            .create_task(state_store::CreateTaskRequest {
+                task_id,
+                title: "Status overlay parent",
+                display_id: None,
+                description: "status overlay test parent",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: state_store::TaskExecutionSemantics::default(),
+                planner_metadata: state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create status overlay parent");
+    }
+
+    async fn create_status_overlay_task(
+        store: &state_store::StateStore,
+        task_id: &str,
+        title: &str,
+        status: &str,
+        parent_id: Option<&str>,
+    ) {
+        store
+            .create_task(state_store::CreateTaskRequest {
+                task_id,
+                title,
+                display_id: None,
+                description: "status overlay test task",
+                issue_type: "task",
+                status,
+                priority: 1,
+                parent_id,
+                labels: &[],
+                execution_semantics: state_store::TaskExecutionSemantics::default(),
+                planner_metadata: state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create status overlay task");
+    }
+
+    fn ready_exception_takeover_status(run_id: &str, task_id: &str) -> state_store::RunGraphStatus {
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "coach", "implementation");
+        status.task_id = task_id.to_string();
+        status.active_node = "coach".to_string();
+        status.next_node = None;
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "coach_ready".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.checkpoint_kind = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        status
+    }
+
+    fn exception_takeover_receipt(
+        run_id: &str,
+        dispatch_target: &str,
+        receipt_id: &str,
+        recorded_at: &str,
+    ) -> state_store::RunGraphDispatchReceipt {
+        state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: dispatch_target.to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some(format!("supersede-{receipt_id}")),
+            exception_path_receipt_id: Some(receipt_id.to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
+            dispatch_command: Some(format!("vida lane complete {run_id} --json")),
+            dispatch_packet_path: Some(format!("/tmp/{run_id}-packet.json")),
+            dispatch_result_path: Some(format!("/tmp/{run_id}-result.json")),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: recorded_at.to_string(),
+        }
+    }
+
+    fn write_exception_takeover_metadata(
+        root: &std::path::Path,
+        run_id: &str,
+        dispatch_target: &str,
+        receipt_id: &str,
+    ) {
+        let metadata_dir = root.join("lane-exception-path-metadata");
+        fs::create_dir_all(&metadata_dir).expect("exception metadata dir should create");
+        fs::write(
+            metadata_dir.join(format!("{run_id}.json")),
+            serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": dispatch_target,
+                "source_exception_path_receipt_id": receipt_id,
+                "active_bounded_unit": format!("{run_id}:{dispatch_target}:exception-takeover"),
+                "owned_write_scope": ["crates/vida/src/status_surface.rs"]
+            })
+            .to_string(),
+        )
+        .expect("exception metadata should write");
     }
 
     #[test]
@@ -3569,6 +3989,62 @@ mod tests {
     }
 
     #[test]
+    fn status_summary_cached_projection_preserves_summary_run_graph_fields() {
+        let cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "host_agents": {
+                "budget": {"event_count": 1},
+                "agents": {"worker": {"status": "ready"}}
+            },
+            "active_bounded_unit": {"task_id": "summary-task"},
+            "why_this_unit": "summary reason",
+            "sequential_vs_parallel_posture": "sequential",
+            "latest_run_graph_status": {"run_id": "run-summary"},
+            "latest_terminal_task_active_run_graph_status": {"run_id": "run-terminal"},
+            "latest_run_graph_delegation_gate": {"status": "blocked"},
+            "latest_run_graph_recovery": {"run_id": "run-summary"},
+            "latest_run_graph_checkpoint": {"run_id": "run-summary"},
+            "latest_run_graph_gate": {"run_id": "run-summary"},
+            "latest_run_graph_dispatch_receipt": {"run_id": "run-summary"},
+            "latest_run_graph_dispatch_route_truth": {"allowed_next_node": "developer"},
+            "latest_run_graph_downstream_dispatch_preview": {"status": "ready"},
+            "latest_run_graph_dispatch_compact_summary": {"status": "blocked"},
+            "projection_cache": {"status": "state_marker_stale_recent_projection_with_live_runtime_overlay"}
+        })
+        .to_string();
+
+        let rendered = super::render_cached_status_projection_for_operator(true, &cached);
+        let payload: serde_json::Value =
+            serde_json::from_str(&rendered).expect("cached summary should render as json");
+
+        assert_eq!(payload["active_bounded_unit"]["task_id"], "summary-task");
+        for key in [
+            "latest_run_graph_status",
+            "latest_terminal_task_active_run_graph_status",
+            "latest_run_graph_delegation_gate",
+            "latest_run_graph_recovery",
+            "latest_run_graph_checkpoint",
+            "latest_run_graph_gate",
+            "latest_run_graph_dispatch_receipt",
+            "latest_run_graph_dispatch_route_truth",
+            "latest_run_graph_downstream_dispatch_preview",
+            "latest_run_graph_dispatch_compact_summary",
+        ] {
+            assert!(
+                payload.get(key).is_some(),
+                "summary cache render should preserve summary field {key}"
+            );
+        }
+        for key in ["projection_cache"] {
+            assert!(
+                payload.get(key).is_none(),
+                "summary cache render should omit full-only field {key}"
+            );
+        }
+    }
+
+    #[test]
     fn runtime_continuation_overlay_does_not_keep_stale_root_session_write_guard() {
         let nanos = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3825,14 +4301,7 @@ mod tests {
         unsafe {
             std::env::remove_var("VIDA_SESSION_ID");
         }
-        let nanos = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-status-live-overlay-{}-{nanos}",
-            std::process::id()
-        ));
+        let root = unique_status_packet_test_root("vida-status-live-overlay");
         let store = state_store::StateStore::open(root.clone())
             .await
             .expect("open state store");
@@ -3952,6 +4421,233 @@ mod tests {
         assert_eq!(
             payload["projection_cache"]["status"],
             "state_marker_stale_recent_projection_with_live_runtime_overlay"
+        );
+
+        let _ = fs::remove_dir_all(root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_stale_projection_overlay_loads_recovery_for_exception_takeover_fallback_without_status(
+    ) {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "status-cache-foreign-takeover-no-status");
+        }
+        let root = unique_status_packet_test_root("vida-status-takeover-no-status");
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open state store");
+        create_status_overlay_parent(&store, "task-cache-parent").await;
+        create_status_overlay_task(
+            &store,
+            "task-cache-takeover",
+            "Cached takeover task",
+            "in_progress",
+            Some("task-cache-parent"),
+        )
+        .await;
+        let status = ready_exception_takeover_status("task-cache-takeover", "task-cache-takeover");
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("record active takeover status");
+        store
+            .record_run_graph_dispatch_receipt(&exception_takeover_receipt(
+                "task-cache-takeover",
+                "coach",
+                "exception-cache-no-status",
+                "2026-06-12T09:00:00Z",
+            ))
+            .await
+            .expect("record active takeover receipt");
+        write_exception_takeover_metadata(
+            &root,
+            "task-cache-takeover",
+            "coach",
+            "exception-cache-no-status",
+        );
+        drop(store);
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "status-cache-takeover-no-status");
+        }
+        let cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "root_session_write_guard": {},
+            "continuation_binding": {
+                "status": "ambiguous",
+                "active_bounded_unit": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "sequential_vs_parallel_posture": "unknown_until_explicit_taskflow_binding"
+            }
+        });
+        let refreshed =
+            super::refresh_cached_status_projection_runtime_fields(&root, &cached.to_string())
+                .await
+                .expect("stale cached status should refresh fallback receipt recovery");
+        let payload: serde_json::Value =
+            serde_json::from_str(&refreshed).expect("refreshed status should remain json");
+
+        assert!(payload["latest_run_graph_status"].is_null());
+        assert_eq!(
+            payload["latest_run_graph_dispatch_receipt"]["run_id"],
+            "task-cache-takeover"
+        );
+        assert_eq!(
+            payload["latest_run_graph_recovery"]["run_id"],
+            "task-cache-takeover"
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["latest_run_graph_task_stale"],
+            false
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["local_exception_takeover_state"],
+            "active"
+        );
+
+        let _ = fs::remove_dir_all(root);
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_stale_projection_overlay_recomputes_takeover_match_after_task_bound_fallback() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var(
+                "VIDA_SESSION_ID",
+                "status-cache-foreign-task-bound-fallback",
+            );
+        }
+        let root = unique_status_packet_test_root("vida-status-task-bound-fallback");
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open state store");
+        create_status_overlay_parent(&store, "task-cache-parent").await;
+        create_status_overlay_task(
+            &store,
+            "task-cache-takeover",
+            "Cached takeover task",
+            "in_progress",
+            Some("task-cache-parent"),
+        )
+        .await;
+        create_status_overlay_task(
+            &store,
+            "task-cache-orthogonal",
+            "Cached orthogonal task",
+            "open",
+            Some("task-cache-parent"),
+        )
+        .await;
+
+        let active_status =
+            ready_exception_takeover_status("task-cache-takeover", "task-cache-takeover");
+        store
+            .record_run_graph_status(&active_status)
+            .await
+            .expect("record active takeover status");
+        store
+            .record_run_graph_dispatch_receipt(&exception_takeover_receipt(
+                "task-cache-takeover",
+                "coach",
+                "exception-cache-task-bound",
+                "2026-06-12T09:00:00Z",
+            ))
+            .await
+            .expect("record active takeover receipt");
+        write_exception_takeover_metadata(
+            &root,
+            "task-cache-takeover",
+            "coach",
+            "exception-cache-task-bound",
+        );
+
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "status-cache-task-bound-fallback");
+        }
+        let mut orthogonal_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-cache-orthogonal",
+            "implementation",
+            "implementation",
+        );
+        orthogonal_status.task_id = "task-cache-orthogonal".to_string();
+        orthogonal_status.status = "in_progress".to_string();
+        orthogonal_status.lifecycle_stage = "coach_active".to_string();
+        store
+            .record_run_graph_status(&orthogonal_status)
+            .await
+            .expect("record orthogonal current-session status");
+        store
+            .acquire_orchestrator_claim(state_store::AcquireOrchestratorClaimRequest {
+                claim_id: "status-cache-task-bound-fallback-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "status-cache-task-bound-fallback".to_string(),
+                process_id: None,
+                task_id: Some("task-cache-orthogonal".to_string()),
+                run_id: Some("run-cache-orthogonal".to_string()),
+                lane_id: None,
+                claim_kind: "write".to_string(),
+                conflict_domain: Some("status-cache".to_string()),
+                owned_paths: vec!["crates/vida/src/status_surface.rs".to_string()],
+                read_only_paths: Vec::new(),
+                lease_mode: state_store::LeaseMode::Exclusive,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire orthogonal current-session claim");
+        drop(store);
+
+        let cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "root_session_write_guard": {
+                "status": "blocked_by_default",
+                "reason": "latest_run_graph_task_stale",
+                "root_local_write_allowed": false
+            },
+            "continuation_binding": {
+                "status": "ambiguous",
+                "active_bounded_unit": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "sequential_vs_parallel_posture": "unknown_until_explicit_taskflow_binding"
+            }
+        });
+        let refreshed =
+            super::refresh_cached_status_projection_runtime_fields(&root, &cached.to_string())
+                .await
+                .expect("stale cached status should refresh task-bound takeover receipt");
+        let payload: serde_json::Value =
+            serde_json::from_str(&refreshed).expect("refreshed status should remain json");
+
+        assert_eq!(
+            payload["latest_run_graph_status"]["run_id"],
+            "run-cache-orthogonal"
+        );
+        assert_eq!(
+            payload["latest_run_graph_dispatch_receipt"]["run_id"],
+            "task-cache-takeover"
+        );
+        assert_eq!(
+            payload["latest_run_graph_recovery"]["run_id"],
+            "task-cache-takeover"
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["latest_run_graph_task_stale"],
+            false
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["status"],
+            "exception_takeover_active"
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["root_local_write_allowed"],
+            true
         );
 
         let _ = fs::remove_dir_all(root);
@@ -4086,14 +4782,7 @@ mod tests {
     async fn status_stale_projection_overlay_does_not_import_foreign_run_graph_evidence() {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
-        let nanos = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-status-foreign-overlay-{}-{nanos}",
-            std::process::id()
-        ));
+        let root = unique_status_packet_test_root("vida-status-foreign-overlay");
 
         unsafe {
             std::env::set_var("VIDA_SESSION_ID", "foreign-status-overlay-session");
@@ -4862,6 +5551,100 @@ host_environment:
         assert_eq!(payload["blocker_codes"], serde_json::json!([blocker]));
         assert_eq!(payload["next_actions"], serde_json::json!([next_action]));
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn cached_run_graph_overlay_recomputes_blockers_and_contract_status() {
+        let mut payload = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "shared_fields": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {}
+            },
+            "operator_contracts": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {}
+            }
+        });
+
+        super::refresh_cached_run_graph_operator_contracts(
+            &mut payload,
+            true,
+            true,
+            false,
+            false,
+            false,
+        )
+        .expect("cached overlay should update run-graph blockers");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["shared_fields"]["status"], "blocked");
+        assert_eq!(payload["operator_contracts"]["status"], "blocked");
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!([
+                "missing_run_graph_dispatch_receipt_operator_evidence",
+                "run_graph_latest_snapshot_inconsistent"
+            ])
+        );
+        assert_eq!(
+            payload["next_actions"],
+            serde_json::json!([
+                missing_run_graph_dispatch_receipt_operator_evidence_next_action(),
+                run_graph_latest_snapshot_inconsistent_next_action()
+            ])
+        );
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+
+        super::refresh_cached_run_graph_operator_contracts(
+            &mut payload,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect("cached overlay should clear stale run-graph blockers");
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+        assert_eq!(payload["next_actions"], serde_json::json!([]));
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn fallback_receipt_consistency_ignores_orthogonal_status_run_id() {
+        assert_eq!(
+            super::status_run_id_for_receipt_consistency(
+                Some("orthogonal-status-run"),
+                Some("active-task-receipt-run"),
+                true,
+                true,
+            ),
+            None
+        );
+        assert_eq!(
+            super::status_run_id_for_receipt_consistency(
+                Some("same-run"),
+                Some("same-run"),
+                true,
+                true,
+            ),
+            Some("same-run")
+        );
+        assert_eq!(
+            super::status_run_id_for_receipt_consistency(
+                Some("orthogonal-status-run"),
+                Some("active-task-receipt-run"),
+                true,
+                false,
+            ),
+            Some("orthogonal-status-run")
+        );
     }
 
     #[test]
