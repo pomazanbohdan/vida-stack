@@ -95,7 +95,8 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 24. For Rust test, CLI smoke/integration test, fixture/golden test, coverage-gate test, runtime defect proof test, or test-task planning work, continue early to:
    - `docs/process/zombie-d-test-writing-protocol.md`
 25. On Windows, run cargo proof commands that need the MSVC toolchain through the project wrapper:
-   - `.\scripts\vida-cargo-msvc.ps1 test -p vida --bin vida <filter> --nocapture`
+   - `.\scripts\vida-cargo-msvc.ps1 test -p vida --lib <filter> --nocapture` for library `#[cfg(test)]` filters.
+   - `.\scripts\vida-cargo-msvc.ps1 test -p vida --bin vida <filter> --nocapture` for binary-target tests.
    - The wrapper dot-sources `scripts/vida-windows-env.ps1`, sets a writable `VIDA_MSVC_TEMP_DIR` default under `.vida\build-temp\msvc`, imports `Import-VidaMsvcEnvironment`, validates `cl.exe`/`link.exe`/Windows SDK availability, and forwards all remaining arguments to `cargo`.
    - The wrapper also inserts cargo's test-harness delimiter before common harness flags such as `--nocapture` and `--test-threads`, because PowerShell scripts consume a bare `--` delimiter before it reaches cargo.
    - Prefer this PowerShell wrapper for local Rust proof runs before hand-rolled `cmd.exe`, `VsDevCmd.bat`, or `vcvars64.bat` command strings.

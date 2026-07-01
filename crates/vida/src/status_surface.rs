@@ -2030,12 +2030,18 @@ fn refresh_cached_closed_task_active_run_projection_mismatch(
 
 fn refresh_cached_run_graph_operator_contracts(
     payload: &mut serde_json::Value,
+    latest_run_graph_missing_dispatch_receipt_operator_evidence: bool,
     latest_run_graph_snapshot_inconsistent: bool,
     latest_run_graph_dispatch_receipt_signal_ambiguous: bool,
     latest_run_graph_dispatch_receipt_summary_inconsistent: bool,
     latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
 ) -> Option<()> {
     let signals = [
+        (
+            "missing_run_graph_dispatch_receipt_operator_evidence",
+            crate::status_surface_signals::missing_run_graph_dispatch_receipt_operator_evidence_next_action(),
+            latest_run_graph_missing_dispatch_receipt_operator_evidence,
+        ),
         (
             "run_graph_latest_snapshot_inconsistent",
             crate::status_surface_signals::run_graph_latest_snapshot_inconsistent_next_action(),
@@ -2539,6 +2545,15 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         .is_some_and(|receipt| {
             state_store::latest_run_graph_dispatch_receipt_signal_is_ambiguous(receipt)
         });
+    let latest_run_graph_dispatch_receipt_matches_status = dispatch_receipt_checkpoint_leakage
+        || state_store::latest_run_graph_dispatch_receipt_matches_status(
+            latest_run_graph_status_run_id_for_receipt_consistency,
+            latest_run_graph_dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str()),
+        );
+    let latest_run_graph_missing_dispatch_receipt_operator_evidence =
+        latest_run_graph_gate.is_some() && !latest_run_graph_dispatch_receipt_matches_status;
     let latest_run_graph_dispatch_receipt_summary_inconsistent =
         !dispatch_receipt_checkpoint_leakage
             && state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
@@ -2717,6 +2732,7 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
     )?;
     refresh_cached_run_graph_operator_contracts(
         &mut payload,
+        latest_run_graph_missing_dispatch_receipt_operator_evidence,
         latest_run_graph_snapshot_inconsistent,
         latest_run_graph_dispatch_receipt_signal_ambiguous,
         latest_run_graph_dispatch_receipt_summary_inconsistent,
@@ -3089,6 +3105,7 @@ mod tests {
     use crate::status_surface_host_cli_summary::host_cli_system_entry_summary;
     use crate::status_surface_host_cli_system::selected_host_cli_system_entry;
     use crate::status_surface_signals::{
+        missing_run_graph_dispatch_receipt_operator_evidence_next_action,
         run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action,
         run_graph_latest_dispatch_receipt_signal_ambiguous_next_action,
         run_graph_latest_dispatch_receipt_summary_inconsistent_next_action,
@@ -5556,23 +5573,37 @@ host_environment:
             }
         });
 
-        super::refresh_cached_run_graph_operator_contracts(&mut payload, true, false, false, false)
-            .expect("cached overlay should update run-graph blockers");
+        super::refresh_cached_run_graph_operator_contracts(
+            &mut payload,
+            true,
+            true,
+            false,
+            false,
+            false,
+        )
+        .expect("cached overlay should update run-graph blockers");
         assert_eq!(payload["status"], "blocked");
         assert_eq!(payload["shared_fields"]["status"], "blocked");
         assert_eq!(payload["operator_contracts"]["status"], "blocked");
         assert_eq!(
             payload["blocker_codes"],
-            serde_json::json!(["run_graph_latest_snapshot_inconsistent"])
+            serde_json::json!([
+                "missing_run_graph_dispatch_receipt_operator_evidence",
+                "run_graph_latest_snapshot_inconsistent"
+            ])
         );
         assert_eq!(
             payload["next_actions"],
-            serde_json::json!([run_graph_latest_snapshot_inconsistent_next_action()])
+            serde_json::json!([
+                missing_run_graph_dispatch_receipt_operator_evidence_next_action(),
+                run_graph_latest_snapshot_inconsistent_next_action()
+            ])
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
 
         super::refresh_cached_run_graph_operator_contracts(
             &mut payload,
+            false,
             false,
             false,
             false,
