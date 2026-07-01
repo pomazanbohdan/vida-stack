@@ -293,10 +293,35 @@ fn host_agents_json_value(
     host_agents: Option<&serde_json::Value>,
     include_historical_evidence: bool,
 ) -> serde_json::Value {
-    crate::status_surface_host_agents::host_agent_status_view(
+    let value = crate::status_surface_host_agents::host_agent_status_view(
         host_agents,
         include_historical_evidence,
-    )
+    );
+    if include_historical_evidence {
+        return value;
+    }
+    serde_json::json!({
+        "host_cli_system": value["host_cli_system"],
+        "runtime_surface": value["runtime_surface"],
+        "effective_execution_posture": value["effective_execution_posture"],
+        "mixed_posture": value["mixed_posture"],
+        "current_state": value["current_state"],
+        "root_session_write_guard": value["root_session_write_guard"],
+        "host_bridge_capacity": value["host_bridge_capacity"],
+        "agents": value["agents"],
+        "subagent_backends": value["subagent_backends"],
+        "internal_dispatch_alias_count": value["internal_dispatch_alias_count"],
+        "internal_dispatch_alias_load_error": value["internal_dispatch_alias_load_error"],
+        "external_cli_preflight": {
+            "status": value["external_cli_preflight"]["status"],
+            "requires_external_cli": value["external_cli_preflight"]["requires_external_cli"],
+            "selected_execution_class": value["external_cli_preflight"]["selected_execution_class"],
+            "effective_execution_posture": value["external_cli_preflight"]["effective_execution_posture"],
+            "mixed_posture": value["external_cli_preflight"]["mixed_posture"],
+            "blocker_code": value["external_cli_preflight"]["blocker_code"],
+            "next_actions": value["external_cli_preflight"]["next_actions"],
+        },
+    })
 }
 
 pub(crate) fn enrich_run_graph_status(

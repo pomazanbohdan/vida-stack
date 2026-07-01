@@ -6334,7 +6334,16 @@ fn operator_json_surfaces_reuse_fresh_projection_before_store_open() {
             }
         },
         "blocker_codes": [],
-        "next_actions": []
+        "next_actions": [],
+        "host_agents": {
+            "system_entry": {"large": true},
+            "stage_attempt_policies": [{"stage": "old-heavy-policy"}],
+            "external_cli_preflight": {
+                "status": "pass",
+                "carrier_readiness": {"large": true},
+                "tool_contract": {"large": true}
+            }
+        }
     });
     write_operator_projection(&state_dir, "status-summary-v2-latest", &status_projection);
 
@@ -6343,6 +6352,14 @@ fn operator_json_surfaces_reuse_fresh_projection_before_store_open() {
     assert_eq!(
         status["operator_contracts"]["artifact_refs"]["projection"],
         "status-summary-v2-latest"
+    );
+    assert!(status["host_agents"]["system_entry"].is_null());
+    assert!(status["host_agents"]["stage_attempt_policies"].is_null());
+    assert!(status["host_agents"]["external_cli_preflight"]["carrier_readiness"].is_null());
+    assert!(status["host_agents"]["external_cli_preflight"]["tool_contract"].is_null());
+    assert_eq!(
+        status["host_agents"]["external_cli_preflight"]["status"],
+        "pass"
     );
 
     let graph_projection = serde_json::json!({

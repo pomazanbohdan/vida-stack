@@ -451,10 +451,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     if as_json && !selected_output && summary_only {
         if let Some(cached) = read_fresh_admissible_status_json_projection(&state_dir, summary_only)
         {
-            if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
-                let cached = refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
-                    .await
-                    .unwrap_or(cached);
+            println!(
+                "{}",
+                render_cached_status_projection_for_operator(summary_only, &cached)
+            );
+            return ExitCode::SUCCESS;
+        }
+        if summary_only {
+            if let Some(cached) =
+                read_state_fresh_admissible_status_json_projection(&state_dir, summary_only)
+            {
                 println!(
                     "{}",
                     render_cached_status_projection_for_operator(summary_only, &cached)
@@ -462,23 +468,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 return ExitCode::SUCCESS;
             }
         }
-        if summary_only {
-            if let Some(cached) =
-                read_state_fresh_admissible_status_json_projection(&state_dir, summary_only)
-            {
-                if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
-                    let cached =
-                        refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
-                            .await
-                            .unwrap_or(cached);
-                    println!(
-                        "{}",
-                        render_cached_status_projection_for_operator(summary_only, &cached)
-                    );
-                    return ExitCode::SUCCESS;
-                }
-            }
-        }
+        let mut recent_candidates = Vec::new();
         if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
             &state_dir,
             status_json_projection_name(summary_only),
@@ -486,16 +476,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         )
         .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
         {
-            if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
-                let cached = refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
-                    .await
-                    .unwrap_or(cached);
-                println!(
-                    "{}",
-                    render_cached_status_projection_for_operator(summary_only, &cached)
-                );
-                return ExitCode::SUCCESS;
-            }
+            recent_candidates.push(cached);
         }
         if let Some(cached) =
             crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
@@ -505,16 +486,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             )
             .filter(|cached| cached_status_projection_admissible(&state_dir, summary_only, cached))
         {
-            if cached_status_projection_current_runtime_admissible(&state_dir, &cached).await {
-                let cached = refresh_cached_status_projection_runtime_fields(&state_dir, &cached)
-                    .await
-                    .unwrap_or(cached);
-                println!(
-                    "{}",
-                    render_cached_status_projection_for_operator(summary_only, &cached)
-                );
-                return ExitCode::SUCCESS;
-            }
+            recent_candidates.push(cached);
         }
         if let Some(cached) =
             crate::operator_projection_cache::read_state_stale_recent_json_projection(
@@ -537,16 +509,28 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
             } else {
                 cached.clone()
             };
-            if cached_status_projection_current_runtime_admissible(&state_dir, &rendered).await {
-                let rendered =
-                    refresh_cached_status_projection_runtime_fields(&state_dir, &rendered)
-                        .await
-                        .unwrap_or(rendered);
-                println!(
-                    "{}",
-                    render_cached_status_projection_for_operator(summary_only, &rendered)
-                );
-                return ExitCode::SUCCESS;
+            recent_candidates.push(rendered);
+        }
+        if !recent_candidates.is_empty() {
+            if let Ok(store) = StateStore::open_existing_read_only_with_strict_timeout(
+                state_dir.clone(),
+                std::time::Duration::from_millis(250),
+            )
+            .await
+            {
+                for cached in recent_candidates {
+                    if cached_status_projection_current_runtime_admissible_with_store(
+                        &store, &cached,
+                    )
+                    .await
+                    {
+                        println!(
+                            "{}",
+                            render_cached_status_projection_for_operator(summary_only, &cached)
+                        );
+                        return ExitCode::SUCCESS;
+                    }
+                }
             }
         }
     }
@@ -1708,10 +1692,44 @@ fn render_cached_status_projection_for_operator(summary_only: bool, cached: &str
     };
     normalize_status_projection_json_shape(&mut payload);
     if summary_only {
+        compact_cached_status_summary_projection(&mut payload);
         return serde_json::to_string(&payload).unwrap_or_else(|_| cached.to_string());
     };
     compact_status_projection_for_fast_operator_render(&mut payload);
     serde_json::to_string_pretty(&payload).unwrap_or_else(|_| cached.to_string())
+}
+
+fn compact_cached_status_summary_projection(payload: &mut serde_json::Value) {
+    let Some(host_agents) = payload
+        .get_mut("host_agents")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for key in [
+        "budget",
+        "model_selection",
+        "selection_policy",
+        "stage_attempt_policies",
+        "stores",
+        "system_entry",
+    ] {
+        host_agents.remove(key);
+    }
+    if let Some(external_cli_preflight) = host_agents
+        .get_mut("external_cli_preflight")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for key in [
+            "carrier_readiness",
+            "incident_baseline",
+            "route_primary_external_backends",
+            "trace_baseline",
+            "tool_contract",
+        ] {
+            external_cli_preflight.remove(key);
+        }
+    }
 }
 
 fn normalize_status_projection_json_shape(payload: &mut serde_json::Value) {
@@ -1730,6 +1748,32 @@ async fn cached_status_projection_current_runtime_admissible(
     state_dir: &std::path::Path,
     cached: &str,
 ) -> bool {
+    let store = match StateStore::open_existing_read_only_with_strict_timeout(
+        state_dir.to_path_buf(),
+        std::time::Duration::from_millis(250),
+    )
+    .await
+    {
+        Ok(store) => store,
+        Err(error) if StateStore::error_is_lock_contention(&error) => {
+            let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
+                return false;
+            };
+            let cached_active_unit_is_null = payload
+                .get("active_bounded_unit")
+                .unwrap_or(&serde_json::Value::Null)
+                .is_null();
+            return !cached_active_unit_is_null;
+        }
+        Err(_) => return false,
+    };
+    cached_status_projection_current_runtime_admissible_with_store(&store, cached).await
+}
+
+async fn cached_status_projection_current_runtime_admissible_with_store(
+    store: &StateStore,
+    cached: &str,
+) -> bool {
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(cached) else {
         return false;
     };
@@ -1740,19 +1784,6 @@ async fn cached_status_projection_current_runtime_admissible(
         .get("active_bounded_unit")
         .unwrap_or(&serde_json::Value::Null)
         .is_null();
-
-    let store = match StateStore::open_existing_read_only_with_strict_timeout(
-        state_dir.to_path_buf(),
-        std::time::Duration::from_millis(250),
-    )
-    .await
-    {
-        Ok(store) => store,
-        Err(error) if StateStore::error_is_lock_contention(&error) => {
-            return !cached_active_unit_is_null;
-        }
-        Err(_) => return false,
-    };
     if cached_active_unit_is_null {
         let Ok(all_tasks) = store.list_tasks(None, true).await else {
             return false;
@@ -2068,13 +2099,20 @@ async fn refresh_cached_status_projection_runtime_fields(
     state_dir: &std::path::Path,
     cached: &str,
 ) -> Option<String> {
-    let mut payload = serde_json::from_str::<serde_json::Value>(cached).ok()?;
     let store = StateStore::open_existing_read_only_with_strict_timeout(
         state_dir.to_path_buf(),
         Duration::from_secs(2),
     )
     .await
     .ok()?;
+    refresh_cached_status_projection_runtime_fields_with_store(&store, cached).await
+}
+
+async fn refresh_cached_status_projection_runtime_fields_with_store(
+    store: &StateStore,
+    cached: &str,
+) -> Option<String> {
+    let mut payload = serde_json::from_str::<serde_json::Value>(cached).ok()?;
     let protocol_binding = store.protocol_binding_summary().await.ok()?;
     refresh_cached_protocol_binding_projection(&mut payload, &protocol_binding)?;
     let latest_run_graph_status = match store.latest_run_graph_status_for_current_session().await {

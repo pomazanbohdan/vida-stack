@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 const BACKLOG_DIRECT_CHILDREN: usize = 120;
 const GRAPH_READ_BUDGET: Duration = Duration::from_secs(20);
+const STATUS_JSON_FAST_PATH_BUDGET: Duration = Duration::from_secs(5);
 const STATE_LOCK_RETRY_LIMIT: usize = 5;
 
 struct TimedJson {
@@ -56,6 +57,14 @@ fn assert_graph_read_budget(surface: &str, duration: Duration) {
     assert!(
         duration <= GRAPH_READ_BUDGET,
         "{surface} exceeded large-backlog graph read budget: {duration:?}"
+    );
+}
+
+fn assert_status_json_fast_path_budget(surface: &str, durations: &[Duration]) {
+    let max_duration = durations.iter().copied().max().unwrap_or(Duration::ZERO);
+    assert!(
+        max_duration <= STATUS_JSON_FAST_PATH_BUDGET,
+        "{surface} exceeded compact status JSON fast-path budget: max={max_duration:?}; samples={durations:?}"
     );
 }
 
@@ -233,8 +242,18 @@ fn large_backlog_graph_progress_and_scheduler_surfaces_stay_deterministic() {
         fixture.in_progress_child_count
     );
 
+    let _warm_status_summary = run_json(&["status", "--json"], &state_dir_string);
+    let mut status_summary_durations = Vec::new();
+    for _ in 0..3 {
+        let status_summary = run_json(&["status", "--json"], &state_dir_string);
+        assert_eq!(status_summary.value["surface"], "vida status");
+        assert_eq!(status_summary.value["view"], "summary");
+        status_summary_durations.push(status_summary.duration);
+    }
+    assert_status_json_fast_path_budget("vida status --json", &status_summary_durations);
+
     eprintln!(
-        "large backlog diagnostics: import={:?} progress={:?} tree={:?} ready={:?} blocked={:?} graph_summary={:?} scheduler={:?} status={:?}",
+        "large backlog diagnostics: import={:?} progress={:?} tree={:?} ready={:?} blocked={:?} graph_summary={:?} scheduler={:?} status={:?} status_summary={:?}",
         import.duration,
         progress.duration,
         tree.duration,
@@ -242,7 +261,8 @@ fn large_backlog_graph_progress_and_scheduler_surfaces_stay_deterministic() {
         blocked.duration,
         graph_summary.duration,
         scheduler.duration,
-        status.duration
+        status.duration,
+        status_summary_durations
     );
 
     let _ = std::fs::remove_dir_all(state_dir);
