@@ -313,7 +313,7 @@ async fn host_bridge_request_provenance_blockers(
     request_path: &Path,
     request: &serde_json::Value,
     state_root: Option<&Path>,
-    retry_completion_override: bool,
+    _retry_completion_override: bool,
 ) -> Vec<String> {
     let state_root = match state_root {
         Some(provided) => provided.to_path_buf(),
@@ -324,7 +324,7 @@ async fn host_bridge_request_provenance_blockers(
         &state_root,
         request_path,
         request,
-        retry_completion_override,
+        _retry_completion_override,
     )
     .await
 }
@@ -370,7 +370,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     state_root: &Path,
     request_path: &Path,
     request: &serde_json::Value,
-    retry_completion_override: bool,
+    _retry_completion_override: bool,
 ) -> Vec<String> {
     let mut blockers = Vec::new();
     if std::fs::canonicalize(&state_root).is_err() {
@@ -438,8 +438,8 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         return blockers;
     };
     if let Ok(typed_request) = HostBridgeRequest::from_value(request.clone()) {
-        let retryable_completion = retry_completion_override
-            || retryable_host_bridge_completion_request_for_state_root(state_root, request);
+        let retryable_completion =
+            retryable_host_bridge_completion_request_for_state_root(state_root, request);
         let decision = validate_host_bridge_request_provenance(&HostBridgeProvenanceInput {
             request: typed_request,
             expected_run_id: Some(run_id.to_string()),
@@ -782,10 +782,10 @@ fn host_bridge_adapter_payload(
     request: &serde_json::Value,
     provenance_blockers: Vec<String>,
     state_root: Option<&Path>,
-    retry_completion_override: bool,
+    _retry_completion_override: bool,
 ) -> serde_json::Value {
-    let retryable_completion_request = retry_completion_override
-        || retryable_host_bridge_completion_request(request_path, request, state_root);
+    let retryable_completion_request =
+        retryable_host_bridge_completion_request(request_path, request, state_root);
     let effective_request = taskflow_host_bridge::effective_host_bridge_request(request);
     let typed_request = HostBridgeRequest::from_value(effective_request.clone()).ok();
     let completion_command = if let Some(request) = typed_request.as_ref() {
@@ -8517,6 +8517,80 @@ mod tests {
             .as_str()
             .expect("completion command")
             .contains("--decision"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_retry_completion_flag_does_not_replace_retry_evidence() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-retry-flag-without-evidence-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = state_root.join("host-tool-bridge/results/result.json");
+        let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
+        for path in [&request_path, &packet_path, &result_path, &receipt_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("artifact parent should be created");
+        }
+        std::fs::write(&packet_path, b"{}").expect("packet file should be written");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "blocked",
+            "request_id": "req-retry-flag",
+            "run_id": "run-retry-flag",
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("request file should be written");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+
+        let blockers = runtime.block_on(host_bridge_request_provenance_blockers_for_state_root(
+            &state_root,
+            &request_path,
+            &request,
+            true,
+        ));
+
+        assert!(
+            blockers.contains(&"request_status_not_admissible".to_string()),
+            "retry intent without blocked receipt/result evidence must not normalize request status blockers: {blockers:?}"
+        );
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            Vec::new(),
+            Some(&state_root),
+            true,
+        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
+        assert!(!payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--retry-completion"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
