@@ -3731,21 +3731,7 @@ fn trusted_host_bridge_completion_request_context(
     } else {
         None
     };
-    if receipt.dispatch_status == "bridge_request_pending" && receipt.dispatch_result_path.is_some()
-    {
-        let normalized_request_path =
-            crate::runtime_dispatch_state::normalize_persisted_runtime_path(request_path);
-        let allow_existing_result_path =
-            materialized_host_bridge_result_path_for_request(state_root, &request)?.is_some();
-        validated_host_bridge_paths_from_receipt(
-            state_root,
-            Path::new(&normalized_request_path),
-            receipt,
-            false,
-            false,
-            allow_existing_result_path,
-        )?;
-    }
+    validate_pending_host_bridge_receipt_paths(state_root, request_path, &request, receipt)?;
     if retryable_completion_context
         && !adapter_gate_context
         && !receipt_target_matches_request
@@ -3784,6 +3770,31 @@ fn trusted_host_bridge_completion_request_context(
         dispatch_target: dispatch_target.to_string(),
         packet_path: packet_path.display().to_string(),
     }))
+}
+
+fn validate_pending_host_bridge_receipt_paths(
+    state_root: &Path,
+    request_path: &str,
+    request: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<(), String> {
+    if receipt.dispatch_status != "bridge_request_pending" || receipt.dispatch_result_path.is_none()
+    {
+        return Ok(());
+    }
+    let normalized_request_path =
+        crate::runtime_dispatch_state::normalize_persisted_runtime_path(request_path);
+    let allow_existing_result_path =
+        materialized_host_bridge_result_path_for_request(state_root, request)?.is_some();
+    validated_host_bridge_paths_from_receipt(
+        state_root,
+        Path::new(&normalized_request_path),
+        receipt,
+        false,
+        false,
+        allow_existing_result_path,
+    )?;
+    Ok(())
 }
 
 fn trusted_host_bridge_receipt_packet_matches_request(
@@ -5770,31 +5781,40 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 )
                 .await;
                 let authoritative_owned_paths = owned_paths_from_lane_packet(&packet);
-                let reconciled_request_dispatch_target =
-                    if receipt.dispatch_status == "bridge_request_pending" {
-                        read_host_bridge_request(store.root(), request_path)
-                            .ok()
-                            .and_then(|request| {
-                                request
-                                    .get("dispatch_target")
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(str::trim)
-                                    .filter(|target| !target.is_empty())
-                                    .map(str::to_string)
-                            })
-                    } else {
-                        None
-                    };
-                let completion_dispatch_target = host_bridge_completion_context
-                    .as_ref()
-                    .map(|context| context.dispatch_target.as_str())
-                    .or(reconciled_request_dispatch_target.as_deref())
-                    .unwrap_or(receipt.dispatch_target.as_str());
+                let pending_receipt_has_persisted_dispatch_evidence = receipt.dispatch_status
+                    == "bridge_request_pending"
+                    && receipt.dispatch_result_path.is_some();
+                let reconciled_request_dispatch_target = if receipt.dispatch_status
+                    == "bridge_request_pending"
+                    && !pending_receipt_has_persisted_dispatch_evidence
+                {
+                    read_host_bridge_request(store.root(), request_path)
+                        .ok()
+                        .and_then(|request| {
+                            request
+                                .get("dispatch_target")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::trim)
+                                .filter(|target| !target.is_empty())
+                                .map(str::to_string)
+                        })
+                } else {
+                    None
+                };
+                let completion_dispatch_target = if pending_receipt_has_persisted_dispatch_evidence
+                {
+                    receipt.dispatch_target.as_str()
+                } else {
+                    host_bridge_completion_context
+                        .as_ref()
+                        .map(|context| context.dispatch_target.as_str())
+                        .or(reconciled_request_dispatch_target.as_deref())
+                        .unwrap_or(receipt.dispatch_target.as_str())
+                };
                 let allow_reconciled_request_paths = (host_bridge_completion_context.is_some()
-                    && !(receipt.dispatch_status == "bridge_request_pending"
-                        && receipt.dispatch_result_path.is_some()))
+                    && !pending_receipt_has_persisted_dispatch_evidence)
                     || retrying_summary_guard
-                    || retrying_request_guard;
+                    || (retrying_request_guard && !pending_receipt_has_persisted_dispatch_evidence);
                 match materialize_host_bridge_completion_evidence(
                     store.root(),
                     request_path,
