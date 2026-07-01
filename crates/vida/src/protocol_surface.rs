@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Clone)]
@@ -385,7 +385,7 @@ fn resolve_protocol_view_target_from_index(
         let Some(canonical_id) = first_backtick_value(cells[1]) else {
             continue;
         };
-        if !canonical_id.contains('/') || !canonical_id.starts_with("runtime-instructions/") {
+        if !is_safe_index_protocol_canonical_id(&canonical_id) {
             continue;
         }
         let short_alias = protocol_short_alias(&canonical_id);
@@ -395,6 +395,17 @@ fn resolve_protocol_view_target_from_index(
         let source_path = format!("vida/config/instructions/{canonical_id}.md");
         let resolved_path = source_root.join(&source_path);
         if !resolved_path.is_file() {
+            continue;
+        }
+        let runtime_instruction_root =
+            source_root.join("vida/config/instructions/runtime-instructions");
+        let Ok(runtime_instruction_root) = runtime_instruction_root.canonicalize() else {
+            continue;
+        };
+        let Ok(canonical_resolved_path) = resolved_path.canonicalize() else {
+            continue;
+        };
+        if !canonical_resolved_path.starts_with(&runtime_instruction_root) {
             continue;
         }
         let resolved = ResolvedProtocolViewTarget {
@@ -412,6 +423,19 @@ fn resolve_protocol_view_target_from_index(
         return Ok(Some((resolved, resolved_path)));
     }
     Ok(None)
+}
+
+fn is_safe_index_protocol_canonical_id(canonical_id: &str) -> bool {
+    let Some(relative) = canonical_id.strip_prefix("runtime-instructions/") else {
+        return false;
+    };
+    if relative.is_empty() || !relative.contains('/') && relative.trim().is_empty() {
+        return false;
+    }
+
+    std::path::Path::new(canonical_id)
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
 }
 
 fn unique_protocol_aliases(aliases: Vec<String>) -> Vec<String> {
@@ -617,6 +641,67 @@ mod tests {
             ),
             "requirement-analysis protocol path should resolve"
         );
+    }
+
+    #[test]
+    fn resolve_protocol_view_target_from_index_rejects_traversal_aliases() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let source_root = harness.path();
+        let index_dir = source_root.join("vida/config/instructions/system-maps");
+        let runtime_dir = source_root.join("vida/config/instructions/runtime-instructions");
+        let outside_dir = source_root.join("outside");
+        std::fs::create_dir_all(&index_dir).expect("index directory should be created");
+        std::fs::create_dir_all(&runtime_dir).expect("runtime directory should be created");
+        std::fs::create_dir_all(&outside_dir).expect("outside directory should be created");
+        std::fs::write(
+            outside_dir.join("work.requirement-analysis-protocol.md"),
+            "TRAVERSAL_SECRET",
+        )
+        .expect("outside target should be written");
+        std::fs::write(
+            index_dir.join("protocol.index.md"),
+            "| Domain | Canonical |\n|---|---|\n| Requirement analysis owner | `runtime-instructions/../../../../outside/work.requirement-analysis-protocol` |\n",
+        )
+        .expect("malicious index should be written");
+
+        let resolved = resolve_protocol_view_target_from_index(source_root, "requirement-analysis")
+            .expect("malicious index should not cause a read error");
+
+        assert!(
+            resolved.is_none(),
+            "traversal-backed aliases must be ignored"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_protocol_view_target_from_index_rejects_symlink_escapes() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let source_root = harness.path();
+        let index_dir = source_root.join("vida/config/instructions/system-maps");
+        let runtime_dir = source_root.join("vida/config/instructions/runtime-instructions");
+        let outside_dir = source_root.join("outside");
+        std::fs::create_dir_all(&index_dir).expect("index directory should be created");
+        std::fs::create_dir_all(&runtime_dir).expect("runtime directory should be created");
+        std::fs::create_dir_all(&outside_dir).expect("outside directory should be created");
+        let outside_target = outside_dir.join("host-secret.md");
+        std::fs::write(&outside_target, "SYMLINK_SECRET")
+            .expect("outside target should be written");
+        std::os::unix::fs::symlink(
+            &outside_target,
+            runtime_dir.join("work.symlink-protocol.md"),
+        )
+        .expect("symlink fixture should be created");
+        std::fs::write(
+            index_dir.join("protocol.index.md"),
+            "| Domain | Canonical |\n|---|---|\n| Symlink owner | `runtime-instructions/work.symlink-protocol` |\n",
+        )
+        .expect("malicious index should be written");
+
+        let resolved = resolve_protocol_view_target_from_index(source_root, "symlink")
+            .expect("malicious index should not cause a read error");
+
+        assert!(resolved.is_none(), "symlink escapes must be ignored");
     }
 
     #[test]
