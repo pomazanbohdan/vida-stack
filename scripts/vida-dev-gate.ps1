@@ -371,17 +371,9 @@ function Resolve-CommandPath {
 }
 
 function Resolve-PowerShellHostPath {
-    $hostPath = Resolve-CommandPath "pwsh" @(
+    return Resolve-CommandPath "pwsh" @(
         "C:\Program Files\PowerShell\7\pwsh.exe",
         "$env:ProgramFiles\PowerShell\7\pwsh.exe"
-    )
-    if ($hostPath -ne "pwsh") {
-        return $hostPath
-    }
-
-    return Resolve-CommandPath "powershell" @(
-        "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe",
-        "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
     )
 }
 
