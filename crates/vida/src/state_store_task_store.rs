@@ -2968,8 +2968,8 @@ impl StateStore {
         if let Some(first) = issues.first() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
-                    "task creation would create invalid graph: {} on {}",
-                    first.issue_type, first.issue_id
+                    "task creation would create invalid graph: {} on {}: {}",
+                    first.issue_type, first.issue_id, first.detail
                 ),
             });
         }
@@ -3334,8 +3334,8 @@ impl StateStore {
         if let Some(first) = issues.first() {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
-                    "task update would create invalid graph: {} on {}",
-                    first.issue_type, first.issue_id
+                    "task update would create invalid graph: {} on {}: {}",
+                    first.issue_type, first.issue_id, first.detail
                 ),
             });
         }

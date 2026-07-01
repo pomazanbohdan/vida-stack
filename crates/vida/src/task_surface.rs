@@ -2523,21 +2523,45 @@ fn task_ready_projection_name(scope_task_id: Option<&str>) -> String {
 const TASK_READ_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(300);
 
-fn task_update_graph_issue_from_invalid_record_reason(
+fn task_graph_issue_from_invalid_record_reason(
+    prefix: &str,
     reason: &str,
 ) -> Option<state_store::TaskGraphIssue> {
-    let rest = reason.strip_prefix("task update would create invalid graph: ")?;
+    let rest = reason.strip_prefix(prefix)?;
     let (issue_type, issue_id) = rest.split_once(" on ")?;
-    if issue_type != "open_parent_has_no_open_child" || issue_id.trim().is_empty() {
+    let (issue_id, detail) = issue_id
+        .split_once(": ")
+        .map(|(id, detail)| (id, detail))
+        .unwrap_or((issue_id, ""));
+    if !matches!(
+        issue_type,
+        "open_parent_has_no_open_child" | "invalid_parent_child_kind"
+    ) || issue_id.trim().is_empty()
+    {
         return None;
     }
     Some(state_store::TaskGraphIssue {
         issue_type: issue_type.to_string(),
-        issue_id: issue_id.to_string(),
+        issue_id: issue_id.trim().to_string(),
         depends_on_id: None,
         edge_type: Some("parent-child".to_string()),
-        detail: "open or in-progress parent has no direct non-closed child".to_string(),
+        detail: if detail.trim().is_empty() {
+            match issue_type {
+                "invalid_parent_child_kind" => {
+                    "parent-child edge violates work item parent kind policy".to_string()
+                }
+                _ => "open or in-progress parent has no direct non-closed child".to_string(),
+            }
+        } else {
+            detail.trim().to_string()
+        },
     })
+}
+
+fn task_update_graph_issue_from_invalid_record_reason(
+    reason: &str,
+) -> Option<state_store::TaskGraphIssue> {
+    task_graph_issue_from_invalid_record_reason("task update would create invalid graph: ", reason)
 }
 
 fn task_update_close_authority_payload(task_id: &str) -> serde_json::Value {
@@ -4185,6 +4209,117 @@ fn task_create_planner_metadata_arg(command: &TaskCreateArgs) -> state_store::Ta
         },
         ..state_store::TaskPlannerMetadata::default()
     }
+}
+
+fn task_create_invalid_parent_kind_payload(
+    surface: &str,
+    task_id: &str,
+    issue_type: &str,
+    parent_id: Option<&str>,
+    reason: &str,
+) -> serde_json::Value {
+    let canonical_issue_type = state_store::canonical_work_item_issue_type(issue_type);
+    let allowed_parent_kind = match canonical_issue_type.as_str() {
+        "subtask" => "task",
+        "step" => "task or subtask",
+        _ => "documented TaskFlow parent kind",
+    };
+    let next_action = match canonical_issue_type.as_str() {
+        "step" => {
+            "Choose a valid parent and retry the command; steps require a task or subtask parent for new mutations."
+        }
+        "subtask" => "Create the subtask under a task parent.",
+        _ => "Choose a valid parent kind for this work item and retry the task create command.",
+    };
+    crate::release1_operator_output::Release1OperatorOutputBuilder::new(surface)
+        .blocker_codes(
+            crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::DependencyGraphIssues,
+            )
+            .into_iter()
+            .collect(),
+        )
+        .next_actions(vec![next_action.to_string()])
+        .artifact_refs(serde_json::json!({
+            "surface": surface,
+            "task_id": task_id,
+            "parent_id": parent_id,
+            "graph_issue_type": "invalid_parent_child_kind",
+        }))
+        .extra_fields(serde_json::json!({
+            "reason": reason,
+            "task_id": task_id,
+            "issue_type": issue_type,
+            "canonical_issue_type": canonical_issue_type,
+            "parent_id": parent_id,
+            "allowed_parent_kind": allowed_parent_kind,
+            "graph_issue": {
+                "issue_type": "invalid_parent_child_kind",
+                "issue_id": task_id,
+                "depends_on_id": parent_id,
+                "edge_type": "parent-child",
+                "detail": reason,
+            },
+        }))
+        .build()
+        .expect(
+            "task create invalid parent kind payload should satisfy release-1 operator contract",
+        )
+}
+
+fn emit_task_create_invalid_parent_kind_error(
+    surface: &str,
+    render: RenderMode,
+    as_json: bool,
+    task_id: &str,
+    issue_type: &str,
+    parent_id: Option<&str>,
+    reason: &str,
+) {
+    let payload =
+        task_create_invalid_parent_kind_payload(surface, task_id, issue_type, parent_id, reason);
+    if as_json {
+        crate::print_json_pretty(&payload);
+        return;
+    }
+    print_surface_header(render, surface);
+    print_surface_line(render, "status", "blocked");
+    print_surface_line(render, "blocker_codes", "dependency_graph_issues");
+    print_surface_line(render, "task_id", task_id);
+    if let Some(parent_id) = parent_id {
+        print_surface_line(render, "parent_id", parent_id);
+    }
+    print_surface_line(render, "reason", reason);
+    if let Some(allowed) = payload["allowed_parent_kind"].as_str() {
+        print_surface_line(render, "allowed_parent_kind", allowed);
+    }
+    if let Some(next_action) = payload["next_actions"]
+        .as_array()
+        .and_then(|items| items.first().and_then(serde_json::Value::as_str))
+    {
+        print_surface_line(render, "next_action", next_action);
+    }
+}
+
+fn maybe_emit_task_create_invalid_parent_kind_error(
+    surface: &str,
+    render: RenderMode,
+    as_json: bool,
+    task_id: &str,
+    issue_type: &str,
+    parent_id: Option<&str>,
+    error: &state_store::StateStoreError,
+) -> bool {
+    let state_store::StateStoreError::InvalidTaskRecord { reason } = error else {
+        return false;
+    };
+    if !reason.contains("invalid_parent_child_kind") {
+        return false;
+    }
+    emit_task_create_invalid_parent_kind_error(
+        surface, render, as_json, task_id, issue_type, parent_id, reason,
+    );
+    true
 }
 
 fn task_update_planner_metadata_arg(
@@ -7223,6 +7358,22 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
+                    let surface = if ensure_existing {
+                        "vida task ensure"
+                    } else {
+                        "vida task create"
+                    };
+                    if maybe_emit_task_create_invalid_parent_kind_error(
+                        surface,
+                        command.render,
+                        command.json,
+                        &command.task_id,
+                        &command.issue_type,
+                        parent_id.as_deref(),
+                        &error,
+                    ) {
+                        return ExitCode::from(1);
+                    }
                     eprintln!(
                         "Failed to {} task: {error}",
                         if ensure_existing { "ensure" } else { "create" }

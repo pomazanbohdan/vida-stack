@@ -153,24 +153,29 @@ pub(crate) fn build_pass_operator_surface_payload(
     build_operator_surface_payload(surface, Vec::new(), Vec::new(), extra_fields)
 }
 
-pub(crate) fn print_task_update_graph_blocked(issue: &TaskGraphIssue, as_json: bool) {
+pub(crate) fn print_task_graph_blocked(surface: &str, issue: &TaskGraphIssue, as_json: bool) {
     let quoted_issue_id = crate::shell_quote(issue.issue_id.trim());
     let next_actions = match issue.issue_type.as_str() {
         "open_parent_has_no_open_child" => vec![format!(
-            "Repair emptied parent `{}` with `{}`, then rerun the original task update.",
+            "Repair emptied parent `{}` with `{}`, then rerun the original task mutation.",
             issue.issue_id,
             operator_output::command_text::human_command(&format!(
                 "vida task update {} --status closed --json",
                 quoted_issue_id
             ))
         )],
+        "invalid_parent_child_kind" => vec![format!(
+            "Choose a valid parent for `{}` and rerun `{}`. Subtasks require a task parent; steps require a task or subtask parent for new mutations.",
+            issue.issue_id,
+            operator_output::command_text::human_command(&format!("{surface} ..."))
+        )],
         _ => vec![
-            "Resolve task graph validation issues and rerun the original `vida task update ...` command."
+            format!("Resolve task graph validation issues and rerun the original `{surface} ...` command.")
                 .to_string(),
         ],
     };
     let payload = build_operator_surface_payload(
-        "vida task update",
+        surface,
         crate::release1_contracts::blocker_code_value(
             crate::release1_contracts::BlockerCode::DependencyGraphIssues,
         )
@@ -192,6 +197,10 @@ pub(crate) fn print_task_update_graph_blocked(issue: &TaskGraphIssue, as_json: b
         "blocked\t{}\t{}\t{}",
         issue.issue_type, issue.issue_id, issue.detail
     );
+}
+
+pub(crate) fn print_task_update_graph_blocked(issue: &TaskGraphIssue, as_json: bool) {
+    print_task_graph_blocked("vida task update", issue, as_json);
 }
 
 fn print_task_record(render: RenderMode, title: &str, task: &TaskRecord) {

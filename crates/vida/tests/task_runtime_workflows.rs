@@ -143,6 +143,65 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
         String::from_utf8_lossy(&invalid_subtask.stderr)
     );
     assert!(invalid_text.contains("invalid_parent_child_kind"));
+    let invalid_step_json = run_failure(
+        &fixture,
+        &[
+            "task",
+            "create",
+            "invalid-step-json",
+            "Invalid Step",
+            "--type",
+            "step",
+            "--parent-id",
+            "workflow-epic",
+            "--json",
+        ],
+    );
+    assert!(
+        invalid_step_json.stderr.is_empty(),
+        "json failure should not emit stderr: {}",
+        String::from_utf8_lossy(&invalid_step_json.stderr)
+    );
+    let invalid_step_payload: Value =
+        serde_json::from_slice(&invalid_step_json.stdout).expect("invalid step json payload");
+    assert_eq!(invalid_step_payload["status"], "blocked");
+    assert_eq!(
+        invalid_step_payload["blocker_codes"],
+        serde_json::json!(["dependency_graph_issues"])
+    );
+    assert_eq!(
+        invalid_step_payload["graph_issue"]["issue_type"],
+        "invalid_parent_child_kind"
+    );
+    assert!(invalid_step_payload["graph_issue"]["detail"]
+        .as_str()
+        .expect("graph issue detail")
+        .contains("got `epic`"));
+    assert!(invalid_step_payload["next_actions"][0]
+        .as_str()
+        .expect("next action")
+        .contains("steps require a task or subtask parent"));
+    let invalid_step_default = run_failure(
+        &fixture,
+        &[
+            "task",
+            "create",
+            "invalid-step-default",
+            "Invalid Step",
+            "--type",
+            "step",
+            "--parent-id",
+            "workflow-epic",
+        ],
+    );
+    let invalid_step_default_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&invalid_step_default.stdout),
+        String::from_utf8_lossy(&invalid_step_default.stderr)
+    );
+    assert!(invalid_step_default_text.contains("invalid_parent_child_kind"));
+    assert!(invalid_step_default_text.contains("got `epic`"));
+    assert!(invalid_step_default_text.contains("step work item"));
 
     let ready = run_json_success(&fixture, &["task", "ready", "--json"]);
     let ready_ids = ready["tasks"]
