@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::{Command, ExitCode};
@@ -694,7 +694,7 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
 fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
     let latest_path = release_install_progress_latest_path();
     let latest_path_string = latest_path.display().to_string();
-    if !latest_path.is_file() {
+    if !release_install_progress_readable_regular_file(&latest_path) {
         if let Some((latest_event, progress_path)) =
             latest_release_install_progress_artifact_event()
         {
@@ -723,28 +723,29 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
             latest_event: None,
         };
     }
-    let latest_raw = match fs::read_to_string(&latest_path) {
-        Ok(raw) => raw,
-        Err(error) => {
-            return ReleaseInstallProgressStatusReceipt {
-                surface: "vida release install --status".to_string(),
-                status: "blocked".to_string(),
-                blocker_codes: vec!["release_install_progress_unreadable".to_string()],
-                next_actions: vec![format!(
-                    "Inspect release install progress marker `{}`: {error}",
-                    latest_path.display()
-                )],
-                latest_status: None,
-                latest_phase: None,
-                latest_path: latest_path_string,
-                progress_path: None,
-                process_id: None,
-                child_state: None,
-                artifact_refs: vec![latest_path.display().to_string()],
-                latest_event: None,
-            };
-        }
-    };
+    let latest_raw =
+        match read_release_install_progress_file_without_following_symlinks(&latest_path) {
+            Ok(raw) => raw,
+            Err(error) => {
+                return ReleaseInstallProgressStatusReceipt {
+                    surface: "vida release install --status".to_string(),
+                    status: "blocked".to_string(),
+                    blocker_codes: vec!["release_install_progress_unreadable".to_string()],
+                    next_actions: vec![format!(
+                        "Inspect release install progress marker `{}`: {error}",
+                        latest_path.display()
+                    )],
+                    latest_status: None,
+                    latest_phase: None,
+                    latest_path: latest_path_string,
+                    progress_path: None,
+                    process_id: None,
+                    child_state: None,
+                    artifact_refs: vec![latest_path.display().to_string()],
+                    latest_event: None,
+                };
+            }
+        };
     let latest_event: serde_json::Value = match serde_json::from_str(&latest_raw) {
         Ok(value) => value,
         Err(error) => {
@@ -838,6 +839,51 @@ fn release_install_status_receipt_from_event(
     }
 }
 
+fn release_install_progress_readable_regular_file(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+fn read_release_install_progress_file_without_following_symlinks(
+    path: &Path,
+) -> io::Result<String> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "release install progress artifact is not a regular file or is a symlink: {}",
+                path.display()
+            ),
+        ));
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+
+    let mut file = options.open(path)?;
+    let opened_metadata = file.metadata()?;
+    if !opened_metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "release install progress artifact is not a regular file: {}",
+                path.display()
+            ),
+        ));
+    }
+
+    let mut body = String::new();
+    file.read_to_string(&mut body)?;
+    Ok(body)
+}
+
 fn latest_release_install_progress_artifact_event() -> Option<(serde_json::Value, String)> {
     let mut candidates = fs::read_dir(release_install_progress_dir())
         .ok()?
@@ -848,10 +894,10 @@ fn latest_release_install_progress_artifact_event() -> Option<(serde_json::Value
             if !file_name.starts_with("release-install-") || !file_name.ends_with(".jsonl") {
                 return None;
             }
-            if !entry.metadata().ok()?.is_file() {
+            if !release_install_progress_readable_regular_file(&path) {
                 return None;
             }
-            let body = fs::read_to_string(&path).ok()?;
+            let body = read_release_install_progress_file_without_following_symlinks(&path).ok()?;
             let event = body
                 .lines()
                 .rev()
@@ -2345,6 +2391,87 @@ mod tests {
             receipt.progress_path.as_deref(),
             Some(newer_path.display().to_string().as_str())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_install_status_ignores_symlinked_durable_progress_artifact() {
+        let _guard = release_progress_test_lock();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let progress_dir = release_install_progress_dir();
+        fs::create_dir_all(&progress_dir).expect("progress dir should write");
+        let victim = harness.path().join("victim-secret.jsonl");
+        let symlink_progress = progress_dir.join("release-install-symlink.jsonl");
+        fs::write(
+            &victim,
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "surface": "vida release install",
+                    "status": "pass",
+                    "phase": "install",
+                    "child_state": "completed",
+                    "progress_path": symlink_progress.display().to_string(),
+                    "recorded_at_unix_ms": 99_u64,
+                    "attacker_secret": "SENSITIVE_TOKEN_ABC123",
+                })
+            ),
+        )
+        .expect("victim secret should write");
+        std::os::unix::fs::symlink(&victim, &symlink_progress)
+            .expect("symlinked progress artifact should write");
+
+        let receipt = release_install_status_receipt();
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(
+            receipt.blocker_codes,
+            vec!["release_install_progress_missing".to_string()]
+        );
+        assert!(receipt.latest_event.is_none());
+        assert!(receipt.progress_path.is_none());
+        assert!(receipt.artifact_refs.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_install_status_rejects_symlinked_latest_marker() {
+        let _guard = release_progress_test_lock();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let latest_path = release_install_progress_latest_path();
+        fs::create_dir_all(latest_path.parent().expect("latest parent should exist"))
+            .expect("latest parent should write");
+        let victim = harness.path().join("victim-latest-secret.json");
+        fs::write(
+            &victim,
+            serde_json::json!({
+                "surface": "vida release install",
+                "status": "pass",
+                "phase": "install",
+                "child_state": "completed",
+                "recorded_at_unix_ms": 100_u64,
+                "attacker_secret": "SENSITIVE_TOKEN_ABC123",
+            })
+            .to_string(),
+        )
+        .expect("victim latest secret should write");
+        std::os::unix::fs::symlink(&victim, &latest_path)
+            .expect("latest marker symlink should write");
+
+        let receipt = release_install_status_receipt();
+
+        assert_eq!(receipt.status, "blocked");
+        assert_eq!(
+            receipt.blocker_codes,
+            vec!["release_install_progress_missing".to_string()]
+        );
+        assert!(receipt.latest_event.is_none());
+        assert!(receipt.progress_path.is_none());
+        clean_release_progress_latest_markers();
     }
 
     #[test]
