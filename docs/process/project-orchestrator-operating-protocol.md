@@ -517,6 +517,58 @@ Development-time defect batching:
    TaskFlow percent and scope delta: tasks closed, tasks created, net open
    change, and whether new items were batch rows or new leaf tasks.
 
+Coherent work-pool execution:
+
+1. When several ready or in-progress tasks are adjacent or same-surface, the
+   orchestrator must inspect the whole candidate pool before selecting the
+   implementation route. This applies to runtime-DX work, docs/process work,
+   test-only work, operator surfaces, and other project-local task clusters.
+2. Classify the pool before write-producing work:
+   - `parallel_coherent_pack`: allowed only when all included tasks are ready in
+     the same dependency layer, have no direct or transitive dependency edges
+     between them, are `parallel_safe` or explicitly non-conflicting, share a
+     compatible owner surface, command family, proof family, dirty-worktree
+     boundary, or shared invariant, have compatible owned paths and conflict
+     domains, and can be represented by one acceptance matrix and consolidated
+     proof bundle.
+   - `sequential_coherent_pack`: required when tasks are adjacent or
+     same-surface but ordered by dependency edges, shared contracts, sequential
+     execution semantics, conflict domains, proof gates, release/install gates,
+     or acceptance criteria. This posture still keeps one shared analysis,
+     acceptance matrix, proof plan, and closeout bundle, but implementation,
+     focused proof, and closure move layer by layer.
+   - `not_packable`: required when a candidate crosses an incompatible security
+     boundary, data migration, owner surface, owned-path boundary, release gate,
+     or proof target too broad for one cycle.
+3. Before write-producing work, bind the pool explicitly in TaskFlow evidence:
+   included task ids, dependency graph and closure order, posture classification,
+   shared invariant, owned paths, conflict domains, non-goals, dirty-worktree
+   exclusions, proof bundle, release/install decision, and whether the next work
+   is simultaneous, staged, or blocked. Create or mark the TaskFlow task and
+   execution step for each included slice before its mutation.
+4. For `parallel_coherent_pack`, analyze the whole pool first, then implement
+   code, tests, and docs for all selected slices in one coordinated write
+   window. Write the test matrix as a batch before broad verification; use
+   focused proof only while shaping the pool, then run the consolidated proof
+   bundle after the pack is complete.
+5. For `sequential_coherent_pack`, analyze the whole pool first and write the
+   shared proof matrix up front, but edit only the next dependency layer. Run
+   focused proof for that layer, refresh assumptions and conflict evidence, then
+   proceed to the next layer. Do not describe this as simultaneous
+   implementation. Run the consolidated pack proof after all layers are complete.
+6. If the user asks for simultaneous pack work but the dependency or conflict
+   evidence requires staged execution, report the downgrade to
+   `sequential_coherent_pack` before coding. Never silently downgrade a requested
+   parallel pack into task-by-task execution.
+7. Close included tasks sequentially in dependency order, reusing the same pool
+   proof where it satisfies each task's acceptance target. If one row fails,
+   split only that row or task with a recorded reason and keep passing rows
+   attached to the pool evidence.
+8. Commit, push, release, and install per pool rather than per small task when
+   current publication and release rules allow it. The closure scorecard must
+   report pool membership, posture, tasks closed, rows split, proof commands
+   reused, operations saved, residual risks, and the next routing rule.
+
 ## Post-Task Optimization Checklist
 
 After every task, the orchestrator must track:
