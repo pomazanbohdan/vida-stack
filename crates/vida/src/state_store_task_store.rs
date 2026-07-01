@@ -342,11 +342,6 @@ impl StateStore {
         if Self::run_graph_status_is_reconciled_terminal_closure(status) {
             return Ok(true);
         }
-        match self.show_task(&status.task_id).await {
-            Ok(task) if Self::task_has_canonical_close_truth(&task) => return Ok(true),
-            Ok(_) | Err(StateStoreError::MissingTask { .. }) => {}
-            Err(error) => return Err(error),
-        }
         self.task_close_reconcile_has_persisted_receipt_truth(&status.run_id, &status.task_id)
             .await
     }
@@ -1379,6 +1374,12 @@ impl StateStore {
         };
         if status.task_id != task.id
             || Self::run_graph_status_is_reconciled_terminal_closure(&status)
+        {
+            return Ok(());
+        }
+        if !self
+            .task_close_reconcile_has_persisted_receipt_truth(&run_id, &task.id)
+            .await?
         {
             return Ok(());
         }
