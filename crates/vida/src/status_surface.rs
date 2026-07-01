@@ -1736,16 +1736,9 @@ fn render_cached_status_projection_for_operator(summary_only: bool, cached: &str
 fn compact_cached_status_summary_projection(payload: &mut serde_json::Value) {
     if let Some(object) = payload.as_object_mut() {
         for key in [
-            "latest_run_graph_status",
-            "latest_terminal_task_active_run_graph_status",
             "latest_run_graph_delegation_gate",
-            "latest_run_graph_recovery",
             "latest_run_graph_checkpoint",
-            "latest_run_graph_gate",
             "latest_run_graph_dispatch_receipt",
-            "latest_run_graph_dispatch_route_truth",
-            "latest_run_graph_downstream_dispatch_preview",
-            "latest_run_graph_dispatch_compact_summary",
         ] {
             object.remove(key);
         }
@@ -3624,7 +3617,7 @@ mod tests {
     }
 
     #[test]
-    fn status_summary_cached_projection_removes_full_run_graph_overlay_fields() {
+    fn status_summary_cached_projection_preserves_summary_run_graph_fields() {
         let cached = serde_json::json!({
             "surface": "vida status",
             "status": "pass",
@@ -3656,14 +3649,21 @@ mod tests {
         for key in [
             "latest_run_graph_status",
             "latest_terminal_task_active_run_graph_status",
-            "latest_run_graph_delegation_gate",
             "latest_run_graph_recovery",
-            "latest_run_graph_checkpoint",
             "latest_run_graph_gate",
-            "latest_run_graph_dispatch_receipt",
             "latest_run_graph_dispatch_route_truth",
             "latest_run_graph_downstream_dispatch_preview",
             "latest_run_graph_dispatch_compact_summary",
+        ] {
+            assert!(
+                payload.get(key).is_some(),
+                "summary cache render should preserve summary field {key}"
+            );
+        }
+        for key in [
+            "latest_run_graph_delegation_gate",
+            "latest_run_graph_checkpoint",
+            "latest_run_graph_dispatch_receipt",
         ] {
             assert!(
                 payload.get(key).is_none(),
