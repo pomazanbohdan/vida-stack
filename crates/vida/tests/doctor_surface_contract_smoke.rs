@@ -87,6 +87,17 @@ fn project_bound_state_dir() -> (String, String) {
         concat!(
             "project:\n",
             "  id: test\n",
+            "operator_surfaces:\n",
+            "  taskflow:\n",
+            "    graph_summary:\n",
+            "      cache_policy:\n",
+            "        mode: cache_first_with_authoritative_fallback\n",
+            "        read_cache_before_authoritative_open: true\n",
+            "        freshness_contract: projection_contract_version_and_state_marker\n",
+            "        stale_projection_behavior: reject_and_recompute\n",
+            "        refresh_flag_supported: false\n",
+            "        authoritative_fallback: true\n",
+            "        help_summary: \"Cache policy is cache-first with authoritative fallback; stale or mismatched projections are rejected and recomputed.\"\n",
             "agent_extensions:\n",
             "  role_selection:\n",
             "    mode: auto\n",
@@ -3207,6 +3218,60 @@ fn taskflow_next_outputs_default_toon_json_and_help_contracts() {
         help_stdout.contains("authoritative recompute"),
         "taskflow next help should document cache refresh behavior: {help_stdout}"
     );
+}
+
+#[test]
+fn taskflow_graph_summary_documents_and_outputs_cache_policy() {
+    let (_project_root, state_dir) = project_bound_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stderr={}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let json_output = vida()
+        .args(["taskflow", "graph-summary", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("graph-summary json output should run");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&json_output.stdout).expect("graph-summary json should parse");
+    assert_eq!(payload["surface"], "vida taskflow graph-summary");
+    assert_eq!(
+        payload["cache_policy"]["mode"],
+        "cache_first_with_authoritative_fallback"
+    );
+    assert_eq!(
+        payload["cache_policy"]["read_cache_before_authoritative_open"],
+        true
+    );
+    assert_eq!(
+        payload["cache_policy"]["stale_projection_behavior"],
+        "reject_and_recompute"
+    );
+    assert_eq!(
+        payload["cache_policy"]["source"],
+        "vida.config.yaml:operator_surfaces.taskflow.graph_summary.cache_policy"
+    );
+
+    let help = vida()
+        .args(["taskflow", "graph-summary", "--help"])
+        .output()
+        .expect("graph-summary help should run");
+    assert!(
+        help.status.success(),
+        "graph-summary help should succeed: stderr={}",
+        String::from_utf8_lossy(&help.stderr)
+    );
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(help_stdout.contains("cache-first"));
+    assert!(help_stdout.contains("authoritative fallback"));
+    assert!(help_stdout.contains("cache_policy"));
 }
 
 #[test]

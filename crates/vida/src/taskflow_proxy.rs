@@ -454,11 +454,80 @@ fn compact_graph_summary_operator_session_projection(
     projection
 }
 
+fn taskflow_graph_summary_default_cache_policy_value() -> serde_json::Value {
+    serde_json::json!({
+        "mode": "cache_first_with_authoritative_fallback",
+        "read_cache_before_authoritative_open": true,
+        "freshness_contract": "projection_contract_version_and_state_marker",
+        "stale_projection_behavior": "reject_and_recompute",
+        "refresh_flag_supported": false,
+        "authoritative_fallback": true,
+        "source": "runtime_default_compatibility",
+    })
+}
+
+fn taskflow_graph_summary_cache_policy_value(state_root: &Path) -> serde_json::Value {
+    let Some(project_root) =
+        crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
+            .or_else(|| std::env::current_dir().ok())
+    else {
+        return taskflow_graph_summary_default_cache_policy_value();
+    };
+    let Ok(config) = crate::config_value_utils::load_project_overlay_yaml_for_root(&project_root)
+    else {
+        return taskflow_graph_summary_default_cache_policy_value();
+    };
+    let Some(policy) = crate::yaml_lookup(
+        &config,
+        &[
+            "operator_surfaces",
+            "taskflow",
+            "graph_summary",
+            "cache_policy",
+        ],
+    ) else {
+        return taskflow_graph_summary_default_cache_policy_value();
+    };
+    let mut value = serde_json::to_value(policy)
+        .unwrap_or_else(|_| taskflow_graph_summary_default_cache_policy_value());
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "source".to_string(),
+            serde_json::json!(
+                "vida.config.yaml:operator_surfaces.taskflow.graph_summary.cache_policy"
+            ),
+        );
+    }
+    value
+}
+
+pub(crate) fn taskflow_graph_summary_cache_policy_help_line_from_project_config() -> String {
+    let Ok(config) = crate::config_value_utils::load_project_overlay_yaml() else {
+        return "Cache policy is configured in vida.config.yaml; missing config falls back to compatibility defaults.".to_string();
+    };
+    crate::yaml_string(crate::yaml_lookup(
+        &config,
+        &[
+            "operator_surfaces",
+            "taskflow",
+            "graph_summary",
+            "cache_policy",
+            "help_summary",
+        ],
+    ))
+    .unwrap_or_else(|| {
+        "Cache policy is configured in vida.config.yaml; missing config falls back to compatibility defaults.".to_string()
+    })
+}
+
 fn compact_taskflow_graph_summary_payload(mut payload: serde_json::Value) -> serde_json::Value {
     let compact_projection = compact_graph_summary_operator_session_projection(
         payload["operator_session_projection"].clone(),
     );
     if let Some(object) = payload.as_object_mut() {
+        object
+            .entry("cache_policy".to_string())
+            .or_insert_with(taskflow_graph_summary_default_cache_policy_value);
         object.insert(
             "operator_session_projection".to_string(),
             compact_projection,
@@ -555,17 +624,6 @@ fn cached_taskflow_graph_summary_projection_admissible(cached: &str) -> bool {
                 .is_some_and(|version| {
                     version == TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION
                 })
-                || (payload.get("surface").and_then(serde_json::Value::as_str)
-                    == Some("vida taskflow graph-summary")
-                    && payload
-                        .get("status")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some()
-                    && payload["operator_contracts"]["contract_id"].as_str()
-                        == Some(
-                            crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC
-                                .contract_id,
-                        ))
         })
 }
 
@@ -5804,6 +5862,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     let payload = serde_json::json!({
         "surface": "vida taskflow graph-summary",
         "projection_contract_version": TASKFLOW_GRAPH_SUMMARY_PROJECTION_CONTRACT_VERSION,
+        "cache_policy": taskflow_graph_summary_cache_policy_value(&proxy_state_root),
         "status": status,
         "trace_id": serde_json::Value::Null,
         "workflow_class": serde_json::Value::Null,
@@ -13703,6 +13762,16 @@ agent_system:
     fn graph_summary_cache_requires_current_projection_contract_version() {
         assert!(!super::cached_taskflow_graph_summary_projection_admissible(
             r#"{"surface":"vida taskflow graph-summary"}"#
+        ));
+        assert!(!super::cached_taskflow_graph_summary_projection_admissible(
+            &serde_json::json!({
+                "surface": "vida taskflow graph-summary",
+                "status": "pass",
+                "operator_contracts": {
+                    "contract_id": crate::release1_operator_output::RELEASE1_OPERATOR_CONTRACT_SPEC.contract_id
+                }
+            })
+            .to_string()
         ));
         assert!(super::cached_taskflow_graph_summary_projection_admissible(
             &serde_json::json!({

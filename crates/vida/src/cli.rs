@@ -3260,8 +3260,18 @@ pub(crate) struct TaskReadyArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskNextArgs {
-    #[arg(long = "scope")]
+    #[arg(
+        long = "scope",
+        help = "Limit next TaskFlow selection to this task scope"
+    )]
     pub(crate) scope: Option<String>,
+
+    #[arg(
+        long = "refresh",
+        visible_alias = "no-cache",
+        help = "Bypass cached TaskFlow next projections and recompute from authoritative state"
+    )]
+    pub(crate) refresh: bool,
 
     #[arg(
         long = "state-dir",
@@ -4691,6 +4701,28 @@ mod tests {
         assert_eq!(next_lawful.select.as_deref(), Some("task-1"));
         assert!(next_lawful.explain);
         assert!(next_lawful.json);
+    }
+
+    #[test]
+    fn task_next_help_exposes_cache_policy_parity() {
+        let next_error = Cli::try_parse_from(["vida", "task", "next", "--help"])
+            .expect_err("help should render clap display error");
+        let next_help = next_error.to_string();
+        assert!(next_help.contains("--scope"));
+        assert!(next_help.contains("--refresh"));
+        assert!(next_help.contains("--no-cache"));
+        assert!(next_help.contains("authoritative state"));
+
+        let parsed = Cli::try_parse_from(["vida", "task", "next", "--refresh", "--json"])
+            .expect("task next refresh should parse");
+        let Some(super::Command::Task(task_args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let TaskCommand::Next(next) = task_args.command else {
+            panic!("next command should parse");
+        };
+        assert!(next.refresh);
+        assert!(next.json);
     }
 
     #[test]

@@ -22,6 +22,18 @@ language_policy:
   documentation: en
   todo_protocol: en
 
+operator_surfaces:
+  taskflow:
+    graph_summary:
+      cache_policy:
+        mode: cache_first_with_authoritative_fallback
+        read_cache_before_authoritative_open: true
+        freshness_contract: projection_contract_version_and_state_marker
+        stale_projection_behavior: reject_and_recompute
+        refresh_flag_supported: false
+        authoritative_fallback: true
+        help_summary: "Cache policy is cache-first with authoritative fallback; stale or mismatched projections are rejected and recomputed."
+
 host_environment:
   cli_system: codex
   host_agent_bridge_contract:

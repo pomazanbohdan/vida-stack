@@ -6669,6 +6669,56 @@ fn taskflow_next_json_recomputes_before_taskflow_next_projection_cache() {
         "--no-cache must skip rewriting taskflow-next-latest projection"
     );
 
+    write_operator_projection(
+        &state_dir,
+        "taskflow-next-latest",
+        &serde_json::json!({
+            "surface": "vida taskflow next",
+            "status": "blocked",
+            "cache_probe": "stale-taskflow-next-reused",
+            "blocker_codes": ["open_delegated_cycle"],
+            "next_actions": ["stale cached blocker"],
+            "projection_cache_dependencies": {
+                "task_snapshot_marker": task_snapshot_marker.trim()
+            }
+        }),
+    );
+    let task_next_refresh = run_command_json(&["task", "next", "--refresh", "--json"], &state_dir);
+    assert_eq!(task_next_refresh["status"], "pass");
+    assert_eq!(task_next_refresh["primary_ready_task"]["id"], ready_task_id);
+    assert_eq!(task_next_refresh["cache_policy"]["mode"], "no_cache");
+    assert_ne!(
+        task_next_refresh["cache_probe"],
+        "stale-taskflow-next-reused"
+    );
+
+    write_operator_projection(
+        &state_dir,
+        "taskflow-next-latest",
+        &serde_json::json!({
+            "surface": "vida taskflow next",
+            "status": "blocked",
+            "cache_probe": "stale-taskflow-next-reused",
+            "blocker_codes": ["open_delegated_cycle"],
+            "next_actions": ["stale cached blocker"],
+            "projection_cache_dependencies": {
+                "task_snapshot_marker": task_snapshot_marker.trim()
+            }
+        }),
+    );
+    let task_next_no_cache =
+        run_command_json(&["task", "next", "--no-cache", "--json"], &state_dir);
+    assert_eq!(task_next_no_cache["status"], "pass");
+    assert_eq!(
+        task_next_no_cache["primary_ready_task"]["id"],
+        ready_task_id
+    );
+    assert_eq!(task_next_no_cache["cache_policy"]["mode"], "no_cache");
+    assert_ne!(
+        task_next_no_cache["cache_probe"],
+        "stale-taskflow-next-reused"
+    );
+
     let _ = fs::remove_dir_all(&state_dir);
 }
 

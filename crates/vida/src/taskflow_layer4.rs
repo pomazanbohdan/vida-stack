@@ -351,10 +351,14 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow graph-summary [--json]");
             println!("  vida taskflow graph-summary [--operator] [--json]");
             println!("  --operator is an explicit alias for the compact operator projection.");
+            println!(
+                "  {}",
+                crate::taskflow_proxy::taskflow_graph_summary_cache_policy_help_line_from_project_config()
+            );
             println!();
             println!("Returned semantics:");
             println!(
-                "  status, blocker_codes, next_actions, ready_count, blocked_count, critical_path_length, current_task_id, primary_ready_task, primary_blocked_task, scheduling.ready[*].ready_parallel_safe, scheduling.ready[*].parallel_blockers, scheduling.parallel_candidates_after_current, waves, critical_path"
+                "  status, blocker_codes, next_actions, cache_policy, ready_count, blocked_count, critical_path_length, current_task_id, primary_ready_task, primary_blocked_task, scheduling.ready[*].ready_parallel_safe, scheduling.ready[*].parallel_blockers, scheduling.parallel_candidates_after_current, waves, critical_path"
             );
             println!();
             println!("Failure modes:");

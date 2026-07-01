@@ -12420,6 +12420,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 proxy_args.push("--state-dir".to_string());
                 proxy_args.push(state_dir.to_string());
             }
+            if command.refresh {
+                proxy_args.push("--refresh".to_string());
+            }
             if command.json {
                 proxy_args.push("--json".to_string());
             }
