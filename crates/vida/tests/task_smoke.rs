@@ -19962,6 +19962,27 @@ fn task_list_show_ready_prefer_authoritative_state_over_stale_snapshot() {
 }
 
 #[test]
+fn task_close_help_documents_output_modes() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let help = run_and_assert_success(&["task", "close", "--help"], &state_dir);
+    for expected in [
+        "--render",
+        "Render mode for default compact human-readable output",
+        "--json",
+        "Emit machine-readable JSON output instead of default compact task close output",
+    ] {
+        assert!(
+            help.contains(expected),
+            "task close help missing `{expected}`:\n{help}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_show_falls_back_to_snapshot_when_authoritative_state_is_missing() {
     let project_root = unique_state_dir();
     let state_dir = format!("{project_root}/.vida/data/state");

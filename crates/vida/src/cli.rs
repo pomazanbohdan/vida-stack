@@ -44,6 +44,8 @@ const TASK_IMPORT_AFTER_HELP: &str = "Examples:\n  vida task import --file tasks
 const TASK_UPDATE_ABOUT: &str = "Update one tracked task in the authoritative backlog store.";
 const TASK_UPDATE_LONG_ABOUT: &str = "Update one tracked task in the authoritative backlog store.\n\nUse execution-semantics flags to correct sequencing and parallelism truth without moving ordering back into notes:\n- `--execution-mode sequential|parallel_safe|exclusive|container_only`\n- `--order-bucket <id>`\n- `--parallel-group <id>`\n- `--conflict-domain <id>`\n- matching `--clear-*` flags remove one semantics field\n\nPlanner proof target updates are replacements, not appends. Use `--clear-proof-targets` to remove obsolete proof targets.";
 const TASK_UPDATE_AFTER_HELP: &str = "Examples:\n  vida task update <task-id> --status in_progress --json\n  vida task update <task-id> --title \"Retitled task\" --priority 1 --json\n  vida task update <task-id> --parent-id <parent-id> --json\n  vida task update <task-id> --clear-parent-id --json\n  vida task update <task-id> --proof-target \"cargo test -p vida focused_test\" --json\n  vida task update <task-id> --acceptance-target-literal \"One prose target, with commas preserved\" --json\n  vida task update <task-id> --clear-proof-targets --json\n  vida task update <task-id> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task update <task-id> --clear-parallel-group --clear-conflict-domain --json\n\nNotes:\n  Use either a value flag or the matching clear flag, not both.\n  `--proof-target` replaces the configured planner proof_targets; it does not append to stale targets.\n  Comma-delimited list flags remain available for compact lists; use `*-literal` variants for long prose values that contain commas.\n  Re-check `vida taskflow graph-summary --json` after updates to confirm `ready_parallel_safe` and `parallel_blockers`.\n  For long notes, use `--notes-file <path>`; for many task updates or creates, use `vida task import --file tasks.jsonl --dry-run`.";
+const TASK_CLOSE_LONG_ABOUT: &str = "Close one tracked task with evidence and optional release automation.\n\nDefault output is compact human-readable operator output. It shows close status, blockers when closure is rejected, and scoped follow-up state. Use --json for the machine-readable task-close contract.";
+const TASK_CLOSE_AFTER_HELP: &str = "Examples:\n  vida task close <task-id> --reason \"proof passed\"\n  vida task close <task-id> --reason-file close-reason.txt\n  vida task close <task-id> --reason \"proof passed\" --json\n  vida task close <task-id> --reason \"proof passed\" --release --install\n\nOutput:\n  Default output is compact human-readable task close output for operators.\n  Blocked default output includes blocker codes and next actions without requiring --json.\n  Use --json only when automation needs the full machine-readable close payload.\n  Use --render plain|color|color_emoji to choose the default human rendering mode.";
 const TASK_BLOCK_ABOUT: &str = "record a runtime blocker on one task without closing it";
 const TASK_BLOCK_LONG_ABOUT: &str = "Record a runtime blocker on one task without closing it.\n\nThe command marks the task status as `blocked`, appends a structured blocker note to existing task notes, refreshes the canonical TaskFlow snapshot, and emits a machine-readable receipt when `--json` is set.";
 const TASK_BLOCK_AFTER_HELP: &str = "Examples:\n  vida task block <task-id> --reason \"runtime bridge unavailable\" --evidence \"agent-init returned host_tool_capability_missing\" --json\n  vida task block <task-id> --reason \"browser proof unavailable\" --blocker web_runtime_unhealthy --next-action \"run vida runtime web status --json\" --json\n\nOptions:\n  --reason <text>       Human-readable blocker reason; required\n  --evidence <text>     Evidence command, file, receipt, or observation; accepts repeated flags\n  --blocker <code>      Canonical blocker code; accepts comma-separated values and repeated flags\n  --next-action <text>  Suggested recovery or continuation action; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output";
@@ -1175,7 +1177,11 @@ pub(crate) enum TaskCommand {
     Handoff(TaskHandoffArgs),
     #[command(about = "inspect task-scoped exception takeover and root-write status")]
     Takeover(TaskTakeoverArgs),
-    #[command(about = "close one tracked task with evidence and optional release automation")]
+    #[command(
+        about = "close one tracked task with evidence and optional release automation",
+        long_about = TASK_CLOSE_LONG_ABOUT,
+        after_help = TASK_CLOSE_AFTER_HELP
+    )]
     Close(TaskCloseArgs),
     #[command(about = "reconcile open epics whose descendants are complete")]
     Reconcile(TaskReconcileArgs),
@@ -3040,13 +3046,26 @@ pub(crate) struct TaskCloseArgs {
     )]
     pub(crate) commit_message: Option<String>,
 
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
     pub(crate) state_dir: Option<PathBuf>,
 
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render mode for default compact human-readable output"
+    )]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "json")]
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact task close output"
+    )]
     pub(crate) json: bool,
 }
 
