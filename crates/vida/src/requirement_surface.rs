@@ -1,8 +1,10 @@
-use std::fs::{self, OpenOptions};
-use std::io::Read;
+use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
+use runtime_path_policy::{
+    read_bounded_text_file_under_root, ArtifactPathKind, PathPolicyError, StateRoot,
+};
 use serde_json::{json, Value};
 
 use crate::config_value_utils::{
@@ -135,38 +137,16 @@ impl RequirementSourceInput {
 fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, String> {
     let project_root = requirement_source_project_root()?;
     let relative_path = validate_requirement_source_path(path)?;
-    let source_path = project_root.join(&relative_path);
     reject_symlink_components(&project_root, &relative_path)?;
-
-    let metadata = fs::symlink_metadata(&source_path)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "{}: source file must not be a symlink",
-            path.display()
-        ));
-    }
-    let mut file = open_requirement_source_file_for_read(&source_path)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
-    let metadata = file
-        .metadata()
-        .map_err(|error| format!("{}: {error}", path.display()))?;
-    if !metadata.is_file() {
-        return Err(format!(
-            "{}: source file must be a regular file",
-            path.display()
-        ));
-    }
-    if metadata.len() > MAX_SOURCE_FILE_BYTES {
-        return Err(format!(
-            "{}: source file exceeds {MAX_SOURCE_FILE_BYTES} byte limit",
-            path.display()
-        ));
-    }
-
-    let mut content = String::new();
-    file.read_to_string(&mut content)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let state_root =
+        StateRoot::open(&project_root).map_err(|error| format!("{}: {error}", path.display()))?;
+    let content = read_bounded_text_file_under_root(
+        &state_root,
+        &relative_path,
+        ArtifactPathKind::RequirementSourceFile,
+        MAX_SOURCE_FILE_BYTES,
+    )
+    .map_err(|error| requirement_source_path_error(path, error))?;
     let display_path = relative_path.display().to_string();
     let redaction = redact_requirement_source_content(content.trim());
     let digest = blake3::hash(redaction.public_text.as_bytes());
@@ -186,30 +166,23 @@ fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, S
     })
 }
 
-fn open_requirement_source_file_for_read(path: &Path) -> std::io::Result<fs::File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    apply_requirement_source_no_follow_open_options(&mut options);
-    options.open(path)
+fn requirement_source_path_error(path: &Path, error: PathPolicyError) -> String {
+    match error {
+        PathPolicyError::Symlink { .. } => {
+            format!("{}: source file must not be a symlink", path.display())
+        }
+        PathPolicyError::NotRegularFile { .. } => {
+            format!("{}: source file must be a regular file", path.display())
+        }
+        PathPolicyError::TooLarge { max_bytes, .. } => {
+            format!(
+                "{}: source file exceeds {max_bytes} byte limit",
+                path.display()
+            )
+        }
+        other => format!("{}: {other}", path.display()),
+    }
 }
-
-#[cfg(unix)]
-fn apply_requirement_source_no_follow_open_options(options: &mut OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    options.custom_flags(libc::O_NOFOLLOW);
-}
-
-#[cfg(windows)]
-fn apply_requirement_source_no_follow_open_options(options: &mut OpenOptions) {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-}
-
-#[cfg(not(any(unix, windows)))]
-fn apply_requirement_source_no_follow_open_options(_options: &mut OpenOptions) {}
 
 fn requirement_source_project_root() -> Result<PathBuf, String> {
     crate::resolve_runtime_project_root()
