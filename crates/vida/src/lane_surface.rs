@@ -3731,9 +3731,7 @@ fn trusted_host_bridge_completion_request_context(
     } else {
         None
     };
-    if receipt.dispatch_status == "bridge_request_pending"
-        && receipt.dispatch_result_path.is_some()
-        && receipt_packet_matches_request != Some(true)
+    if receipt.dispatch_status == "bridge_request_pending" && receipt.dispatch_result_path.is_some()
     {
         let normalized_request_path =
             crate::runtime_dispatch_state::normalize_persisted_runtime_path(request_path);
@@ -3928,6 +3926,9 @@ fn validated_host_bridge_paths_from_receipt(
 ) -> Result<HostBridgeReceiptPaths, String> {
     let canonical_request_path =
         canonicalize_existing_state_path(state_root, request_path, "request")?;
+    let allow_reconciled_request_paths = allow_reconciled_request_paths
+        && !(receipt.dispatch_status == "bridge_request_pending"
+            && receipt.dispatch_result_path.is_some());
     let paths = if allow_reconciled_request_paths {
         let mut request = read_host_bridge_json_artifact_at_path(&canonical_request_path)?;
         if request
@@ -5782,6 +5783,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     .map(|context| context.dispatch_target.as_str())
                     .or(reconciled_request_dispatch_target.as_deref())
                     .unwrap_or(receipt.dispatch_target.as_str());
+                let allow_reconciled_request_paths = (host_bridge_completion_context.is_some()
+                    && !(receipt.dispatch_status == "bridge_request_pending"
+                        && receipt.dispatch_result_path.is_some()))
+                    || retrying_summary_guard
+                    || retrying_request_guard;
                 match materialize_host_bridge_completion_evidence(
                     store.root(),
                     request_path,
@@ -5805,9 +5811,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     taskflow_artifacts,
                     &authoritative_owned_paths,
                     retrying_summary_guard || retrying_request_guard,
-                    host_bridge_completion_context.is_some()
-                        || retrying_summary_guard
-                        || retrying_request_guard,
+                    allow_reconciled_request_paths,
                 ) {
                     Ok(evidence) => Some(evidence),
                     Err(error) => {
@@ -12186,7 +12190,7 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_path_validation_prefers_trusted_request_over_oversized_dispatch_result() {
+    fn host_bridge_path_validation_requires_persisted_dispatch_result_for_pending_receipts() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -12261,41 +12265,25 @@ mod tests {
         receipt.dispatch_result_path = Some(dispatch_result_path.display().to_string());
         receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
 
-        let trusted = validated_host_bridge_paths_from_receipt(
-            &root,
-            &request_path,
-            &receipt,
-            false,
-            true,
-            false,
-        )
-        .expect("trusted explicit request should not parse oversized dispatch result");
-        assert_eq!(
-            trusted.request_path,
-            std::fs::canonicalize(&request_path).unwrap()
-        );
-        assert!(trusted
-            .result_path
-            .ends_with("host-tool-bridge/results/run-large-result.json"));
-        assert!(trusted
-            .receipt_path
-            .ends_with("host-tool-bridge/receipts/run-large-result.json"));
-
-        let untrusted_error = match validated_host_bridge_paths_from_receipt(
-            &root,
-            &request_path,
-            &receipt,
-            false,
-            false,
-            false,
-        ) {
-            Ok(_) => panic!("untrusted completion should still inspect dispatch result evidence"),
-            Err(error) => error,
-        };
-        assert!(
-            untrusted_error.contains("exceeds"),
-            "unexpected error: {untrusted_error}"
-        );
+        for allow_reconciled_request_paths in [true, false] {
+            let error = match validated_host_bridge_paths_from_receipt(
+                &root,
+                &request_path,
+                &receipt,
+                false,
+                allow_reconciled_request_paths,
+                false,
+            ) {
+                Ok(_) => panic!(
+                    "pending completion with persisted dispatch evidence must inspect dispatch result"
+                ),
+                Err(error) => error,
+            };
+            assert!(
+                error.contains("exceeds"),
+                "unexpected error for allow_reconciled_request_paths={allow_reconciled_request_paths}: {error}"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -14197,7 +14185,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_host_bridge_completion_uses_receipt_packet_when_dispatch_result_is_oversized() {
+    fn pending_host_bridge_completion_rejects_oversized_persisted_dispatch_result() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -14271,23 +14259,22 @@ mod tests {
         receipt.dispatch_result_path = Some(oversized_dispatch_result_path.display().to_string());
         receipt.downstream_dispatch_packet_path = None;
 
-        let context = trusted_host_bridge_completion_request_context(
+        let error = match trusted_host_bridge_completion_request_context(
             &root,
             "run-host-bridge-oversized-dispatch-result",
             &request_path.display().to_string(),
             Some(&status),
             &receipt,
-        )
-        .expect("matching receipt packet should avoid reading oversized activation result")
-        .expect("pending bridge request should return completion context");
+        ) {
+            Ok(_) => panic!(
+                "pending bridge request with persisted dispatch evidence must validate dispatch result"
+            ),
+            Err(error) => error,
+        };
 
-        assert_eq!(context.dispatch_target, "analyst");
-        assert_eq!(
-            context.packet_path,
-            canonicalize_existing_regular_state_path(&root, &packet_path, "packet")
-                .expect("canonical packet")
-                .display()
-                .to_string()
+        assert!(
+            error.contains("exceeds"),
+            "unexpected oversized dispatch-result validation error: {error}"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
