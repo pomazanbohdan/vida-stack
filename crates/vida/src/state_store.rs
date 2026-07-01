@@ -2028,6 +2028,131 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
+    async fn update_task_rejects_closed_task_metadata_until_reopened() {
+        let root = unique_temp_root("vida-update-closed-task");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::<String>::new();
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "closed-parent",
+                title: "Closed parent",
+                display_id: None,
+                description: "parent",
+                issue_type: "epic",
+                status: "closed",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create parent task");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "closed-task",
+                title: "Closed task",
+                display_id: None,
+                description: "closed",
+                issue_type: "task",
+                status: "closed",
+                priority: 1,
+                parent_id: Some("closed-parent"),
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: TaskPlannerMetadata::default(),
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create closed task");
+
+        let mut planner_metadata = TaskPlannerMetadata::default();
+        planner_metadata.proof_targets = vec!["cargo test -p vida closed_task_guard".to_string()];
+        let err = store
+            .update_task(UpdateTaskRequest {
+                task_id: "closed-task",
+                title: None,
+                status: None,
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: Some(planner_metadata.clone()),
+            })
+            .await
+            .expect_err("closed metadata mutation should be rejected");
+        let reason = match err {
+            StateStoreError::InvalidTaskRecord { reason } => reason,
+            other => panic!("expected invalid task record, got {other:?}"),
+        };
+        assert_eq!(
+            StateStore::task_update_closed_task_mutation_task_id_from_reason(&reason),
+            Some("closed-task")
+        );
+
+        let reopened = store
+            .update_task(UpdateTaskRequest {
+                task_id: "closed-task",
+                title: None,
+                status: Some("in_progress"),
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: None,
+            })
+            .await
+            .expect("status-only reopen should remain explicit path");
+        assert_eq!(reopened.status, "in_progress");
+
+        let updated = store
+            .update_task(UpdateTaskRequest {
+                task_id: "closed-task",
+                title: None,
+                status: None,
+                priority: None,
+                notes: None,
+                description: None,
+                parent_id: None,
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+                planner_metadata: Some(planner_metadata),
+            })
+            .await
+            .expect("metadata update should be allowed after reopen");
+        assert_eq!(
+            updated.planner_metadata.proof_targets,
+            vec!["cargo test -p vida closed_task_guard".to_string()]
+        );
+
+        store.close().await;
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn append_task_notes_preserves_existing_notes() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)

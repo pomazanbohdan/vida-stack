@@ -103,10 +103,16 @@ pub(crate) struct ClosedTaskRunReconciliationSummary {
 impl StateStore {
     pub(crate) const TASK_UPDATE_CLOSE_AUTHORITY_BLOCKER_CODE: &'static str =
         "task_update_close_authority_required";
+    pub(crate) const TASK_UPDATE_CLOSED_TASK_MUTATION_BLOCKER_CODE: &'static str =
+        "task_update_closed_task_mutation_requires_reopen";
     const TASK_UPDATE_CLOSE_AUTHORITY_REASON_PREFIX: &'static str =
         "task update close authority required for `";
     const TASK_UPDATE_CLOSE_AUTHORITY_REASON_SUFFIX: &'static str =
         "`: configured proof targets require `vida task close`";
+    const TASK_UPDATE_CLOSED_TASK_MUTATION_REASON_PREFIX: &'static str =
+        "task update closed task mutation requires reopen for `";
+    const TASK_UPDATE_CLOSED_TASK_MUTATION_REASON_SUFFIX: &'static str =
+        "`: reopen the task before mutating metadata";
 
     pub(crate) fn task_status_is_closed_like(status: &str) -> bool {
         taskflow_core::task_status_is_closed_like(status)
@@ -220,6 +226,39 @@ impl StateStore {
         } else {
             None
         }
+    }
+
+    pub(crate) fn task_update_closed_task_mutation_task_id_from_reason(
+        reason: &str,
+    ) -> Option<&str> {
+        let rest = reason.strip_prefix(Self::TASK_UPDATE_CLOSED_TASK_MUTATION_REASON_PREFIX)?;
+        let (task_id, suffix) =
+            rest.split_once(Self::TASK_UPDATE_CLOSED_TASK_MUTATION_REASON_SUFFIX)?;
+        if suffix.is_empty() && !task_id.trim().is_empty() {
+            Some(task_id)
+        } else {
+            None
+        }
+    }
+
+    fn ensure_closed_task_update_requires_reopen(
+        task: &TaskRecord,
+        metadata_update_requested: bool,
+        parent_update_requested: bool,
+    ) -> Result<(), StateStoreError> {
+        if Self::task_status_is_closed_like(&task.status)
+            && (metadata_update_requested || parent_update_requested)
+        {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "{}{}{}",
+                    Self::TASK_UPDATE_CLOSED_TASK_MUTATION_REASON_PREFIX,
+                    task.id,
+                    Self::TASK_UPDATE_CLOSED_TASK_MUTATION_REASON_SUFFIX
+                ),
+            });
+        }
+        Ok(())
     }
 
     fn task_update_close_authority_required(
@@ -3225,6 +3264,11 @@ impl StateStore {
             task.planner_metadata = planner_metadata;
             metadata_update_requested = true;
         }
+        Self::ensure_closed_task_update_requires_reopen(
+            &base_task_for_update,
+            metadata_update_requested,
+            parent_update_requested,
+        )?;
         let (execution_semantics, planner_metadata) = Self::normalize_task_record_defaults(
             task_id,
             std::mem::take(&mut task.execution_semantics),

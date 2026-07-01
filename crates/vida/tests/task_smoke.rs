@@ -8679,6 +8679,118 @@ fn task_proof_attach_evidence_preserves_literal_comma_target() {
 }
 
 #[test]
+fn task_update_rejects_closed_task_proof_target_mutation() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("closed-proof-parent");
+    let task_id = unique_test_id("closed-proof-task");
+    let proof_target = "closed task proof target guard";
+    let blocked_target = "cargo test -p vida blocked closed proof target mutation";
+    create_epic_parent(&state_dir, &parent_id, "Closed proof parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Closed proof task",
+            "--type",
+            "task",
+            "--parent-id",
+            &parent_id,
+            "--status",
+            "in_progress",
+            "--proof-target-literal",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let receipt = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            &task_id,
+            "--proof-target",
+            proof_target,
+            "--result",
+            "pass",
+            "--artifact-ref",
+            "artifacts/closed-proof-target-guard.json",
+            "--evidence",
+            "closed task proof target guard evidence",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(receipt["status"], "pass");
+    let closed = run_command_json(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Structured proof evidence recorded",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed["status"], "pass");
+    assert_eq!(closed["closed"], true);
+
+    let (blocked, success) = run_command_json_allow_failure(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--proof-target-literal",
+            blocked_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!success, "closed task update should fail closed: {blocked}");
+    assert_eq!(blocked["surface"], "vida task update");
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(
+        blocked["blocker_codes"],
+        serde_json::json!(["task_update_closed_task_mutation_requires_reopen"])
+    );
+    assert_eq!(
+        blocked["artifact_refs"]["reopen_surface"],
+        serde_json::json!("vida task update")
+    );
+
+    let default_blocked = run_command_capture(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--proof-target-literal",
+            blocked_target,
+        ],
+        &state_dir,
+    );
+    assert!(
+        !default_blocked.status.success(),
+        "default closed task update should fail"
+    );
+    let default_stdout = String::from_utf8_lossy(&default_blocked.stdout);
+    assert!(default_stdout.starts_with("vida task update\n"));
+    assert!(default_stdout.contains("task_update_closed_task_mutation_requires_reopen"));
+    assert!(!default_stdout.contains("--json"));
+
+    let proof_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(proof_status["status"], "pass");
+    assert_eq!(proof_status["satisfied_count"], 1);
+    assert_eq!(proof_status["missing_count"], 0);
+    assert_eq!(proof_status["proof_targets"][0]["target"], proof_target);
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_closeout_json_bundles_blocked_proof_closure_graph_and_temp_scan() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

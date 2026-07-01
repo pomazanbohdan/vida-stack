@@ -2559,6 +2559,68 @@ fn print_task_update_close_authority_blocked(render: RenderMode, task_id: &str, 
     );
 }
 
+fn task_update_closed_task_mutation_payload(task_id: &str) -> serde_json::Value {
+    let quoted_task_id = crate::shell_quote(task_id);
+    let reopen_command = operator_output::command_text::human_command(&format!(
+        "vida task update {} --status in_progress",
+        quoted_task_id
+    ));
+    let blocker_code = crate::release1_contracts::blocker_code_value(
+        crate::release1_contracts::BlockerCode::TaskUpdateClosedTaskMutationRequiresReopen,
+    )
+    .unwrap_or_else(|| {
+        state_store::StateStore::TASK_UPDATE_CLOSED_TASK_MUTATION_BLOCKER_CODE.to_string()
+    });
+    crate::release1_operator_output::Release1OperatorOutputBuilder::new("vida task update")
+        .blocker_codes(vec![blocker_code])
+        .next_actions(vec![format!(
+            "Reopen the task with `{reopen_command}` before mutating metadata or proof targets."
+        )])
+        .artifact_refs(serde_json::json!({
+            "surface": "vida task update",
+            "task_id": task_id,
+            "reopen_surface": "vida task update",
+            "repair_surface": "vida task proof attach-evidence",
+        }))
+        .extra_fields(serde_json::json!({
+            "closed": true,
+            "task_id": task_id,
+            "reason": "closed tasks require explicit reopen before metadata or proof-target mutation",
+            "required_surface": "vida task update --status in_progress",
+        }))
+        .build()
+        .expect("closed task update payload should satisfy release-1 contract")
+}
+
+fn print_task_update_closed_task_mutation_blocked(
+    render: RenderMode,
+    task_id: &str,
+    as_json: bool,
+) {
+    if as_json {
+        crate::print_json_pretty(&task_update_closed_task_mutation_payload(task_id));
+        return;
+    }
+    let quoted_task_id = crate::shell_quote(task_id);
+    print_surface_header(render, "vida task update");
+    print_surface_line(render, "status", "blocked");
+    print_surface_line(
+        render,
+        "blocker_codes",
+        state_store::StateStore::TASK_UPDATE_CLOSED_TASK_MUTATION_BLOCKER_CODE,
+    );
+    print_surface_line(
+        render,
+        "reason",
+        "closed tasks require explicit reopen before metadata or proof-target mutation",
+    );
+    print_surface_line(
+        render,
+        "next action",
+        &format!("vida task update {} --status in_progress", quoted_task_id),
+    );
+}
+
 fn canonical_json_string_array_entries(value: &serde_json::Value) -> Option<Vec<String>> {
     let rows = value.as_array()?;
     let mut entries = Vec::with_capacity(rows.len());
@@ -12817,6 +12879,15 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     state_store::StateStore::task_update_close_authority_task_id_from_reason(reason)
                                 {
                                     print_task_update_close_authority_blocked(
+                                        command.render,
+                                        task_id,
+                                        command.json,
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                                if let Some(task_id) = state_store::StateStore::task_update_closed_task_mutation_task_id_from_reason(reason)
+                                {
+                                    print_task_update_closed_task_mutation_blocked(
                                         command.render,
                                         task_id,
                                         command.json,

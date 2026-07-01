@@ -1074,6 +1074,7 @@ pub(crate) enum BlockerCode {
     ExceptionPathMissing,
     ClosureEvidenceIncomplete,
     TaskUpdateCloseAuthorityRequired,
+    TaskUpdateClosedTaskMutationRequiresReopen,
     OwnerSurfaceContradiction,
     PolicyDenied,
     PolicyContextMissing,
@@ -1224,6 +1225,9 @@ impl BlockerCode {
             Self::ExceptionPathMissing => "exception_path_missing",
             Self::ClosureEvidenceIncomplete => "closure_evidence_incomplete",
             Self::TaskUpdateCloseAuthorityRequired => "task_update_close_authority_required",
+            Self::TaskUpdateClosedTaskMutationRequiresReopen => {
+                "task_update_closed_task_mutation_requires_reopen"
+            }
             Self::OwnerSurfaceContradiction => "owner_surface_contradiction",
             Self::PolicyDenied => "policy_denied",
             Self::PolicyContextMissing => "policy_context_missing",
@@ -1424,6 +1428,9 @@ impl BlockerCode {
             "exception_path_missing" => Some(Self::ExceptionPathMissing),
             "closure_evidence_incomplete" => Some(Self::ClosureEvidenceIncomplete),
             "task_update_close_authority_required" => Some(Self::TaskUpdateCloseAuthorityRequired),
+            "task_update_closed_task_mutation_requires_reopen" => {
+                Some(Self::TaskUpdateClosedTaskMutationRequiresReopen)
+            }
             "owner_surface_contradiction" => Some(Self::OwnerSurfaceContradiction),
             "policy_denied" => Some(Self::PolicyDenied),
             "policy_context_missing" => Some(Self::PolicyContextMissing),
