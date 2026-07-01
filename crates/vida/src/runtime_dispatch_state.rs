@@ -12274,6 +12274,62 @@ host_environment:
     }
 
     #[test]
+    fn internal_execute_dispatch_fallback_returns_terminal_blocked_result_not_activation_view() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-fallback-blocked".to_string(),
+            dispatch_target: "autotester".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch --json".to_string()),
+            dispatch_packet_path: Some("autotester-dispatch.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-07-01T00:00:00Z".to_string(),
+        };
+
+        let result = runtime_dispatch_internal_activation_view_only_result(
+            &receipt,
+            "internal_activation_view_only",
+        );
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["dispatch_target"], "autotester");
+        assert_eq!(result["selected_backend"], "internal_subagents");
+        assert_eq!(result["blocker_code"], "internal_activation_view_only");
+        assert!(
+            result["blocker_reason"]
+                .as_str()
+                .is_some_and(|value| value.contains("activation-view-only")),
+            "fallback blocker should explain non-executing activation semantics: {result}"
+        );
+        assert!(
+            result.get("activation_semantics").is_none()
+                && result.get("activation_vs_execution_evidence").is_none(),
+            "execute-dispatch fallback must not surface activation-view evidence as execution result: {result}"
+        );
+    }
+
+    #[test]
     fn execute_runtime_dispatch_handoff_keeps_internal_host_on_codex_when_receipt_backend_is_external(
     ) {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -26284,38 +26340,15 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
             if matches!(lane_backend_class, Some("internal" | "internal_cli"))
                 && lane_execution_class != Some("internal")
             {
-                let store = StateStore::open_existing(state_root.to_path_buf())
-                    .await
-                    .map_err(|error| {
-                        format!(
-                            "Failed to reopen authoritative state store for activation view: {error}"
-                        )
-                    })?;
-                let activation_view =
-                    crate::init_surfaces::render_agent_init_packet_activation_with_store(
-                        &store,
-                        &project_root,
-                        dispatch_packet_path,
-                        dispatch_packet_declares_downstream_dispatch(dispatch_packet_path),
-                    )
-                    .await?;
-                drop(store);
-                let mut result = agent_lane_dispatch_result(
-                    activation_view,
-                    dispatch_packet_path,
-                    canonical_backend.as_deref(),
+                let blocker_code = internal_host_activation_view_only_blocker_code(
+                    &project_root,
                     role_selection,
                     receipt,
-                    host_runtime,
                 );
+                let mut result =
+                    runtime_dispatch_internal_activation_view_only_result(receipt, blocker_code);
                 if let Some(body) = result.as_object_mut() {
                     body.insert("surface".to_string(), serde_json::json!("vida agent-init"));
-                    body.insert("status".to_string(), serde_json::json!("blocked"));
-                    body.insert("execution_state".to_string(), serde_json::json!("blocked"));
-                    body.insert(
-                        "blocker_code".to_string(),
-                        serde_json::json!("internal_activation_view_only"),
-                    );
                     body.insert(
                         "backend_dispatch".to_string(),
                         lane_dispatch.backend_dispatch,
@@ -26336,33 +26369,20 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
             {
                 return Ok(result);
             }
-            let activation_view = {
-                let store = StateStore::open_existing(state_root.to_path_buf())
-                    .await
-                    .map_err(|error| {
-                        format!(
-                            "Failed to reopen authoritative state store for activation view: {error}"
-                        )
-                    })?;
-                let activation_view =
-                    crate::init_surfaces::render_agent_init_packet_activation_with_store(
-                        &store,
-                        &project_root,
-                        dispatch_packet_path,
-                        dispatch_packet_declares_downstream_dispatch(dispatch_packet_path),
-                    )
-                    .await?;
-                drop(store);
-                activation_view
-            };
-            Ok(agent_lane_dispatch_result(
-                activation_view,
-                dispatch_packet_path,
-                canonical_backend.as_deref(),
+            let blocker_code = internal_host_activation_view_only_blocker_code(
+                &project_root,
                 role_selection,
                 receipt,
-                host_runtime,
-            ))
+            );
+            let mut result =
+                runtime_dispatch_internal_activation_view_only_result(receipt, blocker_code);
+            if let Some(body) = result.as_object_mut() {
+                body.insert(
+                    "backend_dispatch".to_string(),
+                    lane_dispatch.backend_dispatch,
+                );
+            }
+            Ok(result)
         }
     }
 }
