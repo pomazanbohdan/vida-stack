@@ -437,9 +437,16 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     let Some(run_id) = host_bridge_request_string(request, "run_id") else {
         return blockers;
     };
+    let receipt_backed_retry_completion =
+        host_bridge_request_has_retryable_dispatch_receipt_for_state_root(
+            state_root,
+            request,
+            canonical_packet_path.as_deref(),
+        )
+        .await;
     if let Ok(typed_request) = HostBridgeRequest::from_value(request.clone()) {
-        let retryable_completion =
-            retryable_host_bridge_completion_request_for_state_root(state_root, request);
+        let retryable_completion = receipt_backed_retry_completion
+            || retryable_host_bridge_completion_request_for_state_root(state_root, request);
         let decision = validate_host_bridge_request_provenance(&HostBridgeProvenanceInput {
             request: typed_request,
             expected_run_id: Some(run_id.to_string()),
@@ -493,6 +500,76 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     blockers
 }
 
+async fn host_bridge_request_has_retryable_dispatch_receipt_for_state_root(
+    state_root: &Path,
+    request: &serde_json::Value,
+    canonical_packet_path: Option<&Path>,
+) -> bool {
+    let Some(run_id) = host_bridge_request_string(request, "run_id") else {
+        return false;
+    };
+    let Ok(store) = StateStore::open_existing_read_only_with_timeout(
+        state_root.to_path_buf(),
+        HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT,
+    )
+    .await
+    else {
+        return false;
+    };
+    let Ok(Some(receipt)) = store.run_graph_dispatch_receipt(run_id).await else {
+        store.close().await;
+        return false;
+    };
+    let retryable = retryable_host_bridge_completion_receipt_matches_request(
+        state_root,
+        request,
+        &receipt,
+        canonical_packet_path,
+    );
+    store.close().await;
+    retryable
+}
+
+fn retryable_host_bridge_completion_receipt_matches_request(
+    state_root: &Path,
+    request: &serde_json::Value,
+    receipt: &state_store::RunGraphDispatchReceipt,
+    canonical_packet_path: Option<&Path>,
+) -> bool {
+    if !host_bridge_dispatch_receipt_has_retryable_completion_evidence(receipt)
+        || host_bridge_dispatch_receipt_target_mismatch(request, receipt, false)
+    {
+        return false;
+    }
+    if host_bridge_request_string(request, "backend_id") != receipt.selected_backend.as_deref() {
+        return false;
+    }
+    let Some(canonical_packet_path) = canonical_packet_path else {
+        return false;
+    };
+    let Some(receipt_packet_path) = receipt.dispatch_packet_path.as_deref() else {
+        return false;
+    };
+    canonical_state_artifact_path(state_root, receipt_packet_path, true)
+        .ok()
+        .as_deref()
+        == Some(canonical_packet_path)
+}
+
+fn host_bridge_dispatch_receipt_has_retryable_completion_evidence(
+    receipt: &state_store::RunGraphDispatchReceipt,
+) -> bool {
+    receipt.dispatch_status == release1_blocked_status()
+        && (receipt
+            .blocker_code
+            .as_deref()
+            .is_some_and(host_bridge_completion_retryable_blocker)
+            || receipt
+                .downstream_dispatch_blockers
+                .iter()
+                .any(|blocker| host_bridge_completion_retryable_blocker(blocker)))
+}
+
 async fn append_host_bridge_dispatch_receipt_blockers(
     blockers: &mut Vec<String>,
     store: &StateStore,
@@ -538,15 +615,8 @@ async fn append_host_bridge_dispatch_receipt_blockers(
     {
         return;
     }
-    let retryable_blocked_receipt = receipt.dispatch_status == release1_blocked_status()
-        && (receipt
-            .blocker_code
-            .as_deref()
-            .is_some_and(host_bridge_completion_retryable_blocker)
-            || receipt
-                .downstream_dispatch_blockers
-                .iter()
-                .any(|blocker| host_bridge_completion_retryable_blocker(blocker)));
+    let retryable_blocked_receipt =
+        host_bridge_dispatch_receipt_has_retryable_completion_evidence(&receipt);
     if !matches!(
         receipt.dispatch_status.as_str(),
         "routed" | "executing" | "bridge_request_pending"
@@ -782,10 +852,10 @@ fn host_bridge_adapter_payload(
     request: &serde_json::Value,
     provenance_blockers: Vec<String>,
     state_root: Option<&Path>,
-    _retry_completion_override: bool,
+    receipt_backed_retry_completion_evidence: bool,
 ) -> serde_json::Value {
-    let retryable_completion_request =
-        retryable_host_bridge_completion_request(request_path, request, state_root);
+    let retryable_completion_request = receipt_backed_retry_completion_evidence
+        || retryable_host_bridge_completion_request(request_path, request, state_root);
     let effective_request = taskflow_host_bridge::effective_host_bridge_request(request);
     let typed_request = HostBridgeRequest::from_value(effective_request.clone()).ok();
     let completion_command = if let Some(request) = typed_request.as_ref() {
@@ -5000,12 +5070,26 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
             {
                 provenance_blockers.clear();
             }
+            let retry_state_root = command
+                .state_dir
+                .clone()
+                .or_else(|| infer_host_bridge_state_root_from_request_path(&command.request))
+                .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
+            let retry_packet_path = host_bridge_request_string(&request, "packet_path")
+                .and_then(|path| canonical_state_artifact_path(&retry_state_root, path, true).ok());
+            let receipt_backed_retry_completion_evidence =
+                host_bridge_request_has_retryable_dispatch_receipt_for_state_root(
+                    &retry_state_root,
+                    &request,
+                    retry_packet_path.as_deref(),
+                )
+                .await;
             let payload = host_bridge_adapter_payload(
                 &operator_request_path,
                 &request,
                 provenance_blockers,
                 command.state_dir.as_deref(),
-                command.retry_completion,
+                receipt_backed_retry_completion_evidence,
             );
             if !command.attach_artifacts.is_empty() {
                 return attach_host_bridge_implementation_artifacts(command, request, payload)
@@ -5659,6 +5743,7 @@ mod tests {
         dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
         host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
         host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
+        host_bridge_request_has_retryable_dispatch_receipt_for_state_root,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path, materialize_configured_agent_dispatch_lane,
@@ -8572,15 +8657,15 @@ mod tests {
         ));
 
         assert!(
-            blockers.contains(&"request_status_not_admissible".to_string()),
-            "retry intent without blocked receipt/result evidence must not normalize request status blockers: {blockers:?}"
+            blockers.contains(&"host_bridge_request_not_pending".to_string()),
+            "retry intent without blocked receipt/result evidence must keep the public request-status blocker: {blockers:?}"
         );
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
             Vec::new(),
             Some(&state_root),
-            true,
+            false,
         );
         assert!(payload["blocker_codes"]
             .as_array()
@@ -8592,6 +8677,125 @@ mod tests {
             .expect("completion command")
             .contains("--retry-completion"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_receipt_backed_retry_evidence_allows_retry_guidance() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path();
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = state_root.join("host-tool-bridge/results/result.json");
+        let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
+        for path in [&request_path, &packet_path, &result_path, &receipt_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("artifact parent should be created");
+        }
+        std::fs::write(
+            &packet_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "run_id": "run-retry-receipt",
+                "dispatch_target": "implementer"
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet file should be written");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "blocked",
+            "request_id": "req-retry-receipt",
+            "run_id": "run-retry-receipt",
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("request file should be written");
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let (blockers, retry_evidence) = runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.to_path_buf())
+                .await
+                .expect("state store should open");
+            store
+                .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                    run_id: "run-retry-receipt".to_string(),
+                    dispatch_target: "implementer".to_string(),
+                    dispatch_status: "blocked".to_string(),
+                    lane_status: "lane_blocked".to_string(),
+                    supersedes_receipt_id: None,
+                    exception_path_receipt_id: None,
+                    dispatch_kind: "implementation".to_string(),
+                    dispatch_surface: Some("vida agent-init".to_string()),
+                    dispatch_command: Some("vida agent-init --execute-dispatch".to_string()),
+                    dispatch_packet_path: Some(packet_path.display().to_string()),
+                    dispatch_result_path: None,
+                    blocker_code: Some("implementation_artifacts_missing".to_string()),
+                    downstream_dispatch_target: None,
+                    downstream_dispatch_command: None,
+                    downstream_dispatch_note: None,
+                    downstream_dispatch_ready: false,
+                    downstream_dispatch_blockers: vec![
+                        "implementation_artifacts_missing".to_string()
+                    ],
+                    downstream_dispatch_packet_path: None,
+                    downstream_dispatch_status: None,
+                    downstream_dispatch_result_path: None,
+                    downstream_dispatch_trace_path: None,
+                    downstream_dispatch_executed_count: 0,
+                    downstream_dispatch_active_target: None,
+                    downstream_dispatch_last_target: None,
+                    activation_agent_type: Some("internal_subagents".to_string()),
+                    activation_runtime_role: Some("worker".to_string()),
+                    selected_backend: Some("internal_subagents".to_string()),
+                    recorded_at: "2026-07-01T00:00:00Z".to_string(),
+                })
+                .await
+                .expect("retryable blocked receipt should record");
+            store.close().await;
+            let canonical_packet_path =
+                std::fs::canonicalize(&packet_path).expect("packet path should canonicalize");
+            let retry_evidence = host_bridge_request_has_retryable_dispatch_receipt_for_state_root(
+                state_root,
+                &request,
+                Some(canonical_packet_path.as_path()),
+            )
+            .await;
+            let blockers = host_bridge_request_provenance_blockers_for_state_root(
+                state_root,
+                &request_path,
+                &request,
+                true,
+            )
+            .await;
+            (blockers, retry_evidence)
+        });
+
+        assert!(retry_evidence);
+        assert!(!blockers.contains(&"host_bridge_request_not_pending".to_string()));
+        assert_eq!(blockers, Vec::<String>::new());
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            blockers,
+            Some(&state_root),
+            retry_evidence,
+        );
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--retry-completion"));
     }
 
     #[test]
