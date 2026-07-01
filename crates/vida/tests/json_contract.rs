@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,6 +23,19 @@ fn unique_state_dir() -> String {
         std::env::temp_dir().display(),
         std::process::id()
     )
+}
+
+fn unique_local_dir(prefix: &str) -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let counter = UNIQUE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::current_dir()
+        .expect("test cwd should resolve")
+        .join("target")
+        .join("tmp")
+        .join(format!("{prefix}-{}-{nanos}-{counter}", std::process::id()))
 }
 
 fn run_json(state_dir: &str, args: &[&str]) -> serde_json::Value {
@@ -165,14 +177,41 @@ fn json_contract_harness_rejects_missing_operator_fields() {
 
 #[test]
 fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
-    let state_dir = unique_state_dir();
-    let project_root = format!("{}-project", unique_state_dir());
+    let state_dir = unique_local_dir("vida-json-contract-source-state");
+    let project_root = unique_local_dir("vida-json-contract-source-project");
     fs::create_dir_all(&project_root).expect("project root should exist");
+    fs::write(project_root.join("AGENTS.md"), "# test project\n")
+        .expect("project bootstrap marker should be written");
+    fs::write(project_root.join("vida.config.yaml"), "project: {}\n")
+        .expect("project marker should be written");
+    for marker in [".vida/config", ".vida/db", ".vida/project"] {
+        fs::create_dir_all(project_root.join(marker)).expect("project runtime marker should exist");
+    }
     fs::write(
-        format!("{project_root}/requirements.md"),
+        project_root.join("requirements.md"),
         "SECRET_TOKEN=must-not-be-serialized\nBuild the feature.",
     )
     .expect("source fixture should be written");
+    fs::write(
+        project_root.join("requirements.md"),
+        [
+            "SECRET_TOKEN=[redacted-test-value]",
+            "Build the feature.",
+            "Keep operator output compact.",
+            "Add JSON proof.",
+            "Validate blocked source paths.",
+            "Reject symlinks.",
+            "Keep developer handoff complete.",
+            "Document source metadata.",
+            "Preserve project-root semantics.",
+            "Avoid stale artifact fields.",
+            "Keep readiness verdict stable.",
+            "Preserve requirement twelve.",
+            "Preserve requirement thirteen.",
+        ]
+        .join("\n"),
+    )
+    .expect("source fixture should be rewritten");
 
     let json_output = vida()
         .current_dir(&project_root)
@@ -208,6 +247,17 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         !source_text.contains("SECRET_TOKEN"),
         "raw source-file content must not be serialized: {source_text}"
     );
+    let public_analysis_text = artifact["source_inputs"][0]["analysis_text"]
+        .as_str()
+        .expect("redacted source analysis should render");
+    assert!(
+        !public_analysis_text.contains("SECRET_TOKEN"),
+        "redacted analysis must not disclose source-file secrets: {public_analysis_text}"
+    );
+    assert!(
+        public_analysis_text.contains("Preserve requirement thirteen"),
+        "redacted analysis should preserve requirements beyond the atom cap: {public_analysis_text}"
+    );
     assert!(artifact["requirement_atoms"]
         .as_array()
         .expect("atoms should render")
@@ -215,8 +265,40 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         .any(|atom| atom["text"]
             .as_str()
             .is_some_and(|text| text.contains("Build the feature"))));
+    assert!(
+        !artifact["requirement_atoms"]
+            .as_array()
+            .expect("atoms should render")
+            .iter()
+            .any(|atom| atom["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("SECRET_TOKEN"))),
+        "source-file secrets must not leak through requirement atoms"
+    );
 
-    let absolute_source = Path::new(&project_root).join("requirements.md");
+    let nested_dir = project_root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("nested cwd should exist");
+    let nested_output = vida()
+        .current_dir(&nested_dir)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "nested-source-file",
+            "--source-file",
+            "requirements.md",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("nested source resolution should run");
+    assert!(
+        nested_output.status.success(),
+        "source paths should resolve from project root even when cwd is nested: {}",
+        String::from_utf8_lossy(&nested_output.stderr)
+    );
+
+    let absolute_source = project_root.join("requirements.md");
     let absolute_output = vida()
         .current_dir(&project_root)
         .args([

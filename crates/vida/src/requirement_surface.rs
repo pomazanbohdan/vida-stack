@@ -111,7 +111,7 @@ fn blocked_requirement_payload(
 struct RequirementSourceInput {
     kind: &'static str,
     serialized_text: String,
-    analysis_text: String,
+    public_analysis_text: String,
 }
 
 impl RequirementSourceInput {
@@ -119,13 +119,13 @@ impl RequirementSourceInput {
         Self {
             kind: "operator_text",
             serialized_text: text.clone(),
-            analysis_text: text,
+            public_analysis_text: text,
         }
     }
 }
 
 fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, String> {
-    let project_root = std::env::current_dir().map_err(|error| format!("project root: {error}"))?;
+    let project_root = requirement_source_project_root()?;
     let relative_path = validate_requirement_source_path(path)?;
     let source_path = project_root.join(&relative_path);
     reject_symlink_components(&project_root, &relative_path)?;
@@ -155,14 +155,52 @@ fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, S
         fs::read_to_string(&source_path).map_err(|error| format!("{}: {error}", path.display()))?;
     let digest = blake3::hash(content.as_bytes());
     let display_path = relative_path.display().to_string();
+    let public_analysis_text = redact_requirement_source_content(content.trim());
     Ok(RequirementSourceInput {
         kind: "source_file",
         serialized_text: format!(
             "file:{display_path}:bytes={}:blake3={digest}",
             content.len()
         ),
-        analysis_text: content.trim().to_string(),
+        public_analysis_text,
     })
+}
+
+fn requirement_source_project_root() -> Result<PathBuf, String> {
+    crate::resolve_runtime_project_root()
+        .or_else(|_| std::env::current_dir().map_err(|error| format!("project root: {error}")))
+}
+
+fn redact_requirement_source_content(content: &str) -> String {
+    content
+        .lines()
+        .map(redact_requirement_source_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn redact_requirement_source_line(line: &str) -> String {
+    if line.split_whitespace().any(requirement_source_secret_token) {
+        "[redacted source-file secret line]".to_string()
+    } else {
+        line.to_string()
+    }
+}
+
+fn requirement_source_secret_token(token: &str) -> bool {
+    let Some((key, _)) = token.split_once('=') else {
+        return false;
+    };
+    let key = key
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+        .to_ascii_lowercase();
+    key.contains("secret")
+        || key.contains("token")
+        || key.contains("password")
+        || key.contains("credential")
+        || key.contains("private_key")
+        || key.contains("api_key")
+        || key.contains("apikey")
 }
 
 fn validate_requirement_source_path(path: &Path) -> Result<PathBuf, String> {
@@ -239,7 +277,7 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
         .unwrap_or("unbound-requirement");
     let combined_input = source_inputs
         .iter()
-        .map(|source| source.analysis_text.as_str())
+        .map(|source| source.public_analysis_text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
     let atoms = requirement_atoms(&source_inputs);
@@ -258,6 +296,7 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
                 "id": format!("source-{}", index + 1),
                 "kind": input.kind,
                 "text": input.serialized_text,
+                "analysis_text": input.public_analysis_text,
             })
         }).collect::<Vec<_>>(),
         "requirement_classification": {
@@ -482,7 +521,7 @@ fn print_compact_contract(artifact: &Value) {
 fn requirement_atoms(source_inputs: &[RequirementSourceInput]) -> Vec<Value> {
     source_inputs
         .iter()
-        .flat_map(|input| input.analysis_text.split(['.', ';', '\n']))
+        .flat_map(|input| input.public_analysis_text.split(['.', ';', '\n']))
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .take(12)
