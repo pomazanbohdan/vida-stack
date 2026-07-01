@@ -1683,6 +1683,37 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
         "agent-init should reach dispatch materialization or an execution-evidence blocker: {payload}"
     );
     assert_eq!(payload["dispatch_target"], "autotester");
+    match payload["status"].as_str() {
+        Some("pass") => {
+            assert_eq!(
+                payload["execution_evidence"]["receipt_backed"], true,
+                "pass execute-dispatch result must carry receipt-backed execution evidence: {payload}"
+            );
+        }
+        Some("blocked") => {
+            assert_eq!(
+                payload["execution_state"], "bridge_request_pending",
+                "blocked internal_subagents execute-dispatch should materialize a bridge request instead of an activation view: {payload}"
+            );
+            assert_eq!(
+                payload["blocker_code"], "host_tool_bridge_adapter_required",
+                "blocked execute-dispatch should expose the host bridge blocker: {payload}"
+            );
+            assert!(
+                payload["host_tool_bridge_request"]["request_path"]
+                    .as_str()
+                    .is_some_and(|value| !value.trim().is_empty()),
+                "blocked execute-dispatch should expose the bridge request path: {payload}"
+            );
+            assert!(
+                payload["next_actions"]
+                    .as_array()
+                    .is_some_and(|actions| !actions.is_empty()),
+                "blocked execute-dispatch should expose actionable next actions: {payload}"
+            );
+        }
+        other => panic!("unexpected execute-dispatch status {other:?}: {payload}"),
+    }
 
     let request_dir = format!("{state_dir}/host-tool-bridge/requests");
     let request_path = std::fs::read_dir(&request_dir)
@@ -5001,10 +5032,9 @@ fn projection_surfaces_fail_closed_for_closed_task_downstream_handoff_after_exce
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("run-graph status should run");
-    assert!(
-        !run_graph.stdout.is_empty(),
-        "run-graph status should emit structured json even when blocked: stderr={}",
-        String::from_utf8_lossy(&run_graph.stderr)
+    assert_success(
+        &run_graph,
+        "run-graph status should return structured blocked status for closed-task stale run",
     );
     let run_graph_json: serde_json::Value =
         serde_json::from_slice(&run_graph.stdout).expect("run-graph json should parse");
@@ -5530,10 +5560,9 @@ fn projection_surfaces_fail_closed_for_receipt_backed_missing_execution_row_host
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("orchestrator-init should run");
-    assert!(
-        !orchestrator.stdout.is_empty(),
-        "orchestrator-init should emit structured json even when blocked: stderr={}",
-        String::from_utf8_lossy(&orchestrator.stderr)
+    assert_success(
+        &orchestrator,
+        "orchestrator-init should return structured blocked status for missing execution row",
     );
     let orchestrator_json: serde_json::Value =
         serde_json::from_slice(&orchestrator.stdout).expect("orchestrator json should parse");
@@ -5576,6 +5605,105 @@ fn projection_surfaces_fail_closed_for_receipt_backed_missing_execution_row_host
         "consume continue must not leak generic run-graph MissingTask stderr"
     );
 
+    let _ = std::fs::remove_dir_all(project_root);
+}
+
+#[test]
+fn open_active_blocked_receipt_mismatch_does_not_recommend_lane_retire() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let parent_id = "zzzz-open-active-blocked-mismatch-parent";
+    let run_id = "zzzz-open-active-blocked-mismatch";
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+    sync_protocol_binding(&state_dir);
+    create_session_triage_task(
+        &state_dir,
+        parent_id,
+        "Open active blocked mismatch parent",
+        "epic",
+        "open",
+        "1",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        run_id,
+        "Open active blocked mismatch task",
+        "task",
+        "in_progress",
+        "1",
+        Some(parent_id),
+    );
+    persist_host_bridge_lane_receipt_with_target_and_active_node(
+        &state_dir,
+        run_id,
+        "autotester",
+        "designer",
+        "developer",
+        "blocked",
+        "autotester_lane",
+        "host_bridge_completion_result_blocked",
+        "designer_blocked",
+    );
+
+    let run_graph = vida()
+        .args(["taskflow", "run-graph", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph status should run");
+    assert!(
+        !run_graph.stdout.is_empty(),
+        "run-graph status should emit structured json for open active mismatch: stderr={}",
+        String::from_utf8_lossy(&run_graph.stderr)
+    );
+    let run_graph_json: serde_json::Value =
+        serde_json::from_slice(&run_graph.stdout).expect("run-graph json should parse");
+    assert_eq!(
+        run_graph_json["projection_truth"]["stale_state_suspected"],
+        false
+    );
+    assert_eq!(run_graph_json["run_graph_status"]["status"], "blocked");
+    assert_eq!(
+        run_graph_json["run_graph_status"]["active_node"],
+        "autotester"
+    );
+    assert_eq!(
+        run_graph_json["run_graph_status"]["lifecycle_stage"],
+        "autotester_blocked"
+    );
+    let run_graph_text =
+        serde_json::to_string(&run_graph_json).expect("run-graph json should render");
+    assert!(
+        !run_graph_text.contains("vida lane retire"),
+        "open active blocked mismatch must not recommend lane retire: {run_graph_text}"
+    );
+    assert!(
+        !run_graph_text.contains("exception-takeover"),
+        "open active blocked mismatch must not recommend exception takeover as the recovery path: {run_graph_text}"
+    );
+
+    let recovery = vida()
+        .args(["taskflow", "recovery", "status", run_id, "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("recovery status should run");
+    assert!(
+        !recovery.stdout.is_empty(),
+        "recovery status should emit structured json for open active mismatch: stderr={}",
+        String::from_utf8_lossy(&recovery.stderr)
+    );
+    let recovery_json: serde_json::Value =
+        serde_json::from_slice(&recovery.stdout).expect("recovery json should parse");
+    assert_eq!(recovery_json["status"], "blocked");
+    let recovery_text = serde_json::to_string(&recovery_json).expect("recovery json should render");
+    assert!(
+        !recovery_text.contains("exception-takeover"),
+        "open active blocked mismatch recovery must not recommend exception takeover: {recovery_text}"
+    );
     let _ = std::fs::remove_dir_all(project_root);
 }
 

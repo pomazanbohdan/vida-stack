@@ -2498,15 +2498,6 @@ fn next_lawful_operator_action_for_projection(
             status.run_id
         )));
     }
-    if receipt.is_some_and(|receipt| {
-        stale_blocked_dispatch_receipt_mismatches_active_lane(status, receipt)
-    }) {
-        return Some(format!(
-            "vida lane retire {} --receipt-id {} --reason \"stale blocked dispatch receipt\" --json",
-            shell_quote(&status.run_id),
-            shell_quote(&status.run_id)
-        ));
-    }
     if let Some(command) = receipt.and_then(|value| {
         if value
             .downstream_dispatch_blockers
