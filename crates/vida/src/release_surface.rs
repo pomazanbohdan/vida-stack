@@ -929,12 +929,7 @@ fn read_release_install_progress_file_without_following_symlinks(
 
     let mut options = OpenOptions::new();
     options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-
+    apply_no_follow_open_options(&mut options);
     let mut file = options.open(path)?;
     let opened_metadata = file.metadata()?;
     if !opened_metadata.is_file() {
@@ -1309,7 +1304,22 @@ fn apply_no_follow_open_options(options: &mut OpenOptions) {
     options.custom_flags(libc::O_NOFOLLOW);
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+const WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+#[cfg(windows)]
+fn windows_no_follow_open_flags() -> u32 {
+    WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT
+}
+
+#[cfg(windows)]
+fn apply_no_follow_open_options(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    options.custom_flags(windows_no_follow_open_flags());
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn apply_no_follow_open_options(_options: &mut OpenOptions) {}
 
 #[derive(Debug)]
@@ -2848,10 +2858,117 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn release_install_status_rejects_symlink_latest_path_sidecar() {
+        let _guard = release_progress_test_lock();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let latest_path = release_install_progress_latest_path();
+        let latest_sidecar_path = latest_path.with_extension("path");
+        let victim = harness.path().join("secret.txt");
+        if let Some(parent) = latest_path.parent() {
+            fs::create_dir_all(parent).expect("latest parent should write");
+        }
+        fs::write(
+            &latest_path,
+            serde_json::json!({
+                "surface": "vida release install",
+                "status": "pass",
+                "phase": "install",
+                "command": release_build_command(),
+                "exit_code": 0,
+                "process_id": null,
+                "child_state": null,
+            })
+            .to_string(),
+        )
+        .expect("latest marker should write");
+        fs::write(&victim, "API_TOKEN=do-not-print").expect("victim should write");
+        std::os::unix::fs::symlink(&victim, &latest_sidecar_path)
+            .expect("latest path sidecar symlink should write");
+
+        let receipt = release_install_status_receipt();
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.progress_path, None);
+        assert_eq!(
+            receipt.artifact_refs,
+            vec![latest_path.display().to_string()]
+        );
+        let receipt_body =
+            serde_json::to_string(&receipt).expect("status receipt should serialize");
+        assert!(
+            !receipt_body.contains("API_TOKEN=do-not-print"),
+            "status receipt must not include symlink target contents"
+        );
+        clean_release_progress_latest_markers();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn release_install_status_rejects_windows_symlink_latest_path_sidecar_when_available() {
+        let _guard = release_progress_test_lock();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
+        let latest_path = release_install_progress_latest_path();
+        let latest_sidecar_path = latest_path.with_extension("path");
+        let victim = harness.path().join("secret.txt");
+        if let Some(parent) = latest_path.parent() {
+            fs::create_dir_all(parent).expect("latest parent should write");
+        }
+        fs::write(
+            &latest_path,
+            serde_json::json!({
+                "surface": "vida release install",
+                "status": "pass",
+                "phase": "install",
+                "command": release_build_command(),
+                "exit_code": 0,
+                "process_id": null,
+                "child_state": null,
+            })
+            .to_string(),
+        )
+        .expect("latest marker should write");
+        fs::write(&victim, "API_TOKEN=[REDACTED:API key param]").expect("victim should write");
+        match std::os::windows::fs::symlink_file(&victim, &latest_sidecar_path) {
+            Ok(()) => {
+                assert_eq!(windows_no_follow_open_flags(), 0x0020_0000);
+                let receipt = release_install_status_receipt();
+                assert_eq!(receipt.status, "pass");
+                assert_eq!(receipt.progress_path, None);
+                assert_eq!(
+                    receipt.artifact_refs,
+                    vec![latest_path.display().to_string()]
+                );
+                let receipt_body =
+                    serde_json::to_string(&receipt).expect("status receipt should serialize");
+                assert!(
+                    !receipt_body.contains("API_TOKEN=[REDACTED:API key param]"),
+                    "status receipt must not include symlink target contents"
+                );
+            }
+            Err(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) =>
+            {
+                assert_eq!(windows_no_follow_open_flags(), 0x0020_0000);
+            }
+            Err(error) => {
+                panic!("latest path sidecar symlink should write or lack privilege: {error}")
+            }
+        }
+        clean_release_progress_latest_markers();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn release_install_progress_event_rejects_symlink_progress_artifact() {
         let _guard = release_progress_test_lock();
-        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
         let victim = harness.path().join("victim.jsonl");
         let progress_path = harness.path().join("progress-link.jsonl");
         fs::write(&victim, "unchanged").expect("victim should write");
