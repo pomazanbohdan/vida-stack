@@ -2848,6 +2848,53 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn release_install_status_rejects_symlink_latest_path_sidecar() {
+        let _guard = release_progress_test_lock();
+        clean_release_progress_latest_markers();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let latest_path = release_install_progress_latest_path();
+        let latest_sidecar_path = latest_path.with_extension("path");
+        let victim = harness.path().join("secret.txt");
+        if let Some(parent) = latest_path.parent() {
+            fs::create_dir_all(parent).expect("latest parent should write");
+        }
+        fs::write(
+            &latest_path,
+            serde_json::json!({
+                "surface": "vida release install",
+                "status": "pass",
+                "phase": "install",
+                "command": release_build_command(),
+                "exit_code": 0,
+                "process_id": null,
+                "child_state": null,
+            })
+            .to_string(),
+        )
+        .expect("latest marker should write");
+        fs::write(&victim, "API_TOKEN=do-not-print").expect("victim should write");
+        std::os::unix::fs::symlink(&victim, &latest_sidecar_path)
+            .expect("latest path sidecar symlink should write");
+
+        let receipt = release_install_status_receipt();
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.progress_path, None);
+        assert_eq!(
+            receipt.artifact_refs,
+            vec![latest_path.display().to_string()]
+        );
+        let receipt_body =
+            serde_json::to_string(&receipt).expect("status receipt should serialize");
+        assert!(
+            !receipt_body.contains("API_TOKEN=do-not-print"),
+            "status receipt must not include symlink target contents"
+        );
+        clean_release_progress_latest_markers();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn release_install_progress_event_rejects_symlink_progress_artifact() {
         let _guard = release_progress_test_lock();
         clean_release_progress_latest_markers();
