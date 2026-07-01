@@ -1739,6 +1739,7 @@ fn compact_cached_status_summary_projection(payload: &mut serde_json::Value) {
             "latest_run_graph_delegation_gate",
             "latest_run_graph_checkpoint",
             "latest_run_graph_dispatch_receipt",
+            "projection_cache",
         ] {
             object.remove(key);
         }
@@ -2211,8 +2212,14 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         },
         None => None,
     };
-    let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
-        crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root()).ok()?
+    let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none()
+        && (latest_run_graph_status.is_none() || dispatch_receipt_checkpoint_leakage)
+    {
+        store
+            .latest_active_exception_takeover_dispatch_receipt()
+            .await
+            .ok()?
+            .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt)
     } else {
         latest_run_graph_dispatch_receipt
     };
@@ -2304,6 +2311,20 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         }
         None => false,
     };
+    let latest_global_run_graph_terminal_closure_has_truth =
+        match latest_global_run_graph_status.as_ref() {
+            Some(status)
+                if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(
+                    status,
+                ) =>
+            {
+                store
+                    .run_graph_terminal_closure_has_task_close_truth(status)
+                    .await
+                    .ok()?
+            }
+            _ => false,
+        };
     let taskflow_active_candidates =
         crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(&all_tasks);
     let no_active_taskflow_work =
@@ -2326,6 +2347,109 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
                 .map(|receipt| receipt.run_id.as_str()),
             &taskflow_active_candidates,
         );
+    let latest_run_graph_dispatch_receipt =
+        if !exception_takeover_matches_active_taskflow_work
+            && latest_run_graph_task_orthogonal_to_taskflow
+        {
+            let mut candidate_run_ids = Vec::new();
+            for candidate in &taskflow_active_candidates {
+                if let Some(task_id) = candidate
+                    .get("task_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    candidate_run_ids.push(task_id.to_string());
+                }
+                candidate_run_ids.extend(
+                    candidate
+                        .get("parent_task_ids")
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string),
+                );
+            }
+            let mut matched_receipt = None;
+            for candidate_run_id in candidate_run_ids {
+                let receipt = store
+                    .run_graph_dispatch_receipt(&candidate_run_id)
+                    .await
+                    .ok()?
+                    .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt);
+                if exception_takeover_metadata_matches_taskflow_active_work(
+                    store.root(),
+                    receipt.as_ref(),
+                    &taskflow_active_candidates,
+                ) {
+                    matched_receipt = receipt;
+                    break;
+                }
+            }
+            matched_receipt.or(latest_run_graph_dispatch_receipt)
+        } else {
+            latest_run_graph_dispatch_receipt
+        };
+    let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
+        crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root()).ok()?
+    } else {
+        latest_run_graph_dispatch_receipt
+    };
+    let latest_run_graph_recovery = match latest_run_graph_dispatch_receipt.as_ref() {
+        Some(receipt)
+            if latest_run_graph_recovery
+                .as_ref()
+                .is_none_or(|recovery| recovery.run_id != receipt.run_id)
+                && latest_run_graph_status
+                    .as_ref()
+                    .is_some_and(|status| status.run_id == receipt.run_id) =>
+        {
+            store.run_graph_recovery_summary(&receipt.run_id).await.ok()
+        }
+        _ => latest_run_graph_recovery,
+    };
+    let latest_run_graph_effective_run_id = latest_run_graph_status
+        .as_ref()
+        .map(|status| status.run_id.as_str())
+        .or_else(|| {
+            latest_run_graph_dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str())
+        });
+    let latest_run_graph_snapshot_inconsistent = !dispatch_receipt_checkpoint_leakage
+        && !state_store::latest_run_graph_evidence_snapshot_is_consistent(
+            latest_run_graph_effective_run_id,
+            latest_run_graph_recovery
+                .as_ref()
+                .map(|summary| summary.run_id.as_str()),
+            latest_run_graph_checkpoint
+                .as_ref()
+                .map(|summary| summary.run_id.as_str()),
+            latest_run_graph_gate
+                .as_ref()
+                .map(|summary| summary.run_id.as_str()),
+            latest_run_graph_dispatch_receipt
+                .as_ref()
+                .map(|receipt| receipt.run_id.as_str()),
+        );
+    let latest_run_graph_dispatch_receipt_signal_ambiguous = latest_run_graph_dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
+            state_store::latest_run_graph_dispatch_receipt_signal_is_ambiguous(receipt)
+        });
+    let latest_run_graph_dispatch_receipt_summary_inconsistent =
+        !dispatch_receipt_checkpoint_leakage
+            && state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
+                latest_run_graph_status
+                    .as_ref()
+                    .map(|status| status.run_id.as_str()),
+                latest_run_graph_dispatch_receipt
+                    .as_ref()
+                    .map(|receipt| receipt.run_id.as_str()),
+            );
     let latest_run_graph_dispatch_receipt_signal_ambiguous =
         latest_run_graph_dispatch_receipt_signal_is_actionable(
             latest_run_graph_dispatch_receipt_signal_ambiguous,
@@ -2374,6 +2498,7 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         taskflow_active_candidates,
     );
     let global_closed_run_is_current = latest_global_run_graph_task_closed
+        && !latest_global_run_graph_terminal_closure_has_truth
         && latest_global_run_graph_status
             .as_ref()
             .is_some_and(|global| {
@@ -2621,14 +2746,16 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         "latest_run_graph_dispatch_compact_summary".to_string(),
         serde_json::to_value(&latest_run_graph_dispatch_compact_summary).ok()?,
     );
-    object.insert(
-        "projection_cache".to_string(),
-        serde_json::json!({
-            "status": "state_marker_stale_recent_projection_with_live_runtime_overlay",
-            "projection_name": projection_name,
-            "freshness_contract": "cached_structural_status_with_live_continuation_run_graph_and_write_guard_overlay"
-        }),
-    );
+    if !summary_only {
+        object.insert(
+            "projection_cache".to_string(),
+            serde_json::json!({
+                "status": "state_marker_stale_recent_projection_with_live_runtime_overlay",
+                "projection_name": projection_name,
+                "freshness_contract": "cached_structural_status_with_live_continuation_run_graph_and_write_guard_overlay"
+            }),
+        );
+    }
     if summary_only {
         compact_cached_status_summary_projection(&mut payload);
     }
@@ -3637,7 +3764,8 @@ mod tests {
             "latest_run_graph_dispatch_receipt": {"run_id": "run-summary"},
             "latest_run_graph_dispatch_route_truth": {"allowed_next_node": "developer"},
             "latest_run_graph_downstream_dispatch_preview": {"status": "ready"},
-            "latest_run_graph_dispatch_compact_summary": {"status": "blocked"}
+            "latest_run_graph_dispatch_compact_summary": {"status": "blocked"},
+            "projection_cache": {"status": "state_marker_stale_recent_projection_with_live_runtime_overlay"}
         })
         .to_string();
 
@@ -3664,6 +3792,7 @@ mod tests {
             "latest_run_graph_delegation_gate",
             "latest_run_graph_checkpoint",
             "latest_run_graph_dispatch_receipt",
+            "projection_cache",
         ] {
             assert!(
                 payload.get(key).is_none(),
