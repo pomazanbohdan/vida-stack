@@ -4313,7 +4313,9 @@ fn maybe_emit_task_create_invalid_parent_kind_error(
     let state_store::StateStoreError::InvalidTaskRecord { reason } = error else {
         return false;
     };
-    if !reason.contains("invalid_parent_child_kind") {
+    if !reason
+        .starts_with("task creation would create invalid graph: invalid_parent_child_kind on ")
+    {
         return false;
     }
     emit_task_create_invalid_parent_kind_error(
