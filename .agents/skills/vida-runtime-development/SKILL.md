@@ -20,6 +20,15 @@ Use this skill to keep VIDA runtime work evidence-first, TaskFlow-backed, and lo
 6. For command/output/timing friction, load `docs/process/command-timing-and-gate-optimization-protocol.md`.
 7. For session-level runbook details, load `references/session-runtime-runbook.md`.
 
+## Codebase Memory MCP
+
+Use `codebase-memory-mcp` before broad repo text search for codebase structure, symbol ownership, callers/callees, impact analysis, graph/schema inspection, and architecture-decision recall.
+
+1. Run `list_projects`, then `index_status` for the exact indexed project name, for example `C-project-vida-stack-crates`.
+2. When the index is ready, use `search_graph` or `search_code` for discovery, `trace_path` for call/data-flow and impacted surfaces, `detect_changes` for indexed diff impact, and `get_code_snippet` only after graph lookup identifies the exact symbol.
+3. Use `lean-ctx` after memory MCP for current filesystem truth, uncommitted edits, build/test output, and any stale or missing indexed path.
+4. If memory MCP is unavailable or stale, state that fallback explicitly before relying on `lean-ctx` alone.
+
 ## Runtime Evidence Order
 
 Prefer the smallest authoritative surface that answers the question:
