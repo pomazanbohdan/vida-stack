@@ -5553,6 +5553,10 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     }
                 };
             let takeover_active = lane_takeover_state(&receipt, recovery.as_ref()).is_active();
+            let original_receipt_dispatch_target = receipt.dispatch_target.clone();
+            let pending_receipt_has_persisted_dispatch_evidence = receipt.dispatch_status
+                == "bridge_request_pending"
+                && receipt.dispatch_result_path.is_some();
             let host_bridge_completion_context =
                 if let Some(request_path) = host_bridge_request.as_deref() {
                     match trusted_host_bridge_completion_request_context(
@@ -5579,7 +5583,9 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             let (packet_path, allow_dispatch_packet) = if let Some(context) =
                 host_bridge_completion_context.as_ref()
             {
-                receipt.dispatch_target = context.dispatch_target.clone();
+                if !pending_receipt_has_persisted_dispatch_evidence {
+                    receipt.dispatch_target = context.dispatch_target.clone();
+                }
                 (context.packet_path.clone(), true)
             } else if receipt.dispatch_status == "bridge_request_pending" {
                 if let Some(request_path) = host_bridge_request {
@@ -5781,9 +5787,6 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 )
                 .await;
                 let authoritative_owned_paths = owned_paths_from_lane_packet(&packet);
-                let pending_receipt_has_persisted_dispatch_evidence = receipt.dispatch_status
-                    == "bridge_request_pending"
-                    && receipt.dispatch_result_path.is_some();
                 let reconciled_request_dispatch_target = if receipt.dispatch_status
                     == "bridge_request_pending"
                     && !pending_receipt_has_persisted_dispatch_evidence
@@ -5803,7 +5806,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 };
                 let completion_dispatch_target = if pending_receipt_has_persisted_dispatch_evidence
                 {
-                    receipt.dispatch_target.as_str()
+                    original_receipt_dispatch_target.as_str()
                 } else {
                     host_bridge_completion_context
                         .as_ref()
@@ -12546,6 +12549,176 @@ mod tests {
         );
         assert!(!result_path.exists());
         assert!(!bridge_receipt_path.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_complete_preserves_persisted_target_before_context_reconciliation() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-context-target-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-host-bridge-context-target";
+        let persisted_target = "architect";
+        let request_target = "designer";
+
+        let packet_path =
+            root.join("runtime-consumption/downstream-dispatch-packets/run-context-target.json");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/run-context-target.json");
+        let request_path = root.join("host-tool-bridge/requests/run-context-target.json");
+        let result_path = root.join("host-tool-bridge/results/run-context-target.json");
+        let bridge_receipt_path = root.join("host-tool-bridge/receipts/run-context-target.json");
+
+        for path in [
+            &packet_path,
+            &activation_result_path,
+            &request_path,
+            &result_path,
+            &bridge_receipt_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("test path should have parent"))
+                .expect("create test artifact parent");
+        }
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": request_target,
+                "activation_runtime_role": "worker",
+                "packet_template_kind": "delivery_task_packet",
+                "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "delivery_task_packet": {
+                    "goal": "Complete host bridge lane evidence.",
+                    "scope_in": ["dispatch_target:designer"],
+                    "handoff_task_class": "implementation",
+                    "handoff_runtime_role": "worker",
+                    "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["host bridge completion is receipt-backed"],
+                    "verification_command": "cargo test -p vida lane_complete_preserves_persisted_target_before_context_reconciliation",
+                    "proof_target": "host bridge completion receipt",
+                    "stop_rules": ["stop if packet contract is invalid"],
+                    "blocking_question": "none"
+                },
+                "downstream_dispatch_target": "coach",
+                "downstream_dispatch_active_target": request_target,
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["pending_implementation_evidence"],
+                "downstream_dispatch_status": "blocked",
+                "downstream_lane_status": "lane_blocked"
+            })
+            .to_string(),
+        )
+        .expect("write downstream packet");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "run-context-target",
+            "run_id": run_id,
+            "dispatch_target": request_target,
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "senior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "result_path": result_path.display().to_string(),
+            "receipt_path": bridge_receipt_path.display().to_string()
+        });
+        std::fs::write(&request_path, request.to_string()).expect("write host bridge request");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "schema_version": 1,
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": request
+            })
+            .to_string(),
+        )
+        .expect("write dispatch result");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "implementation",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = request_target.to_string();
+        status.next_node = Some(request_target.to_string());
+        status.status = "blocked".to_string();
+        status.policy_gate = "host_tool_bridge_adapter_required".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = persisted_target.to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+        receipt.downstream_dispatch_target = Some("coach".to_string());
+        receipt.downstream_dispatch_command = Some("vida agent-init".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["pending_implementation_evidence".to_string()];
+        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_active_target = Some(request_target.to_string());
+        receipt.selected_backend = Some("internal_subagents".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let exit = run_lane(ProxyArgs {
+            args: vec![
+                "complete".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "host-bridge-context-target".to_string(),
+                "--host-bridge-request".to_string(),
+                request_path.display().to_string(),
+                "--host-agent-id".to_string(),
+                "agent-1".to_string(),
+                "--host-bridge-summary".to_string(),
+                "internal agent completed".to_string(),
+                "--state-dir".to_string(),
+                root.display().to_string(),
+                "--json".to_string(),
+            ],
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(!result_path.exists());
+        assert!(!bridge_receipt_path.exists());
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt after")
+            .expect("receipt should exist");
+        assert_eq!(after.dispatch_target, persisted_target);
+        assert_eq!(after.dispatch_status, "bridge_request_pending");
+        store.close().await;
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
