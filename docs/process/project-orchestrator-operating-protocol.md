@@ -35,6 +35,7 @@ Project rule:
 1. the orchestrator is not expected to rediscover product structure,
 2. the orchestrator is expected to follow the canonical maps, backlog, seams, and packet rules already fixed by project canon.
 3. routine packet/lane reminders should come from the compact project packet/lane capsule, with the full team-development protocol reserved for edge cases, closure conflicts, or packet-law audits.
+4. codebase graph discovery should use `codebase-memory-mcp` when available and fresh; raw file/shell inspection remains the fallback for current working-tree truth and compressed command output.
 
 ## Minimum Read Set
 
@@ -98,6 +99,7 @@ Project residue:
 6. keep historical release labels and concrete blocker names as evidence only, not permanent routing law,
 7. when `vida.config.yaml -> autonomous_execution.agent_only_development` is true, the project default is VIDA agent orchestration; a current VIDA `agent-init` packet, host-tool bridge request, sticky continuation intent, or visible agent-only runtime policy is not by itself explicit authorization to use a spawn-capable host subagent bridge when the host tool requires separate explicit subagent/delegation permission,
 8. when the same runtime defect, blocker code, command-surface failure, lane/receipt/dispatch defect, or session-blocking symptom appears more than once in one session, raise or keep its owning TaskFlow item at priority 1, append recurrence evidence, and route it before unrelated runtime-DX cleanup unless a higher-severity blocker is already active.
+9. for codebase search and impact analysis, prefer `codebase-memory-mcp` surfaces in this order: `list_projects`/`index_status` for freshness, `get_graph_schema` for available graph facts, `trace_path` for callers/callees/data-flow, `get_code_snippet` for exact qualified symbols, `detect_changes` for indexed impact, and `manage_adr` for durable architecture decisions. Do not use it as sole authority when the index is stale, contains deleted/generated paths, or the question depends on uncommitted working-tree changes.
 
 Active-epic publication residue:
 
@@ -653,5 +655,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-operating-protocol.md
 created_at: '2026-03-13T18:40:00+02:00'
-updated_at: 2026-06-12T00:00:00+03:00
+updated_at: 2026-07-01T21:45:00+03:00
 changelog_ref: project-orchestrator-operating-protocol.changelog.jsonl

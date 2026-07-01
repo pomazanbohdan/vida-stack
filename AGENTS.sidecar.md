@@ -100,7 +100,9 @@ Purpose: provide the project-level agent instruction overlay for the repository 
    - The wrapper dot-sources `scripts/vida-windows-env.ps1`, sets a writable `VIDA_MSVC_TEMP_DIR` default under `.vida\build-temp\msvc`, imports `Import-VidaMsvcEnvironment`, validates `cl.exe`/`link.exe`/Windows SDK availability, and forwards all remaining arguments to `cargo`.
    - The wrapper also inserts cargo's test-harness delimiter before common harness flags such as `--nocapture` and `--test-threads`, because PowerShell scripts consume a bare `--` delimiter before it reaches cargo.
    - Prefer this PowerShell wrapper for local Rust proof runs before hand-rolled `cmd.exe`, `VsDevCmd.bat`, or `vcvars64.bat` command strings.
-26. This path set is mandatory bootstrap context, not an optional later lookup.
+26. For codebase structure, symbol lookup, callers/callees, impact analysis, graph/schema inspection, and architecture-decision recall, prefer `codebase-memory-mcp` when it is available and its index is fresh. Use `list_projects`/`index_status` before relying on it, `trace_path` for call/data-flow, `get_code_snippet` after graph lookup, `detect_changes` for indexed impact analysis, and `manage_adr` for durable architecture decisions.
+27. Keep `lean-ctx` as the default for file reads, shell commands, compressed build/test output, and raw working-tree inspection. If `codebase-memory-mcp` returns stale generated paths or misses recent edits, refresh or repair the index and fall back to `lean-ctx` for current filesystem truth.
+28. This path set is mandatory bootstrap context, not an optional later lookup.
 
 Project-routing rule:
 
@@ -264,5 +266,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-06-13T00:00:00+03:00
+updated_at: 2026-07-01T21:45:00+03:00
 changelog_ref: AGENTS.sidecar.changelog.jsonl

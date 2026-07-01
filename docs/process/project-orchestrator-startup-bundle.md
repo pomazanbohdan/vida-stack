@@ -36,6 +36,7 @@ Treat this bundle as the compact project `always_on_core` startup set for routin
 8. runtime development environment skill and issue-processing routing from `vida-runtime-development-environment.md`.
 9. wave-first epic optimization, three-step task execution, and post-task
    scorecard/checklist routing from `project-orchestrator-operating-protocol.md`.
+10. codebase graph/search routing: use `codebase-memory-mcp` for fresh indexed symbol, call graph, impact, snippet, schema, and ADR work; use `lean-ctx` for current file reads, shell commands, compressed logs, and stale-index fallback.
 
 ## Runtime Summary
 
@@ -57,6 +58,7 @@ After reading this bundle, the orchestrator should be able to answer:
     task,
 13. which post-task checklist items must be proven before selecting unrelated
     work.
+14. whether codebase discovery should start from `codebase-memory-mcp` or fall back to `lean-ctx` because the index is absent, stale, or contaminated by generated paths.
 
 ## Expansion Rule
 
@@ -86,6 +88,7 @@ Expand beyond it only when:
 7. for timing evidence, slow-gate classification, and script/gate optimization, read `docs/process/command-timing-and-gate-optimization-protocol.md`,
 8. for runtime blockers, multi-defect pools, ownership conflicts, receipt/proof contradictions, routing blockers, or CI defect clusters, read `docs/process/project-error-search-runtime-diagnostics-protocol.md`.
 9. for runtime development environment, project-local skill activation, GitHub issue processing, or operator-efficiency follow-up routing, read `docs/process/vida-runtime-development-environment.md`.
+10. for codebase graph discovery, start with `codebase-memory-mcp list_projects` and `index_status`; if the index is ready, use graph tools before broad text search, and if it is stale or contaminated, record the blocker and use `lean-ctx` for current filesystem truth.
 
 -----
 artifact_path: process/project-orchestrator-startup-bundle
@@ -96,5 +99,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-startup-bundle.md
 created_at: '2026-03-13T18:05:15+02:00'
-updated_at: 2026-06-13T01:35:00+03:00
+updated_at: 2026-07-01T21:45:00+03:00
 changelog_ref: project-orchestrator-startup-bundle.changelog.jsonl
