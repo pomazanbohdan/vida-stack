@@ -3991,6 +3991,10 @@ fn parse_proof_target_values(values: &[String]) -> Vec<String> {
     taskflow_core::task::update::parse_proof_target_values(values)
 }
 
+fn parse_literal_proof_target_values(values: &[String]) -> Vec<String> {
+    taskflow_core::task::update::parse_literal_proof_target_values(values)
+}
+
 fn parse_literal_metadata_values(values: &[String]) -> Vec<String> {
     values
         .iter()
@@ -12015,7 +12019,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
             TaskProofCommand::AttachEvidence(command) => {
-                let proof_targets = parse_proof_target_values(&command.proof_target);
+                let proof_targets = parse_literal_proof_target_values(&command.proof_target);
                 if proof_targets.is_empty() {
                     if command.json {
                         crate::print_json_pretty(&serde_json::json!({

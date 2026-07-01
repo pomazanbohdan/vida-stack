@@ -59,6 +59,17 @@ pub fn parse_proof_target_values(values: &[String]) -> Vec<String> {
     normalize_proof_target_commands(parse_label_values(values))
 }
 
+#[must_use]
+pub fn parse_literal_proof_target_values(values: &[String]) -> Vec<String> {
+    let values = values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    normalize_proof_target_commands(values)
+}
+
 pub fn task_update_proof_targets_arg(
     values: &[String],
     clear: bool,
@@ -180,9 +191,9 @@ fn cargo_test_option_takes_value(option: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_proof_target_commands, parse_label_values, parse_optional_label_value,
-        parse_proof_target_values, task_update_parent_arg, task_update_proof_targets_arg,
-        task_update_semantics_arg,
+        normalize_proof_target_commands, parse_label_values, parse_literal_proof_target_values,
+        parse_optional_label_value, parse_proof_target_values, task_update_parent_arg,
+        task_update_proof_targets_arg, task_update_semantics_arg,
     };
 
     #[test]
@@ -261,6 +272,25 @@ mod tests {
                 "vida docflow protocol-coverage-check docs --format json".to_string()
             ]),
             vec!["vida docflow protocol-coverage-check docs"]
+        );
+    }
+
+    #[test]
+    fn literal_proof_targets_preserve_commas_while_normalizing_commands() {
+        assert_eq!(
+            parse_literal_proof_target_values(&[
+                "release admission proof, retrieval trust proof".to_string()
+            ]),
+            vec!["release admission proof, retrieval trust proof"]
+        );
+        assert_eq!(
+            parse_literal_proof_target_values(&[
+                "cargo test -p vida alpha beta -- --nocapture".to_string()
+            ]),
+            vec![
+                "cargo test -p vida alpha -- --nocapture".to_string(),
+                "cargo test -p vida beta -- --nocapture".to_string(),
+            ]
         );
     }
 

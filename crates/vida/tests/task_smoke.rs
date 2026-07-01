@@ -8567,6 +8567,118 @@ fn task_proof_attach_evidence_satisfies_status_and_progress() {
 }
 
 #[test]
+fn task_proof_attach_evidence_preserves_literal_comma_target() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("proof-comma-parent");
+    let task_id = unique_test_id("proof-comma-task");
+    let proof_target = "release admission proof, retrieval trust proof";
+    create_epic_parent(&state_dir, &parent_id, "Proof comma parent", "open");
+    let _ = run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Proof comma task",
+            "--type",
+            "task",
+            "--parent-id",
+            &parent_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    let _ = run_command_json(
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--status",
+            "in_progress",
+            "--proof-target-literal",
+            proof_target,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let missing_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(
+        missing_status["proof_targets"][0]["target"],
+        serde_json::json!(proof_target)
+    );
+    assert_eq!(missing_status["missing_count"], 1);
+
+    let receipt = run_command_json(
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            &task_id,
+            "--proof-target",
+            proof_target,
+            "--result",
+            "pass",
+            "--artifact-ref",
+            "artifacts/proof-comma.json",
+            "--evidence",
+            "literal proof target with comma passed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(receipt["status"], "pass");
+    assert_eq!(receipt["proof_target"], proof_target);
+    assert_eq!(receipt["proof_targets"], serde_json::json!([proof_target]));
+
+    let default_output = run_and_assert_success(
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            &task_id,
+            "--proof-target",
+            proof_target,
+            "--result",
+            "pass",
+            "--artifact-ref",
+            "artifacts/proof-comma-default.txt",
+            "--evidence",
+            "default output preserves the literal comma target",
+        ],
+        &state_dir,
+    );
+    assert!(default_output.contains("proof target: release admission proof, retrieval trust proof"));
+    assert!(!default_output.contains("proof targets: 2"));
+
+    let satisfied_status =
+        run_command_json(&["task", "proof", "status", &task_id, "--json"], &state_dir);
+    assert_eq!(satisfied_status["satisfied_count"], 1);
+    assert_eq!(satisfied_status["missing_count"], 0);
+    assert_eq!(
+        satisfied_status["proof_targets"][0]["evidence_source"],
+        "task_proof_evidence_registry"
+    );
+
+    let allowed_close = run_command_json(
+        &[
+            "task",
+            "close",
+            &task_id,
+            "--reason",
+            "Structured proof evidence recorded",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(allowed_close["status"], "pass");
+    assert_eq!(allowed_close["closed"], true);
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_closeout_json_bundles_blocked_proof_closure_graph_and_temp_scan() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
