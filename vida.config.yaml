@@ -417,6 +417,16 @@ agent_extensions:
     - party_chat_dx_tooling
     - party_chat_pm_process
     - party_chat_release_management
+    - ra_requirement_clarification
+    - ra_user_flow_analysis
+    - ra_business_rule_analysis
+    - ra_state_machine_workflow_analysis
+    - ra_data_lifecycle_analysis
+    - ra_api_integration_contract_analysis
+    - ra_security_privacy_review
+    - ra_nonfunctional_requirement_review
+    - ra_test_matrix_design
+    - ra_codebase_impact_analysis
   enabled_shared_skills: []
   enabled_project_profiles:
     - party_chat_facilitator_profile

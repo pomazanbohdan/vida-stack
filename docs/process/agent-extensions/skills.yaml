@@ -54,3 +54,33 @@ skills:
   - skill_id: vida_github_issues
     description: Project-local Codex skill for upstream GitHub Issues triage, stale issue cleanup, issue-to-TaskFlow mapping, labeling, comments, and closure evidence.
     compatible_base_roles: worker,coach,verifier,pm
+  - skill_id: ra_requirement_clarification
+    description: Requirement-clarification method for eliciting, consolidating, and validating stakeholder needs into explicit requirement statements, open questions, assumptions, constraints, and acceptance criteria before implementation shaping.
+    compatible_base_roles: business_analyst,pm,coach
+  - skill_id: ra_user_flow_analysis
+    description: User-flow and UX-analysis method for mapping actors, goals, scenarios, information architecture, happy paths, exception paths, usability risks, and interaction constraints into implementation-ready requirement evidence.
+    compatible_base_roles: business_analyst,pm,coach,verifier
+  - skill_id: ra_business_rule_analysis
+    description: Business-rule analysis method for extracting operative rules, decision logic, obligations, prohibitions, policy constraints, exceptions, and traceable rule-to-requirement impacts from stakeholder or domain evidence.
+    compatible_base_roles: business_analyst,pm,coach
+  - skill_id: ra_state_machine_workflow_analysis
+    description: State-machine and workflow-analysis method for modeling states, events, guards, transitions, lifecycle stages, concurrency limits, invalid transitions, recovery paths, and run-to-completion assumptions for behavior-heavy requirements.
+    compatible_base_roles: business_analyst,worker,solution_architect,verifier
+  - skill_id: ra_data_lifecycle_analysis
+    description: Data-lifecycle analysis method for tracing data creation, ownership, validation, persistence, synchronization, retention, deletion, migration, privacy sensitivity, and downstream contract effects across a requirement.
+    compatible_base_roles: business_analyst,worker,solution_architect,verifier
+  - skill_id: ra_api_integration_contract_analysis
+    description: API and integration-contract analysis method for specifying service boundaries, request and response schemas, path and operation semantics, versioning, compatibility, error contracts, authentication expectations, and consumer-provider obligations.
+    compatible_base_roles: business_analyst,worker,solution_architect,verifier
+  - skill_id: ra_security_privacy_review
+    description: Security and privacy review method for turning requirements into explicit abuse cases, protected assets, access-control expectations, verification requirements, data-exposure limits, and fail-closed handling for security-sensitive behavior.
+    compatible_base_roles: business_analyst,worker,coach,verifier
+  - skill_id: ra_nonfunctional_requirement_review
+    description: Non-functional requirement review method for separating functional behavior from quality requirements and constraints, then making performance, reliability, maintainability, safety, security, usability, and operational expectations measurable.
+    compatible_base_roles: business_analyst,pm,coach,verifier
+  - skill_id: ra_test_matrix_design
+    description: Test-matrix design method for deriving scenario coverage, equivalence classes, boundary values, decision tables, state transitions, fixtures, negative cases, and proof targets from clarified requirements.
+    compatible_base_roles: business_analyst,worker,coach,verifier
+  - skill_id: ra_codebase_impact_analysis
+    description: Codebase-impact analysis method for tracing a requirement across owned paths, modules, APIs, migrations, runtime state, tests, docs, release gates, dependency risks, and safe implementation order before write-producing work.
+    compatible_base_roles: business_analyst,worker,solution_architect,coach,verifier
