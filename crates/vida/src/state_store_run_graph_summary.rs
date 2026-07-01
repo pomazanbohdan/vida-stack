@@ -261,16 +261,6 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             );
             apply_ready_run_graph_transition(&mut status, transition);
             return Ok(status);
-        } else if retryable_blocked_receipt {
-            let blocked_target = normalize_run_graph_node(&receipt.dispatch_target);
-            status.active_node = receipt.dispatch_target.clone();
-            status.next_node = Some(blocked_target.clone());
-            status.lifecycle_stage = format!("{blocked_target}_blocked");
-            status.policy_gate = receipt.blocker_code.clone().unwrap_or_default();
-            status.handoff_state = format!("awaiting_{blocked_target}");
-            status.resume_target = format!("dispatch.{blocked_target}");
-            status.context_state = "sealed".to_string();
-            status.recovery_ready = true;
         } else if let Some(blocked_source) =
             blocked_source_lane_from_downstream_dispatch_packet(&receipt)
         {
@@ -284,6 +274,17 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.handoff_state = "none".to_string();
             status.resume_target = format!("dispatch.{blocked_target}");
             status.context_state = "sealed".to_string();
+            status.recovery_ready = false;
+        } else if retryable_blocked_receipt {
+            let blocked_target = normalize_run_graph_node(&receipt.dispatch_target);
+            status.active_node = receipt.dispatch_target.clone();
+            status.next_node = Some(blocked_target.clone());
+            status.lifecycle_stage = format!("{blocked_target}_blocked");
+            status.policy_gate = receipt.blocker_code.clone().unwrap_or_default();
+            status.handoff_state = format!("awaiting_{blocked_target}");
+            status.resume_target = format!("dispatch.{blocked_target}");
+            status.context_state = "sealed".to_string();
+            status.recovery_ready = true;
         } else {
             let blocked_target = normalize_run_graph_node(&receipt.dispatch_target);
             status.active_node = receipt.dispatch_target.clone();
@@ -5779,19 +5780,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_bridge_completion_retry_prefers_receipt_target_over_stale_packet_source() {
-        let root = temp_run_graph_root("host-bridge-retry-stale-packet-source");
+    async fn host_bridge_completion_retry_preserves_blocked_packet_source_lane() {
+        let root = temp_run_graph_root("host-bridge-retry-blocked-packet-source");
         let store = StateStore::open(root.clone()).await.expect("open store");
         store
             .persist_task_record(test_task_record(
-                "task-host-bridge-retry-stale-packet-source",
+                "task-host-bridge-retry-blocked-packet-source",
                 "in_progress",
             ))
             .await
             .expect("seed task");
         let mut status = sample_run_graph_status();
-        status.run_id = "run-host-bridge-retry-stale-packet-source".to_string();
-        status.task_id = "task-host-bridge-retry-stale-packet-source".to_string();
+        status.run_id = "run-host-bridge-retry-blocked-packet-source".to_string();
+        status.task_id = "task-host-bridge-retry-blocked-packet-source".to_string();
         status.active_node = "designer".to_string();
         status.next_node = None;
         status.status = "blocked".to_string();
@@ -5849,11 +5850,11 @@ mod tests {
             .expect("load recovery summary");
 
         assert_eq!(recovery.resume_status, "blocked");
-        assert_eq!(recovery.active_node, "autotester");
-        assert_eq!(recovery.lifecycle_stage, "autotester_blocked");
-        assert_eq!(recovery.resume_node.as_deref(), Some("autotester"));
-        assert_eq!(recovery.resume_target, "dispatch.autotester");
-        assert!(recovery.recovery_ready);
+        assert_eq!(recovery.active_node, "designer");
+        assert_eq!(recovery.lifecycle_stage, "designer_blocked");
+        assert_eq!(recovery.resume_node, None);
+        assert_eq!(recovery.resume_target, "dispatch.designer");
+        assert!(!recovery.recovery_ready);
 
         close_store_and_remove_root(store, root).await;
     }
