@@ -694,56 +694,68 @@ pub(crate) fn release_build_receipt(skip_build: bool) -> ReleaseBuildReceipt {
 fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
     let latest_path = release_install_progress_latest_path();
     let latest_path_string = latest_path.display().to_string();
-    if !release_install_progress_readable_regular_file(&latest_path) {
-        if let Some((latest_event, progress_path)) =
-            latest_release_install_progress_artifact_event()
-        {
-            return release_install_status_receipt_from_event(
+    match fs::symlink_metadata(&latest_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return release_install_progress_unreadable_status_receipt(
                 latest_path_string,
-                latest_event,
-                Vec::new(),
-                Some(progress_path),
+                &latest_path,
+                "release install progress marker is a symlink".to_string(),
             );
         }
-        return ReleaseInstallProgressStatusReceipt {
-            surface: "vida release install --status".to_string(),
-            status: "blocked".to_string(),
-            blocker_codes: vec!["release_install_progress_missing".to_string()],
-            next_actions: vec![
-                "Run `vida release install --json` to start a release install, or inspect the install target directly."
-                    .to_string(),
-            ],
-            latest_status: None,
-            latest_phase: None,
-            latest_path: latest_path_string,
-            progress_path: None,
-            process_id: None,
-            child_state: None,
-            artifact_refs: Vec::new(),
-            latest_event: None,
-        };
+        Ok(metadata) if !metadata.is_file() => {
+            return release_install_progress_unreadable_status_receipt(
+                latest_path_string,
+                &latest_path,
+                "release install progress marker is not a regular file".to_string(),
+            );
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Some((latest_event, progress_path)) =
+                latest_release_install_progress_artifact_event()
+            {
+                return release_install_status_receipt_from_event(
+                    latest_path_string,
+                    latest_event,
+                    Vec::new(),
+                    Some(progress_path),
+                );
+            }
+            return ReleaseInstallProgressStatusReceipt {
+                surface: "vida release install --status".to_string(),
+                status: "blocked".to_string(),
+                blocker_codes: vec!["release_install_progress_missing".to_string()],
+                next_actions: vec![
+                    "Run `vida release install --json` to start a release install, or inspect the install target directly."
+                        .to_string(),
+                ],
+                latest_status: None,
+                latest_phase: None,
+                latest_path: latest_path_string,
+                progress_path: None,
+                process_id: None,
+                child_state: None,
+                artifact_refs: Vec::new(),
+                latest_event: None,
+            };
+        }
+        Err(error) => {
+            return release_install_progress_unreadable_status_receipt(
+                latest_path_string,
+                &latest_path,
+                error.to_string(),
+            );
+        }
     }
     let latest_raw =
         match read_release_install_progress_file_without_following_symlinks(&latest_path) {
             Ok(raw) => raw,
             Err(error) => {
-                return ReleaseInstallProgressStatusReceipt {
-                    surface: "vida release install --status".to_string(),
-                    status: "blocked".to_string(),
-                    blocker_codes: vec!["release_install_progress_unreadable".to_string()],
-                    next_actions: vec![format!(
-                        "Inspect release install progress marker `{}`: {error}",
-                        latest_path.display()
-                    )],
-                    latest_status: None,
-                    latest_phase: None,
-                    latest_path: latest_path_string,
-                    progress_path: None,
-                    process_id: None,
-                    child_state: None,
-                    artifact_refs: vec![latest_path.display().to_string()],
-                    latest_event: None,
-                };
+                return release_install_progress_unreadable_status_receipt(
+                    latest_path_string,
+                    &latest_path,
+                    error.to_string(),
+                );
             }
         };
     let latest_event: serde_json::Value = match serde_json::from_str(&latest_raw) {
@@ -836,6 +848,30 @@ fn release_install_status_receipt_from_event(
         child_state,
         artifact_refs,
         latest_event: Some(latest_event),
+    }
+}
+
+fn release_install_progress_unreadable_status_receipt(
+    latest_path_string: String,
+    latest_path: &Path,
+    detail: String,
+) -> ReleaseInstallProgressStatusReceipt {
+    ReleaseInstallProgressStatusReceipt {
+        surface: "vida release install --status".to_string(),
+        status: "blocked".to_string(),
+        blocker_codes: vec!["release_install_progress_unreadable".to_string()],
+        next_actions: vec![format!(
+            "Inspect release install progress marker `{}`: {detail}",
+            latest_path.display()
+        )],
+        latest_status: None,
+        latest_phase: None,
+        latest_path: latest_path_string,
+        progress_path: None,
+        process_id: None,
+        child_state: None,
+        artifact_refs: vec![latest_path.display().to_string()],
+        latest_event: None,
     }
 }
 
@@ -2442,9 +2478,23 @@ mod tests {
         let harness = TempStateHarness::new().expect("temp harness should initialize");
         let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
         clean_release_progress_latest_markers();
+        let progress_path = release_install_progress_path()
+            .expect("release progress path should be available for test");
+        write_release_install_progress_event_with_child(
+            &progress_path,
+            "pass",
+            "install",
+            &[
+                "vida".to_string(),
+                "release".to_string(),
+                "install".to_string(),
+            ],
+            Some(0),
+            None,
+            Some("completed"),
+        )
+        .expect("durable install progress should write");
         let latest_path = release_install_progress_latest_path();
-        fs::create_dir_all(latest_path.parent().expect("latest parent should exist"))
-            .expect("latest parent should write");
         let victim = harness.path().join("victim-latest-secret.json");
         fs::write(
             &victim,
@@ -2459,6 +2509,7 @@ mod tests {
             .to_string(),
         )
         .expect("victim latest secret should write");
+        fs::remove_file(&latest_path).expect("regular latest marker should be removed");
         std::os::unix::fs::symlink(&victim, &latest_path)
             .expect("latest marker symlink should write");
 
@@ -2467,10 +2518,18 @@ mod tests {
         assert_eq!(receipt.status, "blocked");
         assert_eq!(
             receipt.blocker_codes,
-            vec!["release_install_progress_missing".to_string()]
+            vec!["release_install_progress_unreadable".to_string()]
         );
+        assert!(receipt
+            .next_actions
+            .iter()
+            .any(|action| action.contains("symlink")));
         assert!(receipt.latest_event.is_none());
         assert!(receipt.progress_path.is_none());
+        assert_eq!(
+            receipt.artifact_refs,
+            vec![latest_path.display().to_string()]
+        );
         clean_release_progress_latest_markers();
     }
 
