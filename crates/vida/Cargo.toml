@@ -14,7 +14,6 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
 [[bin]]
 name = "vida"
 path = "src/main.rs"
-test = false
 
 [dependencies]
 blake3 = "1.8.5"
