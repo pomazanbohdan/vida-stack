@@ -1,3 +1,4 @@
+use std::fs;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,6 +23,29 @@ fn unique_state_dir() -> String {
         std::env::temp_dir().display(),
         std::process::id()
     )
+}
+
+fn unique_local_dir(prefix: &str) -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let counter = UNIQUE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::current_dir()
+        .expect("test cwd should resolve")
+        .join("target")
+        .join("tmp")
+        .join(format!("{prefix}-{}-{nanos}-{counter}", std::process::id()))
+}
+
+fn write_requirement_project_markers(project_root: &std::path::Path) {
+    fs::write(project_root.join("AGENTS.md"), "# test project\n")
+        .expect("project bootstrap marker should be written");
+    fs::write(project_root.join("vida.config.yaml"), "project: {}\n")
+        .expect("project marker should be written");
+    for marker in [".vida/config", ".vida/db", ".vida/project"] {
+        fs::create_dir_all(project_root.join(marker)).expect("project runtime marker should exist");
+    }
 }
 
 fn run_json(state_dir: &str, args: &[&str]) -> serde_json::Value {
@@ -159,6 +183,385 @@ fn json_contract_harness_rejects_missing_operator_fields() {
         support::release1_operator_shape_error(&missing_actions).as_deref(),
         Some("missing next_actions")
     );
+}
+
+#[test]
+fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
+    let state_dir = unique_local_dir("vida-json-contract-source-state");
+    let project_root = unique_local_dir("vida-json-contract-source-project");
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    write_requirement_project_markers(&project_root);
+    fs::write(
+        project_root.join("requirements.md"),
+        "SECRET_TOKEN=must-not-be-serialized\nBuild the feature.",
+    )
+    .expect("source fixture should be written");
+    fs::write(project_root.join("requirements.md"), {
+        let bare_pem_label = "PRIVATE KEY";
+        let bare_pem_begin = format!("-----BEGIN {bare_pem_label}-----");
+        let bare_pem_body = "BAREPEMBODYSHOULDNOTLEAK";
+        let bare_pem_end = format!("-----END {bare_pem_label}-----");
+        [
+            bare_pem_begin.as_str(),
+            bare_pem_body,
+            bare_pem_end.as_str(),
+            "Build the feature.",
+            "Password reset: allow users to rotate credentials.",
+            "Token-based auth: add OAuth.",
+            "SECRET_TOKEN=[redacted-test-value]",
+            "SECRET_TOKEN = [redacted-test-value]",
+            "api_key: [redacted-test-value]",
+            "private-key: [redacted-test-value]",
+            "PRIVATE_KEY=\"-----BEGIN TEST KEY-----",
+            "MIISECRETBODYSHOULDNOTLEAK",
+            "-----END TEST KEY-----\"",
+            "api_token: |",
+            "  YAMLBLOCKSECRETBODYSHOULDNOTLEAK",
+            "",
+            "Keep operator output compact.",
+            "Add JSON proof.",
+            "Validate blocked source paths.",
+            "Reject symlinks.",
+            "Keep developer handoff complete.",
+            "Document source metadata.",
+            "Preserve project-root semantics.",
+            "Avoid stale artifact fields.",
+            "Keep readiness verdict stable.",
+            "Preserve requirement twelve.",
+            "Preserve requirement thirteen.",
+        ]
+        .join("\n")
+    })
+    .expect("source fixture should be rewritten");
+
+    let json_output = vida()
+        .current_dir(&project_root)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "source-file-redaction",
+            "--source-file",
+            "requirements.md",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("requirement analyze json should run");
+    assert!(
+        json_output.status.success(),
+        "project-relative regular source should succeed: {}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let value = parse_json_output(
+        &["requirement", "analyze", "--source-file", "--json"],
+        &json_output,
+    );
+    let artifact = &value["artifact"];
+    let source_text = artifact["source_inputs"][0]["text"]
+        .as_str()
+        .expect("source text should render");
+    let bare_pem_begin_marker = format!("-----BEGIN {}-----", "PRIVATE KEY");
+    let bare_pem_end_marker = format!("-----END {}-----", "PRIVATE KEY");
+    assert_eq!(artifact["source_inputs"][0]["kind"], "source_file");
+    assert!(source_text.contains("Build the feature"));
+    assert!(source_text.contains("Preserve requirement thirteen"));
+    assert!(
+        !source_text.contains("SECRET_TOKEN"),
+        "raw source-file content must not be serialized: {source_text}"
+    );
+    assert!(
+        !source_text.contains("api_key") && !source_text.contains("[redacted-test-value]"),
+        "spaced and YAML-style source-file secrets must be redacted: {source_text}"
+    );
+    for marker in [
+        "private-key",
+        "PRIVATE_KEY",
+        "MIISECRETBODYSHOULDNOTLEAK",
+        "-----BEGIN TEST KEY-----",
+        "-----END TEST KEY-----",
+        bare_pem_begin_marker.as_str(),
+        "BAREPEMBODYSHOULDNOTLEAK",
+        bare_pem_end_marker.as_str(),
+        "YAMLBLOCKSECRETBODYSHOULDNOTLEAK",
+    ] {
+        assert!(
+            !source_text.contains(marker),
+            "source-file secret marker {marker} must be redacted: {source_text}"
+        );
+    }
+    let source_metadata = artifact["source_inputs"][0]["source_metadata"]
+        .as_str()
+        .expect("source metadata should render");
+    assert!(source_metadata.starts_with("file:requirements.md:bytes="));
+    assert!(source_metadata.contains(":blake3="));
+    let public_analysis_text = artifact["source_inputs"][0]["analysis_text"]
+        .as_str()
+        .expect("redacted source analysis should render");
+    assert!(
+        !public_analysis_text.contains("SECRET_TOKEN"),
+        "redacted analysis must not disclose source-file secrets: {public_analysis_text}"
+    );
+    assert!(
+        !public_analysis_text.contains("api_key")
+            && !public_analysis_text.contains("[redacted-test-value]"),
+        "redacted analysis must hide spaced and YAML-style source-file secrets: {public_analysis_text}"
+    );
+    for marker in [
+        "private-key",
+        "PRIVATE_KEY",
+        "MIISECRETBODYSHOULDNOTLEAK",
+        "-----BEGIN TEST KEY-----",
+        "-----END TEST KEY-----",
+        bare_pem_begin_marker.as_str(),
+        "BAREPEMBODYSHOULDNOTLEAK",
+        bare_pem_end_marker.as_str(),
+        "YAMLBLOCKSECRETBODYSHOULDNOTLEAK",
+    ] {
+        assert!(
+            !public_analysis_text.contains(marker),
+            "redacted analysis must hide source-file secret marker {marker}: {public_analysis_text}"
+        );
+    }
+    let raw_source = fs::read_to_string(project_root.join("requirements.md"))
+        .expect("source fixture should still be readable");
+    let raw_digest = blake3::hash(raw_source.as_bytes()).to_string();
+    let public_digest = blake3::hash(public_analysis_text.as_bytes()).to_string();
+    assert!(
+        !source_metadata.contains(&raw_digest),
+        "source metadata must not hash unredacted source-file contents: {source_metadata}"
+    );
+    assert!(
+        source_metadata.contains(&public_digest),
+        "source metadata should hash the public redacted source text: {source_metadata}"
+    );
+    assert!(
+        source_metadata.contains(":redacted=true"),
+        "source metadata should disclose that public source text was redacted: {source_metadata}"
+    );
+    assert!(
+        source_text.contains("Password reset: allow users to rotate credentials.")
+            && source_text.contains("Token-based auth: add OAuth."),
+        "prose requirement headings mentioning password/token should be preserved: {source_text}"
+    );
+    assert!(
+        public_analysis_text.contains("Password reset: allow users to rotate credentials.")
+            && public_analysis_text.contains("Token-based auth: add OAuth."),
+        "analysis text should preserve prose requirement headings mentioning password/token: {public_analysis_text}"
+    );
+    assert!(
+        public_analysis_text.contains("Preserve requirement thirteen"),
+        "redacted analysis should preserve requirements beyond the atom cap: {public_analysis_text}"
+    );
+    assert!(artifact["requirement_atoms"]
+        .as_array()
+        .expect("atoms should render")
+        .iter()
+        .any(|atom| atom["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Build the feature"))));
+    assert!(artifact["requirement_atoms"]
+        .as_array()
+        .expect("atoms should render")
+        .iter()
+        .any(|atom| atom["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Keep readiness verdict stable"))));
+    assert!(
+        !artifact["requirement_atoms"]
+            .as_array()
+            .expect("atoms should render")
+            .iter()
+            .any(|atom| atom["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("SECRET_TOKEN")
+                    || text.contains("api_key")
+                    || text.contains("private-key")
+                    || text.contains("PRIVATE_KEY")
+                    || text.contains("MIISECRETBODYSHOULDNOTLEAK")
+                    || text.contains("BAREPEMBODYSHOULDNOTLEAK")
+                    || text.contains("YAMLBLOCKSECRETBODYSHOULDNOTLEAK")
+                    || text.contains("[redacted source-file secret line]")
+                    || text.contains("[redacted-test-value]"))),
+        "source-file secrets and redaction placeholders must not leak through requirement atoms"
+    );
+    assert!(
+        artifact["requirement_atoms"]
+            .as_array()
+            .expect("atoms should render")
+            .iter()
+            .any(|atom| atom["text"].as_str().is_some_and(
+                |text| text.contains("Password reset: allow users to rotate credentials")
+            ))
+            && artifact["requirement_atoms"]
+                .as_array()
+                .expect("atoms should render")
+                .iter()
+                .any(|atom| atom["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("Token-based auth: add OAuth"))),
+        "requirement atoms should preserve prose headings mentioning password/token"
+    );
+
+    let nested_dir = project_root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("nested cwd should exist");
+    let nested_output = vida()
+        .current_dir(&nested_dir)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "nested-source-file",
+            "--source-file",
+            "requirements.md",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("nested source resolution should run");
+    assert!(
+        nested_output.status.success(),
+        "source paths should resolve from project root even when cwd is nested: {}",
+        String::from_utf8_lossy(&nested_output.stderr)
+    );
+
+    let absolute_source = project_root.join("requirements.md");
+    let absolute_output = vida()
+        .current_dir(&project_root)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "absolute-source",
+            "--source-file",
+            absolute_source
+                .to_str()
+                .expect("absolute source path should be utf8"),
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("absolute source rejection should run");
+    assert!(
+        !absolute_output.status.success(),
+        "absolute source paths should fail closed"
+    );
+    let absolute_value = parse_json_output(
+        &["requirement", "analyze", "--source-file", "--json"],
+        &absolute_output,
+    );
+    assert_eq!(absolute_value["status"], "blocked");
+    assert_eq!(
+        absolute_value["blocker_codes"],
+        json!(["requirement_source_unreadable"])
+    );
+
+    let traversal_output = vida()
+        .current_dir(&project_root)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "traversal-source",
+            "--source-file",
+            "../requirements.md",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("traversal source rejection should run");
+    assert!(
+        !traversal_output.status.success(),
+        "parent traversal source paths should fail closed"
+    );
+
+    let stray_root = std::path::PathBuf::from(unique_state_dir());
+    fs::create_dir_all(&stray_root).expect("stray cwd should exist");
+    fs::write(stray_root.join("requirements.md"), "Build outside project.")
+        .expect("stray source should write");
+    let stray_output = vida()
+        .current_dir(&stray_root)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "stray-source",
+            "--source-file",
+            "requirements.md",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("stray source rejection should run");
+    assert!(
+        !stray_output.status.success(),
+        "source files should fail closed when project root resolution fails"
+    );
+    let stray_value = parse_json_output(
+        &["requirement", "analyze", "--source-file", "--json"],
+        &stray_output,
+    );
+    assert_eq!(stray_value["status"], "blocked");
+    assert_eq!(
+        stray_value["blocker_codes"],
+        json!(["requirement_source_unreadable"])
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+    let _ = fs::remove_dir_all(&stray_root);
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn requirement_analysis_source_file_rejects_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let state_dir = unique_state_dir();
+    let project_root = format!("{}-project", unique_state_dir());
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    write_requirement_project_markers(std::path::Path::new(&project_root));
+    let sensitive_path = format!("{}-sensitive.env", unique_state_dir());
+    fs::write(
+        &sensitive_path,
+        "VIDA_SECRET_TOKEN=local-file-disclosure-proof",
+    )
+    .expect("sensitive fixture should be written");
+    symlink(&sensitive_path, format!("{project_root}/requirements.md"))
+        .expect("symlink fixture should be created");
+
+    let output = vida()
+        .current_dir(&project_root)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "symlink-source",
+            "--source-file",
+            "requirements.md",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("symlink source rejection should run");
+    assert!(!output.status.success(), "symlinks should fail closed");
+    let value = parse_json_output(
+        &["requirement", "analyze", "--source-file", "--json"],
+        &output,
+    );
+    assert_eq!(value["status"], "blocked");
+    assert_eq!(
+        value["blocker_codes"],
+        json!(["requirement_source_unreadable"])
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("VIDA_SECRET_TOKEN"),
+        "blocked payload must not disclose symlink target content"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+    let _ = fs::remove_file(&sensitive_path);
+    let _ = fs::remove_dir_all(&state_dir);
 }
 
 #[test]

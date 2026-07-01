@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
@@ -49,6 +50,7 @@ pub enum ArtifactPathKind {
     RuntimeSnapshot,
     TaskAttemptArtifact,
     DocflowChangedPath,
+    RequirementSourceFile,
     GenericJson,
 }
 
@@ -64,6 +66,7 @@ impl fmt::Display for ArtifactPathKind {
             Self::RuntimeSnapshot => "runtime snapshot",
             Self::TaskAttemptArtifact => "task attempt artifact",
             Self::DocflowChangedPath => "docflow changed path",
+            Self::RequirementSourceFile => "requirement source file",
             Self::GenericJson => "generic json",
         };
         f.write_str(label)
@@ -210,6 +213,114 @@ pub fn existing_regular_file_under_root(
         kind,
     })
 }
+
+pub fn read_bounded_text_file_under_root(
+    root: &StateRoot,
+    raw_path: impl AsRef<Path>,
+    kind: ArtifactPathKind,
+    max_bytes: u64,
+) -> Result<String, PathPolicyError> {
+    let raw_path = raw_path.as_ref();
+    reject_dot_segment(raw_path, kind)?;
+    let path = root.resolve_raw(raw_path);
+    let cap_path = root.cap_relative_path(raw_path, kind)?;
+    let metadata = root
+        .cap_dir()
+        .symlink_metadata(&cap_path)
+        .map_err(|source| PathPolicyError::Metadata {
+            kind,
+            path: path.clone(),
+            source,
+        })?;
+    if metadata.file_type().is_symlink() {
+        return Err(PathPolicyError::Symlink { kind, path });
+    }
+    if !metadata.is_file() {
+        return Err(PathPolicyError::NotRegularFile { kind, path });
+    }
+    if metadata.len() > max_bytes {
+        return Err(PathPolicyError::TooLarge {
+            kind,
+            path,
+            max_bytes,
+        });
+    }
+
+    let options = bounded_regular_file_open_options();
+    let mut file = root
+        .cap_dir()
+        .open_with(&cap_path, &options)
+        .map_err(|source| PathPolicyError::Read {
+            kind,
+            path: path.clone(),
+            source,
+        })?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|source| PathPolicyError::Metadata {
+            kind,
+            path: path.clone(),
+            source,
+        })?;
+    if !opened_metadata.is_file() {
+        return Err(PathPolicyError::NotRegularFile { kind, path });
+    }
+    if opened_metadata.len() > max_bytes {
+        return Err(PathPolicyError::TooLarge {
+            kind,
+            path,
+            max_bytes,
+        });
+    }
+
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|source| PathPolicyError::Read {
+            kind,
+            path: path.clone(),
+            source,
+        })?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(PathPolicyError::TooLarge {
+            kind,
+            path,
+            max_bytes,
+        });
+    }
+
+    String::from_utf8(bytes).map_err(|source| PathPolicyError::Read {
+        kind,
+        path,
+        source: io::Error::new(io::ErrorKind::InvalidData, source),
+    })
+}
+
+fn bounded_regular_file_open_options() -> cap_std::fs::OpenOptions {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true);
+    apply_bounded_regular_file_open_options(&mut options);
+    options
+}
+
+#[cfg(unix)]
+fn apply_bounded_regular_file_open_options(options: &mut cap_std::fs::OpenOptions) {
+    use cap_std::fs::OpenOptionsExt;
+
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+}
+
+#[cfg(windows)]
+fn apply_bounded_regular_file_open_options(options: &mut cap_std::fs::OpenOptions) {
+    use cap_std::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn apply_bounded_regular_file_open_options(_options: &mut cap_std::fs::OpenOptions) {}
 
 pub fn new_output_path_under_root(
     root: &StateRoot,
@@ -403,6 +514,64 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, PathPolicyError::DotSegment { .. }));
+    }
+
+    #[test]
+    fn bounded_text_file_reads_within_limit() {
+        let root_dir = temp_root("bounded-text-file");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        std::fs::write(root_dir.join("requirements.md"), "Build the feature.").unwrap();
+
+        let text = read_bounded_text_file_under_root(
+            &state_root,
+            "requirements.md",
+            ArtifactPathKind::RequirementSourceFile,
+            64,
+        )
+        .unwrap();
+
+        assert_eq!(text, "Build the feature.");
+    }
+
+    #[test]
+    fn bounded_text_file_enforces_limit_after_open() {
+        let root_dir = temp_root("bounded-text-limit");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        std::fs::write(root_dir.join("requirements.md"), "12345").unwrap();
+
+        let err = read_bounded_text_file_under_root(
+            &state_root,
+            "requirements.md",
+            ArtifactPathKind::RequirementSourceFile,
+            4,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, PathPolicyError::TooLarge { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_text_file_rejects_fifo_without_blocking() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let root_dir = temp_root("bounded-text-fifo");
+        let state_root = StateRoot::open(&root_dir).unwrap();
+        let fifo = root_dir.join("requirements.md");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        let rc = unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) };
+        assert_eq!(rc, 0);
+
+        let err = read_bounded_text_file_under_root(
+            &state_root,
+            "requirements.md",
+            ArtifactPathKind::RequirementSourceFile,
+            64,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, PathPolicyError::NotRegularFile { .. }));
     }
 
     #[test]

@@ -5898,6 +5898,7 @@ dependencies = [
  "camino",
  "cap-std",
  "fs-err",
+ "libc",
  "pathdiff",
  "serde",
  "serde_json",

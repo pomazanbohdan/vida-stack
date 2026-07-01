@@ -8,5 +8,6 @@ pub mod symlink_policy;
 pub use safe_path::{
     ArtifactPathKind, ExistingRegularFile, NewStateOutputPath, PathPolicyError,
     existing_regular_file_under_root, new_output_path_under_root, path_contains_dot_segment,
+    read_bounded_text_file_under_root,
 };
 pub use state_root::StateRoot;

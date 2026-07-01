@@ -1,5 +1,10 @@
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
+use runtime_path_policy::{
+    read_bounded_text_file_under_root, ArtifactPathKind, PathPolicyError, StateRoot,
+};
 use serde_json::{json, Value};
 
 use crate::config_value_utils::{
@@ -9,6 +14,8 @@ use crate::{RequirementAnalyzeArgs, RequirementArgs, RequirementCommand};
 
 const SURFACE: &str = "vida requirement analyze";
 const SCHEMA_VERSION: &str = "requirement-analysis-artifact.v1";
+const MAX_SOURCE_FILE_BYTES: u64 = 64 * 1024;
+const REQUIREMENT_SOURCE_REDACTION_PLACEHOLDER: &str = "[redacted source-file secret line]";
 
 pub(crate) async fn run_requirement(args: RequirementArgs) -> ExitCode {
     match args.command {
@@ -104,15 +111,259 @@ fn blocked_requirement_payload(
     .expect("requirement blocked payload should satisfy release-1 operator shape")
 }
 
+#[derive(Debug, Clone)]
+struct RequirementSourceInput {
+    kind: &'static str,
+    serialized_text: String,
+    source_metadata: Option<String>,
+    public_analysis_text: String,
+}
+
+struct RequirementSourceRedaction {
+    public_text: String,
+    redacted: bool,
+}
+
+impl RequirementSourceInput {
+    fn operator_text(text: String) -> Self {
+        Self {
+            kind: "operator_text",
+            serialized_text: text.clone(),
+            source_metadata: None,
+            public_analysis_text: text,
+        }
+    }
+}
+
+fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, String> {
+    let project_root = requirement_source_project_root()?;
+    let relative_path = validate_requirement_source_path(path)?;
+    reject_symlink_components(&project_root, &relative_path)?;
+    let state_root =
+        StateRoot::open(&project_root).map_err(|error| format!("{}: {error}", path.display()))?;
+    let content = read_bounded_text_file_under_root(
+        &state_root,
+        &relative_path,
+        ArtifactPathKind::RequirementSourceFile,
+        MAX_SOURCE_FILE_BYTES,
+    )
+    .map_err(|error| requirement_source_path_error(path, error))?;
+    let display_path = relative_path.display().to_string();
+    let redaction = redact_requirement_source_content(content.trim());
+    let digest = blake3::hash(redaction.public_text.as_bytes());
+    let redacted_flag = if redaction.redacted {
+        ":redacted=true"
+    } else {
+        ""
+    };
+    Ok(RequirementSourceInput {
+        kind: "source_file",
+        serialized_text: redaction.public_text.clone(),
+        source_metadata: Some(format!(
+            "file:{display_path}:bytes={}:blake3={digest}{redacted_flag}",
+            redaction.public_text.len()
+        )),
+        public_analysis_text: redaction.public_text,
+    })
+}
+
+fn requirement_source_path_error(path: &Path, error: PathPolicyError) -> String {
+    match error {
+        PathPolicyError::Symlink { .. } => {
+            format!("{}: source file must not be a symlink", path.display())
+        }
+        PathPolicyError::NotRegularFile { .. } => {
+            format!("{}: source file must be a regular file", path.display())
+        }
+        PathPolicyError::TooLarge { max_bytes, .. } => {
+            format!(
+                "{}: source file exceeds {max_bytes} byte limit",
+                path.display()
+            )
+        }
+        other => format!("{}: {other}", path.display()),
+    }
+}
+
+fn requirement_source_project_root() -> Result<PathBuf, String> {
+    crate::resolve_runtime_project_root()
+}
+
+fn redact_requirement_source_content(content: &str) -> RequirementSourceRedaction {
+    let mut in_secret_block = false;
+    let mut redacted = false;
+    let mut public_lines = Vec::new();
+    for line in content.lines() {
+        let starts_secret_block = requirement_source_secret_assignment_opens_multiline(line);
+        let starts_secret_pem_block = requirement_source_secret_pem_block_opens(line);
+        let secret_line = in_secret_block
+            || starts_secret_block
+            || starts_secret_pem_block
+            || requirement_source_secret_assignment_line(line)
+            || line.split_whitespace().any(requirement_source_secret_token);
+        if secret_line {
+            redacted = true;
+            public_lines.push(REQUIREMENT_SOURCE_REDACTION_PLACEHOLDER.to_string());
+            if in_secret_block && requirement_source_secret_block_closes(line) {
+                in_secret_block = false;
+            } else if starts_secret_block || starts_secret_pem_block {
+                in_secret_block = true;
+            }
+        } else {
+            public_lines.push(line.to_string());
+        }
+    }
+    RequirementSourceRedaction {
+        public_text: public_lines.join("\n"),
+        redacted,
+    }
+}
+
+fn requirement_source_secret_assignment_line(line: &str) -> bool {
+    let Some(delimiter_index) = line.find(['=', ':']) else {
+        return false;
+    };
+    let key = &line[..delimiter_index];
+    requirement_source_assignment_key_like(key) && requirement_source_secret_key(key)
+}
+
+fn requirement_source_secret_assignment_opens_multiline(line: &str) -> bool {
+    let Some(delimiter_index) = line.find(['=', ':']) else {
+        return false;
+    };
+    let key = &line[..delimiter_index];
+    if !requirement_source_assignment_key_like(key) || !requirement_source_secret_key(key) {
+        return false;
+    }
+    let value = line[delimiter_index + 1..].trim_start();
+    (value.contains("-----BEGIN") && !value.contains("-----END"))
+        || matches!(value.chars().next(), Some('|' | '>'))
+        || value
+            .strip_prefix('"')
+            .is_some_and(|rest| !rest.contains('"'))
+        || value
+            .strip_prefix('\'')
+            .is_some_and(|rest| !rest.contains('\''))
+}
+
+fn requirement_source_secret_pem_block_opens(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("-----BEGIN ")
+        && trimmed.ends_with("-----")
+        && requirement_source_secret_pem_label(trimmed)
+}
+
+fn requirement_source_secret_pem_label(line: &str) -> bool {
+    let label = line
+        .trim_matches('-')
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', " ");
+    label.contains("private key") || label.contains("secret key")
+}
+
+fn requirement_source_secret_block_closes(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.is_empty()
+        || trimmed.contains("-----END")
+        || trimmed.ends_with('"')
+        || trimmed.ends_with('\'')
+}
+
+fn requirement_source_secret_token(token: &str) -> bool {
+    let Some((key, _)) = token.split_once('=') else {
+        return false;
+    };
+    requirement_source_secret_key(key)
+}
+
+fn requirement_source_assignment_key_like(key: &str) -> bool {
+    let key = key.trim().trim_matches(['"', '\'']);
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+}
+
+fn requirement_source_secret_key(key: &str) -> bool {
+    let key = key
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+        .to_ascii_lowercase()
+        .replace('-', "_");
+    key.contains("secret")
+        || key.contains("token")
+        || key.contains("password")
+        || key.contains("credential")
+        || key.contains("private_key")
+        || key.contains("api_key")
+        || key.contains("apikey")
+}
+
+fn validate_requirement_source_path(path: &Path) -> Result<PathBuf, String> {
+    if path.is_absolute() {
+        return Err(format!(
+            "{}: source file must be relative to the project root",
+            path.display()
+        ));
+    }
+
+    let mut relative = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => relative.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(format!(
+                    "{}: source file must not contain parent-directory traversal",
+                    path.display()
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "{}: source file must be relative to the project root",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    if relative.as_os_str().is_empty() {
+        return Err("source file path must not be empty".to_string());
+    }
+
+    Ok(relative)
+}
+
+fn reject_symlink_components(project_root: &Path, relative_path: &Path) -> Result<(), String> {
+    let mut current = PathBuf::from(project_root);
+    for component in relative_path.components() {
+        current.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&current)
+            .map_err(|error| format!("{}: {error}", relative_path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "{}: source file path must not contain symlinks",
+                relative_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value, String> {
-    let mut source_inputs = args.input.clone();
+    let mut source_inputs = args
+        .input
+        .iter()
+        .cloned()
+        .map(RequirementSourceInput::operator_text)
+        .collect::<Vec<_>>();
     if let Some(path) = &args.source_file {
-        let content = std::fs::read_to_string(path)
-            .map_err(|error| format!("{}: {error}", path.display()))?;
-        source_inputs.push(format!("file:{}:{}", path.display(), content.trim()));
+        source_inputs.push(read_requirement_source_file(path)?);
     }
     if source_inputs.is_empty() {
-        source_inputs.push("operator_request_text_or_artifact_path".to_string());
+        source_inputs.push(RequirementSourceInput::operator_text(
+            "operator_request_text_or_artifact_path".to_string(),
+        ));
     }
 
     let identity = args
@@ -120,7 +371,11 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
         .as_deref()
         .or(args.request_id.as_deref())
         .unwrap_or("unbound-requirement");
-    let combined_input = source_inputs.join("\n");
+    let combined_input = source_inputs
+        .iter()
+        .map(|source| source.public_analysis_text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     let atoms = requirement_atoms(&source_inputs);
     let conflicts = detected_conflicts(&combined_input);
     let party_chat_route = requirement_party_chat_route(&args, &combined_input, &conflicts);
@@ -133,11 +388,16 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
         "request_id": args.request_id,
         "artifact_path": args.artifact_path.as_ref().map(|path| path.display().to_string()),
         "source_inputs": source_inputs.iter().enumerate().map(|(index, input)| {
-            json!({
+            let mut source_input = json!({
                 "id": format!("source-{}", index + 1),
-                "kind": if input.starts_with("file:") { "source_file" } else { "operator_text" },
-                "text": input,
-            })
+                "kind": input.kind,
+                "text": input.serialized_text,
+                "analysis_text": input.public_analysis_text,
+            });
+            if let Some(metadata) = &input.source_metadata {
+                source_input["source_metadata"] = json!(metadata);
+            }
+            source_input
         }).collect::<Vec<_>>(),
         "requirement_classification": {
             "primary_class": requirement_primary_class(&combined_input),
@@ -358,12 +618,13 @@ fn print_compact_contract(artifact: &Value) {
     println!("developer_handoff: Implement against the requirement atoms");
 }
 
-fn requirement_atoms(source_inputs: &[String]) -> Vec<Value> {
+fn requirement_atoms(source_inputs: &[RequirementSourceInput]) -> Vec<Value> {
     source_inputs
         .iter()
-        .flat_map(|input| input.split(['.', ';', '\n']))
+        .flat_map(|input| input.public_analysis_text.split(['.', ';', '\n']))
         .map(str::trim)
         .filter(|part| !part.is_empty())
+        .filter(|part| *part != REQUIREMENT_SOURCE_REDACTION_PLACEHOLDER)
         .take(12)
         .enumerate()
         .map(|(index, text)| {
