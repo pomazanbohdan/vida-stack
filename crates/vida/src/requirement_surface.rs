@@ -15,6 +15,7 @@ use crate::{RequirementAnalyzeArgs, RequirementArgs, RequirementCommand};
 const SURFACE: &str = "vida requirement analyze";
 const SCHEMA_VERSION: &str = "requirement-analysis-artifact.v1";
 const MAX_SOURCE_FILE_BYTES: u64 = 64 * 1024;
+const REQUIREMENT_SOURCE_REDACTION_PLACEHOLDER: &str = "[redacted source-file secret line]";
 
 pub(crate) async fn run_requirement(args: RequirementArgs) -> ExitCode {
     match args.command {
@@ -202,7 +203,7 @@ fn redact_requirement_source_content(content: &str) -> RequirementSourceRedactio
             || line.split_whitespace().any(requirement_source_secret_token);
         if secret_line {
             redacted = true;
-            public_lines.push("[redacted source-file secret line]".to_string());
+            public_lines.push(REQUIREMENT_SOURCE_REDACTION_PLACEHOLDER.to_string());
             if in_secret_block && requirement_source_secret_block_closes(line) {
                 in_secret_block = false;
             } else if starts_secret_block || starts_secret_pem_block {
@@ -622,6 +623,7 @@ fn requirement_atoms(source_inputs: &[RequirementSourceInput]) -> Vec<Value> {
         .flat_map(|input| input.public_analysis_text.split(['.', ';', '\n']))
         .map(str::trim)
         .filter(|part| !part.is_empty())
+        .filter(|part| *part != REQUIREMENT_SOURCE_REDACTION_PLACEHOLDER)
         .take(12)
         .enumerate()
         .map(|(index, text)| {

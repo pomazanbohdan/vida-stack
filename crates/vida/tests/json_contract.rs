@@ -355,6 +355,13 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         .any(|atom| atom["text"]
             .as_str()
             .is_some_and(|text| text.contains("Build the feature"))));
+    assert!(artifact["requirement_atoms"]
+        .as_array()
+        .expect("atoms should render")
+        .iter()
+        .any(|atom| atom["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Keep readiness verdict stable"))));
     assert!(
         !artifact["requirement_atoms"]
             .as_array()
@@ -368,8 +375,9 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
                     || text.contains("PRIVATE_KEY")
                     || text.contains("MIISECRETBODYSHOULDNOTLEAK")
                     || text.contains("BAREPEMBODYSHOULDNOTLEAK")
+                    || text.contains("[redacted source-file secret line]")
                     || text.contains("[redacted-test-value]"))),
-        "source-file secrets must not leak through requirement atoms"
+        "source-file secrets and redaction placeholders must not leak through requirement atoms"
     );
     assert!(
         artifact["requirement_atoms"]
