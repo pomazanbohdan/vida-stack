@@ -857,6 +857,7 @@ fn release_install_status_receipt_from_event(
     }
 }
 
+<<<<<<< HEAD
 fn release_install_progress_unreadable_status_receipt(
     latest_path_string: String,
     latest_path: &Path,
@@ -907,7 +908,13 @@ fn release_install_progress_latest_path_marker_contents() -> Option<String> {
     let path_marker = release_install_progress_latest_path().with_extension("path");
     let metadata = fs::symlink_metadata(&path_marker).ok()?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return None;
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "release install progress artifact is not a regular file or is a symlink: {}",
+                path.display()
+            ),
+        ));
     }
 
     read_release_install_progress_file_without_following_symlinks(&path_marker).ok()
@@ -929,12 +936,7 @@ fn read_release_install_progress_file_without_following_symlinks(
 
     let mut options = OpenOptions::new();
     options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-
+    apply_no_follow_open_options(&mut options);
     let mut file = options.open(path)?;
     let opened_metadata = file.metadata()?;
     if !opened_metadata.is_file() {
@@ -2850,8 +2852,9 @@ mod tests {
     #[test]
     fn release_install_status_rejects_symlink_latest_path_sidecar() {
         let _guard = release_progress_test_lock();
-        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
         let latest_path = release_install_progress_latest_path();
         let latest_sidecar_path = latest_path.with_extension("path");
         let victim = harness.path().join("secret.txt");
@@ -2897,8 +2900,9 @@ mod tests {
     #[test]
     fn release_install_progress_event_rejects_symlink_progress_artifact() {
         let _guard = release_progress_test_lock();
-        clean_release_progress_latest_markers();
         let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let _progress_dir = release_progress_dir_override(harness.path().join("progress"));
+        clean_release_progress_latest_markers();
         let victim = harness.path().join("victim.jsonl");
         let progress_path = harness.path().join("progress-link.jsonl");
         fs::write(&victim, "unchanged").expect("victim should write");
