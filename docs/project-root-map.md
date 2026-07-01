@@ -54,6 +54,8 @@ This map does not cover extracted secondary bundles by default.
      - project-owned ZOMBIE-D test-writing protocol for agents before writing or updating tests
 19. `docs/process/repository-advisory-planning-protocol.md`
      - project-owned protocol for repository advisory audits, self-contained implementation plans, executor review, reconciliation, and publication safety
+20. `docs/process/project-artifact-cleanup-protocol.md`
+     - project-owned protocol for safe repository, project-adjacent, and filesystem artifact cleanup produced by `vida-stack` work
 
 ## Activation Triggers
 
@@ -107,6 +109,8 @@ Do not use this map as the default route for extracted bundles unless the task e
      - continue to `docs/process/zombie-d-test-writing-protocol.md`
 17. Repository advisory audits, implementation-plan generation, isolated executor review, plan reconciliation, or advisory finding publication:
      - continue to `docs/process/repository-advisory-planning-protocol.md`
+18. Repository cleanup, project-adjacent temp cleanup, root filesystem artifact cleanup, or recurring cleanup automation:
+     - continue to `docs/process/project-artifact-cleanup-protocol.md`
 
 ## Boundary Rule
 

@@ -86,6 +86,8 @@ Canonical entrypoints:
     - project-owned ZOMBIE-D protocol for planning Rust, CLI, fixture/golden, coverage-gate, runtime defect proof, and test-task batches before writing or updating tests
 35. `docs/process/repository-advisory-planning-protocol.md`
     - project-owned protocol for evidence-backed repository audits, advisory implementation plans, isolated executor review, plan reconciliation, and external tracker publication
+36. `docs/process/project-artifact-cleanup-protocol.md`
+    - project-owned protocol for safe repository, project-adjacent, and filesystem artifact cleanup produced by `vida-stack` work
 
 -----
 artifact_path: process/index
