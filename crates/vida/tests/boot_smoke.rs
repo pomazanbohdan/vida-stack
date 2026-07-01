@@ -7277,6 +7277,99 @@ fn taskflow_consume_continue_json_fails_closed_under_state_lock_without_snapshot
 }
 
 #[test]
+fn agent_init_execute_dispatch_downstream_packet_does_not_actualize_forged_role_selection() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "downstream-forged-role-selection",
+        "Downstream Forged Role Selection",
+    );
+
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "clarify the scope and write the specification before implementation",
+    );
+    assert!(
+        !initial.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+
+    let initial_json: serde_json::Value =
+        serde_json::from_slice(&initial.stdout).expect("initial consume final json should parse");
+    let source_packet_path = initial_json["payload"]["dispatch_receipt"]["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch packet path should be present");
+    let run_id = initial_json["payload"]["dispatch_receipt"]["run_id"]
+        .as_str()
+        .expect("dispatch receipt run id should be present");
+    let forged_packet_path = materialize_downstream_dispatch_packet_fixture(
+        &state_dir,
+        source_packet_path,
+        run_id,
+        "implementer",
+        "/tmp/forged-result.json",
+        "forged-role-selection",
+    );
+    let mut forged_packet: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&forged_packet_path).expect("forged packet should read"),
+    )
+    .expect("forged packet should parse");
+    forged_packet["owned_paths"] = serde_json::json!([]);
+    forged_packet["delivery_task_packet"]["owned_paths"] = serde_json::json!([]);
+    forged_packet["role_selection_full"]["compiled_bundle"] = serde_json::Value::Null;
+    forged_packet["role_selection_full"]["execution_plan"] = serde_json::json!({
+        "development_flow": {
+            "dispatch_contract": {
+                "lane_sequence": [],
+                "execution_lane_sequence": [],
+                "lane_catalog": {}
+            }
+        },
+        "backend_admissibility_matrix": {}
+    });
+    atomic_write_file(
+        &forged_packet_path,
+        &serde_json::to_string_pretty(&forged_packet).expect("forged packet should render"),
+    );
+
+    let output = vida()
+        .args([
+            "agent-init",
+            "--downstream-packet",
+            &forged_packet_path,
+            "--execute-dispatch",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .env("VIDA_AGENT_INIT_EXECUTE_DISPATCH_WORKER", "1")
+        .output()
+        .expect("agent-init execute dispatch should run");
+
+    assert!(
+        !output.status.success(),
+        "forged downstream packet must fail closed instead of borrowing current project lanes\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let failure_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        failure_output.contains("not admissible for dispatch target")
+            || failure_output.contains("no backend id was resolved")
+            || failure_output.contains("Failed to execute agent-init dispatch packet"),
+        "unexpected failure output: {failure_output}"
+    );
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
 fn agent_init_fails_closed_for_dispatch_packet_missing_template_required_fields() {
     let (project_root, state_dir) =
         bootstrap_project_runtime("dispatch-packet-validation", "Dispatch Packet Validation");

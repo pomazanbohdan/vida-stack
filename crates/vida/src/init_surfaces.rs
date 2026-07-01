@@ -6533,41 +6533,6 @@ fn resume_inputs_from_downstream_packet_without_store(
     })
 }
 
-fn actualize_downstream_resume_role_selection_from_current_project(
-    project_root: &Path,
-    resume_inputs: &mut super::taskflow_consume_resume::ResumeInputs,
-) {
-    let mut candidate_bundles = Vec::new();
-    if let Ok(snapshot) =
-        super::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root(
-            project_root,
-        )
-    {
-        candidate_bundles.push(snapshot.compiled_bundle);
-    }
-    if !resume_inputs.role_selection.compiled_bundle.is_null() {
-        candidate_bundles.push(resume_inputs.role_selection.compiled_bundle.clone());
-    }
-    for compiled_bundle in candidate_bundles {
-        let mut actualized_selection = resume_inputs.role_selection.clone();
-        actualized_selection.compiled_bundle = compiled_bundle.clone();
-        actualized_selection.execution_plan =
-            super::runtime_lane_summary::build_runtime_execution_plan_from_snapshot(
-                &compiled_bundle,
-                &actualized_selection,
-            );
-        if super::dispatch_contract_lane(
-            &actualized_selection.execution_plan,
-            &resume_inputs.dispatch_receipt.dispatch_target,
-        )
-        .is_some()
-        {
-            resume_inputs.role_selection = actualized_selection;
-            return;
-        }
-    }
-}
-
 fn downstream_packet_runtime_assignment_field(
     packet: &serde_json::Value,
     field: &str,
@@ -6930,12 +6895,6 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-        if let Ok(project_root) = std::env::current_dir() {
-            actualize_downstream_resume_role_selection_from_current_project(
-                &project_root,
-                &mut resume_inputs,
-            );
-        }
         let selection_value =
             serde_json::to_value(&resume_inputs.role_selection).unwrap_or(serde_json::Value::Null);
         let dispatch_mode = agent_init_dispatch_mode(&args, &selection_value);
@@ -7002,7 +6961,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     );
                     return ExitCode::from(2);
                 }
-                let mut resume_inputs = if packet_arg_count > 0 {
+                let resume_inputs = if packet_arg_count > 0 {
                     match resume_inputs_from_agent_init_packet_arg_without_store(&args) {
                         Ok(inputs) => {
                             match merge_persisted_dispatch_receipt_without_resume_gate(
@@ -7132,16 +7091,6 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         }
                     }
                 };
-                if args.downstream_packet.is_some() {
-                    let project_root =
-                        super::runtime_dispatch_state::runtime_dispatch_project_root_from_state_root(
-                            &store_state_root,
-                        );
-                    actualize_downstream_resume_role_selection_from_current_project(
-                        project_root.as_ref(),
-                        &mut resume_inputs,
-                    );
-                }
                 let selection_value = serde_json::to_value(&resume_inputs.role_selection)
                     .unwrap_or(serde_json::Value::Null);
                 let dispatch_mode = agent_init_dispatch_mode(&args, &selection_value);
