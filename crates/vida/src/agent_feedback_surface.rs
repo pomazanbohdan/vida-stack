@@ -955,7 +955,6 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "rather than a blocker",
         "rather than blocker",
         "no longer",
-        "resolved",
         "does not",
         "returns",
         "return",
@@ -976,7 +975,7 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "vida task next",
     ];
 
-    let resolved_meta_keywords = ["cleared", "folded in", "folded into"];
+    let resolved_meta_keywords = ["resolved", "cleared", "folded in", "folded into"];
     let full_reason_normalized = reason.to_ascii_lowercase();
     let full_reason_has_proof_or_success = has_proof_or_success_context(&full_reason_normalized);
 
@@ -2358,6 +2357,8 @@ mod tests {
     #[test]
     fn canonical_close_status_preserves_unproven_resolved_meta_blockers() {
         for reason in [
+            "Security blocker resolved: missing verifier review",
+            "Resolved security blocker missing verifier review",
             "Security blocker cleared: missing verifier review",
             "Current blocker folded into follow-up: missing approval",
         ] {
