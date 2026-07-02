@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "release-install-status", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke")]
+    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "release-install-status", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke", "nextest-summary-smoke")]
     [string]$Mode = "quick",
     [string]$Package = "vida",
     [string]$TestFilter = "",
@@ -277,6 +277,7 @@ Notes:
   Cargo modes set CARGO_TARGET_DIR unless the caller already provided it.
   proof-scheduler accepts -ProofCommandJson '["cmd1","cmd2","cargo --version"]' from any host shell.
   proof-scheduler also accepts -ProofCommand array values when invoked from an already-running PowerShell script.
+  nextest-summary-smoke runs synthetic pass/fail summary parsing without Cargo.
   coverage reuses -CoverageOutputPath (default .vida/tmp/operator-output.lcov) and -CrapOutputPath (default .vida/tmp/workspace-crap.json) by default, then runs vida quality gate.
   coverage with -RefreshCoverage runs cargo llvm-cov nextest and cargo-crap before admission.
   coverage fails on test failure unless -CoverageIgnoreRunFail is set, then still generates LCOV when cargo-llvm-cov can report it.
@@ -569,6 +570,19 @@ function Invoke-Timed {
         $cargoTiming = New-CargoTimingContract -Command $Command -DurationMs ([int64]$sw.ElapsedMilliseconds)
         if ($null -ne $cargoTiming) {
             $record | Add-Member -NotePropertyName "cargo" -NotePropertyValue $cargoTiming
+        }
+        if (Test-NextestCommand -Command $Command) {
+            $nextestSummary = New-NextestSummary `
+                -OperationId $OperationId `
+                -Command $Command `
+                -ExitCode $exitCode `
+                -StdoutPath $stdoutPath `
+                -StderrPath $stderrPath
+            if ($null -ne $nextestSummary) {
+                $artifactRefs += $nextestSummary.summary_artifact_path
+                $record.artifact_refs = $artifactRefs
+                $record | Add-Member -NotePropertyName "nextest_summary" -NotePropertyValue $nextestSummary.summary
+            }
         }
         $Records.Add($record)
     }
@@ -1435,6 +1449,170 @@ function Get-GitPorcelainPaths {
     return [string[]]@($paths)
 }
 
+function Test-NextestCommand {
+    param([string[]]$Command)
+
+    if ($Command.Count -lt 3) {
+        return $false
+    }
+    return $Command[0] -eq "cargo" -and $Command[1] -eq "nextest" -and $Command[2] -eq "run"
+}
+
+function Read-TextFileLinesSafe {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return @()
+    }
+    return @(Get-Content -LiteralPath $Path -Encoding UTF8)
+}
+
+function Get-FirstRegexInt {
+    param(
+        [string[]]$Lines,
+        [string]$Pattern,
+        [string]$GroupName
+    )
+
+    foreach ($line in $Lines) {
+        $match = [regex]::Match($line, $Pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($match.Success) {
+            return [int]$match.Groups[$GroupName].Value
+        }
+    }
+    return $null
+}
+
+function Get-NextestFailedNames {
+    param([string[]]$Lines)
+
+    $names = New-Object System.Collections.Generic.SortedSet[string]
+    foreach ($line in $Lines) {
+        foreach ($pattern in @(
+            '\bFAIL(?:\s+\[[^\]]+\])?\s+(?<name>[A-Za-z0-9_.:-]+(?:::[A-Za-z0-9_.:-]+)*)',
+            '\btest\s+(?<name>[A-Za-z0-9_.:-]+(?:::[A-Za-z0-9_.:-]+)*)\s+\.\.\.\s+FAILED\b',
+            '^\s+(?<name>[A-Za-z0-9_.:-]+(?:::[A-Za-z0-9_.:-]+)*)\s*$'
+        )) {
+            $match = [regex]::Match($line, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if ($match.Success) {
+                [void]$names.Add($match.Groups["name"].Value)
+                break
+            }
+        }
+    }
+    return [string[]]@($names)
+}
+
+function New-NextestSummary {
+    param(
+        [string]$OperationId,
+        [string[]]$Command,
+        [int]$ExitCode,
+        [string]$StdoutPath,
+        [string]$StderrPath
+    )
+
+    $lines = @()
+    $lines += Read-TextFileLinesSafe -Path $StdoutPath
+    $lines += Read-TextFileLinesSafe -Path $StderrPath
+    $failedNames = @(Get-NextestFailedNames -Lines $lines)
+    $passedCount = Get-FirstRegexInt -Lines $lines -Pattern '(?<passed>\d+)\s+passed' -GroupName "passed"
+    $failedCount = Get-FirstRegexInt -Lines $lines -Pattern '(?<failed>\d+)\s+failed' -GroupName "failed"
+    if ($null -eq $failedCount) {
+        $failedCount = $failedNames.Count
+    }
+
+    $changedPaths = @(Get-GitPorcelainPaths | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_) -and
+            -not $_.StartsWith(".vida/", [System.StringComparison]::OrdinalIgnoreCase) -and
+            -not $_.StartsWith(".vida\", [System.StringComparison]::OrdinalIgnoreCase) -and
+            -not $_.StartsWith("~/", [System.StringComparison]::OrdinalIgnoreCase) -and
+            -not $_.StartsWith("~\", [System.StringComparison]::OrdinalIgnoreCase)
+        })
+    $relevance = "not_applicable"
+    if ($failedCount -gt 0) {
+        $relevance = $(if ($changedPaths.Count -gt 0) { "needs_review" } else { "unknown_no_touched_files" })
+    }
+
+    $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $latestSummaryPath = Join-Path $logDir "latest-nextest-summary.json"
+    $previous = Read-DevGateJsonFile -Path $latestSummaryPath
+    $delta = $null
+    if ($null -ne $previous -and $null -ne $previous.failed_count) {
+        $delta = [pscustomobject]@{
+            previous_operation_id = $previous.operation_id
+            passed_delta = $(if ($null -ne $passedCount -and $null -ne $previous.passed_count) { [int]$passedCount - [int]$previous.passed_count } else { $null })
+            failed_delta = [int]$failedCount - [int]$previous.failed_count
+        }
+    }
+
+    $summary = [pscustomobject]@{
+        operation_id = $OperationId
+        command_or_surface = ($Command -join " ")
+        status = $(if ($ExitCode -eq 0 -and $failedCount -eq 0) { "pass" } else { "fail" })
+        passed_count = $passedCount
+        failed_count = $failedCount
+        failed_test_names = $failedNames
+        full_log_artifact_paths = @($StdoutPath, $StderrPath)
+        touched_file_relevance = $relevance
+        touched_files = $changedPaths
+        previous_run_delta = $delta
+    }
+    $safeId = $OperationId -replace '[^A-Za-z0-9_.-]', '-'
+    $summaryPath = Join-Path $logDir ("{0}-nextest-summary.json" -f $safeId)
+    $summary | ConvertTo-Json -Depth 8 | Write-SafeStateFile -Path $summaryPath
+    $summary | ConvertTo-Json -Depth 8 | Write-SafeStateFile -Path $latestSummaryPath
+    return [pscustomobject]@{
+        summary = $summary
+        summary_artifact_path = $summaryPath
+    }
+}
+
+function Invoke-NextestSummarySmoke {
+    $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+    $failOut = Join-Path $logDir "nextest-summary-smoke-fail.out.txt"
+    $failErr = Join-Path $logDir "nextest-summary-smoke-fail.err.txt"
+    "        PASS vida::passing_test`n        FAIL [   0.2s] vida::broken_one`n        FAIL [   0.1s] vida::broken_two`n     Summary [   0.3s] 2 failed, 2539 passed" | Set-Content -LiteralPath $failOut -Encoding UTF8
+    "" | Set-Content -LiteralPath $failErr -Encoding UTF8
+    $failSummary = New-NextestSummary -OperationId "nextest-summary-smoke-fail" -Command @("cargo", "nextest", "run", "-p", "vida") -ExitCode 1 -StdoutPath $failOut -StderrPath $failErr
+
+    $passOut = Join-Path $logDir "nextest-summary-smoke-pass.out.txt"
+    $passErr = Join-Path $logDir "nextest-summary-smoke-pass.err.txt"
+    "     Summary [   0.1s] 0 failed, 12 passed" | Set-Content -LiteralPath $passOut -Encoding UTF8
+    "" | Set-Content -LiteralPath $passErr -Encoding UTF8
+    $passSummary = New-NextestSummary -OperationId "nextest-summary-smoke-pass" -Command @("cargo", "nextest", "run", "-p", "vida") -ExitCode 0 -StdoutPath $passOut -StderrPath $passErr
+
+    $Records.Add([pscustomobject]@{
+        operation_id = "nextest-summary-smoke-fail"
+        command_or_surface = "synthetic nextest failure summary"
+        cwd_or_context = $RootDir
+        started_at = (Get-Date).ToString("o")
+        duration_ms = 0
+        exit_status = "pass"
+        classification = "fast"
+        target_dir_policy = $CargoTargetDirState.target_dir_policy
+        effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+        artifact_refs = @($failOut, $failErr, $failSummary.summary_artifact_path)
+        nextest_summary = $failSummary.summary
+    })
+    $Records.Add([pscustomobject]@{
+        operation_id = "nextest-summary-smoke-pass"
+        command_or_surface = "synthetic nextest passing summary"
+        cwd_or_context = $RootDir
+        started_at = (Get-Date).ToString("o")
+        duration_ms = 0
+        exit_status = "pass"
+        classification = "fast"
+        target_dir_policy = $CargoTargetDirState.target_dir_policy
+        effective_cargo_target_dir = $CargoTargetDirState.effective_cargo_target_dir
+        artifact_refs = @($passOut, $passErr, $passSummary.summary_artifact_path)
+        nextest_summary = $passSummary.summary
+    })
+}
+
 function Get-ChangedRustSourceFiles {
     $paths = New-Object System.Collections.Generic.SortedSet[string]
     foreach ($path in (Get-GitPorcelainPaths)) {
@@ -1744,6 +1922,8 @@ exit 3
             throw "proof scheduler smoke failed: Cargo commands overlapped."
         }
         Remove-Item -LiteralPath $retryProbePath, $retryMarkerPath, $statusFailProbePath -Force -ErrorAction SilentlyContinue
+    } elseif ($Mode -eq "nextest-summary-smoke") {
+        Invoke-NextestSummarySmoke
     } elseif ($Mode -eq "script-check") {
         Invoke-DiffWhitespaceCheck
         Invoke-RootReadmeOnlyCheck
