@@ -12,7 +12,7 @@ param(
     [string]$ReleaseSuffix = "",
     [string]$CoverageOutputPath = ".vida/tmp/operator-output.lcov",
     [string]$CrapOutputPath = ".vida/tmp/workspace-crap.json",
-    [double]$CoverageThreshold = 80.0,
+    [double]$CoverageThreshold = 90.0,
     [int]$Jobs = 0,
     [switch]$SkipBuild,
     [switch]$Windows,
