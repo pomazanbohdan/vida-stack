@@ -499,6 +499,17 @@ fn ignored_canonical_close_historical_context(reason: &str) -> Vec<String> {
     ignored
 }
 
+fn ignored_canonical_close_pre_detection_meta_language(reason: &str) -> Vec<String> {
+    ignored_canonical_close_meta_language(reason)
+        .into_iter()
+        .filter(|phrase| {
+            phrase.contains("no blocker")
+                || phrase.contains("zero blocker")
+                || phrase.contains("no remaining")
+        })
+        .collect()
+}
+
 fn ignored_historical_failure_state_segments(reason: &str) -> Vec<String> {
     let full_reason_normalized = reason.to_ascii_lowercase();
     reason
@@ -939,10 +950,12 @@ fn ignored_canonical_close_meta_segments(reason: &str) -> Vec<String> {
         "not a current blocker",
         "not an active blocker",
         "no current blocker",
+        "no remaining",
         "not current blocker",
         "rather than a blocker",
         "rather than blocker",
         "no longer",
+        "resolved",
         "does not",
         "returns",
         "return",
@@ -1014,10 +1027,11 @@ pub(crate) fn canonical_close_status_from_reason(
     for phrase in ignored_feedback_phrases(reason, APPROVAL_COVERAGE_META_PHRASES) {
         normalized = normalized.replace(&phrase, " canonical_close_context_language ");
     }
+    let ignored_meta_language = ignored_canonical_close_meta_language(reason);
     let mut approval_normalized = normalized.clone();
-    for phrase in ignored_canonical_close_meta_language(reason) {
+    for phrase in &ignored_meta_language {
         approval_normalized =
-            approval_normalized.replace(&phrase, " canonical_close_context_language ");
+            approval_normalized.replace(phrase.as_str(), " canonical_close_context_language ");
     }
     let approval_keywords = [
         "approval_wait".to_string(),
@@ -1032,6 +1046,9 @@ pub(crate) fn canonical_close_status_from_reason(
             crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str(),
         ));
     }
+    for phrase in ignored_canonical_close_pre_detection_meta_language(reason) {
+        normalized = normalized.replace(phrase.as_str(), " canonical_close_context_language ");
+    }
     if has_concrete_canonical_close_field_label(&normalized)
         || has_current_failure_outcome_language(&normalized)
     {
@@ -1040,8 +1057,8 @@ pub(crate) fn canonical_close_status_from_reason(
     if has_concrete_canonical_close_status_code(&normalized) {
         return Some(("blocked", "blocked"));
     }
-    for phrase in ignored_canonical_close_meta_language(reason) {
-        normalized = normalized.replace(&phrase, " canonical_close_context_language ");
+    for phrase in ignored_meta_language {
+        normalized = normalized.replace(phrase.as_str(), " canonical_close_context_language ");
     }
     let blocker_keywords = [
         "blocked".to_string(),
@@ -2541,6 +2558,28 @@ mod tests {
             .any(|phrase| phrase
                 .as_str()
                 .is_some_and(|value| value.contains("no blocker codes"))));
+    }
+
+    #[test]
+    fn canonical_close_status_ignores_resolved_blocker_context_with_no_remaining_condition() {
+        let reason = "Resolved telemetry canonical gate closure defect: current close-feedback inference and task-close feedback tests cover historical blocker-code context; structured proof evidence is attached and no remaining blocked condition exists.";
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase
+                .as_str()
+                .is_some_and(|value| value.contains("no remaining blocked condition exists"))));
     }
 
     #[test]
