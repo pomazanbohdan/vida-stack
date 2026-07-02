@@ -1309,8 +1309,8 @@ fn host_bridge_handle_state_from_result(
     let mut blocker_codes = command_blocker_codes.to_vec();
     let mut status = None;
     if let Some(result_file) = result_file {
-        if let Ok(raw) = std::fs::read_to_string(result_file) {
-            if let Ok(result) = serde_json::from_str::<serde_json::Value>(&raw) {
+        match read_canonical_host_bridge_json_artifact(result_file, "host bridge result") {
+            Ok(result) => {
                 status = result["status"]
                     .as_str()
                     .or_else(|| result["decision"].as_str())
@@ -1327,6 +1327,10 @@ fn host_bridge_handle_state_from_result(
                             .map(str::to_string),
                     );
                 }
+            }
+            Err(_) => {
+                blocker_codes.push("host_bridge_result_unreadable".to_string());
+                status = Some("blocked".to_string());
             }
         }
     }
@@ -6313,6 +6317,48 @@ mod tests {
 
         assert_eq!(state, "completed");
         assert!(blockers.is_empty());
+    }
+
+    #[test]
+    fn host_bridge_handle_state_rejects_oversized_result_artifact() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let result_path = harness.path().join("oversized-result.json");
+        std::fs::write(
+            &result_path,
+            vec![b' '; MAX_HOST_BRIDGE_ARTIFACT_BYTES as usize + 1],
+        )
+        .expect("oversized result should write");
+
+        let (state, blockers) =
+            super::host_bridge_handle_state_from_result(Some(&result_path), &[]);
+
+        assert_eq!(state, "failed");
+        assert_eq!(blockers, vec!["host_bridge_result_unreadable"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn host_bridge_handle_state_rejects_symlink_result_artifact() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let target_path = harness.path().join("target-result.json");
+        let result_path = harness.path().join("linked-result.json");
+        std::fs::write(
+            &target_path,
+            serde_json::json!({
+                "status": "pass",
+                "blocker_codes": []
+            })
+            .to_string(),
+        )
+        .expect("target result should write");
+        std::os::unix::fs::symlink(&target_path, &result_path)
+            .expect("result symlink should be created");
+
+        let (state, blockers) =
+            super::host_bridge_handle_state_from_result(Some(&result_path), &[]);
+
+        assert_eq!(state, "failed");
+        assert_eq!(blockers, vec!["host_bridge_result_unreadable"]);
     }
 
     #[test]
