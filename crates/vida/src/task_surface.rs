@@ -2919,6 +2919,164 @@ fn print_task_evidence_proof_receipt(
     }
 }
 
+async fn run_task_import_jsonl(command: TaskImportJsonlArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    match StateStore::open(state_dir).await {
+        Ok(store) => match store.import_tasks_from_jsonl(&command.path).await {
+            Ok(summary) => {
+                if let Err(code) =
+                    refresh_task_snapshot_after_mutation(&store, "vida task import-jsonl").await
+                {
+                    return code;
+                }
+                if command.json {
+                    let mut summary_json = task_import_jsonl_success_fields(
+                        task_json_success_status(),
+                        &TaskImportJsonlSummary {
+                            source_path: summary.source_path,
+                            imported_count: summary.imported_count,
+                            unchanged_count: summary.unchanged_count,
+                            updated_count: summary.updated_count,
+                        },
+                    );
+                    if let Err(error) = normalize_task_json_contract_arrays(&mut summary_json) {
+                        eprintln!("Failed to render task import-jsonl json: {error}");
+                        return ExitCode::from(1);
+                    }
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&summary_json)
+                            .expect("json import summary should render")
+                    );
+                } else {
+                    print_surface_header(command.render, "vida task import-jsonl");
+                    print_surface_line(command.render, "import", &summary.as_display());
+                }
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                if command.json {
+                    let mut payload = task_import_jsonl_error_payload(
+                        &command.path.display().to_string(),
+                        &error.to_string(),
+                    );
+                    if let Err(render_error) = normalize_task_json_contract_arrays(&mut payload) {
+                        eprintln!("Failed to render task import-jsonl json: {render_error}");
+                        return ExitCode::from(1);
+                    }
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&payload)
+                            .expect("json import error should render")
+                    );
+                } else {
+                    eprintln!("Failed to import tasks from JSONL: {error}");
+                }
+                ExitCode::from(1)
+            }
+        },
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+async fn run_task_replace_jsonl(command: TaskReplaceJsonlArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .unwrap_or_else(state_store::default_state_dir);
+    match StateStore::open(state_dir).await {
+        Ok(store) => match store
+            .replace_with_task_jsonl_snapshot_file(&command.path)
+            .await
+        {
+            Ok(()) => {
+                if let Err(code) =
+                    refresh_task_snapshot_after_mutation(&store, "vida task replace-jsonl").await
+                {
+                    return code;
+                }
+                let continuation_summary =
+                    match sync_replace_jsonl_continuation_binding(&store).await {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            eprintln!("{error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                let source_path = command.path.display().to_string();
+                if command.json {
+                    let mut payload = task_replace_jsonl_success_fields(
+                        task_json_success_status(),
+                        &TaskReplaceJsonlSummary {
+                            source_path: source_path.clone(),
+                        },
+                    );
+                    payload["continuation_binding"] = serde_json::to_value(&continuation_summary)
+                        .expect("replace-jsonl continuation summary should serialize");
+                    crate::print_json_pretty(&payload);
+                } else {
+                    print_surface_header(command.render, "vida task replace-jsonl");
+                    print_surface_line(command.render, "status", "pass");
+                    print_surface_line(command.render, "operation", "replace_snapshot");
+                    print_surface_line(command.render, "source path", &source_path);
+                    print_surface_line(
+                        command.render,
+                        "continuation binding",
+                        &continuation_summary.status,
+                    );
+                    if let Some(run_id) = continuation_summary.run_id.as_deref() {
+                        print_surface_line(command.render, "run id", run_id);
+                    }
+                    if let Some(task_id) = continuation_summary.task_id.as_deref() {
+                        print_surface_line(command.render, "task id", task_id);
+                    }
+                }
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("Failed to replace tasks from snapshot file: {error}");
+                ExitCode::from(1)
+            }
+        },
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+async fn run_task_export_jsonl(command: TaskExportJsonlArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .unwrap_or_else(state_store::default_state_dir);
+    match open_read_only_task_store(state_dir).await {
+        Ok(store) => match store.export_tasks_to_jsonl(&command.path).await {
+            Ok(exported_count) => {
+                print_task_export_summary(
+                    command.render,
+                    u64::try_from(exported_count).expect("task export count should fit u64"),
+                    &command.path.display().to_string(),
+                    command.json,
+                );
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("Failed to export tasks to JSONL: {error}");
+                ExitCode::from(1)
+            }
+        },
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn task_import_jsonl_error_payload(path: &str, error: &str) -> serde_json::Value {
     let blocker_codes = vec![crate::release1_contracts::blocker_code_value(
         crate::release1_contracts::BlockerCode::DependencyGraphIssues,
@@ -11623,171 +11781,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             }
         },
         TaskCommand::Import(command) => run_task_bulk_import(command).await,
-        TaskCommand::ImportJsonl(command) => {
-            let state_dir = command
-                .state_dir
-                .clone()
-                .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open(state_dir).await {
-                Ok(store) => match store.import_tasks_from_jsonl(&command.path).await {
-                    Ok(summary) => {
-                        if let Err(code) =
-                            refresh_task_snapshot_after_mutation(&store, "vida task import-jsonl")
-                                .await
-                        {
-                            return code;
-                        }
-                        if command.json {
-                            let mut summary_json = task_import_jsonl_success_fields(
-                                task_json_success_status(),
-                                &TaskImportJsonlSummary {
-                                    source_path: summary.source_path,
-                                    imported_count: summary.imported_count,
-                                    unchanged_count: summary.unchanged_count,
-                                    updated_count: summary.updated_count,
-                                },
-                            );
-                            if let Err(error) =
-                                normalize_task_json_contract_arrays(&mut summary_json)
-                            {
-                                eprintln!("Failed to render task import-jsonl json: {error}");
-                                return ExitCode::from(1);
-                            }
-                            println!(
-                                "{}",
-                                serde_json::to_string_pretty(&summary_json)
-                                    .expect("json import summary should render")
-                            );
-                        } else {
-                            print_surface_header(command.render, "vida task import-jsonl");
-                            print_surface_line(command.render, "import", &summary.as_display());
-                        }
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        if command.json {
-                            let mut payload = task_import_jsonl_error_payload(
-                                &command.path.display().to_string(),
-                                &error.to_string(),
-                            );
-                            if let Err(render_error) =
-                                normalize_task_json_contract_arrays(&mut payload)
-                            {
-                                eprintln!(
-                                    "Failed to render task import-jsonl json: {render_error}"
-                                );
-                                return ExitCode::from(1);
-                            }
-                            println!(
-                                "{}",
-                                serde_json::to_string_pretty(&payload)
-                                    .expect("json import error should render")
-                            );
-                        } else {
-                            eprintln!("Failed to import tasks from JSONL: {error}");
-                        }
-                        ExitCode::from(1)
-                    }
-                },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
-            }
-        }
-        TaskCommand::ReplaceJsonl(command) => {
-            let state_dir = command
-                .state_dir
-                .unwrap_or_else(state_store::default_state_dir);
-            match StateStore::open(state_dir).await {
-                Ok(store) => match store
-                    .replace_with_task_jsonl_snapshot_file(&command.path)
-                    .await
-                {
-                    Ok(()) => {
-                        if let Err(code) =
-                            refresh_task_snapshot_after_mutation(&store, "vida task replace-jsonl")
-                                .await
-                        {
-                            return code;
-                        }
-                        let continuation_summary =
-                            match sync_replace_jsonl_continuation_binding(&store).await {
-                                Ok(summary) => summary,
-                                Err(error) => {
-                                    eprintln!("{error}");
-                                    return ExitCode::from(1);
-                                }
-                            };
-                        let source_path = command.path.display().to_string();
-                        if command.json {
-                            let mut payload = task_replace_jsonl_success_fields(
-                                task_json_success_status(),
-                                &TaskReplaceJsonlSummary {
-                                    source_path: source_path.clone(),
-                                },
-                            );
-                            payload["continuation_binding"] =
-                                serde_json::to_value(&continuation_summary)
-                                    .expect("replace-jsonl continuation summary should serialize");
-                            crate::print_json_pretty(&payload);
-                        } else {
-                            print_surface_header(command.render, "vida task replace-jsonl");
-                            print_surface_line(command.render, "status", "pass");
-                            print_surface_line(command.render, "operation", "replace_snapshot");
-                            print_surface_line(command.render, "source path", &source_path);
-                            print_surface_line(
-                                command.render,
-                                "continuation binding",
-                                &continuation_summary.status,
-                            );
-                            if let Some(run_id) = continuation_summary.run_id.as_deref() {
-                                print_surface_line(command.render, "run id", run_id);
-                            }
-                            if let Some(task_id) = continuation_summary.task_id.as_deref() {
-                                print_surface_line(command.render, "task id", task_id);
-                            }
-                        }
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to replace tasks from snapshot file: {error}");
-                        ExitCode::from(1)
-                    }
-                },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
-            }
-        }
-        TaskCommand::ExportJsonl(command) => {
-            let state_dir = command
-                .state_dir
-                .unwrap_or_else(state_store::default_state_dir);
-            match open_read_only_task_store(state_dir).await {
-                Ok(store) => match store.export_tasks_to_jsonl(&command.path).await {
-                    Ok(exported_count) => {
-                        print_task_export_summary(
-                            command.render,
-                            u64::try_from(exported_count)
-                                .expect("task export count should fit u64"),
-                            &command.path.display().to_string(),
-                            command.json,
-                        );
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        eprintln!("Failed to export tasks to JSONL: {error}");
-                        ExitCode::from(1)
-                    }
-                },
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
-            }
-        }
+        TaskCommand::ImportJsonl(command) => run_task_import_jsonl(command).await,
+        TaskCommand::ReplaceJsonl(command) => run_task_replace_jsonl(command).await,
+        TaskCommand::ExportJsonl(command) => run_task_export_jsonl(command).await,
         TaskCommand::List(command) => {
             let state_dir = command
                 .state_dir
