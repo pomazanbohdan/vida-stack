@@ -1,6 +1,10 @@
-use std::{env, path::PathBuf};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 use serde_json::json;
+use taskflow_host_bridge::{read_host_bridge_request, HostBridgeRequestPath};
 use vida_contracts::{
     mvp_operation_catalog, operation_input_schema, operations, VidaCommandEnvelope,
     VidaCommandResponse, VidaProblem, VidaProblemSeverity, VidaProjectRef,
@@ -482,8 +486,7 @@ impl LocalRuntimeVidaClient {
                     .payload
                     .get("host_bridge_request_path")
                     .and_then(serde_json::Value::as_str)
-                    .and_then(|path| std::fs::read_to_string(path).ok())
-                    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+                    .and_then(|path| self.read_host_bridge_request_path(path))
             });
         if let Some(request) = host_bridge_request {
             let job = HostBridgeRequestJobSnapshot::from_request(&request)
@@ -555,6 +558,17 @@ impl LocalRuntimeVidaClient {
                 "job": job
             }),
         )
+    }
+
+    fn read_host_bridge_request_path(&self, path: &str) -> Option<serde_json::Value> {
+        let state_root = self.local_state_root();
+        read_host_bridge_request(&HostBridgeRequestPath::new(&state_root, Path::new(path)))
+            .ok()
+            .map(|request| request.raw)
+    }
+
+    fn local_state_root(&self) -> PathBuf {
+        self.project_root.join(".vida").join("data").join("state")
     }
 
     fn receipts_get(&self, envelope: &VidaCommandEnvelope) -> VidaCommandResponse {

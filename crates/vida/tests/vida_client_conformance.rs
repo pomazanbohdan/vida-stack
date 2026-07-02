@@ -389,6 +389,99 @@ fn local_runtime_project_scoped_reads_require_matching_project_ref() {
 }
 
 #[test]
+fn jobs_get_host_bridge_request_path_is_scoped_to_state_root() {
+    let root = unique_test_project_root("vida-client-host-bridge-path");
+    let state_root = root.join(".vida/data/state");
+    let request_path = state_root.join("host-tool-bridge/requests/request-1.json");
+    std::fs::create_dir_all(request_path.parent().expect("request parent"))
+        .expect("create request parent");
+    std::fs::write(
+        &request_path,
+        serde_json::to_string(&json!({
+            "schema_version": 1,
+            "status": "failed",
+            "request_id": "req-scoped",
+            "run_id": "run-scoped",
+            "task_id": "task-scoped",
+            "dispatch_target": "worker",
+            "attempt_count": 3,
+            "failure_reason": "adapter exhausted inside state root"
+        }))
+        .expect("serialize request"),
+    )
+    .expect("write request");
+
+    let job_client = LocalRuntimeVidaClient::with_job_journal_path(
+        root.clone(),
+        root.join("missing-operational-journal.redb"),
+    );
+    let mut command = envelope(operations::JOBS_GET);
+    command.payload = json!({
+        "job_id": "req-scoped",
+        "host_bridge_request_path": request_path.display().to_string()
+    });
+
+    let job = job_client
+        .execute(command)
+        .result
+        .expect("host bridge job result");
+    assert_eq!(job["status"], "deadlettered");
+    assert_eq!(job["authority"], "host_bridge_request");
+    assert_eq!(job["job"]["outbox_id"], "req-scoped");
+}
+
+#[test]
+fn jobs_get_host_bridge_request_path_rejects_files_outside_state_root() {
+    let root = unique_test_project_root("vida-client-host-bridge-outside-path");
+    let outside_dir = unique_test_project_root("vida-client-host-bridge-outside-file");
+    let outside_path = outside_dir.join("request.json");
+    std::fs::write(
+        &outside_path,
+        serde_json::to_string(&json!({
+            "schema_version": 1,
+            "status": "failed",
+            "request_id": "outside-secret",
+            "run_id": "run-outside",
+            "task_id": "task-outside",
+            "dispatch_target": "worker",
+            "attempt_count": 3,
+            "failure_reason": "SECRET_FROM_OUTSIDE_FILE"
+        }))
+        .expect("serialize outside request"),
+    )
+    .expect("write outside request");
+
+    let job_client = LocalRuntimeVidaClient::with_job_journal_path(
+        root.clone(),
+        root.join("missing-operational-journal.redb"),
+    );
+    let mut command = envelope(operations::JOBS_GET);
+    command.payload = json!({
+        "job_id": "outside-job",
+        "host_bridge_request_path": outside_path.display().to_string()
+    });
+
+    let job = job_client
+        .execute(command)
+        .result
+        .expect("fallback job result");
+    assert_eq!(job["authority"], "redb_outbox");
+    assert_eq!(job["status"], "unavailable");
+    assert!(!job.to_string().contains("SECRET_FROM_OUTSIDE_FILE"));
+    assert!(!job.to_string().contains("outside-secret"));
+}
+
+fn unique_test_project_root(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(root.join(".vida/data/state")).expect("create state root");
+    root
+}
+
+#[test]
 fn local_runtime_wizard_jobs_and_receipts_are_read_projection_routes() {
     let schema = execute(operations::WIZARD_SCHEMA_GET)
         .result
