@@ -1500,6 +1500,21 @@ fn validate_host_bridge_result_dry_run(
     if host_bridge_result_string(result, "artifact_kind") != Some("host_tool_bridge_result") {
         blockers.push("host_bridge_result_artifact_kind_invalid".to_string());
     }
+    let result_status = host_bridge_result_string(result, "status");
+    if !result_status
+        .is_some_and(taskflow_host_bridge::host_bridge_completed_result_status_is_admissible)
+    {
+        blockers.push("host_bridge_result_status_invalid".to_string());
+    }
+    let execution_state = host_bridge_result_string(result, "execution_state");
+    if !execution_state.is_some_and(
+        taskflow_host_bridge::host_bridge_completed_result_execution_state_is_admissible,
+    ) {
+        blockers.push("host_bridge_result_execution_state_invalid".to_string());
+    }
+    if host_bridge_result_string(result, "source_dispatch_packet_path").is_none() {
+        blockers.push("host_bridge_result_source_dispatch_packet_path_missing".to_string());
+    }
     if result
         .get("execution_evidence")
         .and_then(|evidence| evidence.get("receipt_backed"))
@@ -7231,6 +7246,38 @@ mod tests {
     }
 
     #[test]
+    fn host_bridge_result_validate_accepts_scaffolded_materialized_result() {
+        let request = host_bridge_validate_request();
+        let typed_request = taskflow_host_bridge::HostBridgeRequest::from_value(request.clone())
+            .expect("request should type");
+        let result = taskflow_host_bridge::receipt_binding::build_host_bridge_result_scaffold(
+            taskflow_host_bridge::receipt_binding::HostBridgeResultScaffoldInput {
+                request: typed_request,
+                decision: None,
+                verdict: None,
+                blocker_codes: Vec::new(),
+                rework_target: None,
+                allowed_next_node: None,
+                summary: Some("parent host adapter completed scaffold proof".to_string()),
+                host_agent_id: Some("host-agent-1".to_string()),
+                receipt_id: Some("receipt-1".to_string()),
+            },
+        );
+        let payload = super::validate_host_bridge_result_dry_run(
+            std::path::Path::new("request.json"),
+            &request,
+            std::path::Path::new("result.json"),
+            &result,
+        );
+
+        assert_eq!(payload["status"], super::release1_pass_status());
+        assert_eq!(result["status"], super::release1_pass_status());
+        assert_eq!(result["execution_state"], "executed");
+        assert_eq!(result["source_dispatch_packet_path"], "packet.json");
+        assert!(payload["blocker_codes"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
     fn host_bridge_result_validate_reports_schema_field_failure() {
         let mut result = host_bridge_validate_result("coach_implementation_gate");
         result.as_object_mut().unwrap().remove("verdict");
@@ -7247,6 +7294,34 @@ mod tests {
             .unwrap()
             .iter()
             .any(|code| code == "host_bridge_result_missing_verdict"));
+    }
+
+    #[test]
+    fn host_bridge_result_validate_reports_materialized_contract_failure() {
+        let mut result = host_bridge_validate_result("coach_implementation_gate");
+        let object = result.as_object_mut().unwrap();
+        object.remove("status");
+        object.remove("execution_state");
+        object.remove("source_dispatch_packet_path");
+        let payload = super::validate_host_bridge_result_dry_run(
+            std::path::Path::new("request.json"),
+            &host_bridge_validate_request(),
+            std::path::Path::new("result.json"),
+            &result,
+        );
+
+        assert_eq!(payload["status"], super::release1_blocked_status());
+        let blocker_codes = payload["blocker_codes"].as_array().unwrap();
+        for expected in [
+            "host_bridge_result_status_invalid",
+            "host_bridge_result_execution_state_invalid",
+            "host_bridge_result_source_dispatch_packet_path_missing",
+        ] {
+            assert!(
+                blocker_codes.iter().any(|code| code == expected),
+                "missing {expected}: {payload}"
+            );
+        }
     }
 
     #[test]
@@ -7536,6 +7611,7 @@ mod tests {
             rework_target: None,
             submit_result: None,
             validate_result: None,
+            scaffold_result: None,
             retry_completion: false,
             result_file: None,
             receipt_id: None,
@@ -7691,6 +7767,7 @@ mod tests {
             rework_target: None,
             submit_result: None,
             validate_result: None,
+            scaffold_result: None,
             retry_completion: false,
             result_file: None,
             receipt_id: None,
@@ -7963,6 +8040,7 @@ mod tests {
             rework_target: None,
             submit_result: Some(staged_result_path.clone()),
             validate_result: None,
+            scaffold_result: None,
             retry_completion: false,
             result_file: None,
             receipt_id: Some("host-bridge-wrapper-complete-1".to_string()),
@@ -8268,6 +8346,7 @@ mod tests {
             rework_target: None,
             submit_result: Some(staged_result_path.clone()),
             validate_result: None,
+            scaffold_result: None,
             retry_completion: false,
             result_file: None,
             receipt_id: Some("completion-autotester-pass-1".to_string()),
@@ -8550,6 +8629,7 @@ mod tests {
             rework_target: None,
             submit_result: Some(staged_result_path.clone()),
             validate_result: None,
+            scaffold_result: None,
             retry_completion: false,
             result_file: None,
             receipt_id: Some("completion-analyst-pass-1".to_string()),
@@ -9573,6 +9653,7 @@ mod tests {
             rework_target: None,
             submit_result: None,
             validate_result: None,
+            scaffold_result: None,
             retry_completion: false,
             result_file: None,
             receipt_id: None,
@@ -9764,6 +9845,7 @@ mod tests {
             rework_target: None,
             submit_result: None,
             validate_result: None,
+            scaffold_result: None,
             retry_completion: false,
             result_file: None,
             receipt_id: None,
@@ -9913,6 +9995,7 @@ mod tests {
             rework_target: None,
             submit_result: None,
             validate_result: None,
+            scaffold_result: None,
             retry_completion: false,
             result_file: None,
             receipt_id: None,
@@ -10124,6 +10207,7 @@ mod tests {
             rework_target: None,
             submit_result: None,
             validate_result: None,
+            scaffold_result: None,
             retry_completion: false,
             result_file: None,
             receipt_id: None,
@@ -10246,6 +10330,7 @@ mod tests {
             rework_target: None,
             submit_result: None,
             validate_result: None,
+            scaffold_result: None,
             retry_completion: false,
             result_file: None,
             receipt_id: None,
@@ -10375,6 +10460,7 @@ mod tests {
             rework_target: None,
             submit_result: None,
             validate_result: None,
+            scaffold_result: None,
             retry_completion: false,
             result_file: None,
             receipt_id: None,

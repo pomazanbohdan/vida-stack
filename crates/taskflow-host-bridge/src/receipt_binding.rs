@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use taskflow_contracts::Release1ContractStatus;
 
 use crate::request::HostBridgeRequest;
 
@@ -104,6 +105,12 @@ pub fn build_host_bridge_result_scaffold(input: HostBridgeResultScaffoldInput) -
             "pass".to_string()
         }
     });
+    let status = if blocked {
+        Release1ContractStatus::Blocked.as_str()
+    } else {
+        Release1ContractStatus::Pass.as_str()
+    };
+    let execution_state = if blocked { "blocked" } else { "executed" };
     let summary = input.summary.unwrap_or_else(|| {
         format!(
             "parent host adapter staged {verdict} result for {}",
@@ -114,6 +121,8 @@ pub fn build_host_bridge_result_scaffold(input: HostBridgeResultScaffoldInput) -
     serde_json::json!({
         "schema_version": 1,
         "artifact_kind": "host_tool_bridge_result",
+        "status": status,
+        "execution_state": execution_state,
         "request_id": input.request.request_id,
         "run_id": input.request.run_id,
         "task_id": input.request.task_id,
@@ -130,6 +139,7 @@ pub fn build_host_bridge_result_scaffold(input: HostBridgeResultScaffoldInput) -
             "host_agent_id": input.host_agent_id,
             "receipt_id": input.receipt_id
         },
+        "source_dispatch_packet_path": input.request.packet_path,
         "identity_binding": {
             "request_id": input.request.request_id,
             "run_id": input.request.run_id,
@@ -204,9 +214,15 @@ mod tests {
         });
 
         assert_eq!(result["artifact_kind"], "host_tool_bridge_result");
+        assert_eq!(result["status"], "pass");
+        assert_eq!(result["execution_state"], "executed");
         assert_eq!(result["decision"], "approve");
         assert_eq!(result["verdict"], "pass");
         assert_eq!(result["blocker_codes"], serde_json::json!([]));
+        assert_eq!(
+            result["source_dispatch_packet_path"],
+            "runtime-consumption/packet.json"
+        );
         assert!(result.get("rework_target").is_some());
         assert_eq!(result["allowed_next_node"], "pass_to_designer");
         assert_eq!(result["identity_binding"]["request_id"], "req-1");
