@@ -1,0 +1,59 @@
+name: Runtime Quality CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'ci/**'
+      - 'runtime/**'
+      - 'taskflow/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime-quality-gates:
+    name: Runtime quality gates
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: vida-runtime-quality-windows
+          cache-on-failure: false
+
+      - name: Install nextest
+        shell: pwsh
+        run: cargo install cargo-nextest --locked
+
+      - name: Run script and architecture quality checks
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode script-check -Json
+
+      - name: Run formatting and compile checks
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode quick -Json
+
+      - name: Run focused runtime quality-gate tests
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Mode focused-nextest -Package vida -TestFilter host_bridge_public_cli_quality_gate_matrix_routes_pass_and_blocked_decisions -Json
