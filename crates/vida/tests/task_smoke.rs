@@ -8836,6 +8836,122 @@ fn task_proof_attach_evidence_satisfies_status_and_progress() {
 }
 
 #[test]
+fn task_pack_finalize_requires_exactly_one_selector_json() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let output = run_command_capture(&["task", "pack-finalize", "--json"], &state_dir);
+    assert!(!output.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("pack-finalize blocked json should parse");
+    assert_eq!(parsed["surface"], "vida task pack-finalize");
+    assert_eq!(parsed["status"], "blocked");
+    assert_eq!(
+        parsed["blocker_codes"],
+        serde_json::json!(["pack_finalize_selector_required"])
+    );
+    assert!(parsed["next_actions"][0]
+        .as_str()
+        .expect("next action should render")
+        .contains("vida task pack-finalize --order-bucket"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn task_pack_finalize_attaches_proof_closes_blocked_pack_and_reconciles() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let parent_id = unique_test_id("pack-finalize-parent");
+    let open_task_id = unique_test_id("pack-finalize-open");
+    let blocked_task_id = unique_test_id("pack-finalize-blocked");
+    let proof_target = "focused pack-finalize proof";
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("init should run");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    create_epic_parent(&state_dir, &parent_id, "Pack finalize parent", "open");
+    for (task_id, title, status) in [
+        (&open_task_id, "Pack finalize open task", "open"),
+        (&blocked_task_id, "Pack finalize blocked task", "blocked"),
+    ] {
+        let _ = run_command_json(
+            &[
+                "task",
+                "create",
+                task_id,
+                title,
+                "--type",
+                "task",
+                "--status",
+                status,
+                "--parent-id",
+                &parent_id,
+                "--execution-mode",
+                "exclusive",
+                "--order-bucket",
+                "pack-finalize-smoke",
+                "--proof-target",
+                proof_target,
+                "--json",
+            ],
+            &state_dir,
+        );
+    }
+
+    let output = run_command_capture(
+        &[
+            "task",
+            "pack-finalize",
+            "--order-bucket",
+            "pack-finalize-smoke",
+            "--artifact-ref",
+            "artifacts/pack-finalize-smoke.json",
+            "--evidence",
+            "pack finalize smoke proof passed",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!output.status.success());
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("pack-finalize json should parse");
+    assert_eq!(receipt["surface"], "vida task pack-finalize");
+    assert_eq!(receipt["status"], "blocked");
+    assert_eq!(receipt["matched_count"], 2);
+    assert_eq!(receipt["finalized_count"], 2);
+    assert_eq!(receipt["blocked_count"], 0);
+    assert_eq!(receipt["reconcile_summary"]["reconciled_count"], 0);
+    assert_eq!(
+        receipt["blocker_codes"],
+        serde_json::json!(["orchestrator_init_blocked"])
+    );
+    assert_eq!(receipt["orchestrator_init"]["status"], "blocked");
+
+    for task in receipt["tasks"].as_array().expect("tasks should render") {
+        assert_eq!(task["proof_attached"], true);
+        assert_eq!(task["closed"], true);
+        assert_eq!(task["status_after"], "closed");
+        assert_eq!(task["proof_targets"], serde_json::json!([proof_target]));
+    }
+
+    let open_show = run_command_json(&["task", "show", &open_task_id, "--json"], &state_dir);
+    let blocked_show = run_command_json(&["task", "show", &blocked_task_id, "--json"], &state_dir);
+    assert_eq!(open_show["task"]["status"], "closed");
+    assert_eq!(blocked_show["task"]["status"], "closed");
+
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+#[test]
 fn task_proof_attach_evidence_preserves_literal_comma_target() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

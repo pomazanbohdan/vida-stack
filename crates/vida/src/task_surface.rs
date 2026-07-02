@@ -957,6 +957,37 @@ struct TaskProofAttachEvidenceReceipt {
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskPackFinalizeTaskResult {
+    task_id: String,
+    title: String,
+    status_before: String,
+    status_after: String,
+    proof_targets: Vec<String>,
+    proof_attached: bool,
+    closed: bool,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+struct TaskPackFinalizeReceipt {
+    surface: &'static str,
+    status: String,
+    selector_kind: String,
+    selector_value: String,
+    matched_count: usize,
+    finalized_count: usize,
+    blocked_count: usize,
+    tasks: Vec<TaskPackFinalizeTaskResult>,
+    reconcile_summary: Option<serde_json::Value>,
+    orchestrator_init: serde_json::Value,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    artifact_refs: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
 struct TaskTakeoverStatusReceipt {
     surface: &'static str,
     status: String,
@@ -2347,6 +2378,472 @@ fn task_evidence_proof_planner_metadata(
         task_browser_proof_planner_metadata(existing, proof_target)
     } else {
         existing.clone()
+    }
+}
+
+fn task_pack_finalize_selector(
+    order_bucket: Option<&str>,
+    parallel_group: Option<&str>,
+) -> Result<(&'static str, String), String> {
+    let order_bucket = order_bucket
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let parallel_group = parallel_group
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match (order_bucket, parallel_group) {
+        (Some(_), Some(_)) => {
+            Err("Provide exactly one of --order-bucket or --parallel-group.".to_string())
+        }
+        (Some(value), None) => Ok(("order_bucket", value.to_string())),
+        (None, Some(value)) => Ok(("parallel_group", value.to_string())),
+        (None, None) => Err("Provide --order-bucket or --parallel-group.".to_string()),
+    }
+}
+
+fn task_matches_pack_selector(
+    task: &state_store::TaskRecord,
+    selector_kind: &str,
+    selector_value: &str,
+) -> bool {
+    match selector_kind {
+        "order_bucket" => task
+            .execution_semantics
+            .order_bucket
+            .as_deref()
+            .is_some_and(|value| value.trim() == selector_value),
+        "parallel_group" => task
+            .execution_semantics
+            .parallel_group
+            .as_deref()
+            .is_some_and(|value| value.trim() == selector_value),
+        _ => false,
+    }
+}
+
+fn normalized_pack_finalize_values(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn task_pack_finalize_targets(task: &state_store::TaskRecord, overrides: &[String]) -> Vec<String> {
+    let targets = if overrides.is_empty() {
+        &task.planner_metadata.proof_targets
+    } else {
+        overrides
+    };
+    normalized_pack_finalize_values(targets)
+}
+
+fn task_pack_finalize_close_reason(
+    reason_prefix: Option<&str>,
+    selector_kind: &str,
+    selector_value: &str,
+    proof_targets: &[String],
+) -> String {
+    let proof_summary = if proof_targets.is_empty() {
+        "no configured proof targets".to_string()
+    } else {
+        format!(
+            "structured proof targets passed: {}",
+            proof_targets.join(" | ")
+        )
+    };
+    match reason_prefix
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(prefix) => format!(
+            "{prefix}; pack-finalize selector {selector_kind}={selector_value}; {proof_summary}"
+        ),
+        None => {
+            format!("pack-finalize selector {selector_kind}={selector_value}; {proof_summary}")
+        }
+    }
+}
+
+fn task_pack_finalize_orchestrator_init(
+    state_dir: &std::path::Path,
+    explicit_state_dir: bool,
+) -> serde_json::Value {
+    let mut command = match std::env::current_exe() {
+        Ok(path) => std::process::Command::new(path),
+        Err(error) => {
+            return serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": ["orchestrator_init_unavailable"],
+                "error": format!("Failed to resolve current vida executable: {error}"),
+            });
+        }
+    };
+    command.arg("orchestrator-init").arg("--json");
+    if explicit_state_dir {
+        command.arg("--state-dir").arg(state_dir);
+    }
+    match command.output() {
+        Ok(output) if output.status.success() => {
+            match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                Ok(payload) => serde_json::json!({
+                    "status": payload["status"].as_str().unwrap_or("unknown"),
+                    "active_bounded_unit": payload["active_bounded_unit"].clone(),
+                    "why_this_unit": payload["why_this_unit"].clone(),
+                    "sequential_vs_parallel_posture": payload["sequential_vs_parallel_posture"].clone(),
+                    "blocker_codes": payload["blocker_codes"].clone(),
+                    "next_actions": payload["next_actions"].clone(),
+                }),
+                Err(error) => serde_json::json!({
+                    "status": "blocked",
+                    "blocker_codes": ["orchestrator_init_json_invalid"],
+                    "error": format!("Failed to parse orchestrator-init JSON: {error}"),
+                    "stdout": String::from_utf8_lossy(&output.stdout),
+                }),
+            }
+        }
+        Ok(output) => serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["orchestrator_init_failed"],
+            "exit_code": output.status.code(),
+            "stderr": String::from_utf8_lossy(&output.stderr),
+        }),
+        Err(error) => serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["orchestrator_init_failed"],
+            "error": error.to_string(),
+        }),
+    }
+}
+
+fn print_task_pack_finalize_receipt(
+    render: RenderMode,
+    receipt: &TaskPackFinalizeReceipt,
+    as_json: bool,
+) {
+    if as_json {
+        let payload = serde_json::to_value(receipt)
+            .expect("task pack-finalize receipt should serialize to JSON");
+        crate::print_json_pretty(&payload);
+        return;
+    }
+    print_surface_header(render, receipt.surface);
+    print_surface_line(render, "status", &receipt.status);
+    print_surface_line(
+        render,
+        "selector",
+        &format!("{}={}", receipt.selector_kind, receipt.selector_value),
+    );
+    print_surface_line(render, "matched", &receipt.matched_count.to_string());
+    print_surface_line(render, "finalized", &receipt.finalized_count.to_string());
+    print_surface_line(render, "blocked", &receipt.blocked_count.to_string());
+    if !receipt.blocker_codes.is_empty() {
+        print_surface_line(render, "blockers", &receipt.blocker_codes.join(", "));
+    }
+    if let Some(action) = receipt.next_actions.first() {
+        print_surface_line(render, "next", action);
+    }
+}
+
+async fn run_task_pack_finalize(command: TaskPackFinalizeArgs) -> ExitCode {
+    let explicit_state_dir = command.state_dir.is_some();
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    let (selector_kind, selector_value) = match task_pack_finalize_selector(
+        command.order_bucket.as_deref(),
+        command.parallel_group.as_deref(),
+    ) {
+        Ok(selector) => selector,
+        Err(error) => {
+            if command.json {
+                crate::print_json_pretty(&serde_json::json!({
+                    "surface": "vida task pack-finalize",
+                    "status": "blocked",
+                    "blocker_codes": ["pack_finalize_selector_required"],
+                    "next_actions": [
+                        "Rerun with exactly one selector: `vida task pack-finalize --order-bucket <bucket>` or `vida task pack-finalize --parallel-group <group>`."
+                    ],
+                    "artifact_refs": {"surface": "vida task pack-finalize"},
+                    "error": error,
+                }));
+            } else {
+                eprintln!("{error}");
+            }
+            return ExitCode::from(2);
+        }
+    };
+    let proof_target_overrides = normalized_pack_finalize_values(&command.proof_targets);
+    let evidence = normalized_task_verify_evidence(&command.evidence);
+    let artifact_refs = normalized_pack_finalize_values(&command.artifact_refs);
+    let artifact_ref = artifact_refs.first().cloned();
+    let artifact_ref_note = if artifact_refs.len() > 1 {
+        Some(artifact_refs.join(" | "))
+    } else {
+        artifact_ref.clone()
+    };
+
+    let (task_results, reconcile_summary) = match StateStore::open_existing(state_dir.clone()).await
+    {
+        Ok(store) => {
+            let tasks = match store.list_tasks(None, true).await {
+                Ok(tasks) => tasks,
+                Err(error) => {
+                    eprintln!("Failed to list tasks for pack-finalize: {error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let mut candidates = tasks
+                .into_iter()
+                .filter(|task| {
+                    !state_store::StateStore::task_status_is_closed_like(&task.status)
+                        && task_matches_pack_selector(task, selector_kind, &selector_value)
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_by(|left, right| left.id.cmp(&right.id));
+
+            let mut results = Vec::new();
+            for task in candidates {
+                let status_before = task.status.clone();
+                let proof_targets = task_pack_finalize_targets(&task, &proof_target_overrides);
+                let mut current_task = task.clone();
+                let mut blocker_codes = Vec::new();
+                let mut next_actions = Vec::new();
+                let mut error = None;
+                let mut proof_attached = false;
+
+                if !proof_targets.is_empty() {
+                    let mut notes = current_task.notes.clone().unwrap_or_default();
+                    let mut planner_metadata = current_task.planner_metadata.clone();
+                    for proof_target in &proof_targets {
+                        notes = append_task_proof_evidence_note(
+                            if notes.trim().is_empty() {
+                                None
+                            } else {
+                                Some(notes.as_str())
+                            },
+                            proof_target,
+                            Some(proof_target.as_str()),
+                            "pass",
+                            "command",
+                            artifact_ref_note.as_deref(),
+                            &evidence,
+                        );
+                        planner_metadata =
+                            task_evidence_proof_planner_metadata(&planner_metadata, proof_target);
+                    }
+                    match store
+                        .update_task(state_store::UpdateTaskRequest {
+                            task_id: &current_task.id,
+                            title: None,
+                            status: None,
+                            priority: None,
+                            notes: Some(&notes),
+                            description: None,
+                            parent_id: None,
+                            add_labels: &[],
+                            remove_labels: &[],
+                            set_labels: None,
+                            execution_mode: None,
+                            order_bucket: None,
+                            parallel_group: None,
+                            conflict_domain: None,
+                            planner_metadata: Some(planner_metadata),
+                        })
+                        .await
+                    {
+                        Ok(updated) => {
+                            current_task = updated;
+                            proof_attached = true;
+                        }
+                        Err(update_error) => {
+                            blocker_codes.push("proof_evidence_attach_failed".to_string());
+                            next_actions.push(format!(
+                                "Inspect task `{}` and attach proof evidence manually before retrying pack-finalize.",
+                                current_task.id
+                            ));
+                            error = Some(update_error.to_string());
+                        }
+                    }
+                }
+
+                if error.is_none() {
+                    let inheritance_rows = store.list_tasks(None, true).await.ok();
+                    if task_close_structured_proof_gate_payload(
+                        &current_task,
+                        inheritance_rows.as_deref(),
+                    )
+                    .is_some()
+                    {
+                        blocker_codes.push("missing_structured_proof_evidence".to_string());
+                        next_actions.push(format!(
+                            "Run `vida task proof status {}` and attach missing structured proof evidence.",
+                            crate::shell_quote(&current_task.id)
+                        ));
+                    } else {
+                        let close_reason = task_pack_finalize_close_reason(
+                            command.reason.as_deref(),
+                            selector_kind,
+                            &selector_value,
+                            &proof_targets,
+                        );
+                        match store.close_task(&current_task.id, &close_reason).await {
+                            Ok(_) => {
+                                if let Err(bridge_error) = crate::runtime_dispatch_state::maybe_bridge_closed_specification_task_into_latest_receipt(&store, &current_task.id).await {
+                                    blocker_codes.push("post_close_receipt_bridge_failed".to_string());
+                                    next_actions.push(format!(
+                                        "Inspect latest dispatch receipt before treating `{}` as fully finalized.",
+                                        current_task.id
+                                    ));
+                                    error = Some(bridge_error.to_string());
+                                }
+                                if error.is_none() {
+                                    if let Err(bridge_error) = crate::runtime_dispatch_state::maybe_bridge_closed_implementer_task_into_latest_receipt(&store, &current_task.id).await {
+                                        blocker_codes.push(
+                                            "post_close_receipt_bridge_failed".to_string(),
+                                        );
+                                        next_actions.push(format!(
+                                            "Inspect latest dispatch receipt before treating `{}` as fully finalized.",
+                                            current_task.id
+                                        ));
+                                        error = Some(bridge_error.to_string());
+                                    }
+                                }
+                                match store.show_task(&current_task.id).await {
+                                    Ok(updated) => current_task = updated,
+                                    Err(read_error) => {
+                                        blocker_codes
+                                            .push("post_close_task_read_failed".to_string());
+                                        next_actions.push(format!(
+                                            "Re-read task `{}` before relying on pack-finalize closure state.",
+                                            current_task.id
+                                        ));
+                                        error = Some(read_error.to_string());
+                                    }
+                                }
+                            }
+                            Err(close_error) => {
+                                blocker_codes.push("task_close_failed".to_string());
+                                next_actions.push(format!(
+                                    "Inspect `vida task closure-ready {}` before retrying pack-finalize.",
+                                    crate::shell_quote(&current_task.id)
+                                ));
+                                error = Some(close_error.to_string());
+                            }
+                        }
+                    }
+                }
+
+                let closed =
+                    state_store::StateStore::task_status_is_closed_like(&current_task.status);
+                results.push(TaskPackFinalizeTaskResult {
+                    task_id: current_task.id.clone(),
+                    title: current_task.title.clone(),
+                    status_before,
+                    status_after: current_task.status.clone(),
+                    proof_targets,
+                    proof_attached,
+                    closed,
+                    blocker_codes,
+                    next_actions,
+                    error,
+                });
+            }
+
+            if let Err(code) =
+                refresh_task_snapshot_after_mutation(&store, "vida task pack-finalize").await
+            {
+                return code;
+            }
+
+            let reconcile_summary = match store
+                .reconcile_historical_closed_task_active_runs(command.limit)
+                .await
+            {
+                Ok(summary) => Some(
+                    serde_json::to_value(summary)
+                        .expect("closed-run reconcile summary should serialize"),
+                ),
+                Err(error) => Some(task_reconcile_closed_runs_error_payload(&error)),
+            };
+            store.close().await;
+            (results, reconcile_summary)
+        }
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let orchestrator_init = task_pack_finalize_orchestrator_init(&state_dir, explicit_state_dir);
+    let mut blocker_codes = task_results
+        .iter()
+        .flat_map(|task| task.blocker_codes.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    if task_results.is_empty() {
+        blocker_codes.insert("pack_finalize_no_matching_tasks".to_string());
+    }
+    if reconcile_summary
+        .as_ref()
+        .is_some_and(|value| value["status"].as_str() == Some("blocked"))
+    {
+        blocker_codes.insert("closed_run_reconcile_blocked".to_string());
+    }
+    if orchestrator_init["status"].as_str() == Some("blocked") {
+        blocker_codes.insert("orchestrator_init_blocked".to_string());
+    }
+    let blocker_codes = blocker_codes.into_iter().collect::<Vec<_>>();
+    let finalized_count = task_results.iter().filter(|task| task.closed).count();
+    let blocked_count = task_results.len().saturating_sub(finalized_count);
+    let mut next_actions = task_results
+        .iter()
+        .flat_map(|task| task.next_actions.iter().cloned())
+        .collect::<Vec<_>>();
+    if task_results.is_empty() {
+        next_actions.push(format!(
+            "Update TaskFlow execution semantics or rerun with a selector that has open tasks: {selector_kind}={selector_value}."
+        ));
+    }
+    if !blocker_codes.is_empty() && next_actions.is_empty() {
+        next_actions.push(
+            "Inspect the per-task pack-finalize results and resolve residual blockers before selecting unrelated work."
+                .to_string(),
+        );
+    }
+    let status = if blocker_codes.is_empty() {
+        task_json_success_status().to_string()
+    } else {
+        "blocked".to_string()
+    };
+    let receipt = TaskPackFinalizeReceipt {
+        surface: "vida task pack-finalize",
+        status: status.clone(),
+        selector_kind: selector_kind.to_string(),
+        selector_value: selector_value.clone(),
+        matched_count: task_results.len(),
+        finalized_count,
+        blocked_count,
+        tasks: task_results,
+        reconcile_summary,
+        orchestrator_init,
+        blocker_codes,
+        next_actions,
+        artifact_refs: serde_json::json!({
+            "surface": "vida task pack-finalize",
+            "selector_kind": selector_kind,
+            "selector_value": selector_value,
+            "artifact_refs": artifact_refs,
+        }),
+    };
+    print_task_pack_finalize_receipt(command.render, &receipt, command.json);
+    if status == task_json_success_status() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }
 
@@ -11096,6 +11593,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 | "update"
                 | "reset"
                 | "close"
+                | "pack-finalize"
                 | "prune-closed-epics"
                 | "split"
                 | "spawn-blocker"
@@ -13465,6 +13963,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             run_task_spawn_blocker_like(command, "vida task spawn-blocker").await
         }
         TaskCommand::AdaptivePreview(command) => run_task_adaptive_preview(command).await,
+        TaskCommand::PackFinalize(command) => run_task_pack_finalize(command).await,
         TaskCommand::Close(command) => {
             let explicit_state_dir = command.state_dir.is_some();
             let state_dir = command

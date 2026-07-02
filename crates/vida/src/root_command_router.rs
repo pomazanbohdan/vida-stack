@@ -329,6 +329,7 @@ fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
         },
         TaskCommand::OwnedStatus(command) => command.state_dir.is_some(),
         TaskCommand::Close(command) => command.state_dir.is_some(),
+        TaskCommand::PackFinalize(command) => command.state_dir.is_some(),
         TaskCommand::Reconcile(command) => command.state_dir.is_some(),
         TaskCommand::ReconcileClosedRuns(command) => command.state_dir.is_some(),
         TaskCommand::PruneClosedEpics(command) => command.state_dir.is_some(),

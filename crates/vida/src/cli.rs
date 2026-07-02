@@ -50,6 +50,8 @@ const TASK_UPDATE_LONG_ABOUT: &str = "Update one tracked task in the authoritati
 const TASK_UPDATE_AFTER_HELP: &str = "Examples:\n  vida task update <task-id> --status in_progress --json\n  vida task update <task-id> --title \"Retitled task\" --priority 1 --json\n  vida task update <task-id> --parent-id <parent-id> --json\n  vida task update <task-id> --clear-parent-id --json\n  vida task update <task-id> --proof-target \"cargo test -p vida focused_test\" --json\n  vida task update <task-id> --acceptance-target-literal \"One prose target, with commas preserved\" --json\n  vida task update <task-id> --clear-proof-targets --json\n  vida task update <task-id> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task update <task-id> --clear-parallel-group --clear-conflict-domain --json\n\nNotes:\n  Use either a value flag or the matching clear flag, not both.\n  `--proof-target` replaces the configured planner proof_targets; it does not append to stale targets.\n  Comma-delimited list flags remain available for compact lists; use `*-literal` variants for long prose values that contain commas.\n  Re-check `vida taskflow graph-summary --json` after updates to confirm `ready_parallel_safe` and `parallel_blockers`.\n  For long notes, use `--notes-file <path>`; for many task updates or creates, use `vida task import --file tasks.jsonl --dry-run`.";
 const TASK_CLOSE_LONG_ABOUT: &str = "Close one tracked task with evidence and optional release automation.\n\nDefault output is compact human-readable operator output. It shows close status, blockers when closure is rejected, and scoped follow-up state. Use --json for the machine-readable task-close contract.";
 const TASK_CLOSE_AFTER_HELP: &str = "Examples:\n  vida task close <task-id> --reason \"proof passed\"\n  vida task close <task-id> --reason-file close-reason.txt\n  vida task close <task-id> --reason \"proof passed\" --json\n  vida task close <task-id> --reason \"proof passed\" --release --install\n\nOutput:\n  Default output is compact human-readable task close output for operators.\n  Blocked default output includes blocker codes and next actions without requiring --json.\n  Use --json only when automation needs the full machine-readable close payload.\n  Use --render plain|color|color_emoji to choose the default human rendering mode.";
+const TASK_PACK_FINALIZE_LONG_ABOUT: &str = "Finalize one TaskFlow execution pack by selector. The command finds non-closed tasks in an order_bucket or parallel_group, attaches structured proof evidence to each configured proof target, closes eligible tasks sequentially, runs closed-run reconciliation, reruns orchestrator-init, and reports residual blockers.\n\nDefault output is compact human-readable operator output. Use --json for the machine-readable pack-finalize contract.";
+const TASK_PACK_FINALIZE_AFTER_HELP: &str = "Examples:\n  vida task pack-finalize --order-bucket wave-a --evidence \"focused tests passed\"\n  vida task pack-finalize --parallel-group taskflow-finalize --artifact-ref artifacts/proof.txt --json\n  vida task pack-finalize --order-bucket wave-a --proof-target \"cargo test -p vida focused\" --reason \"pack proof passed\"\n\nOutput:\n  Default output is compact human-readable pack status, task counts, blockers, and next action.\n  JSON output includes per-task proof attachment, close result, reconcile summary, orchestrator-init summary, blocker_codes, next_actions, and artifact_refs.\n\nSelector:\n  Provide exactly one of --order-bucket or --parallel-group.\n  Blocked tasks are included when their selector matches, so stale blocked work can be finalized after proof is current.";
 const TASK_BLOCK_ABOUT: &str = "record a runtime blocker on one task without closing it";
 const TASK_BLOCK_LONG_ABOUT: &str = "Record a runtime blocker on one task without closing it.\n\nThe command marks the task status as `blocked`, appends a structured blocker note to existing task notes, refreshes the canonical TaskFlow snapshot, and emits a machine-readable receipt when `--json` is set.";
 const TASK_BLOCK_AFTER_HELP: &str = "Examples:\n  vida task block <task-id> --reason \"runtime bridge unavailable\" --evidence \"agent-init returned host_tool_capability_missing\" --json\n  vida task block <task-id> --reason \"browser proof unavailable\" --blocker web_runtime_unhealthy --next-action \"run vida runtime web status --json\" --json\n\nOptions:\n  --reason <text>       Human-readable blocker reason; required\n  --evidence <text>     Evidence command, file, receipt, or observation; accepts repeated flags\n  --blocker <code>      Canonical blocker code; accepts comma-separated values and repeated flags\n  --next-action <text>  Suggested recovery or continuation action; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output";
@@ -1739,6 +1741,13 @@ pub(crate) enum TaskCommand {
         after_help = TASK_CLOSE_AFTER_HELP
     )]
     Close(TaskCloseArgs),
+    #[command(
+        name = "pack-finalize",
+        about = "finalize a TaskFlow order bucket or parallel group with proof, close, reconcile, and init checks",
+        long_about = TASK_PACK_FINALIZE_LONG_ABOUT,
+        after_help = TASK_PACK_FINALIZE_AFTER_HELP
+    )]
+    PackFinalize(TaskPackFinalizeArgs),
     #[command(about = "reconcile open epics whose descendants are complete")]
     Reconcile(TaskReconcileArgs),
     #[command(about = "retire historical run-graph rows for already-closed tasks")]
@@ -3637,6 +3646,74 @@ pub(crate) struct TaskReconcileClosedRunsArgs {
     pub(crate) render: RenderMode,
 
     #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskPackFinalizeArgs {
+    #[arg(
+        long = "order-bucket",
+        help = "Finalize tasks whose execution_semantics.order_bucket matches this value"
+    )]
+    pub(crate) order_bucket: Option<String>,
+
+    #[arg(
+        long = "parallel-group",
+        help = "Finalize tasks whose execution_semantics.parallel_group matches this value"
+    )]
+    pub(crate) parallel_group: Option<String>,
+
+    #[arg(
+        long = "proof-target",
+        help = "Override configured proof targets to attach before close; repeat for multiple targets"
+    )]
+    pub(crate) proof_targets: Vec<String>,
+
+    #[arg(
+        long = "artifact-ref",
+        help = "Proof artifact path or receipt reference to attach; repeat for multiple artifacts"
+    )]
+    pub(crate) artifact_refs: Vec<String>,
+
+    #[arg(
+        long = "evidence",
+        help = "Human-readable proof evidence summary; repeat for multiple evidence lines"
+    )]
+    pub(crate) evidence: Vec<String>,
+
+    #[arg(
+        long = "reason",
+        help = "Closure reason prefix; defaults to a pack-finalize proof summary"
+    )]
+    pub(crate) reason: Option<String>,
+
+    #[arg(
+        long = "limit",
+        default_value_t = 25,
+        help = "Closed-run reconcile limit after sequential task closure"
+    )]
+    pub(crate) limit: usize,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render mode for default compact human-readable output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(
+        long = "json",
+        help = "Emit machine-readable JSON output instead of default compact pack-finalize output"
+    )]
     pub(crate) json: bool,
 }
 
