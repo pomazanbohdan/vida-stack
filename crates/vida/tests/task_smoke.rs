@@ -8927,7 +8927,7 @@ fn task_pack_finalize_requires_exactly_one_selector_json() {
 }
 
 #[test]
-fn task_pack_finalize_attaches_proof_closes_blocked_pack_and_reconciles() {
+fn task_pack_finalize_rejects_self_certified_proof_evidence() {
     let (project_root, state_dir) = project_bound_state_dir();
     let parent_id = unique_test_id("pack-finalize-parent");
     let open_task_id = unique_test_id("pack-finalize-open");
@@ -8995,26 +8995,36 @@ fn task_pack_finalize_attaches_proof_closes_blocked_pack_and_reconciles() {
     assert_eq!(receipt["surface"], "vida task pack-finalize");
     assert_eq!(receipt["status"], "blocked");
     assert_eq!(receipt["matched_count"], 2);
-    assert_eq!(receipt["finalized_count"], 2);
-    assert_eq!(receipt["blocked_count"], 0);
+    assert_eq!(receipt["finalized_count"], 0);
+    assert_eq!(receipt["blocked_count"], 2);
     assert_eq!(receipt["reconcile_summary"]["reconciled_count"], 0);
-    assert_eq!(
-        receipt["blocker_codes"],
-        serde_json::json!(["orchestrator_init_blocked"])
-    );
-    assert_eq!(receipt["orchestrator_init"]["status"], "blocked");
+    assert!(receipt["blocker_codes"]
+        .as_array()
+        .expect("aggregate blocker codes should render")
+        .contains(&serde_json::json!(
+            "pack_finalize_proof_self_certification_forbidden"
+        )));
 
     for task in receipt["tasks"].as_array().expect("tasks should render") {
-        assert_eq!(task["proof_attached"], true);
-        assert_eq!(task["closed"], true);
-        assert_eq!(task["status_after"], "closed");
+        assert_eq!(task["proof_attached"], false);
+        assert_eq!(task["closed"], false);
         assert_eq!(task["proof_targets"], serde_json::json!([proof_target]));
+        assert!(task["blocker_codes"]
+            .as_array()
+            .expect("task blocker codes should render")
+            .contains(&serde_json::json!(
+                "pack_finalize_proof_self_certification_forbidden"
+            )));
     }
 
     let open_show = run_command_json(&["task", "show", &open_task_id, "--json"], &state_dir);
     let blocked_show = run_command_json(&["task", "show", &blocked_task_id, "--json"], &state_dir);
-    assert_eq!(open_show["task"]["status"], "closed");
-    assert_eq!(blocked_show["task"]["status"], "closed");
+    assert_eq!(open_show["task"]["status"], "open");
+    assert_eq!(blocked_show["task"]["status"], "blocked");
+    assert!(!open_show["task"]["notes"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("task_proof_evidence"));
 
     let _ = fs::remove_dir_all(&project_root);
 }
