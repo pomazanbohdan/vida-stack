@@ -1,4 +1,4 @@
-use std::process::Output;
+use std::process::{Command, Output};
 
 use serde_json::Value;
 
@@ -6,6 +6,15 @@ use serde_json::Value;
 mod runtime_consumption_support;
 
 use runtime_consumption_support::PersistentRuntimeFixture;
+
+fn assert_success(output: &Output, label: &str) {
+    assert!(
+        output.status.success(),
+        "{label} should succeed: stdout={}; stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
 fn run_json(fixture: &PersistentRuntimeFixture, args: &[&str]) -> Value {
     let (json, _) = fixture.json_allow_failure(args);
@@ -26,6 +35,125 @@ fn run_failure(fixture: &PersistentRuntimeFixture, args: &[&str]) -> Output {
         String::from_utf8_lossy(&output.stderr)
     );
     output
+}
+
+fn json_string_vec(value: &Value, pointer: &str) -> Vec<String> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("{pointer} should be an array: {value:#}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn delete_run_graph_row_with_helper(fixture: &PersistentRuntimeFixture, table: &str, run_id: &str) {
+    let helper = std::env::current_exe().expect("current test binary should resolve");
+    let output = Command::new(helper)
+        .args([
+            "--ignored",
+            "--exact",
+            "runtime_delete_run_graph_row_helper_process",
+            "--nocapture",
+        ])
+        .env(
+            runtime_consumption_support::RUN_GRAPH_DELETE_STATE_DIR_ENV,
+            fixture.state_dir_string(),
+        )
+        .env(
+            runtime_consumption_support::RUN_GRAPH_DELETE_TABLE_ENV,
+            table,
+        )
+        .env(
+            runtime_consumption_support::RUN_GRAPH_DELETE_RUN_ID_ENV,
+            run_id,
+        )
+        .output()
+        .expect("runtime delete helper process should run");
+    assert_success(&output, "runtime delete helper process");
+}
+
+#[test]
+fn task_runtime_workflows_assumption_doubt_test_stale_missing_task_identity_variant_fails_closed() {
+    let fixture = PersistentRuntimeFixture::state_only("stale-missing-task-identity");
+    fixture.boot();
+
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "create",
+            "stale-parent",
+            "Stale Parent",
+            "--type",
+            "epic",
+            "--json",
+        ],
+    );
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "create",
+            "stale-run-task",
+            "Stale Run Task",
+            "--type",
+            "task",
+            "--parent-id",
+            "stale-parent",
+            "--json",
+        ],
+    );
+    run_json_success(
+        &fixture,
+        &[
+            "taskflow",
+            "run-graph",
+            "dispatch-init",
+            "stale-run-task",
+            "--json",
+        ],
+    );
+    delete_run_graph_row_with_helper(&fixture, "task", "stale-run-task");
+
+    let run_graph = run_json(
+        &fixture,
+        &[
+            "taskflow",
+            "run-graph",
+            "status",
+            "stale-run-task",
+            "--json",
+        ],
+    );
+    let run_graph_blockers = json_string_vec(&run_graph, "/blocker_codes");
+    assert!(
+        run_graph_blockers
+            .iter()
+            .any(|code| code == "stale_missing_task_run_graph"),
+        "missing TaskFlow task should fail closed as stale run graph: {run_graph:#}"
+    );
+
+    let recovery = run_json(
+        &fixture,
+        &["taskflow", "recovery", "status", "stale-run-task", "--json"],
+    );
+    let recovery_blockers = json_string_vec(&recovery, "/blocker_codes");
+    assert!(
+        recovery_blockers
+            .iter()
+            .any(|code| code == "stale_missing_task_run_graph"),
+        "recovery should preserve stale missing task blocker: {recovery:#}"
+    );
+}
+
+#[test]
+#[ignore = "helper process for task_runtime_workflows persisted-state row deletion"]
+fn runtime_delete_run_graph_row_helper_process() {
+    if std::env::var(runtime_consumption_support::RUN_GRAPH_DELETE_STATE_DIR_ENV).is_ok() {
+        runtime_consumption_support::delete_run_graph_row_from_env();
+    }
 }
 
 #[test]

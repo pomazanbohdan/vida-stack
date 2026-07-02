@@ -2924,6 +2924,32 @@ fn recovery_surface_contract_with_owned_scope(
     if terminal_recovery_summary_resolved(summary) {
         return (Vec::new(), None, None, None, None);
     }
+    let task_authority_blockers = projection_truth_issue_codes(projection_truth);
+    if task_authority_blockers.iter().any(|code| {
+        matches!(
+            code.as_str(),
+            "stale_missing_task_run_graph" | "closed_task_active_run_projection_mismatch"
+        )
+    }) {
+        let blocker_codes = normalize_run_graph_issue_codes(
+            &task_authority_blockers,
+            projection_truth.stale_state_suspected,
+        );
+        return (
+            blocker_codes.clone(),
+            Some(RecoveryWhyNotNow {
+                category: "stale_run_graph_blocked_state".to_string(),
+                summary:
+                    "The run graph is stale because its active TaskFlow task identity is not actionable."
+                        .to_string(),
+                blocker_codes,
+                blocking_surface: Some("vida taskflow recovery latest".to_string()),
+            }),
+            None,
+            None,
+            None,
+        );
+    }
 
     let projection_resolves_open_cycle =
         recovery_projection_resolves_persisted_open_cycle(summary, projection_truth);
@@ -3595,13 +3621,16 @@ fn projection_truth_issue_codes(projection_truth: &RunGraphProjectionTruth) -> V
     let mut blocked_evidence_present = projection_truth.stale_state_suspected;
     let mut blocker_codes = Vec::new();
     if projection_truth.stale_state_suspected
-        && projection_truth
-            .next_lawful_operator_action
-            .as_deref()
-            .is_some_and(|action| {
-                action.starts_with("vida lane retire")
-                    && action.contains("missing TaskFlow task stale run")
-            })
+        && (projection_truth
+            .projection_reason
+            .contains("missing TaskFlow task stale run")
+            || projection_truth
+                .next_lawful_operator_action
+                .as_deref()
+                .is_some_and(|action| {
+                    action.starts_with("vida lane retire")
+                        && action.contains("missing TaskFlow task stale run")
+                }))
     {
         blocker_codes.push("stale_missing_task_run_graph".to_string());
     }
@@ -4140,11 +4169,15 @@ pub(crate) async fn run_graph_projection_truth(
         } else {
             "persisted_run_graph_status".to_string()
         },
-        projection_reason: projection_reason_for_snapshot(
-            status,
-            dispatch_receipt.as_ref(),
-            continuation_binding.as_ref(),
-        ),
+        projection_reason: if task_authority.task_missing() {
+            "missing TaskFlow task stale run".to_string()
+        } else {
+            projection_reason_for_snapshot(
+                status,
+                dispatch_receipt.as_ref(),
+                continuation_binding.as_ref(),
+            )
+        },
         dispatch_receipt_present: dispatch_receipt.is_some(),
         continuation_binding_present: continuation_binding.is_some(),
         projection_vs_receipt_parity: projection_vs_receipt_parity(

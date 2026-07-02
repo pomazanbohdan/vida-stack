@@ -265,7 +265,9 @@ impl PersistentRuntimeFixture {
         let mut command = vida_command();
         command.args(args).env("VIDA_STATE_DIR", &self.state_dir);
         if let Some(project_root) = &self.project_root {
-            command.current_dir(project_root);
+            command
+                .current_dir(project_root)
+                .env("VIDA_ROOT", project_root);
         }
         command
     }
@@ -288,6 +290,7 @@ impl PersistentRuntimeFixture {
             if let Some(state_dir) = state_dir {
                 command.env("VIDA_STATE_DIR", state_dir);
             }
+            command.env("VIDA_ROOT", project_root);
             command
         })
     }
@@ -717,10 +720,39 @@ fn unique_fixture_path(label: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!(
+    external_temp_dir().join(format!(
         "vida-{label}-{}-{nanos}-{counter}",
         std::process::id()
     ))
+}
+
+fn external_temp_dir() -> PathBuf {
+    std::env::var_os("VIDA_TEST_EXTERNAL_TMP")
+        .map(PathBuf::from)
+        .or_else(|| outside_repo_temp_base(std::env::temp_dir()))
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .map(|path| path.join("Temp"))
+        })
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .map(|path| path.join("AppData").join("Local").join("Temp"))
+        })
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+fn outside_repo_temp_base(temp_dir: PathBuf) -> Option<PathBuf> {
+    temp_dir
+        .ancestors()
+        .find(|path| {
+            path.join("AGENTS.md").exists()
+                && path.join("AGENTS.sidecar.md").exists()
+                && path.join(".vida").exists()
+        })
+        .and_then(Path::parent)
+        .map(|path| path.join(".vida-test-temp"))
 }
 
 fn write_project_files(project_root: &Path) {

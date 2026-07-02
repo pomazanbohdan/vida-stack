@@ -64,7 +64,6 @@ fn identity_authority_candidate_ids(
         .into_iter()
         .flat_map(|identity| {
             [
-                identity.feature_epic_id.as_deref(),
                 identity.dev_task_id.as_deref(),
                 identity.work_pool_task_id.as_deref(),
                 identity.spec_task_id.as_deref(),
@@ -259,6 +258,46 @@ mod tests {
         assert_eq!(verdict.kind, RunGraphTaskAuthorityKind::ClosedTaskStaleRun);
         assert_eq!(verdict.task_status.as_deref(), Some("resolved"));
         assert!(verdict.task_closed());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn authority_verdict_does_not_let_feature_parent_mask_missing_active_task() {
+        let root = temp_authority_root("vida-run-graph-authority-feature-parent-mask");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("feature-parent", "open"))
+            .await
+            .expect("persist feature parent");
+        store
+            .record_run_graph_dispatch_task_identity(
+                &crate::state_store::RunGraphDispatchTaskIdentity {
+                    run_id: "missing-dev-task".to_string(),
+                    feature_epic_id: Some("feature-parent".to_string()),
+                    spec_task_id: None,
+                    work_pool_task_id: None,
+                    dev_task_id: Some("missing-dev-task".to_string()),
+                    source: "dispatch_init_existing_task".to_string(),
+                    updated_at: "2026-07-02T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("record task identity");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "missing-dev-task",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "missing-dev-task".to_string();
+        status.status = "blocked".to_string();
+
+        let verdict = run_graph_task_authority_verdict(&store, &status)
+            .await
+            .expect("authority verdict");
+        assert_eq!(verdict.kind, RunGraphTaskAuthorityKind::MissingTaskStaleRun);
+        assert_eq!(verdict.task_status, None);
 
         let _ = std::fs::remove_dir_all(&root);
     }

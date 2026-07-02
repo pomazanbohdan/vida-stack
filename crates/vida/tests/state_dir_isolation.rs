@@ -117,6 +117,16 @@ fn json_string_array(value: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
+fn has_parent_dependency(task: &Value, parent_id: &str) -> bool {
+    task["dependencies"]
+        .as_array()
+        .expect("task dependencies should render as array")
+        .iter()
+        .any(|dependency| {
+            dependency["edge_type"] == "parent-child" && dependency["depends_on_id"] == parent_id
+        })
+}
+
 fn rejected_reasons(value: &Value, task_id: &str) -> Vec<String> {
     value["rejected_candidates"]
         .as_array()
@@ -223,6 +233,36 @@ fn taskflow_proxy_and_root_task_surfaces_share_default_state_root() {
         "taskflow proxy should read the same default state root as root task surfaces: {graph:#}"
     );
     assert_ne!(graph["primary_ready_task"]["task"]["id"], "proxy-b-task");
+}
+
+#[test]
+fn state_store_availability_preserves_project_bound_task_state() {
+    let fixture = PersistentRuntimeFixture::project_bound("state-store-available");
+
+    create_epic_and_task(
+        &fixture,
+        "available-epic",
+        "available-task",
+        "Available persisted task",
+    );
+
+    let explicit_show = run_json_success(
+        &fixture,
+        Some(fixture.state_dir()),
+        &["task", "show", "available-task", "--json"],
+    );
+    assert_eq!(explicit_show["task"]["id"], "available-task");
+    assert!(has_parent_dependency(
+        &explicit_show["task"],
+        "available-epic"
+    ));
+
+    let default_show = run_json_success(
+        &fixture,
+        None,
+        &["task", "show", "available-task", "--json"],
+    );
+    assert_eq!(default_show["task"]["id"], "available-task");
 }
 
 #[test]
