@@ -380,6 +380,25 @@ impl RedbOperationalJournal {
         Ok(records)
     }
 
+    fn read_decoded_records<T>(
+        &self,
+        table_definition: TableDefinition<&str, &[u8]>,
+        decode: fn(&[u8]) -> Result<T, TaskflowStateError>,
+    ) -> Result<Vec<T>, TaskflowStateError> {
+        let read = self.db.begin_read().map_err(storage_error)?;
+        let table = match read.open_table(table_definition) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(storage_error(error)),
+        };
+        let mut records = Vec::new();
+        for row in table.iter().map_err(storage_error)? {
+            let (_, value) = row.map_err(storage_error)?;
+            records.push(decode(value.value())?);
+        }
+        Ok(records)
+    }
+
     fn read_one<T: DeserializeOwned>(
         &self,
         table_definition: TableDefinition<&str, &[u8]>,
@@ -529,18 +548,10 @@ impl RedbOperationalJournal {
     pub fn projection_checkpoint_records(
         &self,
     ) -> Result<Vec<RedbProjectionCheckpointRecord>, TaskflowStateError> {
-        let read = self.db.begin_read().map_err(storage_error)?;
-        let table = match read.open_table(PROJECTION_CHECKPOINT_TABLE) {
-            Ok(table) => table,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(error) => return Err(storage_error(error)),
-        };
-        let mut records = Vec::new();
-        for row in table.iter().map_err(storage_error)? {
-            let (_, value) = row.map_err(storage_error)?;
-            records.push(decode_projection_checkpoint_record(value.value())?);
-        }
-        Ok(records)
+        self.read_decoded_records(
+            PROJECTION_CHECKPOINT_TABLE,
+            decode_projection_checkpoint_record,
+        )
     }
 
     pub fn projection_read_barrier(
@@ -573,18 +584,7 @@ impl RedbOperationalJournal {
     pub fn projection_failure_records(
         &self,
     ) -> Result<Vec<RedbProjectionFailureRecord>, TaskflowStateError> {
-        let read = self.db.begin_read().map_err(storage_error)?;
-        let table = match read.open_table(PROJECTION_FAILURE_TABLE) {
-            Ok(table) => table,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(error) => return Err(storage_error(error)),
-        };
-        let mut records = Vec::new();
-        for row in table.iter().map_err(storage_error)? {
-            let (_, value) = row.map_err(storage_error)?;
-            records.push(decode_projection_failure_record(value.value())?);
-        }
-        Ok(records)
+        self.read_decoded_records(PROJECTION_FAILURE_TABLE, decode_projection_failure_record)
     }
 
     pub fn artifact(
@@ -613,18 +613,7 @@ impl RedbOperationalJournal {
     }
 
     pub fn outbox_effect_records(&self) -> Result<Vec<RedbOutboxEffectRecord>, TaskflowStateError> {
-        let read = self.db.begin_read().map_err(storage_error)?;
-        let table = match read.open_table(OUTBOX_TABLE) {
-            Ok(table) => table,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(error) => return Err(storage_error(error)),
-        };
-        let mut records = Vec::new();
-        for row in table.iter().map_err(storage_error)? {
-            let (_, value) = row.map_err(storage_error)?;
-            records.push(decode_outbox_effect_record(value.value())?);
-        }
-        Ok(records)
+        self.read_decoded_records(OUTBOX_TABLE, decode_outbox_effect_record)
     }
 
     pub fn schedule_outbox_retry(
@@ -661,18 +650,7 @@ impl RedbOperationalJournal {
     pub fn artifact_index_records(
         &self,
     ) -> Result<Vec<RedbArtifactIndexRecord>, TaskflowStateError> {
-        let read = self.db.begin_read().map_err(storage_error)?;
-        let table = match read.open_table(ARTIFACT_TABLE) {
-            Ok(table) => table,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(error) => return Err(storage_error(error)),
-        };
-        let mut records = Vec::new();
-        for row in table.iter().map_err(storage_error)? {
-            let (_, value) = row.map_err(storage_error)?;
-            records.push(decode_artifact_index_record(value.value())?);
-        }
-        Ok(records)
+        self.read_decoded_records(ARTIFACT_TABLE, decode_artifact_index_record)
     }
 
     fn materialized_artifact_receipt_from_reconciled_record(
