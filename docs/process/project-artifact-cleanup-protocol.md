@@ -148,5 +148,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-artifact-cleanup-protocol.md
 created_at: '2026-07-01T21:20:00+03:00'
-updated_at: 2026-07-01T21:20:00+03:00
+updated_at: '2026-07-01T21:20:00+03:00'
 changelog_ref: project-artifact-cleanup-protocol.changelog.jsonl

@@ -111,3 +111,15 @@ Each crate independently interprets these literals, leading to:
 
 - TaskFlow task: `runtime-arch-team-flow-state-machine-owner-20260701`
 - Parent epic: `runtime-team-flow-activity-meeting-dx-20260701`
+
+-----
+artifact_path: product/spec/adr-team-flow-state-machine-owner
+artifact_type: architecture_decision
+artifact_version: '1'
+artifact_revision: '2026-07-01'
+schema_version: '1'
+status: proposed
+source_path: docs/product/spec/adr-team-flow-state-machine-owner.md
+created_at: '2026-07-01T00:00:00+03:00'
+updated_at: '2026-07-02T04:18:00+03:00'
+changelog_ref: adr-team-flow-state-machine-owner.changelog.jsonl
