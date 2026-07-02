@@ -58,13 +58,36 @@ infer_cargo_host_triple() {
 
 select_python() {
   local candidate
-  for candidate in python3 python; do
-    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --version >/dev/null 2>&1; then
+  if [[ -n "${VIDA_PYTHON_BIN:-}" ]]; then
+    candidate="$VIDA_PYTHON_BIN"
+    if command -v "$candidate" >/dev/null 2>&1 && python_candidate_allowed "$candidate" && "$candidate" --version >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    fail "VIDA_PYTHON_BIN does not point to a usable Python interpreter: $VIDA_PYTHON_BIN"
+  fi
+
+  for candidate in python python3; do
+    if command -v "$candidate" >/dev/null 2>&1 && python_candidate_allowed "$candidate" && "$candidate" --version >/dev/null 2>&1; then
       printf '%s\n' "$candidate"
       return 0
     fi
   done
-  fail "Missing working Python command: tried python3, python"
+  fail "Missing working Python command: tried VIDA_PYTHON_BIN, python, python3; WindowsApps/Python Manager shims are rejected"
+}
+
+python_candidate_allowed() {
+  local candidate="$1"
+  local resolved
+  resolved="$(command -v "$candidate" 2>/dev/null || true)"
+  case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+      case "$resolved" in
+        *WindowsApps*|*PythonSoftwareFoundation.PythonManager*) return 1 ;;
+      esac
+      ;;
+  esac
+  return 0
 }
 
 if ! skip_build_enabled; then

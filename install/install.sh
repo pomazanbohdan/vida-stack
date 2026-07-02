@@ -207,6 +207,40 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
+python_candidate_allowed() {
+  local candidate="$1"
+  local resolved
+  resolved="$(command -v "$candidate" 2>/dev/null || true)"
+  case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+      case "$resolved" in
+        *WindowsApps*|*PythonSoftwareFoundation.PythonManager*) return 1 ;;
+      esac
+      ;;
+  esac
+  return 0
+}
+
+select_python() {
+  local candidate
+  if [[ -n "${VIDA_PYTHON_BIN:-}" ]]; then
+    candidate="$VIDA_PYTHON_BIN"
+    if command -v "$candidate" >/dev/null 2>&1 && python_candidate_allowed "$candidate" && "$candidate" --version >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    fail "VIDA_PYTHON_BIN does not point to a usable Python interpreter: $VIDA_PYTHON_BIN"
+  fi
+
+  for candidate in python python3; do
+    if command -v "$candidate" >/dev/null 2>&1 && python_candidate_allowed "$candidate" && "$candidate" --version >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  fail "Missing working Python command: tried VIDA_PYTHON_BIN, python, python3; WindowsApps/Python Manager shims are rejected"
+}
+
 checksum_cmd() {
   if command -v sha256sum >/dev/null 2>&1; then
     printf 'sha256sum\n'
@@ -220,7 +254,7 @@ checksum_cmd() {
 }
 
 parse_latest_release_tag() {
-  python3 -c '
+  "$PYTHON_BIN" -c '
 import json
 import sys
 
@@ -980,7 +1014,7 @@ main() {
   require_cmd mktemp
   require_cmd awk
   require_cmd sed
-  require_cmd python3
+  PYTHON_BIN="$(select_python)"
 
   case "$COMMAND" in
     help)
