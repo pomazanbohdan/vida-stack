@@ -3676,19 +3676,19 @@ pub(crate) struct TaskPackFinalizeArgs {
 
     #[arg(
         long = "proof-target",
-        help = "Override configured proof targets to attach before close; repeat for multiple targets"
+        help = "Override configured proof targets to require before close; repeat for multiple targets"
     )]
     pub(crate) proof_targets: Vec<String>,
 
     #[arg(
         long = "artifact-ref",
-        help = "Proof artifact path or receipt reference to attach; repeat for multiple artifacts"
+        help = "Deprecated for pack-finalize: proof artifacts must already be attached to selected tasks"
     )]
     pub(crate) artifact_refs: Vec<String>,
 
     #[arg(
         long = "evidence",
-        help = "Human-readable proof evidence summary; repeat for multiple evidence lines"
+        help = "Deprecated for pack-finalize: proof evidence must already be attached to selected tasks"
     )]
     pub(crate) evidence: Vec<String>,
 

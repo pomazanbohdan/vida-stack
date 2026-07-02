@@ -2499,12 +2499,6 @@ async fn run_task_pack_finalize(command: TaskPackFinalizeArgs) -> ExitCode {
     let proof_target_overrides = normalized_pack_finalize_values(&command.proof_targets);
     let evidence = normalized_task_verify_evidence(&command.evidence);
     let artifact_refs = normalized_pack_finalize_values(&command.artifact_refs);
-    let artifact_ref = artifact_refs.first().cloned();
-    let artifact_ref_note = if artifact_refs.len() > 1 {
-        Some(artifact_refs.join(" | "))
-    } else {
-        artifact_ref.clone()
-    };
 
     let (task_results, reconcile_summary) = match StateStore::open_existing(state_dir.clone()).await
     {
@@ -2533,61 +2527,20 @@ async fn run_task_pack_finalize(command: TaskPackFinalizeArgs) -> ExitCode {
                 let mut blocker_codes = Vec::new();
                 let mut next_actions = Vec::new();
                 let mut error = None;
-                let mut proof_attached = false;
+                let proof_attached = false;
 
-                if !proof_targets.is_empty() {
-                    let mut notes = current_task.notes.clone().unwrap_or_default();
-                    let mut planner_metadata = current_task.planner_metadata.clone();
-                    for proof_target in &proof_targets {
-                        notes = append_task_proof_evidence_note(
-                            if notes.trim().is_empty() {
-                                None
-                            } else {
-                                Some(notes.as_str())
-                            },
-                            proof_target,
-                            Some(proof_target.as_str()),
-                            "pass",
-                            "command",
-                            artifact_ref_note.as_deref(),
-                            &evidence,
-                        );
-                        planner_metadata =
-                            task_evidence_proof_planner_metadata(&planner_metadata, proof_target);
-                    }
-                    match store
-                        .update_task(state_store::UpdateTaskRequest {
-                            task_id: &current_task.id,
-                            title: None,
-                            status: None,
-                            priority: None,
-                            notes: Some(&notes),
-                            description: None,
-                            parent_id: None,
-                            add_labels: &[],
-                            remove_labels: &[],
-                            set_labels: None,
-                            execution_mode: None,
-                            order_bucket: None,
-                            parallel_group: None,
-                            conflict_domain: None,
-                            planner_metadata: Some(planner_metadata),
-                        })
-                        .await
-                    {
-                        Ok(updated) => {
-                            current_task = updated;
-                            proof_attached = true;
-                        }
-                        Err(update_error) => {
-                            blocker_codes.push("proof_evidence_attach_failed".to_string());
-                            next_actions.push(format!(
-                                "Inspect task `{}` and attach proof evidence manually before retrying pack-finalize.",
-                                current_task.id
-                            ));
-                            error = Some(update_error.to_string());
-                        }
-                    }
+                if !proof_targets.is_empty() && (!artifact_refs.is_empty() || !evidence.is_empty())
+                {
+                    blocker_codes
+                        .push("pack_finalize_proof_self_certification_forbidden".to_string());
+                    next_actions.push(format!(
+                        "Attach verified proof to task `{}` with `vida task proof add` or `vida task verify` before retrying pack-finalize.",
+                        current_task.id
+                    ));
+                    error = Some(
+                        "pack-finalize cannot create passing proof evidence; proof must already exist before closure"
+                            .to_string(),
+                    );
                 }
 
                 if error.is_none() {
