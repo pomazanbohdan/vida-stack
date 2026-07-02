@@ -15,7 +15,9 @@ use taskflow_state_redb::{RedbOperationalJournal, RedbOutboxEffectRecord};
 pub type EffectumQueue = effectum::Queue;
 
 pub const EFFECTUM_OUTBOX_WORKER: &str = "vida.redb.outbox.effect";
+pub const HOST_BRIDGE_ADAPTER_REQUEST_WORKER: &str = "vida.host_bridge.adapter_request";
 pub const DEAD_LETTER_BLOCKER_CODE: &str = "vida_job_dead_letter";
+pub const HOST_BRIDGE_DEAD_LETTER_BLOCKER_CODE: &str = "host_bridge_adapter_request_dead_letter";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeLocalJobError {
@@ -675,6 +677,144 @@ pub struct DurableJobPlan {
     pub trace: Vec<DurableJobTraceEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostBridgeRequestJobSnapshot {
+    pub request_id: String,
+    pub run_id: Option<String>,
+    pub status: String,
+    pub attempt_count: u64,
+    pub failure_reason: Option<String>,
+    pub result_path: Option<String>,
+}
+
+impl HostBridgeRequestJobSnapshot {
+    pub fn from_request(request: &serde_json::Value) -> Option<Self> {
+        let request_id = request
+            .get("request_id")
+            .and_then(serde_json::Value::as_str)?
+            .to_string();
+        Some(Self {
+            request_id,
+            run_id: request
+                .get("run_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            status: request
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("pending")
+                .to_string(),
+            attempt_count: request
+                .get("attempt_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0),
+            failure_reason: request
+                .get("failure_reason")
+                .or_else(|| request.get("blocker_reason"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            result_path: request
+                .get("result_path")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        })
+    }
+}
+
+fn host_bridge_request_job_id(request_id: &str) -> DurableJobId {
+    let stable = request_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    DurableJobId(format!("host-bridge-request-{stable}"))
+}
+
+pub fn plan_host_bridge_request_job(
+    snapshot: &HostBridgeRequestJobSnapshot,
+    policy: &RetryPolicy,
+) -> DurableJobPlan {
+    let job_id = host_bridge_request_job_id(&snapshot.request_id);
+    let outbox_id = VidaEventRef(snapshot.request_id.clone());
+    let effect_id = VidaEffectRef(job_id.0.clone());
+    let trace = vec![
+        trace_entry("authority", "host_bridge_request"),
+        trace_entry("effectum_job_kind", HOST_BRIDGE_ADAPTER_REQUEST_WORKER),
+    ];
+    match snapshot.status.as_str() {
+        "completed" | "pass" | "done" => DurableJobPlan {
+            job_id,
+            outbox_id,
+            effect_id,
+            lifecycle: DurableJobLifecycle::Succeeded,
+            next_action: "none".to_string(),
+            claimed_by: None,
+            retry_after_seconds: None,
+            blocker: None,
+            trace,
+        },
+        "running" | "executing" => DurableJobPlan {
+            job_id,
+            outbox_id,
+            effect_id,
+            lifecycle: DurableJobLifecycle::Running,
+            next_action: "wait_for_host_bridge_adapter_result".to_string(),
+            claimed_by: snapshot.run_id.clone(),
+            retry_after_seconds: None,
+            blocker: None,
+            trace,
+        },
+        "blocked" | "failed" if snapshot.attempt_count >= policy.max_attempts => DurableJobPlan {
+            job_id,
+            outbox_id,
+            effect_id,
+            lifecycle: DurableJobLifecycle::DeadLettered,
+            next_action: "emit_blocked_host_bridge_result".to_string(),
+            claimed_by: None,
+            retry_after_seconds: None,
+            blocker: Some(DurableJobBlocker {
+                code: HOST_BRIDGE_DEAD_LETTER_BLOCKER_CODE.to_string(),
+                repair_action: format!(
+                    "Inspect host bridge request `{}` failure `{}` and retry with corrected adapter evidence.",
+                    snapshot.request_id,
+                    snapshot
+                        .failure_reason
+                        .as_deref()
+                        .unwrap_or("host bridge adapter exhausted retries")
+                ),
+            }),
+            trace,
+        },
+        "blocked" | "failed" | "retryable_blocked" => DurableJobPlan {
+            job_id,
+            outbox_id,
+            effect_id,
+            lifecycle: DurableJobLifecycle::Retryable,
+            next_action: "retry_host_bridge_adapter_request".to_string(),
+            claimed_by: None,
+            retry_after_seconds: Some(backoff_seconds(snapshot.attempt_count, policy)),
+            blocker: None,
+            trace,
+        },
+        _ => DurableJobPlan {
+            job_id,
+            outbox_id,
+            effect_id,
+            lifecycle: DurableJobLifecycle::Pending,
+            next_action: "enqueue_host_bridge_adapter_request_idempotently".to_string(),
+            claimed_by: None,
+            retry_after_seconds: None,
+            blocker: None,
+            trace,
+        },
+    }
+}
+
 pub fn unavailable_job_status(job_id: &str, reason: impl Into<String>) -> serde_json::Value {
     serde_json::json!({
         "job_id": job_id,
@@ -825,6 +965,14 @@ pub fn job_status_payload(plan: &DurableJobPlan) -> serde_json::Value {
         "authority": "redb_outbox",
         "runner": "effectum",
     })
+}
+
+pub fn host_bridge_request_job_status_payload(plan: &DurableJobPlan) -> serde_json::Value {
+    let mut payload = job_status_payload(plan);
+    payload["authority"] = serde_json::json!("host_bridge_request");
+    payload["runner"] = serde_json::json!("parent_host_adapter");
+    payload["job_type"] = serde_json::json!(HOST_BRIDGE_ADAPTER_REQUEST_WORKER);
+    payload
 }
 
 fn recovery_behavior(value: &str) -> Result<JobRecoveryBehavior, RuntimeLocalJobError> {
@@ -1294,6 +1442,76 @@ mod tests {
                 .repair_action
                 .contains("requeue from redb outbox evidence")
         );
+    }
+
+    #[test]
+    fn host_bridge_request_job_is_keyed_by_request_id() {
+        let request = serde_json::json!({
+            "request_id": "req/1",
+            "run_id": "run-1",
+            "status": "pending",
+            "attempt_count": 0
+        });
+        let snapshot =
+            HostBridgeRequestJobSnapshot::from_request(&request).expect("request snapshot");
+        let first = plan_host_bridge_request_job(&snapshot, &RetryPolicy::default());
+        let second = plan_host_bridge_request_job(&snapshot, &RetryPolicy::default());
+
+        assert_eq!(first.job_id, second.job_id);
+        assert_eq!(first.job_id.0, "host-bridge-request-req-1");
+        assert_eq!(first.lifecycle, DurableJobLifecycle::Pending);
+        assert_eq!(
+            first.next_action,
+            "enqueue_host_bridge_adapter_request_idempotently"
+        );
+    }
+
+    #[test]
+    fn host_bridge_request_job_recovers_blocked_request_as_retryable() {
+        let request = serde_json::json!({
+            "request_id": "req-retry",
+            "run_id": "run-1",
+            "status": "blocked",
+            "attempt_count": 1,
+            "failure_reason": "parent host capacity unavailable"
+        });
+        let snapshot =
+            HostBridgeRequestJobSnapshot::from_request(&request).expect("request snapshot");
+        let plan = plan_host_bridge_request_job(
+            &snapshot,
+            &RetryPolicy {
+                max_attempts: 3,
+                base_backoff_seconds: 10,
+            },
+        );
+
+        assert_eq!(plan.lifecycle, DurableJobLifecycle::Retryable);
+        assert_eq!(plan.retry_after_seconds, Some(10));
+        assert_eq!(plan.next_action, "retry_host_bridge_adapter_request");
+        assert!(plan.blocker.is_none());
+    }
+
+    #[test]
+    fn host_bridge_request_job_dead_letters_after_retry_exhaustion() {
+        let request = serde_json::json!({
+            "request_id": "req-dead",
+            "status": "failed",
+            "attempt_count": 3,
+            "failure_reason": "adapter result missing"
+        });
+        let snapshot =
+            HostBridgeRequestJobSnapshot::from_request(&request).expect("request snapshot");
+        let plan = plan_host_bridge_request_job(&snapshot, &RetryPolicy::default());
+        let payload = host_bridge_request_job_status_payload(&plan);
+
+        assert_eq!(plan.lifecycle, DurableJobLifecycle::DeadLettered);
+        assert_eq!(
+            plan.blocker.as_ref().map(|blocker| blocker.code.as_str()),
+            Some(HOST_BRIDGE_DEAD_LETTER_BLOCKER_CODE)
+        );
+        assert_eq!(payload["authority"], "host_bridge_request");
+        assert_eq!(payload["runner"], "parent_host_adapter");
+        assert_eq!(payload["job_type"], HOST_BRIDGE_ADAPTER_REQUEST_WORKER);
     }
 
     #[test]

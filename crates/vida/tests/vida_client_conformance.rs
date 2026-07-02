@@ -420,6 +420,32 @@ fn local_runtime_wizard_jobs_and_receipts_are_read_projection_routes() {
     assert_eq!(job["job"]["next_action"], "schedule_retry_from_redb_outbox");
     assert_eq!(job["source"], "local_runtime_projection");
 
+    let mut host_bridge_envelope = envelope(operations::JOBS_GET);
+    host_bridge_envelope.payload = json!({
+        "host_bridge_request": {
+            "request_id": "req-conformance",
+            "run_id": "run-conformance",
+            "status": "failed",
+            "attempt_count": 3,
+            "failure_reason": "adapter exhausted"
+        }
+    });
+    let host_bridge_job = job_client
+        .execute(host_bridge_envelope)
+        .result
+        .expect("host bridge job result");
+    assert_eq!(host_bridge_job["status"], "deadlettered");
+    assert_eq!(host_bridge_job["authority"], "host_bridge_request");
+    assert_eq!(host_bridge_job["runner"], "parent_host_adapter");
+    assert_eq!(
+        host_bridge_job["job"]["job_type"],
+        "vida.host_bridge.adapter_request"
+    );
+    assert_eq!(
+        host_bridge_job["job"]["blocker"]["code"],
+        "host_bridge_adapter_request_dead_letter"
+    );
+
     let receipt = execute(operations::RECEIPTS_GET)
         .result
         .expect("receipt result");

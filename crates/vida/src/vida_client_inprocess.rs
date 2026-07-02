@@ -7,7 +7,8 @@ use vida_contracts::{
 };
 use vida_runtime_local::engine::local_runtime_capabilities;
 use vida_runtime_local::jobs::{
-    job_status_payload, plan_outbox_job_from_redb, unavailable_job_status, RetryPolicy,
+    host_bridge_request_job_status_payload, job_status_payload, plan_host_bridge_request_job,
+    plan_outbox_job_from_redb, unavailable_job_status, HostBridgeRequestJobSnapshot, RetryPolicy,
 };
 
 use crate::{
@@ -472,6 +473,47 @@ impl LocalRuntimeVidaClient {
             .get("job_id")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("latest");
+        let host_bridge_request = envelope
+            .payload
+            .get("host_bridge_request")
+            .cloned()
+            .or_else(|| {
+                envelope
+                    .payload
+                    .get("host_bridge_request_path")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|path| std::fs::read_to_string(path).ok())
+                    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            });
+        if let Some(request) = host_bridge_request {
+            let job = HostBridgeRequestJobSnapshot::from_request(&request)
+                .map(|snapshot| plan_host_bridge_request_job(&snapshot, &RetryPolicy::default()))
+                .map(|plan| host_bridge_request_job_status_payload(&plan))
+                .unwrap_or_else(|| {
+                    unavailable_job_status(
+                        job_id,
+                        "host_bridge_request requires a request_id before durable job projection",
+                    )
+                });
+            let status = job
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unavailable")
+                .to_string();
+            return pass_response(
+                envelope,
+                json!({
+                    "job_id": job["job_id"].clone(),
+                    "status": status,
+                    "operation": envelope.operation,
+                    "receipt_available": true,
+                    "source": "local_runtime_projection",
+                    "authority": "host_bridge_request",
+                    "runner": "parent_host_adapter",
+                    "job": job
+                }),
+            );
+        }
         let job = match self.job_journal_path.as_ref() {
             Some(path) if path.exists() => {
                 match plan_outbox_job_from_redb(path, job_id, &RetryPolicy::default()) {

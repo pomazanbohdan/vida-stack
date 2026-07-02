@@ -116,6 +116,12 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         .as_ref()
         .ok()
         .map(|request| request.run_id.as_str());
+    let request_id = typed_request
+        .as_ref()
+        .ok()
+        .map(|request| request.request_id.as_str())
+        .or_else(|| host_bridge_request_string(request, "request_id"))
+        .unwrap_or("unknown-request");
     let dispatch_target = typed_request
         .as_ref()
         .ok()
@@ -268,6 +274,28 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
             "If the parent host tool reports thread or capacity exhaustion, submit a blocked host bridge result with blocker_code host_agent_capacity_unavailable so the host-agent handle registry records capacity state."
         ]
     });
+    let durable_job_id = request_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let durable_job = serde_json::json!({
+        "job_type": "vida.host_bridge.adapter_request",
+        "job_id": format!("host-bridge-request-{durable_job_id}"),
+        "idempotency_key": request_id,
+        "request_id": request_id,
+        "status": adapter_capacity_status,
+        "authority": "host_bridge_request",
+        "runner": "parent_host_adapter",
+        "duplicate_enqueue_behavior": "resume_existing_request_id_job",
+        "restart_replay_behavior": "resume_or_dead_letter_from_request_status",
+        "dead_letter_blocker_code": "host_bridge_adapter_request_dead_letter"
+    });
     let next_actions = if status == Release1ContractStatus::Pass.as_str() {
         artifact_attach_command
             .iter()
@@ -324,6 +352,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
             "implementation_artifacts_present": implementation_artifacts_present,
             "host_tool_calls": host_tool_calls,
             "adapter_capacity": adapter_capacity,
+            "durable_job": durable_job,
             "blocked_result_contract": {
                 "execution_state": "blocked",
                 "decision": "rework_required",
@@ -425,6 +454,14 @@ mod tests {
         assert_eq!(
             payload["host_bridge"]["adapter_capacity"]["capacity_source"],
             "host_agent_handle_registry"
+        );
+        assert_eq!(
+            payload["host_bridge"]["durable_job"]["job_id"],
+            "host-bridge-request-req-1"
+        );
+        assert_eq!(
+            payload["host_bridge"]["durable_job"]["dead_letter_blocker_code"],
+            "host_bridge_adapter_request_dead_letter"
         );
         assert_eq!(
             payload["host_bridge"]["required_result_fields"],
