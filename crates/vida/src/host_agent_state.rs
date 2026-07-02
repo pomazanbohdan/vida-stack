@@ -117,6 +117,17 @@ pub(crate) struct HostAgentFeedbackInput<'a> {
     pub(crate) reason: Option<&'a str>,
 }
 
+pub(crate) struct HostAgentHandleStateInput<'a> {
+    pub(crate) host_agent_id: &'a str,
+    pub(crate) state: &'a str,
+    pub(crate) run_id: Option<&'a str>,
+    pub(crate) dispatch_target: Option<&'a str>,
+    pub(crate) request_path: Option<&'a str>,
+    pub(crate) result_path: Option<&'a str>,
+    pub(crate) receipt_id: Option<&'a str>,
+    pub(crate) blocker_codes: Vec<String>,
+}
+
 fn increment_object_counter(
     object: &mut serde_json::Map<String, serde_json::Value>,
     key: &str,
@@ -546,6 +557,43 @@ pub(crate) fn append_host_agent_observability_event(
     Ok(event)
 }
 
+pub(crate) fn record_host_agent_handle_state(
+    project_root: &Path,
+    input: &HostAgentHandleStateInput<'_>,
+) -> Result<serde_json::Value, String> {
+    let mut ledger = load_or_initialize_host_agent_observability_state(project_root);
+    if !ledger["host_agent_handles"].is_object() {
+        ledger["host_agent_handles"] = serde_json::json!({});
+    }
+    let recorded_at = time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("rfc3339 timestamp should render");
+    let record = serde_json::json!({
+        "host_agent_id": input.host_agent_id,
+        "state": input.state,
+        "run_id": input.run_id,
+        "dispatch_target": input.dispatch_target,
+        "request_path": input.request_path,
+        "result_path": input.result_path,
+        "receipt_id": input.receipt_id,
+        "blocker_codes": input.blocker_codes,
+        "updated_at": recorded_at,
+        "source": "vida agent host-bridge"
+    });
+    ledger["host_agent_handles"][input.host_agent_id] = record.clone();
+    ledger["updated_at"] = serde_json::Value::String(recorded_at);
+    let ledger_path = host_agent_observability_state_path(project_root);
+    if let Some(parent) = ledger_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    fs::write(
+        &ledger_path,
+        serde_json::to_string_pretty(&ledger).expect("observability json should render"),
+    )
+    .map_err(|error| format!("Failed to write {}: {error}", ledger_path.display()))?;
+    Ok(record)
+}
+
 pub(crate) fn json_u64(value: Option<&serde_json::Value>) -> Option<u64> {
     value.and_then(|node| match node {
         serde_json::Value::Number(number) => number.as_u64(),
@@ -793,7 +841,7 @@ mod tests {
     use super::{
         append_host_agent_observability_event, load_or_initialize_host_agent_observability_state,
         load_or_initialize_prompt_lifecycle_state, prompt_lifecycle_state_path,
-        HostAgentFeedbackInput,
+        record_host_agent_handle_state, HostAgentFeedbackInput, HostAgentHandleStateInput,
     };
     use crate::temp_state::TempStateHarness;
 
@@ -857,6 +905,41 @@ mod tests {
             prompt_lifecycle["workflows"]["delegated_development_packet"]["lifecycle_state"],
             "draft"
         );
+    }
+
+    #[test]
+    fn record_host_agent_handle_state_persists_lifecycle_registry() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        for state in ["spawned", "waiting", "completed", "closed", "failed"] {
+            record_host_agent_handle_state(
+                harness.path(),
+                &HostAgentHandleStateInput {
+                    host_agent_id: state,
+                    state,
+                    run_id: Some("run-1"),
+                    dispatch_target: Some("developer"),
+                    request_path: Some("request.json"),
+                    result_path: Some("result.json"),
+                    receipt_id: Some("receipt-1"),
+                    blocker_codes: Vec::new(),
+                },
+            )
+            .expect("handle state should record");
+        }
+
+        let ledger = load_or_initialize_host_agent_observability_state(harness.path());
+
+        assert_eq!(ledger["host_agent_handles"]["spawned"]["state"], "spawned");
+        assert_eq!(ledger["host_agent_handles"]["waiting"]["state"], "waiting");
+        assert_eq!(
+            ledger["host_agent_handles"]["completed"]["dispatch_target"],
+            "developer"
+        );
+        assert_eq!(
+            ledger["host_agent_handles"]["closed"]["receipt_id"],
+            "receipt-1"
+        );
+        assert_eq!(ledger["host_agent_handles"]["failed"]["run_id"], "run-1");
     }
 
     #[test]

@@ -1268,6 +1268,54 @@ fn host_bridge_command_blocker_codes(command: &AgentHostBridgeArgs) -> Vec<Strin
     blocker_codes
 }
 
+fn host_bridge_handle_state_from_result(
+    result_file: Option<&Path>,
+    command_blocker_codes: &[String],
+) -> (String, Vec<String>) {
+    let mut blocker_codes = command_blocker_codes.to_vec();
+    let mut status = None;
+    if let Some(result_file) = result_file {
+        if let Ok(raw) = std::fs::read_to_string(result_file) {
+            if let Ok(result) = serde_json::from_str::<serde_json::Value>(&raw) {
+                status = result["status"]
+                    .as_str()
+                    .or_else(|| result["decision"].as_str())
+                    .or_else(|| result["verdict"].as_str())
+                    .map(str::to_string);
+                if let Some(code) = result["blocker_code"].as_str() {
+                    blocker_codes.push(code.to_string());
+                }
+                if let Some(codes) = result["blocker_codes"].as_array() {
+                    blocker_codes.extend(
+                        codes
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_string),
+                    );
+                }
+            }
+        }
+    }
+    blocker_codes.sort();
+    blocker_codes.dedup();
+    if blocker_codes
+        .iter()
+        .any(|code| code == taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable.as_str())
+    {
+        return ("capacity_unavailable".to_string(), blocker_codes);
+    }
+    if blocker_codes.is_empty()
+        && match status.as_deref() {
+            Some(status) => matches!(status, "pass" | "completed" | "done"),
+            None => true,
+        }
+    {
+        ("completed".to_string(), blocker_codes)
+    } else {
+        ("failed".to_string(), blocker_codes)
+    }
+}
+
 fn emit_host_bridge_result_scaffold_blocked(
     request_path: &Path,
     result_path: &Path,
@@ -5586,6 +5634,33 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                         return emit_host_bridge_payload(&blocked, command.json);
                     }
                 };
+                let command_blocker_codes = host_bridge_command_blocker_codes(&command);
+                let (handle_state, handle_blocker_codes) = host_bridge_handle_state_from_result(
+                    command.result_file.as_deref(),
+                    &command_blocker_codes,
+                );
+                let run_id = host_bridge_request_string(&request, "run_id");
+                let dispatch_target = host_bridge_request_string(&request, "dispatch_target");
+                let result_path = command
+                    .result_file
+                    .as_ref()
+                    .map(|path| path.display().to_string());
+                let request_path = command.request.display().to_string();
+                let project_root =
+                    std::env::current_dir().unwrap_or_else(|_| crate::repo_runtime_root());
+                let _ = crate::record_host_agent_handle_state(
+                    &project_root,
+                    &crate::HostAgentHandleStateInput {
+                        host_agent_id,
+                        state: &handle_state,
+                        run_id,
+                        dispatch_target,
+                        request_path: Some(&request_path),
+                        result_path: result_path.as_deref(),
+                        receipt_id: command.receipt_id.as_deref(),
+                        blocker_codes: handle_blocker_codes,
+                    },
+                );
                 return crate::lane_surface::run_lane(crate::ProxyArgs { args: lane_args }).await;
             }
             emit_host_bridge_payload(&payload, command.json)
@@ -6167,6 +6242,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn host_bridge_handle_state_marks_capacity_unavailable_from_result() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let result_path = harness.path().join("result.json");
+        std::fs::write(
+            &result_path,
+            serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": ["host_agent_capacity_unavailable"]
+            })
+            .to_string(),
+        )
+        .expect("result should write");
+
+        let (state, blockers) =
+            super::host_bridge_handle_state_from_result(Some(&result_path), &[]);
+
+        assert_eq!(state, "capacity_unavailable");
+        assert_eq!(blockers, vec!["host_agent_capacity_unavailable"]);
+    }
+
+    #[test]
+    fn host_bridge_handle_state_marks_pass_result_completed() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let result_path = harness.path().join("result.json");
+        std::fs::write(
+            &result_path,
+            serde_json::json!({
+                "status": "pass",
+                "blocker_codes": []
+            })
+            .to_string(),
+        )
+        .expect("result should write");
+
+        let (state, blockers) =
+            super::host_bridge_handle_state_from_result(Some(&result_path), &[]);
+
+        assert_eq!(state, "completed");
+        assert!(blockers.is_empty());
     }
 
     #[test]

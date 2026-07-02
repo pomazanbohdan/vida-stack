@@ -11,8 +11,70 @@ use crate::status_surface_host_cli_system::{
     selected_host_cli_system_entry,
 };
 
+fn host_agent_handle_registry_summary(observability: &serde_json::Value) -> serde_json::Value {
+    let handles = observability["host_agent_handles"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let mut active_agents_count = 0usize;
+    let mut completed_count = 0usize;
+    let mut closed_count = 0usize;
+    let mut failed_count = 0usize;
+    let mut capacity_unavailable_count = 0usize;
+    let mut state_counts = serde_json::Map::new();
+    let mut stale_handles = Vec::new();
+    for (host_agent_id, handle) in &handles {
+        let state = handle["state"].as_str().unwrap_or("unknown");
+        let current = state_counts
+            .get(state)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        state_counts.insert(
+            state.to_string(),
+            serde_json::Value::Number(serde_json::Number::from(current + 1)),
+        );
+        if matches!(state, "spawned" | "waiting") {
+            active_agents_count += 1;
+        }
+        if state == "completed" {
+            completed_count += 1;
+            stale_handles.push(host_agent_id.clone());
+        }
+        if state == "closed" {
+            closed_count += 1;
+        }
+        if state == "failed" {
+            failed_count += 1;
+            stale_handles.push(host_agent_id.clone());
+        }
+        if state == "capacity_unavailable"
+            || handle["blocker_codes"].as_array().is_some_and(|codes| {
+                codes
+                    .iter()
+                    .any(|code| code.as_str() == Some("host_agent_capacity_unavailable"))
+            })
+        {
+            capacity_unavailable_count += 1;
+        }
+    }
+    serde_json::json!({
+        "status": "observable",
+        "handle_count": handles.len(),
+        "active_agents_count": active_agents_count,
+        "waiting_count": state_counts.get("waiting").cloned().unwrap_or_else(|| serde_json::json!(0)),
+        "spawned_count": state_counts.get("spawned").cloned().unwrap_or_else(|| serde_json::json!(0)),
+        "completed_count": completed_count,
+        "closed_count": closed_count,
+        "failed_count": failed_count,
+        "capacity_unavailable_count": capacity_unavailable_count,
+        "state_counts": state_counts,
+        "stale_handles": stale_handles,
+    })
+}
+
 fn host_bridge_capacity_summary(
     subagent_backends: &serde_json::Map<String, serde_json::Value>,
+    observability: &serde_json::Value,
 ) -> serde_json::Value {
     let host_bridge_backends = subagent_backends
         .iter()
@@ -32,21 +94,53 @@ fn host_bridge_capacity_summary(
         .collect::<Vec<_>>();
     let configured_backend_count = host_bridge_backends.len();
     let ready_to_attempt = configured_backend_count > 0;
+    let handle_registry = host_agent_handle_registry_summary(observability);
+    let active_agents_count = handle_registry["active_agents_count"].as_u64().unwrap_or(0);
+    let capacity_unavailable = handle_registry["capacity_unavailable_count"]
+        .as_u64()
+        .unwrap_or(0)
+        > 0;
+    let stale_handles = handle_registry["stale_handles"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let capacity_status = if capacity_unavailable {
+        "blocked"
+    } else if ready_to_attempt {
+        "ready_to_attempt"
+    } else {
+        "not_configured"
+    };
     serde_json::json!({
-        "status": if ready_to_attempt { "ready_to_attempt" } else { "not_configured" },
+        "status": capacity_status,
         "configured_backend_count": configured_backend_count,
         "ready_to_attempt": ready_to_attempt,
-        "capacity_observable": false,
-        "capacity_source": "parent_host_tool_runtime",
-        "active_agents_count": serde_json::Value::Null,
+        "capacity_observable": true,
+        "capacity_source": crate::HOST_AGENT_OBSERVABILITY_STATE,
+        "active_agents_count": active_agents_count,
         "active_lanes_count": serde_json::Value::Null,
-        "thread_limit_reached": serde_json::Value::Null,
+        "thread_limit_reached": capacity_unavailable,
+        "handle_registry": handle_registry,
         "host_bridge_backends": host_bridge_backends,
         "blocked_result_code": "host_agent_capacity_unavailable",
-        "next_actions": if ready_to_attempt {
+        "blocker_codes": if capacity_unavailable {
+            vec!["host_agent_capacity_unavailable".to_string()]
+        } else {
+            Vec::<String>::new()
+        },
+        "next_actions": if capacity_unavailable {
+            vec![
+                "Submit a blocked host bridge result with blocker_code host_agent_capacity_unavailable.".to_string(),
+                "Close or mark completed stale host-agent handles before dispatching more internal_subagents work.".to_string(),
+            ]
+        } else if !stale_handles.is_empty() {
+            vec![
+                "Close stale completed or failed host-agent handles before dispatching more internal_subagents work.".to_string(),
+            ]
+        } else if ready_to_attempt {
             vec![
                 "Attempt the host bridge adapter command from agent-init output.".to_string(),
-                "If the parent host tool reports thread or capacity exhaustion, close stale host agents or write a blocked host bridge result with blocker_code host_agent_capacity_unavailable.".to_string(),
+                "If the parent host tool reports thread or capacity exhaustion, submit a blocked host bridge result with blocker_code host_agent_capacity_unavailable.".to_string(),
             ]
         } else {
             vec!["Configure an enabled host_tool_bridge subagent backend before dispatching internal_subagents.".to_string()]
@@ -425,7 +519,7 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
     if let Some(serde_json::Value::Object(subagent_backends)) = payload.get("subagent_backends") {
         payload.insert(
             "host_bridge_capacity".to_string(),
-            host_bridge_capacity_summary(subagent_backends),
+            host_bridge_capacity_summary(subagent_backends, &observability),
         );
     }
     let overlay_dispatch_aliases_result =
@@ -630,10 +724,8 @@ mod tests {
             summary["host_bridge_capacity"]["configured_backend_count"],
             1
         );
-        assert_eq!(
-            summary["host_bridge_capacity"]["capacity_observable"],
-            false
-        );
+        assert_eq!(summary["host_bridge_capacity"]["capacity_observable"], true);
+        assert_eq!(summary["host_bridge_capacity"]["active_agents_count"], 0);
         assert_eq!(
             summary["host_bridge_capacity"]["blocked_result_code"],
             "host_agent_capacity_unavailable"
@@ -772,8 +864,8 @@ mod tests {
                 "internal_subagents": {"status": "ready"}
             },
             "host_bridge_capacity": {
-                "capacity_observable": false,
-                "active_agents_count": serde_json::Value::Null,
+                "capacity_observable": true,
+                "active_agents_count": 1,
                 "active_lanes_count": serde_json::Value::Null
             }
         });
@@ -786,6 +878,7 @@ mod tests {
             1
         );
         assert_eq!(current["current_state"]["current_feedback_event_count"], 0);
+        assert_eq!(current["current_state"]["active_agents_count"], 1);
         assert_eq!(current["current_state"]["feedback_history_included"], false);
         assert_eq!(current["historical_evidence"]["preserved"], true);
         assert_eq!(current["historical_evidence"]["event_count"], 2);
@@ -798,6 +891,82 @@ mod tests {
         assert!(current["budget"].get("by_task_id").is_none());
         assert_eq!(current["agents"]["count"], 1);
         assert_eq!(current["subagent_backends"]["count"], 1);
+    }
+
+    #[test]
+    fn host_agent_status_view_exposes_capacity_registry_cleanup_hints() {
+        let summary = serde_json::json!({
+            "budget": {"event_count": 0},
+            "agents": {},
+            "subagent_backends": {"internal_subagents": {"status": "ready"}},
+            "host_bridge_capacity": {
+                "status": "ready_to_attempt",
+                "capacity_observable": true,
+                "active_agents_count": 0,
+                "active_lanes_count": serde_json::Value::Null,
+                "handle_registry": {
+                    "handle_count": 2,
+                    "active_agents_count": 0,
+                    "completed_count": 1,
+                    "failed_count": 1,
+                    "stale_handles": ["agent-complete", "agent-failed"]
+                },
+                "next_actions": [
+                    "Close stale completed or failed host-agent handles before dispatching more internal_subagents work."
+                ]
+            }
+        });
+
+        let current = host_agent_status_view(Some(&summary), false);
+
+        assert_eq!(current["current_state"]["capacity_observable"], true);
+        assert_eq!(current["current_state"]["active_agents_count"], 0);
+        assert_eq!(
+            current["host_bridge_capacity"]["handle_registry"]["stale_handles"][0],
+            "agent-complete"
+        );
+        assert!(current["host_bridge_capacity"]["next_actions"][0]
+            .as_str()
+            .unwrap()
+            .contains("Close stale"));
+    }
+
+    #[test]
+    fn host_agent_status_view_exposes_capacity_unavailable_blocker() {
+        let summary = serde_json::json!({
+            "budget": {"event_count": 0},
+            "agents": {},
+            "subagent_backends": {"internal_subagents": {"status": "ready"}},
+            "host_bridge_capacity": {
+                "status": "blocked",
+                "capacity_observable": true,
+                "active_agents_count": 4,
+                "active_lanes_count": serde_json::Value::Null,
+                "thread_limit_reached": true,
+                "blocker_codes": ["host_agent_capacity_unavailable"],
+                "blocked_result_code": "host_agent_capacity_unavailable",
+                "handle_registry": {
+                    "handle_count": 4,
+                    "active_agents_count": 4,
+                    "capacity_unavailable_count": 1
+                },
+                "next_actions": [
+                    "Submit a blocked host bridge result with blocker_code host_agent_capacity_unavailable."
+                ]
+            }
+        });
+
+        let current = host_agent_status_view(Some(&summary), false);
+
+        assert_eq!(current["host_bridge_capacity"]["status"], "blocked");
+        assert_eq!(
+            current["host_bridge_capacity"]["blocker_codes"],
+            serde_json::json!(["host_agent_capacity_unavailable"])
+        );
+        assert!(current["host_bridge_capacity"]["next_actions"][0]
+            .as_str()
+            .unwrap()
+            .contains("blocked host bridge result"));
     }
 
     #[test]

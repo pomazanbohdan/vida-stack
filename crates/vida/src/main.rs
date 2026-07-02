@@ -256,9 +256,10 @@ use hook_template_registry_projection::build_hook_template_registry_projection;
 pub(crate) use host_agent_state::{
     append_host_agent_observability_event, host_agent_observability_state_path,
     load_or_initialize_host_agent_observability_state, load_or_initialize_worker_scorecards,
-    read_json_file_if_present, refresh_worker_strategy, worker_scorecards_state_path,
-    worker_strategy_state_path, HostAgentFeedbackInput, HOST_AGENT_OBSERVABILITY_STATE,
-    PROMPT_LIFECYCLE_STATE, WORKER_SCORECARDS_STATE, WORKER_STRATEGY_STATE,
+    read_json_file_if_present, record_host_agent_handle_state, refresh_worker_strategy,
+    worker_scorecards_state_path, worker_strategy_state_path, HostAgentFeedbackInput,
+    HostAgentHandleStateInput, HOST_AGENT_OBSERVABILITY_STATE, PROMPT_LIFECYCLE_STATE,
+    WORKER_SCORECARDS_STATE, WORKER_STRATEGY_STATE,
 };
 pub(crate) use init_surfaces::resolve_init_bootstrap_source_root;
 pub(crate) use launcher_activation_snapshot::{

@@ -257,14 +257,15 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
     };
     let adapter_capacity = serde_json::json!({
         "status": adapter_capacity_status,
-        "capacity_observable": false,
-        "capacity_source": "parent_host_tool_runtime",
-        "active_agents_count": Value::Null,
+        "capacity_observable": true,
+        "capacity_source": "host_agent_handle_registry",
+        "active_agents_count": 0,
         "thread_limit_reached": Value::Null,
+        "registry_update_required": true,
         "blocked_result_code": taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable.as_str(),
         "next_actions": [
             "Invoke multi_agent_v1.spawn_agent from the parent host session when capacity is available.",
-            "If the parent host tool reports thread or capacity exhaustion, close stale host agents or write a blocked host bridge result with blocker_code host_agent_capacity_unavailable."
+            "If the parent host tool reports thread or capacity exhaustion, submit a blocked host bridge result with blocker_code host_agent_capacity_unavailable so the host-agent handle registry records capacity state."
         ]
     });
     let next_actions = if status == Release1ContractStatus::Pass.as_str() {
@@ -416,6 +417,14 @@ mod tests {
         assert_eq!(
             payload["host_bridge"]["adapter_capacity"]["status"],
             "ready_to_attempt"
+        );
+        assert_eq!(
+            payload["host_bridge"]["adapter_capacity"]["capacity_observable"],
+            true
+        );
+        assert_eq!(
+            payload["host_bridge"]["adapter_capacity"]["capacity_source"],
+            "host_agent_handle_registry"
         );
         assert_eq!(
             payload["host_bridge"]["required_result_fields"],
