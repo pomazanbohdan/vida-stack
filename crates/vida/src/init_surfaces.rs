@@ -697,6 +697,7 @@ fn emit_agent_init_dispatch_result_error_payload(
 }
 
 fn render_agent_init_dispatch_result_from_receipt(
+    state_root: &Path,
     dispatch_mode: &serde_json::Value,
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
     json_output: bool,
@@ -712,7 +713,20 @@ fn render_agent_init_dispatch_result_from_receipt(
             json_output,
         ));
     };
-    let result_body = match std::fs::read_to_string(dispatch_result_path) {
+    let Some(safe_dispatch_result_path) =
+        safe_existing_agent_init_dispatch_result_artifact_path(state_root, dispatch_result_path)
+    else {
+        return Ok(emit_agent_init_dispatch_result_error_payload(
+            dispatch_mode,
+            dispatch_receipt,
+            "dispatch_result_untrusted_path",
+            &format!(
+                "Agent init dispatch result `{dispatch_result_path}` is not an existing regular artifact under the current VIDA state root."
+            ),
+            json_output,
+        ));
+    };
+    let result_body = match std::fs::read_to_string(&safe_dispatch_result_path) {
         Ok(body) => body,
         Err(error) => {
             return Ok(emit_agent_init_dispatch_result_error_payload(
@@ -754,11 +768,15 @@ fn render_agent_init_dispatch_result_from_receipt(
     }
     if crate::agent_dispatch_surface::attach_host_bridge_auto_invocation_scaffold(&mut result_json)
     {
-        let _ = std::fs::write(
-            dispatch_result_path,
-            serde_json::to_string_pretty(&result_json)
-                .expect("agent-init dispatch result scaffold should serialize"),
-        );
+        if let Some(safe_output_path) = safe_agent_init_dispatch_result_artifact_output_path(
+            state_root,
+            &safe_dispatch_result_path,
+        ) {
+            let _ = runtime_path_policy::atomic_write::write_json_replace(
+                &safe_output_path,
+                &result_json,
+            );
+        }
     }
     if timeout_seconds.is_some() {
         emit_agent_init_dispatch_timeout_payload(&result_json, json_output);
@@ -772,6 +790,32 @@ fn render_agent_init_dispatch_result_from_receipt(
     } else {
         ExitCode::SUCCESS
     })
+}
+
+fn safe_existing_agent_init_dispatch_result_artifact_path(
+    state_root: &Path,
+    result_path: &str,
+) -> Option<PathBuf> {
+    let trimmed = result_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = Path::new(trimmed);
+    let candidate = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        state_root.join(candidate)
+    };
+    let state_root = std::fs::canonicalize(state_root).ok()?;
+    let candidate = std::fs::canonicalize(candidate).ok()?;
+    if !candidate.starts_with(&state_root) {
+        return None;
+    }
+    let metadata = std::fs::symlink_metadata(&candidate).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return None;
+    }
+    Some(candidate)
 }
 
 fn safe_dispatch_worker_id(run_id: &str, dispatch_target: &str) -> String {
@@ -789,6 +833,20 @@ fn safe_dispatch_worker_id(run_id: &str, dispatch_target: &str) -> String {
             }
         })
         .collect()
+}
+
+fn safe_agent_init_dispatch_result_artifact_output_path(
+    state_root: &Path,
+    safe_dispatch_result_path: &Path,
+) -> Option<runtime_path_policy::NewStateOutputPath> {
+    let state_root = runtime_path_policy::StateRoot::open(state_root).ok()?;
+    runtime_path_policy::new_output_path_under_root(
+        &state_root,
+        safe_dispatch_result_path,
+        runtime_path_policy::ArtifactPathKind::DispatchResult,
+        true,
+    )
+    .ok()
 }
 
 fn dispatch_packet_flag_for_packet_path(packet_path: &str) -> &'static str {
@@ -3645,8 +3703,14 @@ mod tests {
     #[test]
     fn agent_init_dispatch_result_renderer_blocks_missing_or_invalid_artifacts() {
         let dispatch_mode = json!({ "mode": "execute_dispatch" });
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-result-renderer-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("dispatch result temp root should create");
         let missing_receipt = sample_agent_init_dispatch_receipt();
         let missing_exit = render_agent_init_dispatch_result_from_receipt(
+            &root,
             &dispatch_mode,
             &missing_receipt,
             true,
@@ -3656,11 +3720,6 @@ mod tests {
         .expect("missing dispatch result should render a structured blocker");
         assert_eq!(missing_exit, std::process::ExitCode::from(1));
 
-        let root = std::env::temp_dir().join(format!(
-            "vida-dispatch-result-invalid-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).expect("dispatch result temp root should create");
         let invalid_path = root.join("invalid-result.json");
         fs::write(&invalid_path, "{not-json")
             .expect("invalid dispatch result fixture should write");
@@ -3668,6 +3727,7 @@ mod tests {
         invalid_receipt.dispatch_result_path = Some(invalid_path.display().to_string());
 
         let invalid_exit = render_agent_init_dispatch_result_from_receipt(
+            &root,
             &dispatch_mode,
             &invalid_receipt,
             true,
@@ -3677,6 +3737,45 @@ mod tests {
         .expect("invalid dispatch result should render a structured blocker");
         assert_eq!(invalid_exit, std::process::ExitCode::from(1));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_init_dispatch_result_renderer_does_not_rewrite_outside_root_bridge_payload() {
+        let state_root = std::env::temp_dir().join(format!(
+            "vida-agent-init-render-state-root-{}",
+            std::process::id()
+        ));
+        let outside_root = std::env::temp_dir().join(format!(
+            "vida-agent-init-render-outside-root-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&state_root).expect("state root should create");
+        fs::create_dir_all(&outside_root).expect("outside root should create");
+        let victim_path = outside_root.join("operator-owned-victim.json");
+        let victim_body = r#"{"host_bridge":{"status":"ready"},"unrelated_user_file":true}"#;
+        fs::write(&victim_path, victim_body).expect("victim fixture should write");
+
+        let mut receipt = sample_agent_init_dispatch_receipt();
+        receipt.dispatch_result_path = Some(victim_path.display().to_string());
+
+        let exit = render_agent_init_dispatch_result_from_receipt(
+            &state_root,
+            &json!({ "mode": "execute_dispatch" }),
+            &receipt,
+            true,
+            None,
+            None,
+        )
+        .expect("outside-root dispatch result should render a structured blocker");
+
+        assert_eq!(exit, std::process::ExitCode::from(1));
+        assert_eq!(
+            fs::read_to_string(&victim_path).expect("victim should still read"),
+            victim_body
+        );
+
+        let _ = fs::remove_dir_all(state_root);
+        let _ = fs::remove_dir_all(outside_root);
     }
 
     #[cfg(windows)]
@@ -6052,6 +6151,7 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
             )
             .await;
         return match render_agent_init_dispatch_result_from_receipt(
+            &state_root,
             dispatch_mode,
             &resume_inputs.dispatch_receipt,
             json_output,
@@ -6122,6 +6222,7 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
                     == Some("internal_dispatch_timeout_without_receipt")
             {
                 match render_agent_init_dispatch_result_from_receipt(
+                    &state_root,
                     dispatch_mode,
                     &resume_inputs.dispatch_receipt,
                     json_output,
@@ -6157,6 +6258,7 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
                         )
                         .await;
                     return match render_agent_init_dispatch_result_from_receipt(
+                        &state_root,
                         dispatch_mode,
                         &resume_inputs.dispatch_receipt,
                         json_output,
@@ -6239,6 +6341,7 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
         }
     }
     match render_agent_init_dispatch_result_from_receipt(
+        &state_root,
         dispatch_mode,
         &resume_inputs.dispatch_receipt,
         json_output,
