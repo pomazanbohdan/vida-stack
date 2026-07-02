@@ -89,7 +89,9 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::Release(args)) => match args.command {
             ReleaseCommand::Install(args) => release_surface::run_release_install(args),
         },
-        Some(Command::Taskflow(args)) => run_taskflow_proxy(args).await,
+        Some(Command::Taskflow(args)) => {
+            run_taskflow_proxy(normalize_taskflow_team_continue_alias(args)).await
+        }
         Some(Command::Docflow(args)) => docflow_proxy::run_docflow_proxy(args),
         Some(Command::External(args)) => run_unknown(&args),
     };
@@ -112,6 +114,52 @@ async fn run_legacy_taskflow_root_alias(alias: &'static str, args: super::ProxyA
             error.exit_code
         }
     }
+}
+
+fn normalize_taskflow_team_continue_alias(mut args: super::ProxyArgs) -> super::ProxyArgs {
+    if matches!(
+        (
+            args.args.first().map(String::as_str),
+            args.args.get(1).map(String::as_str)
+        ),
+        (Some("team"), Some("continue"))
+    ) {
+        if args
+            .args
+            .iter()
+            .skip(2)
+            .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "help"))
+        {
+            return args;
+        }
+        let mut canonical = vec!["consume".to_string(), "continue".to_string()];
+        let mut rest = args.args.drain(2..).peekable();
+        if rest
+            .peek()
+            .is_some_and(|arg| !arg.starts_with('-') && arg != "help")
+        {
+            canonical.push("--run-id".to_string());
+        }
+        let mut skip_state_dir_value = false;
+        for arg in rest {
+            if skip_state_dir_value {
+                skip_state_dir_value = false;
+                std::env::set_var("VIDA_STATE_DIR", &arg);
+                continue;
+            }
+            if arg == "--state-dir" {
+                skip_state_dir_value = true;
+                continue;
+            }
+            if let Some(value) = arg.strip_prefix("--state-dir=") {
+                std::env::set_var("VIDA_STATE_DIR", value);
+                continue;
+            }
+            canonical.push(arg);
+        }
+        args.args = canonical;
+    }
+    args
 }
 
 async fn run_state(args: StateArgs) -> ExitCode {

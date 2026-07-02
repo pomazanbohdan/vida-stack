@@ -697,6 +697,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]"
             );
             println!(
+                "  vida taskflow team continue <task-id> [--json] (canonical alias for consume continue; task id is accepted for operator intent)"
+            );
+            println!(
                 "  vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]"
             );
             println!("  vida taskflow bootstrap-spec \"<request>\" --json");
@@ -741,6 +744,41 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!(
                 "  Let the bounded scheduler progress ready steps automatically: vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>]"
+            );
+            return;
+        }
+        Some("team") => {
+            println!("VIDA TaskFlow help: team");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Continue the next lawful development-team step for one bounded TaskFlow item."
+            );
+            println!(
+                "  This is a launcher-owned operator alias over the consume-continuation runtime pipeline."
+            );
+            println!();
+            println!("Canonical command:");
+            println!("  vida taskflow team continue <task-id> [--state-dir <path>] [--json]");
+            println!();
+            println!("Execution pipeline:");
+            println!(
+                "  dispatch-init -> agent-init -> host bridge request -> adapter invocation -> completion submit -> lane closure -> downstream packet creation"
+            );
+            println!();
+            println!("Output modes:");
+            println!("  Default human output uses compact TOON/plain.");
+            println!("  --json emits the machine-readable operator contract.");
+            println!();
+            println!("Returned semantics:");
+            println!("  status, blocker_codes, next_actions, artifact_refs, run_id, task_id");
+            println!();
+            println!("Failure modes:");
+            println!(
+                "  Missing dispatch receipts, invalid packets, inactive host-bridge requests, or blocked downstream route authority fail closed with blocker_codes and next_actions."
+            );
+            println!(
+                "  Host-tool bridge adapters must submit a concrete result before lane completion can dispatch the next packet."
             );
             return;
         }
@@ -1059,10 +1097,10 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Usage:");
     println!("  vida taskflow <args...>");
     println!(
-        "  vida taskflow help [task|parallelism|dependencies|queue|next|closeout|receipt-pack|graph|graph-summary|plan|replan|scheduler|scheduling|config-actuation|route|validate-routing|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|pricing|bootstrap-spec|query]"
+        "  vida taskflow help [task|parallelism|dependencies|queue|next|closeout|receipt-pack|graph|graph-summary|plan|replan|scheduler|scheduling|config-actuation|route|validate-routing|status|consume|team|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|pricing|bootstrap-spec|query]"
     );
     println!(
-        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|config-actuation|status|consume|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
+        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph|graph-summary|plan|replan|scheduler|config-actuation|status|consume|team|continuation|packet|artifacts|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
     );
     println!("  vida taskflow <command> --help");
     println!();
@@ -1106,6 +1144,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  route      route diagnostics and model/carrier selection explanation");
     println!("  validate-routing  route/config validation before dispatch");
     println!("  status      family-scoped alias to the root operator status surface");
+    println!("  team        continue the next lawful development-team step");
     println!("  continuation explicit bounded-unit binding");
     println!("  packet      persisted runtime packet inspection");
     println!("  artifacts   execution-preparation artifact readiness/materialization");
@@ -1156,6 +1195,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow pricing import --source-file <path> --dry-run");
     println!("  vida taskflow consume final \"proof path\"");
     println!("  vida taskflow consume continue");
+    println!("  vida taskflow team continue <task-id>");
     println!("  vida taskflow consume advance --max-rounds 4");
     println!("  vida taskflow bootstrap-spec \"feature request\"");
     println!("  Add --json only when machine-readable output is required.");
@@ -1209,7 +1249,15 @@ pub(crate) fn taskflow_help_topic(args: &[String]) -> Option<Option<&str>> {
     match args {
         [] => Some(None),
         [head] if matches!(head.as_str(), "help" | "--help" | "-h") => Some(None),
+        [command] if command == "team" => Some(Some(command.as_str())),
         [head, topic, ..] if head == "help" => Some(Some(topic.as_str())),
+        [command, subcommand, flag, ..]
+            if command == "team"
+                && subcommand == "continue"
+                && matches!(flag.as_str(), "--help" | "-h") =>
+        {
+            Some(Some(command.as_str()))
+        }
         [command, flag, ..] if matches!(flag.as_str(), "--help" | "-h") => {
             Some(Some(command.as_str()))
         }

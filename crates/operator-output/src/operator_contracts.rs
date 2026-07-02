@@ -234,6 +234,9 @@ pub fn render_vida_gate_result_from_operator_contracts(
 fn canonical_default_blocker_codes(entries: &[String]) -> Vec<String> {
     const KNOWN_BLOCKERS: &[&str] = &[
         "host_tool_bridge_adapter_required",
+        "host_tool_capability_missing",
+        "host_agent_capacity_unavailable",
+        "host_agent_execution_failed",
         "closure_admission_block",
         "dispatch_packet_contract_invalid",
         "migration_required",

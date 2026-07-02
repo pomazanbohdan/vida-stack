@@ -4511,6 +4511,358 @@ async fn route_taskflow_status(args: &[String]) -> ExitCode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskflowTeamProjectionMode {
+    Status,
+    Diagnose,
+}
+
+impl TaskflowTeamProjectionMode {
+    fn surface(self) -> &'static str {
+        match self {
+            Self::Status => "vida taskflow team status",
+            Self::Diagnose => "vida taskflow team diagnose",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskflowTeamProjectionArgs {
+    mode: TaskflowTeamProjectionMode,
+    task_id: String,
+    state_dir: Option<PathBuf>,
+    as_json: bool,
+}
+
+fn taskflow_team_projection_usage() -> &'static str {
+    "VIDA TaskFlow help: team\n\nUsage: vida taskflow team status <task-id> [--state-dir <path>] [--json]\n       vida taskflow team diagnose <task-id> [--state-dir <path>] [--json]\n       vida taskflow team continue <task-id> [--state-dir <path>] [--json]\n\nFields: current_role, next_role, pending_agent, last_receipt, next_command, blocker_codes, next_actions.\nOutput: Default human output uses compact TOON/plain; --json emits the machine-readable operator contract."
+}
+
+fn parse_taskflow_team_projection_args(
+    args: &[String],
+) -> Result<TaskflowTeamProjectionArgs, &'static str> {
+    let mode = match args.get(1).map(String::as_str) {
+        Some("status") => TaskflowTeamProjectionMode::Status,
+        Some("diagnose") => TaskflowTeamProjectionMode::Diagnose,
+        Some("continue") => return Err("continue"),
+        _ => return Err(taskflow_team_projection_usage()),
+    };
+    let mut parsed = TaskflowTeamProjectionArgs {
+        mode,
+        task_id: String::new(),
+        state_dir: None,
+        as_json: false,
+    };
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                parsed.as_json = true;
+                index += 1;
+            }
+            "--state-dir" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("Missing value for --state-dir");
+                };
+                parsed.state_dir = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--help" | "-h" => return Err(taskflow_team_projection_usage()),
+            value if parsed.task_id.is_empty() => {
+                parsed.task_id = value.to_string();
+                index += 1;
+            }
+            _ => return Err(taskflow_team_projection_usage()),
+        }
+    }
+    if parsed.task_id.trim().is_empty() {
+        return Err(taskflow_team_projection_usage());
+    }
+    Ok(parsed)
+}
+
+fn push_unique(values: &mut Vec<String>, value: impl Into<String>) {
+    let value = value.into();
+    if !value.trim().is_empty() && !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
+}
+
+fn taskflow_team_projection_payload(
+    mode: TaskflowTeamProjectionMode,
+    task_id: &str,
+    run_id: Option<String>,
+    status: Option<crate::state_store::RunGraphStatus>,
+    recovery: Option<crate::state_store::RunGraphRecoverySummary>,
+    receipt: Option<crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> serde_json::Value {
+    let current_role = status
+        .as_ref()
+        .map(|status| status.active_node.clone())
+        .or_else(|| {
+            recovery
+                .as_ref()
+                .map(|recovery| recovery.active_node.clone())
+        });
+    let next_role = status
+        .as_ref()
+        .and_then(|status| status.next_node.clone())
+        .or_else(|| {
+            recovery
+                .as_ref()
+                .and_then(|recovery| recovery.resume_node.clone())
+        });
+    let pending_agent = receipt.as_ref().and_then(|receipt| {
+        receipt
+            .downstream_dispatch_active_target
+            .clone()
+            .or_else(|| {
+                (receipt.dispatch_status == "bridge_request_pending"
+                    || receipt.lane_status == "lane_open")
+                    .then(|| receipt.dispatch_target.clone())
+            })
+    });
+    let mut blocker_codes = Vec::new();
+    if let Some(receipt) = receipt.as_ref() {
+        if let Some(code) = receipt.blocker_code.as_deref() {
+            push_unique(&mut blocker_codes, code);
+        }
+        for code in &receipt.downstream_dispatch_blockers {
+            push_unique(&mut blocker_codes, code.clone());
+        }
+    }
+    if let Some(recovery) = recovery.as_ref() {
+        if !recovery.recovery_ready
+            && recovery.resume_status == "blocked"
+            && blocker_codes.is_empty()
+        {
+            push_unique(&mut blocker_codes, "run_graph_recovery_not_ready");
+        }
+        if let Some(code) = recovery.delegation_gate.blocker_code.as_deref() {
+            push_unique(&mut blocker_codes, code);
+        }
+    }
+    if run_id.is_none() {
+        push_unique(
+            &mut blocker_codes,
+            "missing_run_graph_dispatch_receipt_operator_evidence",
+        );
+    }
+    let next_command = if blocker_codes.is_empty() {
+        format!("vida taskflow team continue {task_id}")
+    } else if mode == TaskflowTeamProjectionMode::Diagnose {
+        format!("vida taskflow team status {task_id}")
+    } else {
+        format!("vida taskflow team diagnose {task_id}")
+    };
+    let run_id_for_command = run_id.as_deref().unwrap_or(task_id);
+    let next_actions = if blocker_codes.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!("Inspect blockers with `{next_command}`.")]
+    };
+    let last_receipt = receipt.as_ref().map(|receipt| {
+        serde_json::json!({
+            "dispatch_target": receipt.dispatch_target,
+            "dispatch_status": receipt.dispatch_status,
+            "lane_status": receipt.lane_status,
+            "recorded_at": receipt.recorded_at,
+            "dispatch_result_path": receipt.dispatch_result_path,
+            "downstream_dispatch_status": receipt.downstream_dispatch_status,
+            "downstream_dispatch_active_target": receipt.downstream_dispatch_active_target,
+            "exception_path_receipt_id": receipt.exception_path_receipt_id,
+            "supersedes_receipt_id": receipt.supersedes_receipt_id,
+        })
+    });
+    let mut payload = serde_json::json!({
+        "surface": mode.surface(),
+        "task_id": task_id,
+        "run_id": run_id,
+        "current_role": current_role,
+        "next_role": next_role,
+        "pending_agent": pending_agent,
+        "last_receipt": last_receipt.clone(),
+        "next_command": next_command,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": {
+            "surface": mode.surface(),
+            "task_id": task_id,
+            "run_id": run_id_for_command,
+        }
+    });
+    if mode == TaskflowTeamProjectionMode::Diagnose {
+        payload["diagnostics"] = serde_json::json!({
+            "recovery": recovery,
+            "dispatch_receipt": last_receipt,
+            "status_lifecycle_stage": status.as_ref().map(|status| status.lifecycle_stage.clone()),
+        });
+    }
+    normalize_taskflow_diagnostic_operator_contract_payload(
+        payload,
+        "inspect team-flow blockers with `vida taskflow team diagnose <task-id>`",
+    )
+    .unwrap_or_else(|_| {
+        serde_json::json!({
+            "surface": mode.surface(),
+            "status": "blocked",
+            "task_id": task_id,
+            "run_id": run_id_for_command,
+            "blocker_codes": ["unsupported_blocker_code"],
+            "next_actions": ["inspect team-flow projection blockers"],
+        })
+    })
+}
+
+async fn run_taskflow_team_projection(args: &[String]) -> ExitCode {
+    if matches!(
+        args.get(1).map(String::as_str),
+        Some("--help" | "-h" | "help")
+    ) {
+        println!("{}", taskflow_team_projection_usage());
+        return ExitCode::SUCCESS;
+    }
+    if matches!(args.get(1).map(String::as_str), Some("status" | "diagnose"))
+        && args.iter().any(|arg| arg == "--help" || arg == "-h")
+    {
+        println!("{}", taskflow_team_projection_usage());
+        return ExitCode::SUCCESS;
+    }
+    let parsed = match parse_taskflow_team_projection_args(args) {
+        Ok(parsed) => parsed,
+        Err("continue") => {
+            let help_requested = args
+                .iter()
+                .skip(2)
+                .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "help"));
+            if help_requested {
+                println!("{}", taskflow_team_projection_usage());
+                return ExitCode::SUCCESS;
+            }
+            let mut consume_args = vec!["consume".to_string(), "continue".to_string()];
+            consume_args.extend(args.iter().skip(2).cloned());
+            return taskflow_consume::run_taskflow_consume(&consume_args).await;
+        }
+        Err(usage) => {
+            eprintln!("{usage}");
+            return ExitCode::from(2);
+        }
+    };
+    let state_dir = match resolve_taskflow_proxy_state_dir(parsed.state_dir.clone()) {
+        Ok(state_dir) => state_dir,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    let store =
+        match crate::state_store::StateStore::open_existing_read_only(state_dir.clone()).await {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("Failed to open authoritative state store: {error}");
+                return ExitCode::from(1);
+            }
+        };
+    let run_id = match store
+        .latest_run_graph_run_id_for_task(&parsed.task_id)
+        .await
+    {
+        Ok(Some(run_id)) => Some(run_id),
+        Ok(None) => {
+            if store.run_graph_status(&parsed.task_id).await.is_ok() {
+                Some(parsed.task_id.clone())
+            } else {
+                None
+            }
+        }
+        Err(error) => {
+            eprintln!("Failed to read run-graph task binding: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let (status, recovery, receipt) = if let Some(run_id) = run_id.as_deref() {
+        let status = match store.run_graph_status(run_id).await {
+            Ok(status) => Some(status),
+            Err(error) => {
+                eprintln!("Failed to read run-graph status for `{run_id}`: {error}");
+                return ExitCode::from(1);
+            }
+        };
+        let recovery = match store.run_graph_recovery_summary(run_id).await {
+            Ok(recovery) => Some(recovery),
+            Err(error) => {
+                eprintln!("Failed to read run-graph recovery for `{run_id}`: {error}");
+                return ExitCode::from(1);
+            }
+        };
+        let receipt = match status.as_ref() {
+            Some(status) => match store
+                .run_graph_dispatch_receipt_summary_for_status(status)
+                .await
+            {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    eprintln!("Failed to read run-graph dispatch receipt for `{run_id}`: {error}");
+                    return ExitCode::from(1);
+                }
+            },
+            None => None,
+        };
+        (status, recovery, receipt)
+    } else {
+        (None, None, None)
+    };
+    let payload = taskflow_team_projection_payload(
+        parsed.mode,
+        &parsed.task_id,
+        run_id,
+        status,
+        recovery,
+        receipt,
+    );
+    if parsed.as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        print_surface_header(RenderMode::Plain, parsed.mode.surface());
+        for (label, value) in [
+            ("task_id", payload["task_id"].as_str()),
+            ("run_id", payload["run_id"].as_str()),
+            ("current_role", payload["current_role"].as_str()),
+            ("next_role", payload["next_role"].as_str()),
+            ("pending_agent", payload["pending_agent"].as_str()),
+            ("next_command", payload["next_command"].as_str()),
+        ] {
+            if let Some(value) = value {
+                print_surface_line(RenderMode::Plain, label, value);
+            }
+        }
+        if let Some(blockers) = payload["blocker_codes"]
+            .as_array()
+            .filter(|items| !items.is_empty())
+        {
+            let joined = blockers
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            print_surface_line(RenderMode::Plain, "blocker_codes", &joined);
+        }
+        if let Some(receipt) = payload["last_receipt"].as_object() {
+            if let Some(lane_status) = receipt
+                .get("lane_status")
+                .and_then(serde_json::Value::as_str)
+            {
+                print_surface_line(RenderMode::Plain, "last_receipt", lane_status);
+            }
+        }
+    }
+    if payload["status"].as_str() == Some("pass") {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 async fn route_taskflow_ready(command: TaskReadyArgs) -> ExitCode {
     let state_dir = match resolve_taskflow_proxy_state_dir(command.state_dir) {
         Ok(state_dir) => state_dir,
@@ -14300,6 +14652,10 @@ async fn run_taskflow_proxy_impl(args: ProxyArgs) -> ExitCode {
         return run_taskflow_settle(&args.args).await;
     }
 
+    if matches!(args.args.first().map(String::as_str), Some("team")) {
+        return run_taskflow_team_projection(&args.args).await;
+    }
+
     if let Some(topic) = taskflow_help_topic(&args.args) {
         print_taskflow_proxy_help(topic);
         return ExitCode::SUCCESS;
@@ -14410,6 +14766,10 @@ async fn run_taskflow_proxy_impl(args: ProxyArgs) -> ExitCode {
         ) {
             return taskflow_consume::run_taskflow_consume(&args.args).await;
         }
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("team")) {
+        return run_taskflow_team_projection(&args.args).await;
     }
 
     if matches!(args.args.first().map(String::as_str), Some("run-graph")) {

@@ -6,11 +6,11 @@ const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
-const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready\n  vida task next\n  vida task show <task-id>\n  vida task progress <task-id>\n  vida task deps <task-id>\n  vida task tree <task-id>\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run\n  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\"\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\"\n  vida task reparent-children <from-parent-id> <to-parent-id>\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id>\n  vida task critical-path\n  vida taskflow help parallelism\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n\nLarge-batch transport:\n  Use `vida task import --file tasks.jsonl --dry-run` for many task creates instead of pasting oversized shell payloads.\n  Use JSONL/NDJSON files for large batches and `vida task dep add-bulk --edge-file edges.txt --dry-run` for many dependency edges.\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary` for the default operator summary; add `--json` only for machine-readable scheduling fields.\n  Missing execution semantics never imply safe parallel execution.";
+const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready\n  vida task next\n  vida task show <task-id>\n  vida task progress <task-id>\n  vida task deps <task-id>\n  vida task tree <task-id>\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run\n  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\"\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\"\n  vida task reparent-children <from-parent-id> <to-parent-id>\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id>\n  vida task critical-path\n  vida taskflow help parallelism\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n\nField/view/detail selection:\n  `vida task list` supports `--fields` and `--view compact|summary|full`.\n  `vida task show` supports `--view compact|summary|full`.\n  Task diagnostic surfaces that do not expose `--fields`, `--view`, or `--details` use fixed operator projections and document that scope in their help.\n\nLarge-batch transport:\n  Use `vida task import --file tasks.jsonl --dry-run` for many task creates instead of pasting oversized shell payloads.\n  Use JSONL/NDJSON files for large batches and `vida task dep add-bulk --edge-file edges.txt --dry-run` for many dependency edges.\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary` for the default operator summary; add `--json` only for machine-readable scheduling fields.\n  Missing execution semantics never imply safe parallel execution.";
 
 const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
 
-const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow help dependencies\n  vida taskflow help queue\n  vida taskflow help dispatch\n  vida taskflow help scheduler\n  vida taskflow help scheduling\n  vida task tree <task-id> --json\n  vida task import --file tasks.yaml --parent-id <parent-id> --dry-run --json\n  vida taskflow graph explain <task-id> --json\n  vida taskflow graph-summary --json\n  vida taskflow closeout --json --compact\n  vida taskflow receipt-pack --since HEAD~1\n  vida taskflow plan generate --json\n  vida taskflow replan split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json\n  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida taskflow scheduler dispatch --json\n  vida taskflow scheduling actualize --scope open-epics --dry-run --json\n  vida taskflow route explain --json\n  vida taskflow validate-routing --json\n  vida taskflow pricing status --json\n  vida taskflow pricing import --source-file <path> --dry-run --json\n  vida taskflow status --summary --json\n  vida taskflow run-graph status <run-id> --json\n  vida taskflow recovery status <run-id> --json\n  vida taskflow packet latest --json\n  vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json\n  vida taskflow bootstrap-spec \"feature request\" --json\n  vida task next --json\n\nLarge-batch transport:\n  Put large task batches in JSONL/YAML files and run `vida task import --file <path> --dry-run` before applying.\n  Put large dependency batches in an edge file and run `vida task dep add-bulk --edge-file <path> --dry-run`.\n\nParallelism guidance:\n  `vida taskflow graph explain <task-id> --json` explains one task's ready/blocked/parallel-safe posture from canonical projection truth.\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida taskflow scheduler dispatch --json` turns that projection into a preview-first launch plan capped by `max_parallel_agents`.\n  `vida taskflow scheduling actualize --dry-run --json` previews conservative scheduling metadata repairs before `--apply` mutates tasks.\n  `vida taskflow help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
+const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow help dependencies\n  vida taskflow help queue\n  vida taskflow help dispatch\n  vida taskflow help scheduler\n  vida taskflow help scheduling\n  vida task tree <task-id> --json\n  vida task import --file tasks.yaml --parent-id <parent-id> --dry-run --json\n  vida taskflow graph explain <task-id> --json\n  vida taskflow graph-summary --json\n  vida taskflow closeout --json --compact\n  vida taskflow receipt-pack --since HEAD~1\n  vida taskflow plan generate --json\n  vida taskflow replan split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\" --json\n  vida taskflow replan spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\" --json\n  vida taskflow scheduler dispatch --json\n  vida taskflow scheduling actualize --scope open-epics --dry-run --json\n  vida taskflow route explain --json\n  vida taskflow validate-routing --json\n  vida taskflow pricing status --json\n  vida taskflow pricing import --source-file <path> --dry-run --json\n  vida taskflow status --summary --json\n  vida taskflow team continue <task-id>\n  vida taskflow team continue <task-id> --json\n  vida taskflow run-graph status <run-id> --json\n  vida taskflow recovery status <run-id> --json\n  vida taskflow packet latest --json\n  vida taskflow packet repair --run-id <run-id> --from-task <task-id> --json\n  vida taskflow bootstrap-spec \"feature request\" --json\n  vida task next --json\n\nField/view/detail selection:\n  `vida taskflow graph-summary` is a fixed scheduling projection; it supports default/operator output and `--json`, not ad-hoc `--fields`, `--view`, or `--details` selectors.\n  `vida taskflow recovery status|explain` and `vida taskflow run-graph status|diagnose` are fixed diagnostic projections; use `--json` for full machine-readable detail.\n  Use `vida task list --fields ... --view ...` and `vida task show --view ...` when row/record field selection is required.\n\nLarge-batch transport:\n  Put large task batches in JSONL/YAML files and run `vida task import --file <path> --dry-run` before applying.\n  Put large dependency batches in an edge file and run `vida task dep add-bulk --edge-file <path> --dry-run`.\n\nParallelism guidance:\n  `vida taskflow graph explain <task-id> --json` explains one task's ready/blocked/parallel-safe posture from canonical projection truth.\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida taskflow scheduler dispatch --json` turns that projection into a preview-first launch plan capped by `max_parallel_agents`.\n  `vida taskflow scheduling actualize --dry-run --json` previews conservative scheduling metadata repairs before `--apply` mutates tasks.\n  `vida taskflow help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
 
 const DOCFLOW_LONG_ABOUT: &str = "Delegate to the DocFlow runtime family.\n\nDocFlow is the standalone documentation/readiness utility. Use it for documentation bootstrap, artifact init, validation, readiness checks, inventory, relations, and agent handoff instructions.";
 
@@ -28,6 +28,10 @@ const RECEIPT_AFTER_HELP: &str = "Receipt operations:\n  vida receipt get --json
 const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route <route> --expect <text> --json\n\nBrowser proof options:\n  --route <route>    Browser route or URL to prove\n  --expect <text>    Text or route marker expected in the collected browser proof\n  --json             Emit machine-readable JSON output";
 const SESSION_AFTER_HELP: &str = "Session operations:\n  vida session triage\n  vida session triage --task <task-id>\n  vida session triage --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const QUALITY_AFTER_HELP: &str = "Quality operations:\n  vida quality gate --prepush\n  vida quality gate --prepush --advise\n  vida quality gate --prepush --json --advise\n\nOptions:\n  --prepush                        Evaluate the pre-push quality gate advisor\n  --advise                         Include remediation guidance\n  --coverage-file <path>           Read LCOV coverage evidence from this file\n  --crap-file <path>               Read cargo-crap JSON evidence from this file\n  --crap-baseline-file <path>      Optional previous cargo-crap JSON baseline used to detect CRAP>1000 growth\n  --task-exception-note <note>     TaskFlow exception note allowing touched high-CRAP functions for this push\n  --coverage-threshold <percent>   Coverage threshold used for covered-line deficit math\n  --project-root <path>            Repository root used for git dirty/changed file evidence\n  --json                           Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
+const DOCTOR_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida doctor` is a fixed runtime-integrity diagnostic projection; it supports compact default output, `--summary`, and `--json`, not ad-hoc `--fields`, `--view`, or `--details` selectors.\n  Use `vida status --json --fields ... --view ...` for top-level status field selection and `vida task show --view ...` for TaskFlow record field selection.";
+const DIAGNOSTICS_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida diagnostics` subcommands are fixed evidence and rules projections; use `--json` on the selected subcommand for the full machine-readable payload.\n  They do not support ad-hoc `--fields`, `--view`, or `--details` selectors; use `vida task show --view ...` or `vida status --json --fields ... --view ...` when row or status field selection is required.";
+const LANE_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida lane` is a fixed lane/takeover diagnostic projection; it supports compact default output and `--json`, not ad-hoc `--fields`, `--view`, or `--details` selectors.\n  Use `vida taskflow run-graph status <run-id> --json` and `vida taskflow recovery status <run-id> --json` for full machine-readable run-graph detail.";
+const RECOVERY_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida recovery` is a TaskFlow recovery alias with fixed diagnostic projections; use default output for operators and `--json` for full machine-readable recovery detail.\n  It does not support ad-hoc `--fields`, `--view`, or `--details` selectors; use `vida task show --view ...` or `vida status --json --fields ... --view ...` for selectable records.";
 const REQUIREMENT_AFTER_HELP: &str = "Requirement operations:\n  vida requirement analyze --input \"Need editable meeting event fields\" --json\n  vida requirement analyze --task-id task-1 --input \"Build feature\" --artifact-path artifacts/requirement-analysis.json\n\nAnalyze contract:\n  Inputs: --input <text>, --source-file <path>, --task-id <id>, --request-id <id>, --depth-mode quick|standard|critical, --artifact-path <path>, --codebase-inspected.\n  JSON output includes: task_id, request_id, source_inputs, requirement_classification, depth_mode, requirement_atoms, selected_methods, selected_roles, role_findings_summary, detected_conflicts, open_questions, working_assumptions, solution_options, recommended_option, readiness_verdict, downstream_routes, acceptance_criteria, test_matrix, output_contract, codebase_impact, developer_handoff.\n  Default output is compact TOON/plain with readiness, artifact path, required-field summary, output modes, routes, and developer handoff. Use --json for the full machine-readable artifact.";
 const PACK_AFTER_HELP: &str = "Pack operations:\n  vida pack list\n  vida pack list --json\n  vida pack show spec-four-pack\n  vida pack show spec-four-pack --json\n  vida pack validate\n  vida pack validate --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive --reinit\n  vida state reset --archive --reinit --json\n  vida state reset --archive --reinit --state-dir <path> --json\n\nOptions:\n  --archive             Rename the current state root to a timestamped sibling archive before reset\n  --reinit              Recreate the authoritative state spine after archive\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output\n\nOutput:\n  Default output is compact plain text for operators.\n  Use --json for machine-readable automation.";
@@ -686,9 +690,15 @@ pub(crate) enum Command {
     State(StateArgs),
     #[command(about = "operate runtime-owned local development services")]
     Runtime(RuntimeArgs),
-    #[command(about = "run bounded runtime integrity checks")]
+    #[command(
+        about = "run bounded runtime integrity checks",
+        after_help = DOCTOR_AFTER_HELP
+    )]
     Doctor(DoctorArgs),
-    #[command(about = "run canonical runtime diagnostics for completed slices")]
+    #[command(
+        about = "run canonical runtime diagnostics for completed slices",
+        after_help = DIAGNOSTICS_AFTER_HELP
+    )]
     Diagnostics(DiagnosticsArgs),
     #[command(
         about = "collect or diagnose runtime proof evidence",
@@ -746,13 +756,19 @@ pub(crate) enum Command {
     Pack(PackArgs),
     #[command(about = "thin root alias to the TaskFlow consume family")]
     Consume(ProxyArgs),
-    #[command(about = "inspect or mutate canonical lane/takeover operator state")]
+    #[command(
+        about = "inspect or mutate canonical lane/takeover operator state",
+        after_help = LANE_AFTER_HELP
+    )]
     Lane(ProxyArgs),
     #[command(
         about = "family-owned root operator surface for approval inspection over the run-graph approval law"
     )]
     Approval(ProxyArgs),
-    #[command(about = "thin root alias to the TaskFlow recovery family")]
+    #[command(
+        about = "thin root alias to the TaskFlow recovery family",
+        after_help = RECOVERY_AFTER_HELP
+    )]
     Recovery(ProxyArgs),
     #[command(about = "thin root alias to the TaskFlow route diagnostics family")]
     Route(ProxyArgs),
@@ -1391,6 +1407,12 @@ pub(crate) struct AgentHostBridgeArgs {
         help = "Dry-run validate one parent-host bridge result JSON file without mutating lane or TaskFlow state"
     )]
     pub(crate) validate_result: Option<PathBuf>,
+
+    #[arg(
+        long = "scaffold-result",
+        help = "Write a schema-correct staged parent-host bridge result JSON file for this request; defaults come from request identity and can be validated with --validate-result"
+    )]
+    pub(crate) scaffold_result: Option<PathBuf>,
 
     #[arg(
         long = "retry-completion",
@@ -4306,12 +4328,15 @@ pub(crate) struct DoctorArgs {
     #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain, help = "Render mode for human output; plain is compact TOON by default")]
     pub(crate) render: RenderMode,
 
-    #[arg(long = "summary", help = "Emit the compact doctor summary shape")]
+    #[arg(
+        long = "summary",
+        help = "Emit the compact doctor summary shape; doctor uses fixed diagnostic projections, not --fields/--view/--details selectors"
+    )]
     pub(crate) summary: bool,
 
     #[arg(
         long = "json",
-        help = "Emit machine-readable JSON output instead of default compact TOON"
+        help = "Emit machine-readable JSON output with the full fixed doctor diagnostic projection"
     )]
     pub(crate) json: bool,
 }
@@ -4663,6 +4688,31 @@ mod tests {
         assert!(dep_help.contains("--edge-file <EDGE_FILE>"));
         assert!(dep_help.contains("large batches"));
         assert!(dep_help.contains("oversized shell payloads"));
+    }
+
+    #[test]
+    fn fixed_diagnostic_help_scopes_field_view_detail_selectors() {
+        for command in ["doctor", "diagnostics", "lane", "recovery"] {
+            let error = Cli::try_parse_from(["vida", command, "--help"])
+                .expect_err("help should render clap display error");
+            let help = error.to_string();
+
+            assert!(
+                help.contains("fixed") || help.contains("TaskFlow recovery alias"),
+                "{command} help should explain fixed projection scope: {help}"
+            );
+            assert!(
+                help.contains("not ad-hoc `--fields`, `--view`, or `--details` selectors")
+                    || help.contains(
+                        "does not support ad-hoc `--fields`, `--view`, or `--details` selectors"
+                    ),
+                "{command} help should explicitly scope selectors: {help}"
+            );
+            assert!(
+                help.contains("--json"),
+                "{command} help should point operators to JSON detail: {help}"
+            );
+        }
     }
 
     #[test]

@@ -767,6 +767,123 @@ fn host_bridge_payload_should_show_completion_command(payload: &serde_json::Valu
         })
 }
 
+pub(crate) fn host_bridge_auto_invocation_scaffold_for_payload(
+    payload: &serde_json::Value,
+) -> serde_json::Value {
+    let host_bridge = &payload["host_bridge"];
+    let request_path = host_bridge["request_path"]
+        .as_str()
+        .or_else(|| payload["host_tool_bridge_request"]["request_path"].as_str());
+    let packet_path = host_bridge["packet_path"]
+        .as_str()
+        .or_else(|| payload["host_tool_bridge_request"]["packet_path"].as_str());
+    let result_path = host_bridge["result_path"]
+        .as_str()
+        .or_else(|| payload["host_tool_bridge_request"]["result_path"].as_str());
+    let receipt_path = host_bridge["receipt_path"]
+        .as_str()
+        .or_else(|| payload["host_tool_bridge_request"]["receipt_path"].as_str());
+    let adapter_kind = host_bridge["adapter_kind"]
+        .as_str()
+        .or_else(|| payload["host_tool_bridge_request"]["adapter_kind"].as_str());
+    let adapter_capability_id = host_bridge["adapter_capability_id"]
+        .as_str()
+        .or_else(|| payload["host_tool_bridge_request"]["adapter_capability_id"].as_str());
+    let invocation_mode = host_bridge["invocation_mode"]
+        .as_str()
+        .or_else(|| payload["host_tool_bridge_request"]["invocation_mode"].as_str())
+        .unwrap_or("parent_host_tool_api");
+    let dispatch_transport = host_bridge["dispatch_transport"]
+        .as_str()
+        .or_else(|| payload["host_tool_bridge_request"]["dispatch_transport"].as_str());
+    let blocker_codes = payload["blocker_codes"]
+        .as_array()
+        .map(|codes| {
+            codes
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut blocker_codes = blocker_codes;
+    if let Some(code) = payload["blocker_code"]
+        .as_str()
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+    {
+        blocker_codes.push(code);
+    }
+    let request_gate_ready = dispatch_transport == Some("host_tool_bridge")
+        && adapter_kind == Some("codex_host_tools")
+        && adapter_capability_id == Some("codex.multi_agent_v1")
+        && request_path.is_some()
+        && packet_path.is_some()
+        && result_path.is_some()
+        && receipt_path.is_some();
+    let only_adapter_required = blocker_codes.iter().all(|code| {
+        *code == crate::release1_contracts::BlockerCode::HostToolBridgeAdapterRequired.as_str()
+    });
+    let safe_to_auto_invoke = request_gate_ready
+        && (payload["status"].as_str() == Some(release1_pass_status()) || only_adapter_required);
+
+    serde_json::json!({
+        "schema_version": "host-bridge-auto-invocation-v1",
+        "status": if safe_to_auto_invoke { "ready_to_invoke_parent_host_adapter" } else { "blocked_by_request_gate" },
+        "safe_to_auto_invoke": safe_to_auto_invoke,
+        "auto_invoke_supported": safe_to_auto_invoke,
+        "adapter_kind": adapter_kind,
+        "adapter_capability_id": adapter_capability_id,
+        "invocation_mode": invocation_mode,
+        "dispatch_transport": dispatch_transport,
+        "request_path": request_path,
+        "packet_path": packet_path,
+        "result_path": result_path,
+        "receipt_path": receipt_path,
+        "tool_sequence": if safe_to_auto_invoke {
+            serde_json::json!([
+                "multi_agent_v1.spawn_agent",
+                "multi_agent_v1.wait_agent",
+                "multi_agent_v1.close_agent"
+            ])
+        } else {
+            serde_json::json!([])
+        },
+        "result_contract": {
+            "required_fields": [
+                "decision",
+                "verdict",
+                "blocker_codes",
+                "rework_target",
+                "allowed_next_node"
+            ],
+            "blocked_blocker_codes": [
+                taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable.as_str(),
+                taskflow_contracts::BlockerCode::HostToolCapabilityMissing.as_str(),
+                "host_agent_execution_failed"
+            ]
+        },
+        "binary_boundary": "vida.exe scaffolds and validates; the parent host session invokes native host tools and writes receipt-backed artifacts"
+    })
+}
+
+pub(crate) fn attach_host_bridge_auto_invocation_scaffold(result: &mut serde_json::Value) -> bool {
+    if result.get("host_bridge_auto_invocation").is_some() {
+        return false;
+    }
+    let has_bridge_request = result.get("host_tool_bridge_request").is_some();
+    let has_bridge_payload = result.get("host_bridge").is_some();
+    if !has_bridge_request && !has_bridge_payload {
+        return false;
+    }
+    let scaffold = host_bridge_auto_invocation_scaffold_for_payload(result);
+    if let Some(object) = result.as_object_mut() {
+        object.insert("host_bridge_auto_invocation".to_string(), scaffold);
+        true
+    } else {
+        false
+    }
+}
+
 fn retryable_host_bridge_completion_request_for_state_root(
     state_root: &Path,
     request: &serde_json::Value,
@@ -900,16 +1017,18 @@ fn host_bridge_adapter_payload(
             crate::shell_quote("<changed-file>")
         )
     });
-    normalize_host_bridge_payload_operator_fields(build_host_bridge_adapter_payload(
-        HostBridgeAdapterPayloadInput {
+    let mut payload = normalize_host_bridge_payload_operator_fields(
+        build_host_bridge_adapter_payload(HostBridgeAdapterPayloadInput {
             request_path,
             request,
             provenance_blockers,
             retryable_completion_request,
             completion_command,
             artifact_attach_command,
-        },
-    ))
+        }),
+    );
+    attach_host_bridge_auto_invocation_scaffold(&mut payload);
+    payload
 }
 
 fn normalize_host_bridge_payload_operator_fields(
@@ -1116,6 +1235,229 @@ fn host_bridge_result_blocker_codes(result: &serde_json::Value) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn host_bridge_command_blocker_codes(command: &AgentHostBridgeArgs) -> Vec<String> {
+    let mut blocker_codes = command
+        .blocker_codes
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            serde_json::from_str::<Vec<String>>(value).unwrap_or_else(|_| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|code| !code.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
+    blocker_codes.extend(
+        command
+            .blocker_code
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
+            .map(ToOwned::to_owned),
+    );
+    blocker_codes.sort();
+    blocker_codes.dedup();
+    blocker_codes
+}
+
+fn emit_host_bridge_result_scaffold_blocked(
+    request_path: &Path,
+    result_path: &Path,
+    as_json: bool,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    error: String,
+) -> ExitCode {
+    let artifact_refs = serde_json::json!({
+        "request_path": request_path.display().to_string(),
+        "result_path": result_path.display().to_string()
+    });
+    let (shared_fields, operator_contracts) = host_bridge_operator_fields(
+        release1_blocked_status(),
+        blocker_codes.clone(),
+        next_actions.clone(),
+        next_actions,
+        artifact_refs.clone(),
+    );
+    let payload = serde_json::json!({
+        "surface": "vida agent host-bridge",
+        "mode": "result_scaffold",
+        "status": release1_blocked_status(),
+        "blocker_codes": blocker_codes,
+        "next_actions": shared_fields["next_actions"].clone(),
+        "artifact_refs": artifact_refs,
+        "shared_fields": shared_fields,
+        "operator_contracts": operator_contracts,
+        "error": error
+    });
+    emit_host_bridge_payload(&payload, as_json)
+}
+
+fn scaffold_host_bridge_result(
+    command: &AgentHostBridgeArgs,
+    request_path: &Path,
+    request: &serde_json::Value,
+    result_path: &Path,
+) -> ExitCode {
+    let effective_request = taskflow_host_bridge::effective_host_bridge_request(request);
+    let typed_request = match HostBridgeRequest::from_value(effective_request) {
+        Ok(request) => request,
+        Err(error) => {
+            return emit_host_bridge_result_scaffold_blocked(
+                request_path,
+                result_path,
+                command.json,
+                vec!["host_bridge_request_schema_invalid".to_string()],
+                vec![format!(
+                    "repair host bridge request before scaffolding result: {error}"
+                )],
+                error.to_string(),
+            );
+        }
+    };
+    let state_dir = command
+        .state_dir
+        .clone()
+        .or_else(|| infer_host_bridge_state_root_from_request_path(request_path))
+        .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
+    let state_root = match StateRoot::open(&state_dir) {
+        Ok(root) => root,
+        Err(error) => {
+            return emit_host_bridge_result_scaffold_blocked(
+                request_path,
+                result_path,
+                command.json,
+                vec![blocker_code_value(
+                    taskflow_contracts::BlockerCode::HostBridgeStateRootMissing,
+                )],
+                vec![format!(
+                    "open the TaskFlow state root before scaffolding result: {error}"
+                )],
+                error.to_string(),
+            );
+        }
+    };
+    let output_path = match new_output_path_under_root(
+        &state_root,
+        result_path,
+        ArtifactPathKind::HostBridgeResult,
+        true,
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            return emit_host_bridge_result_scaffold_blocked(
+                request_path,
+                result_path,
+                command.json,
+                vec!["host_bridge_result_untrusted_path".to_string()],
+                vec!["write scaffolded host bridge results under the VIDA state root".to_string()],
+                error.to_string(),
+            );
+        }
+    };
+    let result = taskflow_host_bridge::receipt_binding::build_host_bridge_result_scaffold(
+        taskflow_host_bridge::receipt_binding::HostBridgeResultScaffoldInput {
+            request: typed_request,
+            decision: command.decision.clone(),
+            verdict: command.verdict.clone(),
+            blocker_codes: host_bridge_command_blocker_codes(command),
+            rework_target: command.rework_target.clone(),
+            allowed_next_node: command.allowed_next_node.clone(),
+            summary: command.summary.clone(),
+            host_agent_id: command.host_agent_id.clone(),
+            receipt_id: command.receipt_id.clone(),
+        },
+    );
+    let rendered = match serde_json::to_string_pretty(&result) {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            return emit_host_bridge_result_scaffold_blocked(
+                request_path,
+                output_path.path(),
+                command.json,
+                vec!["host_bridge_result_schema_invalid".to_string()],
+                vec!["repair scaffold inputs before writing result JSON".to_string()],
+                error.to_string(),
+            );
+        }
+    };
+    if let Err(error) = std::fs::write(output_path.path(), format!("{rendered}\n")) {
+        return emit_host_bridge_result_scaffold_blocked(
+            request_path,
+            output_path.path(),
+            command.json,
+            vec!["host_bridge_result_write_failed".to_string()],
+            vec!["repair the result artifact path and retry --scaffold-result".to_string()],
+            error.to_string(),
+        );
+    }
+    let validation =
+        validate_host_bridge_result_dry_run(request_path, request, output_path.path(), &result);
+    let blocker_codes = host_bridge_result_blocker_codes(&validation);
+    let validate_command = format!(
+        "vida agent host-bridge --request {} --validate-result {}{}",
+        crate::shell_quote(&request_path.display().to_string()),
+        crate::shell_quote(&output_path.path().display().to_string()),
+        command
+            .state_dir
+            .as_ref()
+            .map(|state_dir| format!(
+                " --state-dir {}",
+                crate::shell_quote(&state_dir.display().to_string())
+            ))
+            .unwrap_or_default()
+    );
+    let mut next_actions = vec![validate_command.clone()];
+    if blocker_codes.is_empty() {
+        next_actions.push(format!(
+            "vida agent host-bridge --request {} --submit-result {} --host-agent-id <host-agent-id> --receipt-id <receipt-id>{}",
+            crate::shell_quote(&request_path.display().to_string()),
+            crate::shell_quote(&output_path.path().display().to_string()),
+            command
+                .state_dir
+                .as_ref()
+                .map(|state_dir| format!(" --state-dir {}", crate::shell_quote(&state_dir.display().to_string())))
+                .unwrap_or_default()
+        ));
+    }
+    let status = if blocker_codes.is_empty() {
+        release1_pass_status()
+    } else {
+        release1_blocked_status()
+    };
+    let artifact_refs = serde_json::json!({
+        "request_path": request_path.display().to_string(),
+        "result_path": output_path.path().display().to_string(),
+        "state_dir": state_dir.display().to_string()
+    });
+    let (shared_fields, operator_contracts) = host_bridge_operator_fields(
+        status,
+        blocker_codes.clone(),
+        next_actions.clone(),
+        next_actions,
+        artifact_refs.clone(),
+    );
+    let payload = serde_json::json!({
+        "surface": "vida agent host-bridge",
+        "mode": "result_scaffold",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": shared_fields["next_actions"].clone(),
+        "artifact_refs": artifact_refs,
+        "validation": validation,
+        "result": result,
+        "shared_fields": shared_fields,
+        "operator_contracts": operator_contracts
+    });
+    emit_host_bridge_payload(&payload, command.json)
 }
 
 fn validate_host_bridge_result_dry_run(
@@ -5105,6 +5447,14 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
             if !command.attach_artifacts.is_empty() {
                 return attach_host_bridge_implementation_artifacts(command, request, payload)
                     .await;
+            }
+            if let Some(result_path) = command.scaffold_result.as_ref() {
+                return scaffold_host_bridge_result(
+                    &command,
+                    &command.request,
+                    &request,
+                    result_path,
+                );
             }
             if let Some(result_path) = command.validate_result.as_ref() {
                 let result = match read_canonical_host_bridge_json_artifact(result_path, "result") {

@@ -750,6 +750,14 @@ fn render_agent_init_dispatch_result_from_receipt(
     } else if let Some(object) = result_json.as_object_mut() {
         object.insert("dispatch_mode".to_string(), dispatch_mode.clone());
     }
+    if crate::agent_dispatch_surface::attach_host_bridge_auto_invocation_scaffold(&mut result_json)
+    {
+        let _ = std::fs::write(
+            dispatch_result_path,
+            serde_json::to_string_pretty(&result_json)
+                .expect("agent-init dispatch result scaffold should serialize"),
+        );
+    }
     if timeout_seconds.is_some() {
         emit_agent_init_dispatch_timeout_payload(&result_json, json_output);
     } else if json_output {
@@ -4467,6 +4475,32 @@ mod tests {
                 assert_eq!(parsed["status"], "blocked");
                 assert_eq!(parsed["execution_state"], "bridge_request_pending");
                 assert_eq!(parsed["blocker_code"], "host_tool_bridge_adapter_required");
+                assert_eq!(
+                    parsed["host_bridge_auto_invocation"]["schema_version"],
+                    "host-bridge-auto-invocation-v1"
+                );
+                assert_eq!(
+                    parsed["host_bridge_auto_invocation"]["safe_to_auto_invoke"],
+                    true
+                );
+                assert_eq!(
+                    parsed["host_bridge_auto_invocation"]["tool_sequence"],
+                    json!([
+                        "multi_agent_v1.spawn_agent",
+                        "multi_agent_v1.wait_agent",
+                        "multi_agent_v1.close_agent"
+                    ])
+                );
+                assert_eq!(
+                    parsed["host_bridge_auto_invocation"]["result_contract"]["required_fields"],
+                    json!([
+                        "decision",
+                        "verdict",
+                        "blocker_codes",
+                        "rework_target",
+                        "allowed_next_node"
+                    ])
+                );
                 assert!(parsed["blocker_reason"]
                     .as_str()
                     .expect("blocker reason should render")

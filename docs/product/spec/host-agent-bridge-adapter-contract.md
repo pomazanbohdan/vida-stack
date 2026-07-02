@@ -158,6 +158,18 @@ If the current environment does not expose the configured adapter capability, VI
 
 The adapter is parent-session code, not a child process launched by `vida.exe`. VIDA may emit the request and validate completion, but the host adapter owns native host-tool invocation because those tools are not available inside the binary process.
 
+When the request names `adapter_kind: "codex_host_tools"`, `adapter_capability_id:
+"codex.multi_agent_v1"`, `invocation_mode: "parent_host_tool_api"`, and
+`dispatch_transport: "host_tool_bridge"`, VIDA must also emit a
+`host_bridge_auto_invocation` scaffold. The scaffold is not execution evidence;
+it is the canonical, machine-readable parent-host adapter plan that allows the
+host integration to auto-invoke `multi_agent_v1.spawn_agent`,
+`multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent` without manual
+parent orchestration or shell interpolation. The scaffold must include request,
+packet, result, and receipt paths plus the required result fields:
+`decision`, `verdict`, `blocker_codes`, `rework_target`, and
+`allowed_next_node`.
+
 Before invoking host tools, the adapter or operator can normalize and validate a
 pending request with:
 

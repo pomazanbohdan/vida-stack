@@ -96,6 +96,12 @@ When more than two defects, PR failures, CI failures, runtime blockers, or opera
 
 Do not run a long full gate after each tiny edit when focused tests can validate the same invariant first.
 
+When closing a coherent batch of tasks, run the runtime self-diagnostic once for
+the whole batch after the included tasks are closed and before selecting any
+next work. Treat this batch self-diagnostic as closure evidence for the pool,
+not as a replacement for per-task proof, and classify any findings before the
+pool is considered fully closed.
+
 ## Fix Locus Guide
 
 Choose the patch layer by the first wrong transition point:
@@ -119,6 +125,8 @@ A VIDA runtime Error Search fix is not ready for commit until the proof matrix c
 4. formatting or schema validation for edited source/docs,
 5. release build/install according to the System Binary Update Policy in `docs/process/command-timing-and-gate-optimization-protocol.md`,
 6. post-pool continuous-improvement diagnostics after the coherent fix pool is proven: command timings, VIDA runtime slow-surface status, token/output reduction opportunities, stage-ordering/parallelism findings, script/gate decisions, command-surface follow-ups, and documentation sync for any new reusable rule.
+7. project-skill creation or update actualization through `docs/process/agent-skill-learning-protocol.md`: collect the close/self-analysis/diagnostic events, classify whether a project skill update is required, record `no_skill_update_reason` when not required, and stage or validate skill proposals before TaskFlow next-work selection.
+8. final TaskFlow actualization after skill-learning actualization and immediately before deciding what to take into work next: refresh status, parent/child layer, priority, dependencies, owned paths, proof targets, execution mode, order bucket, parallel group, conflict domain, and sequential/parallel posture from current evidence.
 
 Record timings for each proof command. If a repeated proof command exceeds the project timing target, create or update an operator-efficiency task.
 

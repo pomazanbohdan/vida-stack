@@ -80,7 +80,10 @@ For parallel task packs, run one explicit finalize sequence:
 3. Run `vida task reconcile-closed-runs --limit 25 --json`, then `vida orchestrator-init --json`.
 4. Treat a remaining `closed_task_active_run_projection_mismatch` as a runtime blocker or follow-up, not as a clean pack close.
 5. Record broad test deltas as `inside_pack`, `adjacent_regression`, or `outside_pack_residual` before closing tasks.
-6. Create or update runtime follow-ups for repeated command-output loss, repo-root temp leakage, missing pack-level proof/close commands, or shell PATH drift.
+6. Run the runtime self-diagnostic once for the whole closed pack before selecting unrelated work.
+7. Actualize project-skill creation or updates through `docs/process/agent-skill-learning-protocol.md`: collect close, self-analysis, diagnostic, and user-correction events; record `no_skill_update_reason` when no skill update is needed; otherwise stage or validate the bounded proposal.
+8. Actualize TaskFlow last, after skill-learning actualization and immediately before next-work analysis.
+9. Create or update runtime follow-ups for repeated command-output loss, repo-root temp leakage, missing pack-level proof/close commands, or shell PATH drift.
 
 ## Agent Research Ring
 

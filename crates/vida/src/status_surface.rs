@@ -1300,21 +1300,31 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         };
+                    let active_exception_takeover =
+                        exception_takeover_scope_reclassifies_release_evidence(
+                            &root_session_write_guard,
+                        );
                     let incomplete_release_admission_operator_evidence =
-                        match incomplete_release_admission_operator_evidence_for_status(
-                            store.root(),
-                            &runtime_consumption,
-                            latest_release_admission_operator_evidence_snapshot_path.as_deref(),
-                            latest_final_snapshot_path.as_deref(),
-                            summary_only,
-                        ) {
-                            Ok(value) => value,
-                            Err(error) => {
-                                eprintln!("Failed to evaluate release-admission evidence: {error}");
-                                return ExitCode::from(1);
+                        if active_exception_takeover {
+                            false
+                        } else {
+                            match incomplete_release_admission_operator_evidence_for_status(
+                                store.root(),
+                                &runtime_consumption,
+                                latest_release_admission_operator_evidence_snapshot_path.as_deref(),
+                                latest_final_snapshot_path.as_deref(),
+                                summary_only,
+                            ) {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to evaluate release-admission evidence: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
                             }
                         };
-                    let operator_contracts =
+                    let mut operator_contracts =
                         match build_status_operator_contracts(StatusOperatorContractInputs {
                             boot_compatibility: boot_compatibility.as_ref(),
                             migration_state: migration_state.as_ref(),
@@ -1372,6 +1382,11 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         };
+                    if active_exception_takeover {
+                        reclassify_retrieval_release_operator_contract_blockers(
+                            &mut operator_contracts,
+                        );
+                    }
                     let blocker_codes = operator_contracts["blocker_codes"]
                         .as_array()
                         .map(|rows| {
@@ -1441,6 +1456,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                     };
                     normalize_status_projection_json_shape(&mut summary_json);
+                    if active_exception_takeover {
+                        annotate_operator_no_task_reason(
+                            &mut summary_json,
+                            "active_exception_takeover_reclassifies_release_admission_operator_evidence_for_bounded_recovery",
+                        );
+                    }
                     if !summary_only && !as_json {
                         compact_status_projection_for_fast_operator_render(&mut summary_json);
                     }
@@ -3022,6 +3043,67 @@ fn incomplete_release_admission_operator_evidence_for_status(
         crate::runtime_consumption_state::release_admission_operator_evidence_incomplete(state_root)
     } else {
         Ok(true)
+    }
+}
+
+fn exception_takeover_scope_reclassifies_release_evidence(
+    root_session_write_guard: &serde_json::Value,
+) -> bool {
+    root_session_write_guard["status"].as_str() == Some("exception_takeover_active")
+        || root_session_write_guard["latest_lane_status"].as_str() == Some("lane_completed")
+            && root_session_write_guard["local_exception_takeover_gate"].as_str()
+                == Some("delegated_cycle_clear")
+}
+
+fn reclassify_retrieval_release_operator_contract_blockers(payload: &mut serde_json::Value) {
+    let reclassified = [
+        crate::contract_profile_adapter::blocker_code_str(
+            crate::contract_profile_adapter::BlockerCode::MissingRetrievalTrustSourceOperatorEvidence,
+        ),
+        crate::contract_profile_adapter::blocker_code_str(
+            crate::contract_profile_adapter::BlockerCode::MissingRetrievalTrustSignalOperatorEvidence,
+        ),
+        crate::contract_profile_adapter::blocker_code_str(
+            crate::contract_profile_adapter::BlockerCode::MissingRetrievalTrustOperatorEvidence,
+        ),
+        crate::contract_profile_adapter::blocker_code_str(
+            crate::contract_profile_adapter::BlockerCode::IncompleteReleaseAdmissionOperatorEvidence,
+        ),
+    ];
+    let Some(blockers) = payload["blocker_codes"].as_array_mut() else {
+        return;
+    };
+    blockers.retain(|code| {
+        code.as_str()
+            .is_none_or(|code| !reclassified.iter().any(|blocked| *blocked == code))
+    });
+    let blockers_empty = blockers.is_empty();
+    if let Some(actions) = payload["next_actions"].as_array_mut() {
+        actions.clear();
+    }
+    payload["status"] = serde_json::Value::String(if blockers_empty {
+        "pass".to_string()
+    } else {
+        "blocked".to_string()
+    });
+}
+
+fn annotate_operator_no_task_reason(payload: &mut serde_json::Value, reason: &str) {
+    for path in [
+        &["artifact_refs"][..],
+        &["shared_fields", "artifact_refs"][..],
+        &["operator_contracts", "artifact_refs"][..],
+    ] {
+        let mut current = &mut *payload;
+        for key in path {
+            current = &mut current[*key];
+        }
+        if let Some(object) = current.as_object_mut() {
+            object.insert(
+                "no_task_reason".to_string(),
+                serde_json::Value::String(reason.to_string()),
+            );
+        }
     }
 }
 

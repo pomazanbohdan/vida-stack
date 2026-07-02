@@ -3209,7 +3209,7 @@ fn critical_operator_default_toon_golden_matrix_keeps_json_explicit() {
         (
             "vida taskflow consume",
             &["taskflow", "consume", "--help"][..],
-            &["continue", "--json"][..],
+            &["continue", "team continue", "--json"][..],
         ),
         (
             "vida taskflow scheduler",
@@ -3315,6 +3315,63 @@ fn critical_operator_default_toon_golden_matrix_keeps_json_explicit() {
         run_command_json_allow_failure(&["taskflow", "consume", "continue", "--json"], &state_dir);
     assert_eq!(consume_json["surface"], "vida taskflow consume continue");
     assert!(consume_json["status"].is_string());
+
+    let team_help = run_and_assert_success(&["taskflow", "team", "continue", "--help"], &state_dir);
+    assert!(team_help.contains("vida taskflow team continue"));
+
+    let team_default = run_command_capture(&["taskflow", "team", "continue", "vida-a"], &state_dir);
+    assert!(
+        !team_default.stdout.is_empty(),
+        "team continue default should delegate to consume continue: stderr={}",
+        String::from_utf8_lossy(&team_default.stderr)
+    );
+    let team_stdout = String::from_utf8_lossy(&team_default.stdout);
+    assert!(
+        team_stdout.starts_with("vida taskflow consume continue\n"),
+        "team continue default should use canonical consume output: {team_stdout}"
+    );
+    vida_test_support::assert_non_json_human_output("vida taskflow team continue", &team_stdout);
+
+    let (team_json, _success) = run_command_json_allow_failure(
+        &["taskflow", "team", "continue", "vida-a", "--json"],
+        &state_dir,
+    );
+    assert_eq!(team_json["surface"], "vida taskflow consume continue");
+    assert!(team_json["status"].is_string());
+
+    for subcommand in ["status", "diagnose"] {
+        let help = run_and_assert_success(&["taskflow", "team", subcommand, "--help"], &state_dir);
+        assert!(help.contains("current_role"));
+        assert!(help.contains("last_receipt"));
+        assert!(help.contains("next_command"));
+
+        let default = run_command_capture(&["taskflow", "team", subcommand, "vida-a"], &state_dir);
+        assert!(
+            !default.stdout.is_empty(),
+            "team {subcommand} default should emit operator output: stderr={}",
+            String::from_utf8_lossy(&default.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&default.stdout);
+        assert!(stdout.starts_with(&format!("vida taskflow team {subcommand}\n")));
+        assert!(stdout.contains("task_id: vida-a"));
+        assert!(stdout.contains("next_command:"));
+        vida_test_support::assert_non_json_human_output(
+            &format!("vida taskflow team {subcommand}"),
+            &stdout,
+        );
+
+        let (json, _success) = run_command_json_allow_failure(
+            &["taskflow", "team", subcommand, "vida-a", "--json"],
+            &state_dir,
+        );
+        assert_eq!(json["surface"], format!("vida taskflow team {subcommand}"));
+        assert_eq!(json["task_id"], "vida-a");
+        assert!(json.get("current_role").is_some());
+        assert!(json.get("next_role").is_some());
+        assert!(json.get("pending_agent").is_some());
+        assert!(json.get("last_receipt").is_some());
+        assert!(json["next_command"].is_string());
+    }
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -13199,7 +13256,8 @@ fn work_pool_materialization_pass_resolves_identity_and_unblocks_next_pack_via_c
         "default recovery output should not expose resolved materialization blocker: {recovery_plain_text}"
     );
     assert!(
-        recovery_plain_text.contains("recommended_command: vida taskflow consume continue --run-id")
+        recovery_plain_text
+            .contains("recommended_command: vida taskflow consume continue --run-id")
             && recovery_plain_text.contains("--json"),
         "default recovery output should expose the machine-safe continuation command: {recovery_plain_text}"
     );
@@ -17260,6 +17318,24 @@ fn agent_host_bridge_complete_missing_host_agent_id_uses_state_dir_and_json_enve
         .expect("completion command should render")
         .contains("vida agent host-bridge --request"));
     assert_eq!(
+        ready_payload["host_bridge_auto_invocation"]["schema_version"],
+        "host-bridge-auto-invocation-v1"
+    );
+    assert_eq!(
+        ready_payload["host_bridge_auto_invocation"]["safe_to_auto_invoke"],
+        false
+    );
+    assert_eq!(
+        ready_payload["host_bridge_auto_invocation"]["result_contract"]["required_fields"],
+        serde_json::json!([
+            "decision",
+            "verdict",
+            "blocker_codes",
+            "rework_target",
+            "allowed_next_node"
+        ])
+    );
+    assert_eq!(
         ready_payload["shared_fields"]["artifact_refs"]["request_path"],
         request_path
     );
@@ -17312,6 +17388,165 @@ fn agent_host_bridge_complete_missing_host_agent_id_uses_state_dir_and_json_enve
         .as_str()
         .expect("next action should render")
         .contains("--host-agent-id"));
+
+    let _ = fs::remove_dir_all(state_dir);
+}
+
+#[test]
+fn agent_host_bridge_scaffold_result_generates_and_validates_analyst_pass_to_designer() {
+    let state_dir = unique_state_dir();
+    let bridge_dir = format!("{state_dir}/runtime-consumption/host-tool-bridge");
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    fs::create_dir_all(&bridge_dir).expect("create host bridge dir");
+    fs::create_dir_all(&packet_dir).expect("create packet dir");
+    let packet_path = format!("{packet_dir}/analyst.json");
+    let request_path = format!("{bridge_dir}/request.json");
+    let result_path = "runtime-consumption/host-tool-bridge/analyst-result.json";
+    fs::write(&packet_path, "{}").expect("write packet");
+    fs::write(
+        &request_path,
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-analyst-scaffold",
+            "run_id": "runtime-host-bridge-result-scaffold-20260701",
+            "task_id": "runtime-host-bridge-result-scaffold-20260701",
+            "dispatch_target": "analyst",
+            "allowed_next_node": "pass_to_designer",
+            "packet_path": packet_path,
+            "backend_id": "internal_subagents",
+            "carrier_id": "developer",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": "runtime-consumption/host-tool-bridge/analyst-receipt.json",
+            "required_result_fields": [
+                "decision",
+                "verdict",
+                "blocker_codes",
+                "rework_target",
+                "allowed_next_node"
+            ]
+        })
+        .to_string(),
+    )
+    .expect("write request");
+
+    let help = run_and_assert_success(&["agent", "host-bridge", "--help"], &state_dir);
+    assert!(help.contains("--scaffold-result"));
+    assert!(help.contains("--validate-result"));
+    assert!(help.contains("Default output is compact TOON/plain") || help.contains("--json"));
+    assert!(help.contains("--state-dir"));
+
+    let plain = run_and_assert_success(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request_path,
+            "--scaffold-result",
+            result_path,
+            "--state-dir",
+            &state_dir,
+        ],
+        &state_dir,
+    );
+    assert!(plain.contains("status"));
+    assert!(plain.contains("artifact_refs"));
+
+    let scaffold = run_command_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request_path,
+            "--scaffold-result",
+            result_path,
+            "--state-dir",
+            &state_dir,
+            "--host-agent-id",
+            "host-agent-analyst",
+            "--receipt-id",
+            "receipt-analyst",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(scaffold["mode"], "result_scaffold");
+    assert_eq!(scaffold["status"], "pass");
+    assert_eq!(scaffold["blocker_codes"], serde_json::json!([]));
+    assert_eq!(scaffold["result"]["decision"], "approve");
+    assert_eq!(scaffold["result"]["verdict"], "pass");
+    assert_eq!(scaffold["result"]["allowed_next_node"], "pass_to_designer");
+    assert_eq!(
+        scaffold["result"]["identity_binding"]["request_id"],
+        "req-analyst-scaffold"
+    );
+    assert_eq!(
+        scaffold["result"]["identity_binding"]["run_id"],
+        "runtime-host-bridge-result-scaffold-20260701"
+    );
+    assert_eq!(
+        scaffold["result"]["execution_evidence"]["host_agent_id"],
+        "host-agent-analyst"
+    );
+    assert_eq!(scaffold["artifact_refs"]["state_dir"], state_dir);
+    assert!(scaffold["next_actions"]
+        .as_array()
+        .expect("next actions should render")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .is_some_and(|text| text.contains("--validate-result"))));
+    let generated_result_path = scaffold["artifact_refs"]["result_path"]
+        .as_str()
+        .expect("result path should render")
+        .to_string();
+
+    let validation = run_command_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request_path,
+            "--validate-result",
+            &generated_result_path,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(validation["mode"], "result_validate");
+    assert_eq!(validation["status"], "pass");
+    assert_eq!(validation["blocker_codes"], serde_json::json!([]));
+
+    let blocked_result_path = "runtime-consumption/host-tool-bridge/blocked-result.json";
+    let blocked = run_command_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request_path,
+            "--scaffold-result",
+            blocked_result_path,
+            "--state-dir",
+            &state_dir,
+            "--blocker-code",
+            "designer_review_required",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(
+        blocked["result"]["blocker_codes"],
+        serde_json::json!(["designer_review_required"])
+    );
+    assert_eq!(blocked["result"]["verdict"], "blocked");
 
     let _ = fs::remove_dir_all(state_dir);
 }

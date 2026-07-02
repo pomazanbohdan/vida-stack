@@ -32,6 +32,11 @@ impl VidaCommand {
         self
     }
 
+    fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
+        self.command.env_remove(key);
+        self
+    }
+
     fn current_dir(&mut self, dir: impl AsRef<std::path::Path>) -> &mut Self {
         self.command.current_dir(dir);
         self
@@ -3247,6 +3252,138 @@ fn taskflow_next_outputs_default_toon_json_and_help_contracts() {
         help_stdout.contains("authoritative recompute"),
         "taskflow next help should document cache refresh behavior: {help_stdout}"
     );
+}
+
+#[test]
+fn taskflow_team_continue_outputs_help_default_json_and_state_dir_contracts() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert_success(&boot, "boot");
+
+    let team_help = vida()
+        .args(["taskflow", "team", "--help"])
+        .env_remove("VIDA_STATE_DIR")
+        .output()
+        .expect("taskflow team help should run");
+    assert_success(&team_help, "taskflow team help");
+    let help_stdout = String::from_utf8_lossy(&team_help.stdout);
+    assert!(help_stdout.contains("VIDA TaskFlow help: team"));
+    assert!(help_stdout.contains("vida taskflow team continue <task-id>"));
+    assert!(help_stdout.contains("Default human output uses compact TOON/plain"));
+    assert!(help_stdout.contains("--json emits the machine-readable operator contract"));
+    assert!(help_stdout.contains("--state-dir <path>"));
+
+    let continue_help = vida()
+        .args(["taskflow", "team", "continue", "--help"])
+        .env_remove("VIDA_STATE_DIR")
+        .output()
+        .expect("taskflow team continue help should run");
+    assert_success(&continue_help, "taskflow team continue help");
+    assert!(String::from_utf8_lossy(&continue_help.stdout).contains("VIDA TaskFlow help: team"));
+
+    let default_output = vida()
+        .args([
+            "taskflow",
+            "team",
+            "continue",
+            "activity-meeting-like-fixture",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow team continue default should run");
+    assert_failure(
+        &default_output,
+        "taskflow team continue default should fail closed without receipt",
+    );
+    let default_stdout = String::from_utf8_lossy(&default_output.stdout);
+    assert_not_json_output("vida taskflow team continue", &default_stdout);
+    assert_no_raw_terminal_controls("vida taskflow team continue", &default_stdout);
+    assert!(default_stdout.contains("missing_run_graph_dispatch_receipt"));
+    assert!(default_stdout.contains("artifact_refs:"));
+
+    let json_output = vida()
+        .args([
+            "taskflow",
+            "team",
+            "continue",
+            "activity-meeting-like-fixture",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ])
+        .env_remove("VIDA_STATE_DIR")
+        .output()
+        .expect("taskflow team continue json should run");
+    assert_failure(
+        &json_output,
+        "taskflow team continue json should fail closed without receipt",
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&json_output.stdout).expect("team continue json should parse");
+    assert_eq!(payload["surface"], "vida taskflow consume continue");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["missing_run_graph_dispatch_receipt"])
+    );
+    assert_eq!(
+        payload["artifact_refs"]["run_id"],
+        "activity-meeting-like-fixture"
+    );
+    assert_eq!(
+        payload["operator_contracts"]["artifact_refs"]["surface"],
+        "vida taskflow consume continue"
+    );
+    assert!(payload["next_actions"].as_array().is_some_and(|actions| {
+        actions.iter().any(|action| {
+            action
+                .as_str()
+                .is_some_and(|text| text.contains("vida taskflow consume continue"))
+        })
+    }));
+
+    let diagnose_output = vida()
+        .args([
+            "taskflow",
+            "team",
+            "diagnose",
+            "activity-meeting-like-fixture",
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ])
+        .env_remove("VIDA_STATE_DIR")
+        .output()
+        .expect("taskflow team diagnose json should run");
+    assert_failure(
+        &diagnose_output,
+        "taskflow team diagnose json should fail closed without receipt",
+    );
+    let diagnose_payload: serde_json::Value =
+        serde_json::from_slice(&diagnose_output.stdout).expect("team diagnose json should parse");
+    let diagnose_text =
+        serde_json::to_string(&diagnose_payload).expect("team diagnose json should render");
+    assert_eq!(
+        diagnose_payload["next_command"],
+        "vida taskflow team status activity-meeting-like-fixture"
+    );
+    for forbidden in [
+        "vida lane",
+        "vida taskflow run-graph",
+        "vida agent-init",
+        "vida agent host-bridge",
+    ] {
+        assert!(
+            !diagnose_text.contains(forbidden),
+            "team diagnose should not recommend manual bridge glue `{forbidden}`: {diagnose_text}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(project_root);
 }
 
 #[test]

@@ -105,6 +105,15 @@ fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> boo
     !crate::release1_contracts::release_admission_operator_evidence_snapshot(&summary_json)
 }
 
+fn exception_takeover_scope_reclassifies_release_evidence(
+    root_session_write_guard: &serde_json::Value,
+) -> bool {
+    root_session_write_guard["status"].as_str() == Some("exception_takeover_active")
+        || root_session_write_guard["latest_lane_status"].as_str() == Some("lane_completed")
+            && root_session_write_guard["local_exception_takeover_gate"].as_str()
+                == Some("delegated_cycle_clear")
+}
+
 fn trace_evidence_next_action() -> String {
     "Refresh task reconciliation, runtime consumption, run-graph dispatch receipt, protocol binding, and effective instruction bundle evidence before rerunning `vida doctor`.".to_string()
 }
@@ -307,6 +316,8 @@ fn doctor_operator_blocker_codes(
     trace_evidence_blocker_codes: Vec<String>,
 ) -> Vec<String> {
     let mut operator_blocker_codes: Vec<String> = Vec::new();
+    let active_exception_takeover =
+        exception_takeover_scope_reclassifies_release_evidence(root_session_write_guard);
 
     if !dependency_graph_issues.is_empty() {
         operator_blocker_codes
@@ -349,7 +360,7 @@ fn doctor_operator_blocker_codes(
             latest_final_snapshot_path,
             protocol_binding.latest_receipt_id.as_deref(),
         );
-    if retrieval_trust_signal.is_none() {
+    if retrieval_trust_signal.is_none() && !active_exception_takeover {
         operator_blocker_codes.push(
             blocker_code_str(BlockerCode::MissingRetrievalTrustSourceOperatorEvidence).to_string(),
         );
@@ -362,6 +373,7 @@ fn doctor_operator_blocker_codes(
     if latest_final_snapshot_path.is_none()
         && latest_recorded_final_snapshot_path
             .is_some_and(final_snapshot_missing_release_admission_evidence)
+        && !active_exception_takeover
     {
         operator_blocker_codes.push(
             blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence).to_string(),
@@ -385,6 +397,7 @@ fn doctor_operator_blocker_codes(
         && latest_run_graph_recovery
             .as_ref()
             .is_some_and(|summary| !summary.recovery_ready && !summary.is_terminal_closure())
+        && !active_exception_takeover
     {
         operator_blocker_codes
             .push(blocker_code_str(BlockerCode::RecoveryReadinessBlocked).to_string());
@@ -625,6 +638,25 @@ fn recovery_readiness_target_evidence(
             "task_id": serde_json::Value::Null,
             "reason": "recovery_readiness_blocked has no validated run_id; recovery and continue commands require concrete run/task evidence"
         }),
+    }
+}
+
+fn annotate_operator_no_task_reason(payload: &mut serde_json::Value, reason: &str) {
+    for path in [
+        &["artifact_refs"][..],
+        &["shared_fields", "artifact_refs"][..],
+        &["operator_contracts", "artifact_refs"][..],
+    ] {
+        let mut current = &mut *payload;
+        for key in path {
+            current = &mut current[*key];
+        }
+        if let Some(object) = current.as_object_mut() {
+            object.insert(
+                "no_task_reason".to_string(),
+                serde_json::Value::String(reason.to_string()),
+            );
+        }
     }
 }
 
@@ -1569,6 +1601,13 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         "latest_terminal_task_active_run_graph_status".to_string(),
                         serde_json::to_value(&latest_terminal_task_active_run_graph_status)
                             .expect("terminal task active run graph status should serialize"),
+                    );
+                }
+                if root_session_write_guard["status"].as_str() == Some("exception_takeover_active")
+                {
+                    annotate_operator_no_task_reason(
+                        &mut summary_json,
+                        "active_exception_takeover_reclassifies_release_admission_retrieval_trust_and_recovery_operator_evidence_for_bounded_recovery",
                     );
                 }
                 if let Some(error) = shared_operator_output_contract_parity_error(&summary_json) {

@@ -352,15 +352,28 @@ metadata discovered after creation.
 10. check parent/wave closure readiness,
 11. run runtime self-diagnostic when the task is architectural/process-shaped or
     closes a wave,
-12. release-install and smoke the system `vida` binary before treating a wave as
+12. run runtime self-diagnostic when closing a coherent task batch; the
+    diagnostic covers the whole batch after all included task closes and before
+    unrelated work selection,
+13. actualize project skill creation or updates through
+    `docs/process/agent-skill-learning-protocol.md`: collect close,
+    self-analysis, user-correction, and diagnostic events, classify whether a
+    skill update is required, record `no_skill_update_reason` when not required,
+    and stage or validate any bounded skill proposal before TaskFlow
+    next-selection,
+14. actualize TaskFlow last, immediately before deciding what to take into work
+    next: refresh task status, parent/child layer, priority, dependencies,
+    owned paths, proof targets, execution semantics, and sequential/parallel
+    posture from current evidence,
+15. release-install and smoke the system `vida` binary before treating a wave as
     operationally closed,
-13. for a runtime defect that blocked the current session, continuation, lane
+16. for a runtime defect that blocked the current session, continuation, lane
     execution, receipt/proof truth, or installed CLI behavior, run
     `vida release install --json` and an installed-binary smoke check after the
     focused fix proof unless the current explicit operator policy already
     requires a system build after every task; if release install cannot run,
     keep closure blocked or record the proof blocker,
-14. select the next task using the updated scorecard, self-analysis, and
+17. select the next task using the updated scorecard, self-analysis, and
     closure-distance data.
 
 ## Post-Task Self-Analysis Gate
@@ -566,7 +579,16 @@ Coherent work-pool execution:
    proof where it satisfies each task's acceptance target. If one row fails,
    split only that row or task with a recorded reason and keep passing rows
    attached to the pool evidence.
-8. Commit, push, release, and install per pool rather than per small task when
+8. After the included tasks are closed, run the runtime self-diagnostic once for
+   the whole pool and classify findings before selecting unrelated work.
+9. Actualize project skills through `docs/process/agent-skill-learning-protocol.md`
+   before final TaskFlow actualization: collect batch close, self-analysis,
+   diagnostic, and user-correction events; decide whether a skill update is
+   needed; record `no_skill_update_reason` or stage/validate a bounded proposal.
+10. Actualize TaskFlow last, immediately before next-work analysis, so candidate
+   tasks are ordered from current status, dependencies, proof targets,
+   execution semantics, and sequential/parallel posture.
+11. Commit, push, release, and install per pool rather than per small task when
    current publication and release rules allow it. The closure scorecard must
    report pool membership, posture, tasks closed, rows split, proof commands
    reused, operations saved, residual risks, and the next routing rule.
@@ -602,7 +624,12 @@ After every task, the orchestrator must track:
 16. PR/open-source intake state recorded: open PRs processed or explicitly kept
     open with reason, and processed issues closed or explicitly kept open with
     reason.
-17. Next routing rule written in the TaskFlow closure scorecard or relevant process-doc evidence.
+17. Project-skill learning actualization completed through
+    `docs/process/agent-skill-learning-protocol.md`, with accepted proposal,
+    staged proposal, rejection, or `no_skill_update_reason` recorded.
+18. Final TaskFlow actualization completed after skill-learning actualization
+    and before next-work selection.
+19. Next routing rule written in the TaskFlow closure scorecard or relevant process-doc evidence.
 
 If any checklist item cannot be proven, keep the current task or a follow-up
 TaskFlow item open instead of silently moving to unrelated work.

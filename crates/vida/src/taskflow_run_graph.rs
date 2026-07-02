@@ -5376,7 +5376,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
                 && matches!(flag.as_str(), "--help" | "-h") =>
         {
             eprintln!(
-                "Usage: vida taskflow recovery status <run-id> [--state-dir <path>] [--json]\n\nOutput:\n  default              Emit compact TOON operator output.\n  --json               Emit machine-readable JSON output."
+                "Usage: vida taskflow recovery status <run-id> [--state-dir <path>] [--json]\n\nField/view/detail selection:\n  Recovery surfaces use fixed diagnostic projections.\n  Use default output for compact operator text or --json for full machine-readable detail.\n  Recovery does not expose ad-hoc --fields, --view, or --details selectors.\n\nOutput:\n  default              Emit compact TOON operator output.\n  --json               Emit machine-readable JSON output."
             );
             ExitCode::SUCCESS
         }
@@ -5435,7 +5435,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         }
         [head, subcommand, ..] if head == "recovery" && subcommand == "status" => {
             eprintln!(
-                "Usage: vida taskflow recovery status <run-id> [--state-dir <path>] [--json]"
+                "Usage: vida taskflow recovery status <run-id> [--state-dir <path>] [--json]\nRecovery status is a fixed diagnostic projection; use --json for machine-readable detail."
             );
             ExitCode::from(2)
         }
@@ -5458,7 +5458,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                 && matches!(flag.as_str(), "--help" | "-h") =>
         {
             eprintln!(
-                "Usage: vida taskflow run-graph status <run-id> [--state-dir <path>] [--json]"
+                "Usage: vida taskflow run-graph status <run-id> [--state-dir <path>] [--json]\nRun-graph status is a fixed diagnostic projection; use --json for machine-readable detail.\nIt does not expose ad-hoc --fields, --view, or --details selectors."
             );
             ExitCode::SUCCESS
         }
@@ -5476,7 +5476,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                 && matches!(flag.as_str(), "--help" | "-h") =>
         {
             eprintln!(
-                "Usage: vida taskflow run-graph diagnose-latest [--state-dir <path>] [--json]"
+                "Usage: vida taskflow run-graph diagnose-latest [--state-dir <path>] [--json]\nRun-graph diagnose is a fixed diagnostic projection; use --json for machine-readable detail."
             );
             ExitCode::SUCCESS
         }
@@ -5486,7 +5486,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                 && matches!(flag.as_str(), "--help" | "-h") =>
         {
             eprintln!(
-                "Usage: vida taskflow run-graph diagnose <run-id> [--state-dir <path>] [--json]"
+                "Usage: vida taskflow run-graph diagnose <run-id> [--state-dir <path>] [--json]\nRun-graph diagnose is a fixed diagnostic projection; use --json for machine-readable detail."
             );
             ExitCode::SUCCESS
         }
@@ -5969,19 +5969,19 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         }
         [head, subcommand, ..] if head == "run-graph" && subcommand == "diagnose-latest" => {
             eprintln!(
-                "Usage: vida taskflow run-graph diagnose-latest [--state-dir <path>] [--json]"
+                "Usage: vida taskflow run-graph diagnose-latest [--state-dir <path>] [--json]\nRun-graph diagnose is a fixed diagnostic projection; use --json for machine-readable detail."
             );
             ExitCode::from(2)
         }
         [head, subcommand, ..] if head == "run-graph" && subcommand == "diagnose" => {
             eprintln!(
-                "Usage: vida taskflow run-graph diagnose <run-id> [--state-dir <path>] [--json]"
+                "Usage: vida taskflow run-graph diagnose <run-id> [--state-dir <path>] [--json]\nRun-graph diagnose is a fixed diagnostic projection; use --json for machine-readable detail."
             );
             ExitCode::from(2)
         }
         [head, subcommand, ..] if head == "run-graph" && subcommand == "status" => {
             eprintln!(
-                "Usage: vida taskflow run-graph status <run-id> [--state-dir <path>] [--json]"
+                "Usage: vida taskflow run-graph status <run-id> [--state-dir <path>] [--json]\nRun-graph status is a fixed diagnostic projection; use --json for machine-readable detail."
             );
             ExitCode::from(2)
         }
