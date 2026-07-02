@@ -60,20 +60,27 @@ select_python() {
   local candidate
   if [[ -n "${VIDA_PYTHON_BIN:-}" ]]; then
     candidate="$VIDA_PYTHON_BIN"
-    if command -v "$candidate" >/dev/null 2>&1 && python_candidate_allowed "$candidate" && "$candidate" --version >/dev/null 2>&1; then
+    if python_candidate_usable "$candidate"; then
       printf '%s\n' "$candidate"
       return 0
     fi
-    fail "VIDA_PYTHON_BIN does not point to a usable Python interpreter: $VIDA_PYTHON_BIN"
+    fail "VIDA_PYTHON_BIN does not point to a usable Python 3.9+ interpreter: $VIDA_PYTHON_BIN"
   fi
 
-  for candidate in python python3; do
-    if command -v "$candidate" >/dev/null 2>&1 && python_candidate_allowed "$candidate" && "$candidate" --version >/dev/null 2>&1; then
+  for candidate in python3 python; do
+    if python_candidate_usable "$candidate"; then
       printf '%s\n' "$candidate"
       return 0
     fi
   done
-  fail "Missing working Python command: tried VIDA_PYTHON_BIN, python, python3; WindowsApps/Python Manager shims are rejected"
+  fail "Missing working Python 3.9+ command: tried VIDA_PYTHON_BIN, python3, python; WindowsApps/Python Manager shims are rejected"
+}
+
+python_candidate_usable() {
+  local candidate="$1"
+  command -v "$candidate" >/dev/null 2>&1 \
+    && python_candidate_allowed "$candidate" \
+    && "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1
 }
 
 python_candidate_allowed() {
