@@ -2,9 +2,6 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
-use runtime_path_policy::{
-    read_bounded_text_file_under_root, ArtifactPathKind, PathPolicyError, StateRoot,
-};
 use serde_json::{json, Value};
 
 use crate::config_value_utils::{
@@ -139,15 +136,7 @@ fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, S
     let project_root = requirement_source_project_root()?;
     let relative_path = validate_requirement_source_path(path)?;
     reject_symlink_components(&project_root, &relative_path)?;
-    let state_root =
-        StateRoot::open(&project_root).map_err(|error| format!("{}: {error}", path.display()))?;
-    let content = read_bounded_text_file_under_root(
-        &state_root,
-        &relative_path,
-        ArtifactPathKind::RequirementSourceFile,
-        MAX_SOURCE_FILE_BYTES,
-    )
-    .map_err(|error| requirement_source_path_error(path, error))?;
+    let content = read_bounded_requirement_source_file(&project_root, &relative_path)?;
     let display_path = relative_path.display().to_string();
     let redaction = redact_requirement_source_content(content.trim());
     let digest = blake3::hash(redaction.public_text.as_bytes());
@@ -167,25 +156,38 @@ fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, S
     })
 }
 
-fn requirement_source_path_error(path: &Path, error: PathPolicyError) -> String {
-    match error {
-        PathPolicyError::Symlink { .. } => {
-            format!("{}: source file must not be a symlink", path.display())
-        }
-        PathPolicyError::NotRegularFile { .. } => {
-            format!("{}: source file must be a regular file", path.display())
-        }
-        PathPolicyError::TooLarge { max_bytes, .. } => {
-            format!(
-                "{}: source file exceeds {max_bytes} byte limit",
-                path.display()
-            )
-        }
-        other => format!("{}: {other}", path.display()),
+fn read_bounded_requirement_source_file(
+    project_root: &Path,
+    relative_path: &Path,
+) -> Result<String, String> {
+    let source_path = project_root.join(relative_path);
+    let metadata = fs::metadata(&source_path)
+        .map_err(|error| format!("{}: {error}", relative_path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{}: source file must be a regular file",
+            relative_path.display()
+        ));
     }
+    if metadata.len() > MAX_SOURCE_FILE_BYTES {
+        return Err(format!(
+            "{}: source file exceeds {MAX_SOURCE_FILE_BYTES} byte limit",
+            relative_path.display()
+        ));
+    }
+    fs::read_to_string(&source_path)
+        .map_err(|error| format!("{}: {error}", relative_path.display()))
 }
 
 fn requirement_source_project_root() -> Result<PathBuf, String> {
+    let current_dir =
+        std::env::current_dir().map_err(|error| format!("failed to resolve cwd: {error}"))?;
+    if let Some(project_root) = current_dir
+        .ancestors()
+        .find(|candidate| crate::looks_like_project_root(candidate))
+    {
+        return Ok(project_root.to_path_buf());
+    }
     crate::resolve_runtime_project_root()
 }
 
