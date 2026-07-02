@@ -94,7 +94,7 @@ Expand beyond it only when:
 artifact_path: process/project-orchestrator-startup-bundle
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-13'
+artifact_revision: '2026-07-01'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-startup-bundle.md
