@@ -5976,6 +5976,62 @@ fn taskflow_scheduling_actualize_cli_contract() {
     );
     assert_eq!(no_candidates["candidate_count"], 0);
 
+    let top_level_legacy = run_command_json(
+        &[
+            "task",
+            "create",
+            "taskflow-actualize-top-level",
+            "TaskFlow actualize top-level task",
+            "--parent-id",
+            "scheduling-actualize-root",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(top_level_legacy["status"], "pass");
+
+    let top_level_preview = run_command_json(
+        &[
+            "taskflow",
+            "actualize",
+            "--scope",
+            "scheduling-actualize-root",
+            "--state-dir",
+            state_dir.as_str(),
+            "--preview",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(
+        top_level_preview["surface"],
+        "vida taskflow scheduling actualize"
+    );
+    assert_eq!(top_level_preview["dry_run"], true);
+    assert_eq!(top_level_preview["apply"], false);
+    assert_eq!(top_level_preview["candidate_count"], 1);
+    assert_eq!(
+        top_level_preview["candidates"][0]["task_id"],
+        "taskflow-actualize-top-level"
+    );
+
+    let top_level_applied = run_command_json(
+        &[
+            "taskflow",
+            "actualize",
+            "--scope",
+            "scheduling-actualize-root",
+            "--state-dir",
+            state_dir.as_str(),
+            "--apply",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(top_level_applied["status"], "pass");
+    assert_eq!(top_level_applied["candidate_count"], 1);
+    assert_eq!(top_level_applied["applied_count"], 1);
+
     let help = run_command_capture(
         &["taskflow", "scheduling", "actualize", "--help"],
         &state_dir,
@@ -5990,6 +6046,18 @@ fn taskflow_scheduling_actualize_cli_contract() {
     assert!(help_text.contains("--scope"));
     assert!(help_text.contains("--dry-run"));
     assert!(help_text.contains("--apply"));
+
+    let top_level_help = run_command_capture(&["taskflow", "actualize", "--help"], &state_dir);
+    assert!(
+        top_level_help.status.success(),
+        "{}",
+        String::from_utf8_lossy(&top_level_help.stderr)
+    );
+    let top_level_help_text = String::from_utf8_lossy(&top_level_help.stdout);
+    assert!(top_level_help_text.contains("vida taskflow actualize"));
+    assert!(top_level_help_text.contains("--scope"));
+    assert!(top_level_help_text.contains("--preview"));
+    assert!(top_level_help_text.contains("--apply"));
 
     let missing_scope = run_command_capture(
         &[

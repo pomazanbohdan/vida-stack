@@ -6893,6 +6893,37 @@ async fn run_taskflow_scheduling_surface(args: &[String]) -> ExitCode {
     }
 }
 
+fn taskflow_actualize_alias_args(args: &[String]) -> Vec<String> {
+    let mut aliased = Vec::with_capacity(args.len() + 1);
+    aliased.push("scheduling".to_string());
+    aliased.push("actualize".to_string());
+    for arg in args.iter().skip(1) {
+        if arg == "--preview" {
+            aliased.push("--dry-run".to_string());
+        } else {
+            aliased.push(arg.clone());
+        }
+    }
+    aliased
+}
+
+fn print_taskflow_actualize_alias_help() {
+    println!(
+        "VIDA TaskFlow help: actualize\n\nPurpose:\n  Preview or apply conservative TaskFlow scheduling metadata actualization from live graph evidence.\n\nCanonical command:\n  vida taskflow actualize [--scope open-epics|<task-id>] [--preview|--apply] [--json]\n\nOptions:\n  --scope: open-epics or one scoped task id; defaults to open-epics\n  --preview: preview candidate changes without mutating state; default mode\n  --apply: apply proposed execution semantics to candidate tasks\n  --state-dir: override authoritative TaskFlow state directory\n  --json: emit machine-readable output\n\nAlias contract:\n  Reuses the canonical `vida taskflow scheduling actualize` implementation; --preview maps to --dry-run."
+    );
+}
+
+async fn run_taskflow_actualize_surface(args: &[String]) -> ExitCode {
+    if matches!(
+        args,
+        [head, flag] if head == "actualize" && matches!(flag.as_str(), "--help" | "-h")
+    ) {
+        print_taskflow_actualize_alias_help();
+        return ExitCode::SUCCESS;
+    }
+    run_taskflow_scheduling_surface(&taskflow_actualize_alias_args(args)).await
+}
+
 async fn run_taskflow_graph_surface(args: &[String]) -> ExitCode {
     let usage = "Usage: vida taskflow graph explain [task-id] [--scope <task-id>] [--current-task-id <task-id>] [--state-dir <path>] [--json]";
     if matches!(
@@ -14654,6 +14685,10 @@ async fn run_taskflow_proxy_impl(args: ProxyArgs) -> ExitCode {
 
     if matches!(args.args.first().map(String::as_str), Some("team")) {
         return run_taskflow_team_projection(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("actualize")) {
+        return run_taskflow_actualize_surface(&args.args).await;
     }
 
     if let Some(topic) = taskflow_help_topic(&args.args) {
