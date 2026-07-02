@@ -183,12 +183,51 @@ fn check_json_renders_blocked_and_pass_envelopes() {
     assert_eq!(pass_json["surface"], "docflow check");
     assert_eq!(pass_json["status"], "pass");
     assert_eq!(pass_json["row_count"], 0);
-    assert!(
-        pass_json["rows"]
-            .as_array()
-            .expect("rows should be an array")
-            .is_empty()
-    );
+    assert!(pass_json["rows"]
+        .as_array()
+        .expect("rows should be an array")
+        .is_empty());
+}
+
+#[test]
+fn check_default_and_json_bind_relative_paths_to_root() {
+    let context = vida_test_support::CommandContext::empty();
+    let root = unique_docflow_root("check-root-binding");
+    fs::create_dir_all(root.join("docs/process")).expect("process dir should be created");
+    fs::write(root.join("docs/process/a.md"), "# a\n").expect("process markdown");
+    let root_arg = root.to_string_lossy().to_string();
+
+    let default_output = run_docflow_owned(vec![
+        "check".to_string(),
+        "--root".to_string(),
+        root_arg.clone(),
+        "docs/process/a.md".to_string(),
+    ]);
+    assert_docflow_success(&context, &default_output);
+    let default_stdout = String::from_utf8_lossy(&default_output.stdout);
+    assert!(default_stdout.contains("\"path\":\"docs/process/a.md\""));
+    assert!(default_stdout.contains("\"missing_footer\""));
+    assert!(!default_stdout.contains(&root_arg));
+
+    let json_output = run_docflow_owned(vec![
+        "check".to_string(),
+        "--root".to_string(),
+        root_arg,
+        "--json".to_string(),
+        "docs/process/a.md".to_string(),
+    ]);
+    assert_docflow_success(&context, &json_output);
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&json_output.stdout).expect("check json should parse");
+    assert_eq!(parsed["surface"], "docflow check");
+    assert_eq!(parsed["status"], "blocked");
+    assert_eq!(parsed["rows"][0]["path"], "docs/process/a.md");
+    assert!(parsed["rows"][0]["issues"]
+        .as_array()
+        .expect("issues should be an array")
+        .contains(&serde_json::Value::String("missing_footer".to_string())));
+
+    fs::remove_dir_all(root).expect("root should be removed");
 }
 
 fn write_task_doc(root: &std::path::Path, task_id: &str) {
@@ -701,6 +740,22 @@ fn proofcheck_task_uses_root_docflow_evidence_with_default_profile() {
     )));
 
     fs::remove_dir_all(root).expect("root should be removed");
+}
+
+#[test]
+fn proofcheck_unsupported_format_fails_closed_with_diagnostics() {
+    let context = vida_test_support::CommandContext::empty();
+    let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args(["proofcheck", "--format", "xml"])
+        .output()
+        .expect("docflow proofcheck unsupported format should run");
+
+    assert!(output.status.success(), "{}", context.diagnostics(&output));
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("proofcheck json should parse");
+    assert_eq!(parsed["command"], "proofcheck");
+    assert_eq!(parsed["verdict"], "blocking");
+    assert_eq!(parsed["error"], "unsupported_format:xml");
 }
 
 #[test]

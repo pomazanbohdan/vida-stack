@@ -80,6 +80,38 @@ fn delegated_commands_bind_project_local_state_dir_when_missing() {
 }
 
 #[test]
+fn delegated_commands_preserve_explicit_state_dir() {
+    let bin_dir = temp_dir("taskflow-cli-bin");
+    write_mock_vida(&bin_dir);
+    let vida_bin = bin_dir.join(if cfg!(windows) { "vida.bat" } else { "vida" });
+    let project_root = temp_dir("taskflow-cli-project");
+    let explicit_state = temp_dir("taskflow-cli-explicit-state");
+    write_activated_project_root(&project_root);
+    let mut process_guard = vida_test_support::ProcessGuard::new();
+    process_guard.set_env("VIDA_TASKFLOW_VIDA_BIN", &vida_bin);
+    process_guard.set_env("VIDA_STATE_DIR", &explicit_state);
+    process_guard.change_current_dir(&project_root);
+    let context = vida_test_support::CommandContext::capture([
+        ("VIDA_TASKFLOW_VIDA_BIN", vida_bin.display().to_string()),
+        ("VIDA_STATE_DIR", explicit_state.display().to_string()),
+    ]);
+
+    let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_taskflow"))
+        .args(["validate-routing", "--json"])
+        .output()
+        .expect("taskflow binary should run");
+
+    assert!(output.status.success(), "{}", context.diagnostics(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("vida taskflow validate-routing --json"));
+    assert!(stdout.contains(&format!("VIDA_STATE_DIR={}", explicit_state.display())));
+    assert!(!stdout.contains(&format!(
+        "VIDA_STATE_DIR={}",
+        project_root.join(".vida/data/state").display()
+    )));
+}
+
+#[test]
 fn root_help_renders_without_delegation() {
     let context = vida_test_support::CommandContext::empty();
     let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_taskflow"))
@@ -91,6 +123,38 @@ fn root_help_renders_without_delegation() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Standalone TaskFlow CLI wrapper"));
     assert!(stdout.contains("validate-routing --json"));
+}
+
+#[test]
+fn delegated_command_fails_closed_when_vida_runtime_is_unavailable() {
+    let missing_vida = temp_dir("taskflow-cli-missing-bin").join(if cfg!(windows) {
+        "missing-vida.exe"
+    } else {
+        "missing-vida"
+    });
+    let project_root = temp_dir("taskflow-cli-project");
+    write_activated_project_root(&project_root);
+    let mut process_guard = vida_test_support::ProcessGuard::new();
+    process_guard.set_env("VIDA_TASKFLOW_VIDA_BIN", &missing_vida);
+    process_guard.unset_env("VIDA_STATE_DIR");
+    process_guard.change_current_dir(&project_root);
+    let context = vida_test_support::CommandContext::capture([
+        ("VIDA_TASKFLOW_VIDA_BIN", missing_vida.display().to_string()),
+        ("VIDA_STATE_DIR", "<unset>".to_string()),
+    ]);
+
+    let output = vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_taskflow"))
+        .args(["validate-routing", "--json"])
+        .output()
+        .expect("taskflow binary should run");
+
+    assert!(!output.status.success(), "{}", context.diagnostics(&output));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("taskflow"));
+    assert!(stderr.contains("status: blocked"));
+    assert!(stderr.contains("blocker_codes: [vida_runtime_unavailable]"));
+    assert!(stderr.contains("next_actions:"));
+    assert!(stderr.contains("VIDA_TASKFLOW_VIDA_BIN"));
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -31,6 +32,92 @@ fn run_vida_json_with_state(
         )
     });
     (payload, output.status.success())
+}
+
+struct HostBridgeFixture {
+    root: PathBuf,
+    state_root: PathBuf,
+    request_path: PathBuf,
+    result_path: PathBuf,
+    blocked_result_path: PathBuf,
+    invalid_result_path: PathBuf,
+    stale_result_path: PathBuf,
+    missing_result_path: PathBuf,
+}
+
+fn create_host_bridge_fixture(prefix: &str) -> HostBridgeFixture {
+    let root = unique_lane_state_root(prefix);
+    let state_root = root.join(".vida/data/state");
+    let bridge_dir = state_root.join("runtime-consumption/host-tool-bridge");
+    let packet_dir = state_root.join("runtime-consumption/dispatch-packets");
+    std::fs::create_dir_all(&bridge_dir).expect("create host bridge dir");
+    std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+    let packet_path = packet_dir.join("analyst.json");
+    let request_path = bridge_dir.join("request.json");
+    let result_path = bridge_dir.join("designer-pass.json");
+    let blocked_result_path = bridge_dir.join("designer-blocked.json");
+    let invalid_result_path = bridge_dir.join("invalid-next-lane.json");
+    let stale_result_path = bridge_dir.join("stale-result.json");
+    let missing_result_path = bridge_dir.join("missing-result.json");
+    std::fs::write(&packet_path, "{}").expect("write packet");
+    std::fs::write(
+        &request_path,
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-zombie-d-analyst",
+            "run_id": "run-zombie-d-analyst",
+            "task_id": "run-zombie-d-analyst",
+            "dispatch_target": "analyst",
+            "allowed_next_node": "designer",
+            "packet_path": packet_path,
+            "backend_id": "internal_subagents",
+            "carrier_id": "developer",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": bridge_dir.join("receipt.json"),
+            "required_result_fields": [
+                "decision",
+                "verdict",
+                "blocker_codes",
+                "rework_target",
+                "allowed_next_node"
+            ]
+        })
+        .to_string(),
+    )
+    .expect("write request");
+    HostBridgeFixture {
+        root,
+        state_root,
+        request_path,
+        result_path,
+        blocked_result_path,
+        invalid_result_path,
+        stale_result_path,
+        missing_result_path,
+    }
+}
+
+fn run_host_bridge_json(args: &[&str], state_root: &Path) -> (serde_json::Value, bool) {
+    run_vida_json_with_state(args, state_root)
+}
+
+fn assert_blocker(payload: &serde_json::Value, expected: &str) {
+    assert_eq!(payload["status"].as_str(), Some("blocked"));
+    assert!(
+        payload["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should render")
+            .iter()
+            .any(|code| code.as_str() == Some(expected)),
+        "expected blocker {expected}: {payload}"
+    );
 }
 
 #[test]
@@ -274,6 +361,147 @@ fn host_bridge_completion_command_does_not_read_packet_outside_state_root() {
     assert!(!command.contains("--allowed-next-node"));
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn host_bridge_zombie_d_result_validation_matrix_covers_boundary_rows() {
+    let fixture = create_host_bridge_fixture("vida-host-bridge-zombie-d-matrix");
+    let request = fixture.request_path.to_string_lossy().to_string();
+    let result = fixture.result_path.to_string_lossy().to_string();
+    let blocked_result = fixture.blocked_result_path.to_string_lossy().to_string();
+    let invalid_result = fixture.invalid_result_path.to_string_lossy().to_string();
+    let stale_result = fixture.stale_result_path.to_string_lossy().to_string();
+    let missing_result = fixture.missing_result_path.to_string_lossy().to_string();
+
+    let (scaffold, scaffold_success) = run_host_bridge_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request,
+            "--scaffold-result",
+            &result,
+            "--host-agent-id",
+            "host-agent-zombie-d",
+            "--receipt-id",
+            "receipt-zombie-d",
+            "--json",
+        ],
+        &fixture.state_root,
+    );
+    assert!(
+        scaffold_success,
+        "valid analyst->designer scaffold: {scaffold}"
+    );
+    assert_eq!(scaffold["mode"], "result_scaffold");
+    assert_eq!(scaffold["result"]["allowed_next_node"], "designer");
+    assert_eq!(
+        scaffold["result"]["identity_binding"]["request_id"],
+        "req-zombie-d-analyst"
+    );
+
+    let (valid, valid_success) = run_host_bridge_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request,
+            "--validate-result",
+            &result,
+            "--json",
+        ],
+        &fixture.state_root,
+    );
+    assert!(valid_success, "valid analyst->designer result: {valid}");
+    assert_eq!(valid["validation"]["accepted_completion"], true);
+    assert_eq!(valid["validation"]["final_state"], "Passed");
+
+    let mut invalid_next: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&fixture.result_path).expect("read result"))
+            .expect("parse scaffolded result");
+    invalid_next["allowed_next_node"] = serde_json::json!("invalid-next-lane");
+    std::fs::write(&fixture.invalid_result_path, invalid_next.to_string())
+        .expect("write invalid next result");
+    let (invalid, invalid_success) = run_host_bridge_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request,
+            "--validate-result",
+            &invalid_result,
+            "--json",
+        ],
+        &fixture.state_root,
+    );
+    assert!(!invalid_success, "invalid next lane should fail closed");
+    assert_blocker(&invalid, "invalid_allowed_next_node_for_execution_plan");
+
+    let (missing, missing_success) = run_host_bridge_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request,
+            "--validate-result",
+            &missing_result,
+            "--json",
+        ],
+        &fixture.state_root,
+    );
+    assert!(!missing_success, "missing result should fail closed");
+    assert_blocker(&missing, "host_bridge_result_unreadable");
+
+    let mut stale: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&fixture.result_path).expect("read result"))
+            .expect("parse scaffolded result");
+    stale["request_id"] = serde_json::json!("stale-request");
+    stale["identity_binding"]["request_id"] = serde_json::json!("stale-request");
+    std::fs::write(&fixture.stale_result_path, stale.to_string()).expect("write stale result");
+    let (stale_payload, stale_success) = run_host_bridge_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request,
+            "--validate-result",
+            &stale_result,
+            "--json",
+        ],
+        &fixture.state_root,
+    );
+    assert!(!stale_success, "stale result should fail closed");
+    assert_blocker(&stale_payload, "host_bridge_result_request_id_mismatch");
+
+    let (blocked, blocked_success) = run_host_bridge_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request,
+            "--scaffold-result",
+            &blocked_result,
+            "--blocker-code",
+            "designer_review_required",
+            "--json",
+        ],
+        &fixture.state_root,
+    );
+    assert!(
+        blocked_success,
+        "blocked result scaffold stays valid: {blocked}"
+    );
+    assert_eq!(blocked["result"]["verdict"], "blocked");
+    assert_eq!(
+        blocked["validation"]["validation"]["accepted_completion"],
+        false
+    );
+    assert_eq!(
+        blocked["validation"]["validation"]["authority_blocker_codes"],
+        serde_json::json!(["designer_review_required"])
+    );
+
+    let _ = std::fs::remove_dir_all(&fixture.root);
 }
 
 #[test]
