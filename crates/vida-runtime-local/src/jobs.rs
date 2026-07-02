@@ -343,6 +343,16 @@ pub struct EffectumEnqueueReceipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostBridgeRequestEnqueueReceipt {
+    pub job_id: DurableJobId,
+    pub effectum_job_id: String,
+    pub request_id: String,
+    pub duplicate: bool,
+    pub queue_path: PathBuf,
+    pub trace: Vec<DurableJobTraceEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EffectumOutboxWorker {
     pub command_operation: VidaOperation,
 }
@@ -362,6 +372,17 @@ struct EffectumOutboxJobPayload {
     runner: String,
     next_action: String,
     claimed_by: Option<String>,
+    trace: Vec<DurableJobTraceEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HostBridgeRequestJobPayload {
+    job_id: String,
+    request_id: String,
+    run_id: Option<String>,
+    authority: String,
+    runner: String,
+    next_action: String,
     trace: Vec<DurableJobTraceEntry>,
 }
 
@@ -657,6 +678,59 @@ pub async fn enqueue_outbox_job_idempotently(
                 Err(RuntimeLocalJobError::EnqueueEffectumJob {
                     job_id: plan.job_id.0.clone(),
                     outbox_id: plan.outbox_id.0.clone(),
+                    detail: error.to_string(),
+                })
+            }
+        }
+    }
+}
+
+pub async fn enqueue_host_bridge_request_job_idempotently(
+    queue: &EffectumQueue,
+    config: &EffectumQueueConfig,
+    snapshot: &HostBridgeRequestJobSnapshot,
+    policy: &RetryPolicy,
+) -> Result<HostBridgeRequestEnqueueReceipt, RuntimeLocalJobError> {
+    let plan = plan_host_bridge_request_job(snapshot, policy);
+    if matches!(
+        plan.lifecycle,
+        DurableJobLifecycle::Succeeded | DurableJobLifecycle::DeadLettered
+    ) {
+        return Err(RuntimeLocalJobError::EnqueueTerminalDurableJob {
+            job_id: plan.job_id.0.clone(),
+            lifecycle: plan.lifecycle.clone(),
+        });
+    }
+
+    let effectum_job_id = deterministic_effectum_job_id(&plan.job_id);
+    if queue.get_job_status(effectum_job_id).await.is_ok() {
+        return Ok(host_bridge_enqueue_receipt(
+            config,
+            snapshot,
+            &plan,
+            effectum_job_id,
+            true,
+        ));
+    }
+
+    let job = effectum_host_bridge_job_for_plan(snapshot, &plan, policy, effectum_job_id)?;
+    match queue.add_job(job).await {
+        Ok(job_id) => Ok(host_bridge_enqueue_receipt(
+            config, snapshot, &plan, job_id, false,
+        )),
+        Err(error) => {
+            if queue.get_job_status(effectum_job_id).await.is_ok() {
+                Ok(host_bridge_enqueue_receipt(
+                    config,
+                    snapshot,
+                    &plan,
+                    effectum_job_id,
+                    true,
+                ))
+            } else {
+                Err(RuntimeLocalJobError::EnqueueEffectumJob {
+                    job_id: plan.job_id.0.clone(),
+                    outbox_id: snapshot.request_id.clone(),
                     detail: error.to_string(),
                 })
             }
@@ -1021,6 +1095,35 @@ fn effectum_job_for_plan(
     Ok(job)
 }
 
+fn effectum_host_bridge_job_for_plan(
+    snapshot: &HostBridgeRequestJobSnapshot,
+    plan: &DurableJobPlan,
+    policy: &RetryPolicy,
+    effectum_job_id: uuid::Uuid,
+) -> Result<Job, RuntimeLocalJobError> {
+    let payload = HostBridgeRequestJobPayload {
+        job_id: plan.job_id.0.clone(),
+        request_id: snapshot.request_id.clone(),
+        run_id: snapshot.run_id.clone(),
+        authority: "host_bridge_request".to_string(),
+        runner: "parent_host_adapter".to_string(),
+        next_action: plan.next_action.clone(),
+        trace: plan.trace.clone(),
+    };
+    let mut job = Job::builder(HOST_BRIDGE_ADAPTER_REQUEST_WORKER)
+        .name(&plan.job_id.0)
+        .json_payload(&payload)
+        .map_err(|error| RuntimeLocalJobError::SerializeEffectumJobPayload {
+            job_id: plan.job_id.0.clone(),
+            detail: error.to_string(),
+        })?
+        .max_retries(policy.max_attempts.try_into().unwrap_or(u32::MAX))
+        .backoff_initial_interval(Duration::from_secs(policy.base_backoff_seconds))
+        .build();
+    job.id = effectum_job_id;
+    Ok(job)
+}
+
 fn enqueue_receipt(
     config: &EffectumQueueConfig,
     plan: &DurableJobPlan,
@@ -1038,6 +1141,29 @@ fn enqueue_receipt(
         effectum_job_id: effectum_job_id.to_string(),
         outbox_id: plan.outbox_id.clone(),
         effect_id: plan.effect_id.clone(),
+        duplicate,
+        queue_path: config.sqlite_path.clone(),
+        trace,
+    }
+}
+
+fn host_bridge_enqueue_receipt(
+    config: &EffectumQueueConfig,
+    snapshot: &HostBridgeRequestJobSnapshot,
+    plan: &DurableJobPlan,
+    effectum_job_id: uuid::Uuid,
+    duplicate: bool,
+) -> HostBridgeRequestEnqueueReceipt {
+    let mut trace = plan.trace.clone();
+    trace.push(trace_entry("effectum_job_id", &effectum_job_id.to_string()));
+    trace.push(trace_entry(
+        "effectum_enqueue",
+        if duplicate { "duplicate" } else { "created" },
+    ));
+    HostBridgeRequestEnqueueReceipt {
+        job_id: plan.job_id.clone(),
+        effectum_job_id: effectum_job_id.to_string(),
+        request_id: snapshot.request_id.clone(),
         duplicate,
         queue_path: config.sqlite_path.clone(),
         trace,
@@ -1464,6 +1590,94 @@ mod tests {
             first.next_action,
             "enqueue_host_bridge_adapter_request_idempotently"
         );
+    }
+
+    #[tokio::test]
+    async fn host_bridge_request_enqueue_is_idempotent_by_request_id() {
+        let dir = tempdir().unwrap();
+        let config = EffectumQueueConfig::new(dir.path().join("host-bridge-jobs.sqlite"));
+        let queue = open_effectum_queue(&config).await.unwrap();
+        let request = serde_json::json!({
+            "request_id": "req-idempotent",
+            "run_id": "run-1",
+            "status": "pending",
+            "attempt_count": 0
+        });
+        let snapshot =
+            HostBridgeRequestJobSnapshot::from_request(&request).expect("request snapshot");
+
+        let first = enqueue_host_bridge_request_job_idempotently(
+            &queue,
+            &config,
+            &snapshot,
+            &RetryPolicy::default(),
+        )
+        .await
+        .unwrap();
+        let second = enqueue_host_bridge_request_job_idempotently(
+            &queue,
+            &config,
+            &snapshot,
+            &RetryPolicy::default(),
+        )
+        .await
+        .unwrap();
+
+        assert!(!first.duplicate);
+        assert!(second.duplicate);
+        assert_eq!(first.effectum_job_id, second.effectum_job_id);
+        assert_eq!(first.request_id, "req-idempotent");
+        assert!(
+            second
+                .trace
+                .iter()
+                .any(|entry| entry.kind == "effectum_enqueue" && entry.detail == "duplicate")
+        );
+    }
+
+    #[tokio::test]
+    async fn reopened_effectum_queue_preserves_host_bridge_request_job_for_restart_replay() {
+        let dir = tempdir().unwrap();
+        let config = EffectumQueueConfig::new(dir.path().join("host-bridge-restart.sqlite"));
+        let request = serde_json::json!({
+            "request_id": "req-restart",
+            "run_id": "run-1",
+            "status": "pending",
+            "attempt_count": 0
+        });
+        let snapshot =
+            HostBridgeRequestJobSnapshot::from_request(&request).expect("request snapshot");
+        let first_job_id = {
+            let queue = open_effectum_queue(&config).await.unwrap();
+            enqueue_host_bridge_request_job_idempotently(
+                &queue,
+                &config,
+                &snapshot,
+                &RetryPolicy::default(),
+            )
+            .await
+            .unwrap()
+            .effectum_job_id
+        };
+
+        let reopened = open_effectum_queue(&config).await.unwrap();
+        let duplicate = enqueue_host_bridge_request_job_idempotently(
+            &reopened,
+            &config,
+            &snapshot,
+            &RetryPolicy::default(),
+        )
+        .await
+        .unwrap();
+        let status = reopened
+            .get_job_status(uuid::Uuid::parse_str(&first_job_id).unwrap())
+            .await
+            .unwrap();
+
+        assert!(duplicate.duplicate);
+        assert_eq!(duplicate.effectum_job_id, first_job_id);
+        assert_eq!(status.state, effectum::JobState::Pending);
+        assert_eq!(status.job_type, HOST_BRIDGE_ADAPTER_REQUEST_WORKER);
     }
 
     #[test]
