@@ -2498,6 +2498,64 @@ fn resume_from_persisted_final_snapshot(
     ))
 }
 
+fn latest_final_snapshot_matches_run_and_packet(
+    store: &super::StateStore,
+    run_id: &str,
+    packet_path: &str,
+) -> Result<bool, String> {
+    let snapshot_path = match super::latest_final_runtime_consumption_snapshot_path(store.root())? {
+        Some(path) => Some(path),
+        None => super::latest_recorded_final_runtime_consumption_snapshot_path(store.root())?,
+    };
+    let Some(snapshot_path) = snapshot_path else {
+        return Ok(false);
+    };
+    let snapshot_body = match std::fs::read_to_string(&snapshot_path) {
+        Ok(body) => body,
+        Err(_) => return Ok(false),
+    };
+    let snapshot_json = match serde_json::from_str::<serde_json::Value>(&snapshot_body) {
+        Ok(snapshot) => snapshot,
+        Err(_) => return Ok(false),
+    };
+    let payload_json = snapshot_json.get("payload").unwrap_or(&snapshot_json);
+    let snapshot_run_id = snapshot_json
+        .get("source_run_id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            payload_json
+                .get("dispatch_receipt")
+                .and_then(|receipt| receipt.get("run_id"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if snapshot_run_id != Some(run_id) {
+        return Ok(false);
+    }
+    let snapshot_packet_path = snapshot_json
+        .get("source_dispatch_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            payload_json
+                .get("source_dispatch_packet_path")
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            payload_json
+                .get("dispatch_receipt")
+                .and_then(|receipt| receipt.get("dispatch_packet_path"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    Ok(snapshot_packet_path.is_some_and(|snapshot_packet_path| {
+        runtime_packet_paths_equivalent(snapshot_packet_path, packet_path)
+            || normalized_runtime_packet_path_text(snapshot_packet_path)
+                == normalized_runtime_packet_path_text(packet_path)
+    }))
+}
+
 fn resume_from_latest_admissible_final_snapshot(
     store: &super::StateStore,
     run_id: &str,
@@ -3140,7 +3198,14 @@ async fn validate_run_graph_resume_state_for_downstream_packet_candidate(
             packet_path,
             run_id,
             active_receipt.as_ref(),
-        ) {
+        ) || active_receipt.as_ref().is_some_and(|receipt| {
+            downstream_packet_candidate_has_packet_ready_receipt(
+                packet,
+                packet_path,
+                run_id,
+                receipt,
+            )
+        }) {
             return Ok(());
         }
     }
@@ -3196,12 +3261,22 @@ fn downstream_packet_candidate_has_receipt_backed_ready_evidence(
     if receipt.is_some_and(|receipt| {
         receipt.run_id == run_id
             && receipt.downstream_dispatch_ready
-            && receipt.downstream_dispatch_blockers.is_empty()
             && receipt
                 .downstream_dispatch_packet_path
                 .as_deref()
                 .map(str::trim)
-                == Some(packet_path.trim())
+                .is_some_and(|path| {
+                    runtime_packet_paths_equivalent(path, packet_path)
+                        || normalized_runtime_packet_path_text(path)
+                            == normalized_runtime_packet_path_text(packet_path)
+                })
+            && receipt
+                .downstream_dispatch_status
+                .as_deref()
+                .map(|status| canonical_resume_dispatch_status(Some(status)))
+                == Some("packet_ready")
+            && receipt.downstream_dispatch_target.as_deref().map(str::trim)
+                == Some(candidate_target)
     }) {
         return true;
     }
@@ -3255,6 +3330,205 @@ fn downstream_packet_candidate_has_receipt_backed_ready_evidence(
         .map(str::trim)
         .is_some_and(|value| !value.is_empty())
         && !packet_path.trim().is_empty()
+}
+
+fn downstream_packet_candidate_has_packet_ready_receipt(
+    packet: &serde_json::Value,
+    _packet_path: &str,
+    run_id: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    if receipt.run_id != run_id
+        || canonical_resume_dispatch_status(Some(receipt.dispatch_status.as_str()))
+            != "packet_ready"
+    {
+        return false;
+    }
+    let Some(candidate_target) = packet
+        .get("downstream_dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    receipt.dispatch_target == candidate_target
+        && packet
+            .get("downstream_dispatch_ready")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        && packet
+            .get("downstream_dispatch_blockers")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|blockers| blockers.is_empty())
+}
+
+fn downstream_packet_identity_drift_is_ready_packet(
+    error: &str,
+    packet: &serde_json::Value,
+) -> bool {
+    error.contains("Persisted dispatch receipt expects dispatch_packet_path")
+        && packet
+            .get("downstream_dispatch_ready")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        && packet
+            .get("downstream_dispatch_blockers")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|blockers| blockers.is_empty())
+        && packet
+            .get("downstream_dispatch_status")
+            .and_then(serde_json::Value::as_str)
+            .map(|status| canonical_resume_dispatch_status(Some(status)))
+            == Some("packet_ready")
+}
+
+fn normalized_runtime_packet_path_text(path: &str) -> String {
+    path.trim().replace('\\', "/").to_ascii_lowercase()
+}
+
+fn recovery_projection_safe_run_id(run_id: &str) -> bool {
+    !run_id.trim().is_empty()
+        && !run_id
+            .chars()
+            .any(|ch| matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+}
+
+fn normalized_resume_node_token(value: &str) -> String {
+    value.trim().replace('_', "-")
+}
+
+fn ready_downstream_dispatch_packet_path_from_recovery_projection(
+    store: &super::StateStore,
+    run_id: &str,
+) -> Result<Option<String>, String> {
+    const RECOVERY_PROJECTION_READ_LIMIT_BYTES: u64 = 1024 * 1024;
+
+    if !recovery_projection_safe_run_id(run_id) {
+        return Ok(None);
+    }
+    let projection_path = store
+        .root()
+        .join("operator-projections")
+        .join(format!("taskflow-recovery-status-{run_id}.json"));
+    let Ok(metadata) = std::fs::symlink_metadata(&projection_path) else {
+        return Ok(None);
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > RECOVERY_PROJECTION_READ_LIMIT_BYTES
+    {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&projection_path).map_err(|error| {
+        format!(
+            "Failed to read recovery projection `{}`: {error}",
+            projection_path.display()
+        )
+    })?;
+    if raw.len() as u64 > RECOVERY_PROJECTION_READ_LIMIT_BYTES {
+        return Ok(None);
+    }
+    let projection: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "Failed to parse recovery projection `{}`: {error}",
+            projection_path.display()
+        )
+    })?;
+    if projection.get("status").and_then(serde_json::Value::as_str) != Some("pass")
+        || !projection
+            .get("blocker_codes")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|codes| codes.is_empty())
+    {
+        return Ok(None);
+    }
+    let recovery = projection
+        .get("recovery")
+        .unwrap_or(&serde_json::Value::Null);
+    let Some(resume_node) = recovery
+        .get("resume_node")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    if !recovery
+        .get("recovery_ready")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    let dispatch_receipt = projection
+        .get("dispatch_receipt")
+        .unwrap_or(&serde_json::Value::Null);
+    if dispatch_receipt
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        != Some(run_id)
+        || !dispatch_receipt
+            .get("downstream_dispatch_ready")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        || dispatch_receipt
+            .get("downstream_dispatch_status")
+            .and_then(serde_json::Value::as_str)
+            .map(|status| canonical_resume_dispatch_status(Some(status)))
+            != Some("packet_ready")
+    {
+        return Ok(None);
+    }
+    let Some(target) = dispatch_receipt
+        .get("downstream_dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    if normalized_resume_node_token(target) != normalized_resume_node_token(resume_node) {
+        return Ok(None);
+    }
+    let Some(packet_path) = dispatch_receipt
+        .get("downstream_dispatch_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Ok(packet) = read_dispatch_packet_for_store(store, packet_path) else {
+        return Ok(None);
+    };
+    let packet_target = packet
+        .get("downstream_dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if packet.get("run_id").and_then(serde_json::Value::as_str) != Some(run_id)
+        || !packet
+            .get("downstream_dispatch_ready")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        || !packet
+            .get("downstream_dispatch_blockers")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|blockers| blockers.is_empty())
+        || packet
+            .get("downstream_dispatch_status")
+            .and_then(serde_json::Value::as_str)
+            .map(|status| canonical_resume_dispatch_status(Some(status)))
+            != Some("packet_ready")
+        || normalized_resume_node_token(packet_target) != normalized_resume_node_token(resume_node)
+    {
+        return Ok(None);
+    }
+    if latest_final_snapshot_matches_run_and_packet(store, run_id, packet_path)? {
+        return Ok(None);
+    }
+    Ok(Some(packet_path.to_string()))
 }
 
 fn packet_nonempty_string_array(packet: &serde_json::Value, key: &str) -> bool {
@@ -3702,7 +3976,7 @@ fn dispatch_packet_json_and_path_from_state_root_absolute_path(
     path: &str,
     state_root: &std::path::Path,
 ) -> Option<(serde_json::Value, std::path::PathBuf)> {
-    const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 1024 * 1024;
+    const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 4 * 1024 * 1024;
 
     let path = path.trim();
     if path.is_empty() {
@@ -4811,12 +5085,27 @@ async fn resume_inputs_from_downstream_packet(
             ));
         }
     };
-    validate_receipt_packet_pair(
+    match validate_receipt_packet_pair(
         &root_receipt,
         &packet,
         packet_path,
         "downstream dispatch packet",
-    )?;
+    ) {
+        Ok(()) => {}
+        Err(error)
+            if downstream_packet_candidate_has_receipt_backed_ready_evidence(
+                &packet,
+                packet_path,
+                &run_id,
+                Some(&root_receipt),
+            ) || downstream_packet_candidate_has_packet_ready_receipt(
+                &packet,
+                packet_path,
+                &run_id,
+                &root_receipt,
+            ) || downstream_packet_identity_drift_is_ready_packet(&error, &packet) => {}
+        Err(error) => return Err(error),
+    }
     if packet
         .get("downstream_dispatch_target")
         .and_then(serde_json::Value::as_str)
@@ -4833,12 +5122,28 @@ async fn resume_inputs_from_downstream_packet(
             packet["downstream_dispatch_target"] = serde_json::json!(target);
         }
     }
-    validate_run_graph_resume_state_for_downstream_packet_candidate(
+    match validate_run_graph_resume_state_for_downstream_packet_candidate(
         store,
         &run_id,
         Some((&packet, packet_path)),
     )
-    .await?;
+    .await
+    {
+        Ok(()) => {}
+        Err(error)
+            if downstream_packet_candidate_has_receipt_backed_ready_evidence(
+                &packet,
+                packet_path,
+                &run_id,
+                Some(&root_receipt),
+            ) || downstream_packet_candidate_has_packet_ready_receipt(
+                &packet,
+                packet_path,
+                &run_id,
+                &root_receipt,
+            ) || downstream_packet_identity_drift_is_ready_packet(&error, &packet) => {}
+        Err(error) => return Err(error),
+    }
     let role_selection = decode_role_selection_from_packet(&packet, "downstream dispatch packet")?;
     let dispatch_target = packet
         .get("downstream_dispatch_target")
@@ -4996,7 +5301,7 @@ async fn resume_inputs_from_downstream_packet(
         exception_path_receipt_id,
         dispatch_kind,
         dispatch_surface,
-        dispatch_command,
+        dispatch_command: dispatch_command.clone(),
         dispatch_packet_path: Some(packet_path.to_string()),
         dispatch_result_path: None,
         blocker_code: if missing_lane_evidence_blocker
@@ -5010,13 +5315,13 @@ async fn resume_inputs_from_downstream_packet(
         } else {
             None
         },
-        downstream_dispatch_target: None,
-        downstream_dispatch_command: None,
+        downstream_dispatch_target: Some(dispatch_target.to_string()),
+        downstream_dispatch_command: dispatch_command.clone(),
         downstream_dispatch_note: downstream_dispatch_note.filter(|_| dispatch_status == "blocked"),
-        downstream_dispatch_ready: false,
+        downstream_dispatch_ready,
         downstream_dispatch_blockers: Vec::new(),
-        downstream_dispatch_packet_path: None,
-        downstream_dispatch_status: None,
+        downstream_dispatch_packet_path: Some(packet_path.to_string()),
+        downstream_dispatch_status: downstream_dispatch_status.clone(),
         downstream_dispatch_result_path: None,
         downstream_dispatch_trace_path: None,
         downstream_dispatch_executed_count: packet
@@ -5071,6 +5376,11 @@ async fn maybe_resume_inputs_from_ready_downstream_packet(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     if !packet_ready {
+        return Ok(None);
+    }
+    let run_id_for_snapshot_guard = requested_run_id.unwrap_or(receipt.run_id.as_str());
+    if latest_final_snapshot_matches_run_and_packet(store, run_id_for_snapshot_guard, packet_path)?
+    {
         return Ok(None);
     }
     resume_inputs_from_downstream_packet(store, requested_run_id, packet_path)
@@ -6629,6 +6939,21 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     {
         validate_run_graph_resume_state_strict(store, &resolved_run_id).await?;
     }
+    if let Some(packet_path) =
+        ready_downstream_dispatch_packet_path_from_recovery_projection(store, &resolved_run_id)?
+    {
+        let resume =
+            resume_inputs_from_downstream_packet(store, Some(&resolved_run_id), &packet_path)
+                .await?;
+        record_run_graph_replay_lineage_receipt_for_resume(
+            store,
+            &receipt,
+            &resume,
+            "ready_downstream_packet_after_recovery_projection",
+        )
+        .await?;
+        return Ok(resume);
+    }
     let packet_path = receipt
         .dispatch_packet_path
         .clone()
@@ -6689,7 +7014,22 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     if strict_blocked_receipts && receipt.dispatch_target == "specification" {
         validate_run_graph_resume_state_strict(store, &resolved_run_id).await?;
     }
-    validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
+    match validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet") {
+        Ok(()) => {}
+        Err(error)
+            if downstream_packet_candidate_has_receipt_backed_ready_evidence(
+                &packet,
+                &packet_path,
+                &resolved_run_id,
+                Some(&receipt),
+            ) || downstream_packet_candidate_has_packet_ready_receipt(
+                &packet,
+                &packet_path,
+                &resolved_run_id,
+                &receipt,
+            ) || downstream_packet_identity_drift_is_ready_packet(&error, &packet) => {}
+        Err(error) => return Err(error),
+    }
     let resume = build_resume_inputs(receipt.clone(), packet_path, packet, role_selection);
     record_run_graph_replay_lineage_receipt_for_resume(
         store,
@@ -7992,6 +8332,26 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 .as_str()
                 .to_string();
                 dispatch_receipt.blocker_code = None;
+            }
+            if receipt_has_ready_downstream_packet(&dispatch_receipt) {
+                return match emit_runtime_consumption_resume_json(
+                    &store,
+                    surface_name,
+                    &dispatch_packet_path,
+                    &dispatch_receipt,
+                    &role_selection,
+                    requested_run_id.as_deref(),
+                    emit_output,
+                    as_json,
+                )
+                .await
+                {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        ExitCode::from(1)
+                    }
+                };
             }
             if consume_continue_should_defer_agent_handoff(surface_name, &dispatch_receipt) {
                 if let Err(error) = sync_run_graph_after_resumed_execution(

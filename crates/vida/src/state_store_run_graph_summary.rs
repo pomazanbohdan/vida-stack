@@ -23,7 +23,7 @@ use taskflow_core::run_graph::model::{
     RunGraphTransitionKind as CoreRunGraphTransitionKind,
 };
 
-const MAX_RECONCILED_PACK_DISPATCH_PACKET_BYTES: u64 = 1024 * 1024;
+const MAX_RECONCILED_PACK_DISPATCH_PACKET_BYTES: u64 = 4 * 1024 * 1024;
 
 fn run_graph_dispatch_lane_receipt_id(
     run_id: &str,
@@ -3603,7 +3603,7 @@ impl StateStore {
             return Err(invalid_reconciled_pack_dispatch_packet_error(
                 &candidate_path,
                 format!(
-                    "materialized pack dispatch packet is {} bytes, exceeding the 1 MiB intake cap",
+                    "materialized pack dispatch packet is {} bytes, exceeding the 4 MiB intake cap",
                     metadata.len()
                 ),
             ));
@@ -4472,6 +4472,9 @@ impl StateStore {
             if dispatch_packet_path_matches_receipt(
                 receipt.dispatch_packet_path.as_deref(),
                 dispatch_packet_path,
+            ) || dispatch_packet_path_matches_receipt(
+                receipt.downstream_dispatch_packet_path.as_deref(),
+                dispatch_packet_path,
             ) {
                 return Ok(Some(receipt));
             }
@@ -4490,6 +4493,9 @@ impl StateStore {
         let Some(receipt) = rows.into_iter().find(|receipt| {
             dispatch_packet_path_matches_receipt(
                 receipt.dispatch_packet_path.as_deref(),
+                dispatch_packet_path,
+            ) || dispatch_packet_path_matches_receipt(
+                receipt.downstream_dispatch_packet_path.as_deref(),
                 dispatch_packet_path,
             )
         }) else {
@@ -6571,7 +6577,7 @@ mod tests {
 
         match error {
             StateStoreError::InvalidTaskRecord { reason } => {
-                assert!(reason.contains("1 MiB intake cap"));
+                assert!(reason.contains("4 MiB intake cap"));
             }
             other => panic!("expected InvalidTaskRecord, got {other:?}"),
         }
