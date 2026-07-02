@@ -126,6 +126,132 @@ function Test-ProtectedPath {
     return $false
 }
 
+
+function Get-RegisteredWorktreePaths {
+    $paths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    try {
+        $lines = & git -C $ProjectRoot worktree list --porcelain 2>$null
+        foreach ($line in $lines) {
+            if ($line -like "worktree *") {
+                $path = $line.Substring("worktree ".Length)
+                if (-not [string]::IsNullOrWhiteSpace($path)) {
+                    try {
+                        $resolved = (Resolve-Path -LiteralPath $path -ErrorAction Stop).Path
+                        [void]$paths.Add($resolved)
+                    } catch {
+                        [void]$paths.Add($path)
+                    }
+                }
+            }
+        }
+    } catch {
+        # Fail closed for worktree-like cleanup if the registry cannot be read.
+    }
+    return $paths
+}
+
+function Test-DirectoryEmpty {
+    param([string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer) {
+        return $false
+    }
+
+    $firstChild = Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+    return $null -eq $firstChild
+}
+
+function Test-StaleCargoLeanCtxCopyTree {
+    param([string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer) {
+        return $false
+    }
+
+    $expected = Join-Path $Path "Users\pomaz\.cargo\bin\lean-ctx.exe"
+    if (-not (Test-Path -LiteralPath $expected -PathType Leaf)) {
+        return $false
+    }
+
+    $allowedRoots = @("Users")
+    $rootChildren = Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop
+    foreach ($child in $rootChildren) {
+        if ($allowedRoots -notcontains $child.Name) {
+            return $false
+        }
+    }
+
+    $allowedPrefixes = @(
+        $Path,
+        (Join-Path $Path "Users"),
+        (Join-Path $Path "Users\pomaz"),
+        (Join-Path $Path "Users\pomaz\.cargo"),
+        (Join-Path $Path "Users\pomaz\.cargo\bin"),
+        $expected
+    )
+
+    Get-ChildItem -LiteralPath $Path -Force -Recurse -ErrorAction Stop | ForEach-Object {
+        $fullName = $_.FullName
+        $allowed = $false
+        foreach ($allowedPath in $allowedPrefixes) {
+            if ($fullName -eq $allowedPath) {
+                $allowed = $true
+                break
+            }
+        }
+        if (-not $allowed) {
+            throw "Unexpected content under stale C:\c cleanup candidate: $fullName"
+        }
+    }
+
+    return $true
+}
+
+function Test-SafeToDeleteCandidate {
+    param(
+        [string]$ResolvedPath,
+        [System.Collections.Generic.HashSet[string]]$RegisteredWorktrees
+    )
+
+    if ($RegisteredWorktrees.Contains($ResolvedPath)) {
+        return [pscustomobject]@{ Safe = $false; Reason = "registered_worktree" }
+    }
+
+    if ($ResolvedPath -eq "C:\project\vida-stack-test-temp" -or $ResolvedPath.StartsWith("C:\project\vida-stack-vh", [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($RegisteredWorktrees.Count -eq 0) {
+            return [pscustomobject]@{ Safe = $false; Reason = "worktree_registry_unavailable" }
+        }
+    }
+
+    if ($ResolvedPath -eq "C:\project\vida-stack\.vida\worktrees" -or $ResolvedPath -eq "C:\project\vida-stack\.vida\cache") {
+        if (-not (Test-DirectoryEmpty $ResolvedPath)) {
+            return [pscustomobject]@{ Safe = $false; Reason = "not_empty" }
+        }
+    }
+
+    if ($ResolvedPath -eq "C:\c") {
+        try {
+            if (-not (Test-StaleCargoLeanCtxCopyTree $ResolvedPath)) {
+                return [pscustomobject]@{ Safe = $false; Reason = "unexpected_c_drive_content" }
+            }
+        } catch {
+            return [pscustomobject]@{ Safe = $false; Reason = "unexpected_c_drive_content" }
+        }
+    }
+
+    $broadRootDirectories = @("C:\manifest", "C:\sstables", "C:\wal", "C:\vlog")
+    if ($broadRootDirectories -contains $ResolvedPath) {
+        $item = Get-Item -LiteralPath $ResolvedPath -Force -ErrorAction Stop
+        if ($item.PSIsContainer -and -not (Test-DirectoryEmpty $ResolvedPath)) {
+            return [pscustomobject]@{ Safe = $false; Reason = "unvalidated_non_empty_root_directory" }
+        }
+    }
+
+    return [pscustomobject]@{ Safe = $true; Reason = "safe" }
+}
+
 function Get-PathSize {
     param([string]$Path)
 
@@ -200,6 +326,7 @@ if (Test-Path -LiteralPath "C:\temp") {
 }
 
 $results = @()
+$registeredWorktrees = Get-RegisteredWorktreePaths
 
 foreach ($candidate in $candidates) {
     if (-not (Test-Path -LiteralPath $candidate)) {
@@ -216,6 +343,19 @@ foreach ($candidate in $candidates) {
             Status = "refused"
             Files = 0
             MiB = 0
+            Reason = $(if (-not $allowed) { "not_allowlisted" } else { "protected" })
+        }
+        continue
+    }
+
+    $safety = Test-SafeToDeleteCandidate $resolved $registeredWorktrees
+    if (-not $safety.Safe) {
+        $results += [pscustomobject]@{
+            Path = $resolved
+            Status = "skipped_safety"
+            Files = 0
+            MiB = 0
+            Reason = $safety.Reason
         }
         continue
     }
@@ -241,6 +381,7 @@ foreach ($candidate in $candidates) {
         Status = $status
         Files = $size.Files
         MiB = [math]::Round($size.Bytes / 1MB, 2)
+        Reason = "safe"
     }
 }
 
