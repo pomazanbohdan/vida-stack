@@ -106,6 +106,8 @@ pub enum RuntimeLocalJobError {
         outbox_id: String,
         detail: String,
     },
+    #[error("existing Effectum host-bridge job `{job_id}` is not an idempotent replay: {detail}")]
+    HostBridgeEffectumJobMismatch { job_id: String, detail: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -703,7 +705,8 @@ pub async fn enqueue_host_bridge_request_job_idempotently(
     }
 
     let effectum_job_id = deterministic_effectum_job_id(&plan.job_id);
-    if queue.get_job_status(effectum_job_id).await.is_ok() {
+    if let Ok(status) = queue.get_job_status(effectum_job_id).await {
+        validate_existing_host_bridge_request_job(&status, snapshot, &plan)?;
         return Ok(host_bridge_enqueue_receipt(
             config,
             snapshot,
@@ -719,7 +722,8 @@ pub async fn enqueue_host_bridge_request_job_idempotently(
             config, snapshot, &plan, job_id, false,
         )),
         Err(error) => {
-            if queue.get_job_status(effectum_job_id).await.is_ok() {
+            if let Ok(status) = queue.get_job_status(effectum_job_id).await {
+                validate_existing_host_bridge_request_job(&status, snapshot, &plan)?;
                 Ok(host_bridge_enqueue_receipt(
                     config,
                     snapshot,
@@ -1093,6 +1097,60 @@ fn effectum_job_for_plan(
         .build();
     job.id = effectum_job_id;
     Ok(job)
+}
+
+fn validate_existing_host_bridge_request_job(
+    status: &effectum::JobStatus,
+    snapshot: &HostBridgeRequestJobSnapshot,
+    plan: &DurableJobPlan,
+) -> Result<(), RuntimeLocalJobError> {
+    if status.job_type != HOST_BRIDGE_ADAPTER_REQUEST_WORKER {
+        return Err(RuntimeLocalJobError::HostBridgeEffectumJobMismatch {
+            job_id: plan.job_id.0.clone(),
+            detail: format!(
+                "job_type `{}` does not match `{}`",
+                status.job_type, HOST_BRIDGE_ADAPTER_REQUEST_WORKER
+            ),
+        });
+    }
+
+    if status.name.as_deref() != Some(plan.job_id.0.as_str()) {
+        return Err(RuntimeLocalJobError::HostBridgeEffectumJobMismatch {
+            job_id: plan.job_id.0.clone(),
+            detail: format!(
+                "name `{:?}` does not match `{}`",
+                status.name, plan.job_id.0
+            ),
+        });
+    }
+
+    let payload: HostBridgeRequestJobPayload =
+        serde_json::from_slice(&status.payload).map_err(|error| {
+            RuntimeLocalJobError::HostBridgeEffectumJobMismatch {
+                job_id: plan.job_id.0.clone(),
+                detail: format!("payload is not a HostBridgeRequestJobPayload: {error}"),
+            }
+        })?;
+
+    let expected = HostBridgeRequestJobPayload {
+        job_id: plan.job_id.0.clone(),
+        request_id: snapshot.request_id.clone(),
+        run_id: snapshot.run_id.clone(),
+        authority: "host_bridge_request".to_string(),
+        runner: "parent_host_adapter".to_string(),
+        next_action: plan.next_action.clone(),
+        trace: plan.trace.clone(),
+    };
+
+    if payload != expected {
+        return Err(RuntimeLocalJobError::HostBridgeEffectumJobMismatch {
+            job_id: plan.job_id.0.clone(),
+            detail: "payload does not match request_id/run_id/authority/runner/action/trace"
+                .to_string(),
+        });
+    }
+
+    Ok(())
 }
 
 fn effectum_host_bridge_job_for_plan(
@@ -1678,6 +1736,57 @@ mod tests {
         assert_eq!(duplicate.effectum_job_id, first_job_id);
         assert_eq!(status.state, effectum::JobState::Pending);
         assert_eq!(status.job_type, HOST_BRIDGE_ADAPTER_REQUEST_WORKER);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_request_enqueue_rejects_poisoned_duplicate_job() {
+        let dir = tempdir().unwrap();
+        let config = EffectumQueueConfig::new(dir.path().join("host-bridge-poisoned.sqlite"));
+        let queue = open_effectum_queue(&config).await.unwrap();
+        let request = serde_json::json!({
+            "request_id": "req-poisoned",
+            "run_id": "run-1",
+            "status": "pending",
+            "attempt_count": 0
+        });
+        let snapshot =
+            HostBridgeRequestJobSnapshot::from_request(&request).expect("request snapshot");
+        let plan = plan_host_bridge_request_job(&snapshot, &RetryPolicy::default());
+        let effectum_job_id = deterministic_effectum_job_id(&plan.job_id);
+        let poisoned_payload = HostBridgeRequestJobPayload {
+            job_id: plan.job_id.0.clone(),
+            request_id: "attacker-request".to_string(),
+            run_id: Some("attacker-run".to_string()),
+            authority: "attacker_authority".to_string(),
+            runner: "parent_host_adapter".to_string(),
+            next_action: "attacker-controlled-action".to_string(),
+            trace: plan.trace.clone(),
+        };
+        let mut poisoned_job = Job::builder(HOST_BRIDGE_ADAPTER_REQUEST_WORKER)
+            .name("attacker-controlled-name")
+            .json_payload(&poisoned_payload)
+            .unwrap()
+            .build();
+        poisoned_job.id = effectum_job_id;
+        queue.add_job(poisoned_job).await.unwrap();
+
+        let error = enqueue_host_bridge_request_job_idempotently(
+            &queue,
+            &config,
+            &snapshot,
+            &RetryPolicy::default(),
+        )
+        .await
+        .expect_err("poisoned duplicate must fail closed");
+
+        assert!(
+            matches!(
+                error,
+                RuntimeLocalJobError::HostBridgeEffectumJobMismatch { ref job_id, .. }
+                    if job_id == "host-bridge-request-req-poisoned"
+            ),
+            "unexpected error variant: {error:?}"
+        );
     }
 
     #[test]
