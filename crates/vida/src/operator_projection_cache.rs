@@ -491,10 +491,32 @@ fn apply_runtime_continuation_binding_overlay_to_payload_with_cache_status(
         "continuation_binding".to_string(),
         continuation_binding.clone(),
     );
+    let active_bounded_unit = continuation_binding
+        .get("active_bounded_unit")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     object.insert(
         "active_bounded_unit".to_string(),
-        continuation_binding
-            .get("active_bounded_unit")
+        active_bounded_unit.clone(),
+    );
+    object.insert(
+        "active_step".to_string(),
+        active_bounded_unit
+            .get("active_step")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        "active_parent_task".to_string(),
+        active_bounded_unit
+            .get("active_parent_task")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    );
+    object.insert(
+        "active_epic".to_string(),
+        active_bounded_unit
+            .get("active_epic")
             .cloned()
             .unwrap_or(serde_json::Value::Null),
     );
@@ -1551,7 +1573,16 @@ mod tests {
                 "active_bounded_unit": {
                     "kind": "task_graph_task",
                     "run_id": "run-overlay",
-                    "task_id": "task-overlay"
+                    "task_id": "task-overlay",
+                    "active_step": {
+                        "task_id": "step-overlay"
+                    },
+                    "active_parent_task": {
+                        "task_id": "task-overlay"
+                    },
+                    "active_epic": {
+                        "task_id": "epic-overlay"
+                    }
                 },
                 "binding_source": "explicit_continuation_bind_task",
                 "why_this_unit": "test overlay",
@@ -1567,7 +1598,16 @@ mod tests {
                 "active_bounded_unit": {
                     "kind": "task_graph_task",
                     "run_id": "run-overlay",
-                    "task_id": "task-overlay"
+                    "task_id": "task-overlay",
+                    "active_step": {
+                        "task_id": "step-overlay"
+                    },
+                    "active_parent_task": {
+                        "task_id": "task-overlay"
+                    },
+                    "active_epic": {
+                        "task_id": "epic-overlay"
+                    }
                 },
                 "binding_source": "explicit_continuation_bind_task",
                 "why_this_unit": "test overlay",
@@ -1627,6 +1667,9 @@ mod tests {
             "task-overlay"
         );
         assert_eq!(rendered["active_bounded_unit"]["task_id"], "task-overlay");
+        assert_eq!(rendered["active_step"]["task_id"], "step-overlay");
+        assert_eq!(rendered["active_parent_task"]["task_id"], "task-overlay");
+        assert_eq!(rendered["active_epic"]["task_id"], "epic-overlay");
         assert_eq!(
             rendered["projection_cache"]["status"],
             "state_marker_stale_recent_projection_with_runtime_continuation_overlay"
