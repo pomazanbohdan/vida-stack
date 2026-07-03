@@ -202,7 +202,7 @@ pub fn host_bridge_request_status_allows_parent_completion(
     request_status: &str,
     retryable_completion_evidence: bool,
 ) -> bool {
-    request_status == "pending" || retryable_completion_evidence
+    matches!(request_status, "pending" | "retryable_blocked") || retryable_completion_evidence
 }
 
 #[must_use]
@@ -228,7 +228,7 @@ pub fn host_bridge_completed_result_status_is_admissible(status: &str) -> bool {
 
 #[must_use]
 pub fn host_bridge_completed_result_execution_state_is_admissible(execution_state: &str) -> bool {
-    matches!(execution_state, "executed" | "blocked")
+    matches!(execution_state, "executed" | "completed" | "blocked")
 }
 
 #[must_use]
@@ -492,6 +492,24 @@ pub fn host_bridge_result_verdict_contract_blockers(
     blockers
 }
 
+#[must_use]
+pub fn host_bridge_result_declares_no_code_change(result: Option<&Value>) -> bool {
+    let Some(result) = result else {
+        return false;
+    };
+    [
+        "artifact_kind",
+        "implementation_result",
+        "patch_status",
+        "change_class",
+    ]
+    .into_iter()
+    .filter_map(|field| result.get(field).and_then(Value::as_str))
+    .map(str::trim)
+    .map(|value| value.to_ascii_lowercase().replace('-', "_"))
+    .any(|value| matches!(value.as_str(), "no_code_change" | "no_code"))
+}
+
 fn push_unique_blocker(blockers: &mut Vec<String>, blocker: &str) {
     if !blockers.iter().any(|value| value == blocker) {
         blockers.push(blocker.to_string());
@@ -646,6 +664,10 @@ mod tests {
         assert!(host_bridge_request_status_allows_parent_completion(
             "blocked", true
         ));
+        assert!(host_bridge_request_status_allows_parent_completion(
+            "retryable_blocked",
+            false
+        ));
         assert!(!host_bridge_request_status_allows_parent_completion(
             "blocked", false
         ));
@@ -785,6 +807,36 @@ mod tests {
             ),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn no_code_change_result_must_be_explicit() {
+        let result = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "decision": "approve",
+            "verdict": "pass",
+            "blocker_codes": [],
+            "rework_target": null,
+            "allowed_next_node": "closure",
+            "artifact_kind": "no_code_change"
+        });
+        assert!(host_bridge_result_declares_no_code_change(Some(&result)));
+
+        let implicit_empty_patch = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "decision": "approve",
+            "verdict": "pass",
+            "blocker_codes": [],
+            "rework_target": null,
+            "allowed_next_node": "closure",
+            "patches": [],
+            "changed_files": []
+        });
+        assert!(!host_bridge_result_declares_no_code_change(Some(
+            &implicit_empty_patch
+        )));
     }
 
     #[test]

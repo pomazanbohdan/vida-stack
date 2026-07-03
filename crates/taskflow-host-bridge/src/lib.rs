@@ -36,9 +36,9 @@ pub use completion::{
     host_bridge_request_requires_implementation_artifacts,
     host_bridge_request_status_after_completion,
     host_bridge_request_status_allows_parent_completion,
-    host_bridge_result_verdict_contract_blockers, host_bridge_result_verdict_fields,
-    host_bridge_result_verdict_fields_for_gate, materialize_host_bridge_completion_evidence,
-    normalize_host_bridge_provenance_for_completion,
+    host_bridge_result_declares_no_code_change, host_bridge_result_verdict_contract_blockers,
+    host_bridge_result_verdict_fields, host_bridge_result_verdict_fields_for_gate,
+    materialize_host_bridge_completion_evidence, normalize_host_bridge_provenance_for_completion,
 };
 pub use completion_authority::{
     BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_PROVENANCE_REJECTED, BLOCKER_RECEIPT_NOT_BOUND,
