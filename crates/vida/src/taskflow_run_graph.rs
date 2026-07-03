@@ -17422,6 +17422,16 @@ agent_system:
             "# Design-backed reseed canonicalization qwen blocker\n\nStatus: `approved`\n\n## Bounded File Set\n- `crates/vida/src/taskflow_run_graph.rs`\n- `crates/vida/src/taskflow_consume.rs`\n- `crates/vida/src/taskflow_consume_resume.rs`\n- `crates/vida/src/runtime_dispatch_state.rs`\n",
         )
         .expect("write approved design doc");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "dispatch-init-reseed-bound-worker-claim",
+                bound_task_id,
+                bound_task_id,
+                "runtime-recovery-contract",
+                "crates/vida/src/taskflow_run_graph.rs",
+            )
+            .await
+            .expect("current session should claim reseeded bound run");
 
         let payload = run_graph_dispatch_init(&store, requested_run_id)
             .await
@@ -17639,21 +17649,21 @@ agent_system:
             .await
             .expect("activation snapshot should be written");
         let existing = RunGraphStatus {
-            run_id: "task-direct-test-author".to_string(),
-            task_id: "task-direct-test-author".to_string(),
+            run_id: "task-direct-developer".to_string(),
+            task_id: "task-direct-developer".to_string(),
             task_class: "implementation".to_string(),
             active_node: "planning".to_string(),
-            next_node: Some("junior".to_string()),
+            next_node: Some("developer".to_string()),
             status: "ready".to_string(),
             route_task_class: "implementation".to_string(),
-            selected_backend: "junior".to_string(),
+            selected_backend: "internal_subagents".to_string(),
             lane_id: "planning_lane".to_string(),
             lifecycle_stage: "implementation_dispatch_ready".to_string(),
             policy_gate: "not_required".to_string(),
-            handoff_state: "awaiting_junior".to_string(),
+            handoff_state: "awaiting_developer".to_string(),
             context_state: "sealed".to_string(),
             checkpoint_kind: "execution_cursor".to_string(),
-            resume_target: "dispatch.junior".to_string(),
+            resume_target: "dispatch.developer_lane".to_string(),
             recovery_ready: true,
         };
         store
@@ -17665,8 +17675,8 @@ agent_system:
             .await
             .expect("seeded writer run should advance");
 
-        assert_eq!(payload.status.active_node, "junior");
-        assert_eq!(payload.status.lifecycle_stage, "junior_active");
+        assert_eq!(payload.status.active_node, "developer");
+        assert_eq!(payload.status.lifecycle_stage, "developer_active");
         assert_eq!(payload.status.next_node.as_deref(), Some("coach"));
         assert_eq!(payload.status.handoff_state, "awaiting_coach");
     }

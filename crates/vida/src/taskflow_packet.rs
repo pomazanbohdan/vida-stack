@@ -481,12 +481,12 @@ async fn repair_persisted_dispatch_packet_from_task(
     let mut packet = read_packet_body(dispatch_packet_path)?;
     validate_packet_repair_binding(run_id, task, &status, &receipt, &packet)?;
     let mut repaired = repair_delivery_task_packet_identity(&mut packet);
+    repaired |= reconcile_dispatch_packet_owned_paths_from_task(&mut packet, task);
     if let Some(lane_repaired) =
         reconcile_dispatch_packet_lane_contract_from_task(&mut packet, task)
     {
         repaired |= lane_repaired;
     }
-    repaired |= reconcile_dispatch_packet_owned_paths_from_task(&mut packet, task);
     crate::validate_runtime_dispatch_packet_contract(&packet, "Repaired dispatch packet").map_err(
         |error| {
             format!("execution_preparation_gate_blocked: {error}; dispatch packet `{display_path}`")
