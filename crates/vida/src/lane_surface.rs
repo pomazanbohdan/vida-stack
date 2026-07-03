@@ -11419,6 +11419,16 @@ mod tests {
             .record_run_graph_dispatch_receipt(&receipt)
             .await
             .expect("persist exception-recorded receipt");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "lane-supersede-exception-takeover-claim",
+                run_id,
+                run_id,
+                "run-graph-continuation-ownership",
+                "crates/vida/src/lane_surface.rs",
+            )
+            .await
+            .expect("current session should claim lane supersede fixture");
         drop(store);
         wait_for_state_unlock(&root);
 
