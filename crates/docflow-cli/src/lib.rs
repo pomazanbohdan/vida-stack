@@ -16,7 +16,11 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
+#[cfg(windows)]
+use std::ffi::OsString;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode};
 use time::format_description::well_known::Rfc3339;
 
@@ -3436,11 +3440,71 @@ struct ProtocolCompressionInventoryPayload {
     invalid: Vec<ProtocolCompressionInventoryRow>,
 }
 
-fn token_count_for_path(path: &std::path::Path) -> Option<u64> {
-    let output = ProcessCommand::new("tiktoken-cli")
+fn trusted_tokenizer_path_for(input_path: &Path) -> Option<PathBuf> {
+    let project_root = detect_project_root_for(input_path);
+    let current_dir = env::current_dir().ok();
+    let path_entries = env::var_os("PATH")?;
+
+    for dir in env::split_paths(&path_entries) {
+        if dir.as_os_str().is_empty() || !dir.is_absolute() {
+            continue;
+        }
+
+        for candidate in tokenizer_candidates(&dir) {
+            let Ok(canonical_candidate) = candidate.canonicalize() else {
+                continue;
+            };
+            if !canonical_candidate.is_file() {
+                continue;
+            }
+            if path_is_under(&canonical_candidate, project_root.as_deref()) {
+                continue;
+            }
+            if path_is_under(&canonical_candidate, current_dir.as_deref()) {
+                continue;
+            }
+            return Some(canonical_candidate);
+        }
+    }
+
+    None
+}
+
+fn tokenizer_candidates(dir: &Path) -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let pathext =
+            env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+        let mut candidates = vec![dir.join("tiktoken-cli")];
+        for ext in env::split_paths(&pathext).flat_map(|path| path.into_os_string().into_string()) {
+            let normalized = if ext.starts_with('.') {
+                ext
+            } else {
+                format!(".{ext}")
+            };
+            candidates.push(dir.join(format!("tiktoken-cli{normalized}")));
+        }
+        candidates
+    }
+    #[cfg(not(windows))]
+    {
+        vec![dir.join("tiktoken-cli")]
+    }
+}
+
+fn path_is_under(path: &Path, root: Option<&Path>) -> bool {
+    root.and_then(|value| value.canonicalize().ok())
+        .filter(|root| root.parent().is_some())
+        .is_some_and(|root| path.starts_with(root))
+}
+
+fn token_count_for_path(path: &Path) -> Option<u64> {
+    let tokenizer = trusted_tokenizer_path_for(path)?;
+    let tokenized_path = path.canonicalize().ok()?;
+    let output = ProcessCommand::new(tokenizer)
         .arg("--model")
         .arg("gpt-4o")
-        .arg(path)
+        .arg(tokenized_path)
         .output()
         .ok()?;
     if !output.status.success() {
@@ -5412,13 +5476,14 @@ fn collect_tree_issues(
 mod tests {
     use super::{
         Cli, activation_issue_for, protocol_compression_hash_content, protocol_coverage_issue_for,
-        run, run_with_exit, sha256_hex,
+        run, run_with_exit, sha256_hex, trusted_tokenizer_path_for,
     };
     use clap::Parser;
     use serde_json::Value;
     use std::fs;
     use std::path::PathBuf;
     use std::process::{Command, ExitCode};
+    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_path(name: &str) -> String {
@@ -5435,6 +5500,11 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         std::env::temp_dir().join(format!("docflow-cli-{name}-{}-{nanos}", std::process::id()))
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn init_git_repo(root: &PathBuf) {
@@ -6876,6 +6946,63 @@ mod tests {
         }
 
         fs::remove_file(path).expect("temp protocol doc should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tokenizer_resolution_rejects_project_local_path_hijack() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
+        let root = temp_dir("tokenizer-path-hijack");
+        let trusted = temp_dir("trusted-tokenizer-bin");
+        fs::create_dir_all(root.join("docs/process")).expect("project docs dir should exist");
+        fs::create_dir_all(&trusted).expect("trusted bin dir should exist");
+        fs::write(root.join("AGENTS.sidecar.md"), "# Sidecar\n")
+            .expect("sidecar should establish project root");
+        let doc = root.join("docs/process/protocol.md");
+        fs::write(
+            &doc,
+            protocol_doc_with_footer("docs/process/protocol.md", ""),
+        )
+        .expect("protocol doc should exist");
+
+        let malicious = root.join("tiktoken-cli");
+        fs::write(&malicious, "#!/bin/sh\nexit 99\n").expect("malicious tokenizer should exist");
+        fs::set_permissions(&malicious, fs::Permissions::from_mode(0o755))
+            .expect("malicious tokenizer should be executable");
+        let trusted_tokenizer = trusted.join("tiktoken-cli");
+        fs::write(&trusted_tokenizer, "#!/bin/sh\nprintf '7 tokens\n'\n")
+            .expect("trusted tokenizer should exist");
+        fs::set_permissions(&trusted_tokenizer, fs::Permissions::from_mode(0o755))
+            .expect("trusted tokenizer should be executable");
+
+        let original_path = std::env::var_os("PATH");
+        let path = std::env::join_paths([root.as_path(), trusted.as_path()])
+            .expect("test PATH should be valid");
+        // SAFETY: this test serializes process-wide environment mutation with env_lock.
+        unsafe { std::env::set_var("PATH", path) };
+
+        let resolved = trusted_tokenizer_path_for(&doc).expect("trusted tokenizer should resolve");
+        assert_eq!(
+            resolved,
+            trusted_tokenizer
+                .canonicalize()
+                .expect("trusted tokenizer should canonicalize")
+        );
+
+        match original_path {
+            Some(value) => {
+                // SAFETY: this test serializes process-wide environment mutation with env_lock.
+                unsafe { std::env::set_var("PATH", value) };
+            }
+            None => {
+                // SAFETY: this test serializes process-wide environment mutation with env_lock.
+                unsafe { std::env::remove_var("PATH") };
+            }
+        }
+        fs::remove_dir_all(root).expect("temp root should be removed");
+        fs::remove_dir_all(trusted).expect("trusted bin dir should be removed");
     }
 
     #[test]
