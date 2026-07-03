@@ -205,6 +205,9 @@ fn derive_completion_authority_outcome(
     if passed && blocked {
         push_unique(&mut blockers, BLOCKER_OUTCOME_CONTRADICTION);
     }
+    if completion_tuple_has_contradictory_pass_alias(input) {
+        push_unique(&mut blockers, BLOCKER_OUTCOME_CONTRADICTION);
+    }
     if !input.provenance_valid {
         push_unique(&mut blockers, BLOCKER_PROVENANCE_REJECTED);
     }
@@ -481,10 +484,11 @@ fn dedup_blockers(blockers: &mut Vec<String>) {
 }
 
 fn completion_tuple_is_passed(input: &HostBridgeCompletionAuthorityInput) -> bool {
-    matches!(
-        normalized(&input.decision).as_str(),
-        "approve" | "pass" | "passed"
-    ) && matches!(normalized(&input.verdict).as_str(), "pass" | "passed")
+    let decision = normalized(&input.decision);
+    let verdict = normalized(&input.verdict);
+    matches!(decision.as_str(), "approve" | "pass" | "passed")
+        && matches!(verdict.as_str(), "pass" | "passed")
+        || decision.starts_with("pass_to_") && verdict == "test_contract_ready_with_expected_red"
 }
 
 fn completion_tuple_is_blocked(input: &HostBridgeCompletionAuthorityInput) -> bool {
@@ -502,6 +506,14 @@ fn completion_tuple_is_blocked(input: &HostBridgeCompletionAuthorityInput) -> bo
 fn completion_tuple_is_failed(input: &HostBridgeCompletionAuthorityInput) -> bool {
     matches!(normalized(&input.decision).as_str(), "fail" | "failed")
         || matches!(normalized(&input.verdict).as_str(), "fail" | "failed")
+}
+
+fn completion_tuple_has_contradictory_pass_alias(
+    input: &HostBridgeCompletionAuthorityInput,
+) -> bool {
+    let decision = normalized(&input.decision);
+    let verdict = normalized(&input.verdict);
+    decision.starts_with("pass_to_") && verdict != "test_contract_ready_with_expected_red"
 }
 
 fn failure_blocker_code(blocker: &str) -> bool {
@@ -623,6 +635,51 @@ mod tests {
                 .events
                 .contains(&HostBridgeCompletionEvent::CompletionRejected)
         );
+    }
+
+    #[test]
+    fn expected_red_pass_to_developer_alias_is_accepted_completion() {
+        let decision = decide_host_bridge_completion_authority(input(
+            "pass_to_developer",
+            "test_contract_ready_with_expected_red",
+            [],
+            None,
+        ));
+
+        assert!(decision.accepted);
+        assert_eq!(decision.final_state, HostBridgeCompletionState::Passed);
+        assert!(decision.blocker_codes.is_empty());
+        assert!(decision.next_step_packet_admitted);
+        assert!(
+            decision
+                .events
+                .contains(&HostBridgeCompletionEvent::CompletionAccepted)
+        );
+        assert!(
+            !decision
+                .events
+                .contains(&HostBridgeCompletionEvent::CompletionRejected)
+        );
+    }
+
+    #[test]
+    fn pass_to_alias_with_wrong_verdict_fails_with_contradiction() {
+        let decision = decide_host_bridge_completion_authority(input(
+            "pass_to_developer",
+            "blocked",
+            [],
+            None,
+        ));
+
+        assert!(!decision.accepted);
+        assert_eq!(decision.final_state, HostBridgeCompletionState::Failed);
+        assert!(
+            decision
+                .blocker_codes
+                .iter()
+                .any(|blocker| blocker == BLOCKER_OUTCOME_CONTRADICTION)
+        );
+        assert!(!decision.next_step_packet_admitted);
     }
 
     #[test]

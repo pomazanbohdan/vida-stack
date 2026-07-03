@@ -7531,6 +7531,59 @@ pub(crate) fn lawful_explicit_downstream_dispatch_target_from_execution_plan(
     .map(|resolution| resolution.dispatch_target)
 }
 
+pub(crate) fn lawful_explicit_downstream_dispatch_target_for_completed_target(
+    execution_plan: &serde_json::Value,
+    completed_dispatch_target: &str,
+    previous_dispatch_target: Option<&str>,
+    explicit_target: &str,
+) -> Option<String> {
+    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
+    let allowed_next_lane_sequence =
+        dispatch_contract_allowed_next_lane_sequence(dispatch_contract);
+    let receipt = crate::state_store::RunGraphDispatchReceipt {
+        run_id: String::new(),
+        dispatch_target: completed_dispatch_target.trim().replace('-', "_"),
+        dispatch_status: "executed".to_string(),
+        lane_status: crate::release1_contracts::LaneStatus::LaneCompleted
+            .as_str()
+            .to_string(),
+        supersedes_receipt_id: None,
+        exception_path_receipt_id: None,
+        dispatch_kind: "agent_lane".to_string(),
+        dispatch_surface: None,
+        dispatch_command: None,
+        dispatch_packet_path: None,
+        dispatch_result_path: None,
+        blocker_code: None,
+        downstream_dispatch_target: None,
+        downstream_dispatch_command: None,
+        downstream_dispatch_note: None,
+        downstream_dispatch_ready: false,
+        downstream_dispatch_blockers: Vec::new(),
+        downstream_dispatch_packet_path: None,
+        downstream_dispatch_status: None,
+        downstream_dispatch_result_path: None,
+        downstream_dispatch_trace_path: None,
+        downstream_dispatch_executed_count: 0,
+        downstream_dispatch_active_target: None,
+        downstream_dispatch_last_target: previous_dispatch_target
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.replace('-', "_")),
+        activation_agent_type: None,
+        activation_runtime_role: None,
+        selected_backend: None,
+        recorded_at: String::new(),
+    };
+    lawful_explicit_downstream_dispatch_target(
+        execution_plan,
+        &allowed_next_lane_sequence,
+        &receipt,
+        explicit_target,
+    )
+    .map(|resolution| resolution.dispatch_target)
+}
+
 pub(crate) fn canonical_terminal_closure_dispatch_target(value: &str) -> Option<&'static str> {
     matches!(value.trim(), "closure" | "closure_lane").then_some("closure")
 }
