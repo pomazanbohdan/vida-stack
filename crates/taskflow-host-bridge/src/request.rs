@@ -156,6 +156,7 @@ pub fn host_bridge_request_owned_paths(request: &Value) -> Vec<PathBuf> {
 
 pub fn host_bridge_request_proof_artifact_paths(request: &Value) -> Vec<PathBuf> {
     for field in [
+        "proof_artifact_paths",
         "proof_artifact_scope",
         "proof_scope",
         "test_owned_paths",
@@ -168,6 +169,7 @@ pub fn host_bridge_request_proof_artifact_paths(request: &Value) -> Vec<PathBuf>
     }
     if let Some(implementation_isolation) = request.get("implementation_isolation") {
         for field in [
+            "proof_artifact_paths",
             "proof_artifact_scope",
             "proof_scope",
             "test_owned_paths",
@@ -392,6 +394,20 @@ mod tests {
         assert_eq!(
             host_bridge_request_proof_artifact_paths(&request),
             vec![PathBuf::from("src/test/features/list_view")]
+        );
+    }
+
+    #[test]
+    fn request_proof_artifact_paths_support_request_paths_field() {
+        let request = serde_json::json!({
+            "proof_artifact_paths": ["src/test/features/list_view/domain/model_test.dart", " "]
+        });
+
+        assert_eq!(
+            host_bridge_request_proof_artifact_paths(&request),
+            vec![PathBuf::from(
+                "src/test/features/list_view/domain/model_test.dart"
+            )]
         );
     }
 

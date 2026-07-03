@@ -74,6 +74,115 @@ fn push_unique_owned_path(paths: &mut Vec<String>, path: &str) {
     paths.push(trimmed.to_string());
 }
 
+fn push_unique_proof_artifact_path(paths: &mut Vec<String>, value: &str) {
+    let normalized = value
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | ':' | ')' | '(' | '[' | ']'))
+        .replace('\\', "/");
+    if normalized.is_empty() || !(normalized.contains('/') || normalized.contains('\\')) {
+        return;
+    }
+    if !paths.iter().any(|existing| existing == &normalized) {
+        paths.push(normalized);
+    }
+}
+
+fn proof_token_looks_like_artifact_path(value: &str) -> bool {
+    let normalized = value.replace('\\', "/");
+    normalized.contains("/test/")
+        || normalized.contains("/tests/")
+        || normalized.starts_with("test/")
+        || normalized.starts_with("tests/")
+        || normalized.ends_with("_test.rs")
+        || normalized.ends_with("_test.dart")
+        || normalized.ends_with(".test.ts")
+        || normalized.ends_with(".test.tsx")
+        || normalized.ends_with(".spec.ts")
+        || normalized.ends_with(".spec.tsx")
+}
+
+fn collect_proof_artifact_paths_from_text(paths: &mut Vec<String>, value: &str) {
+    for token in value.split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '`')) {
+        if proof_token_looks_like_artifact_path(token) {
+            push_unique_proof_artifact_path(paths, token);
+        }
+    }
+}
+
+fn collect_explicit_proof_artifact_paths_from_value(
+    paths: &mut Vec<String>,
+    value: &serde_json::Value,
+) {
+    match value {
+        serde_json::Value::String(value) => push_unique_proof_artifact_path(paths, value),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_explicit_proof_artifact_paths_from_value(paths, value);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                collect_explicit_proof_artifact_paths_from_value(paths, value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_test_like_proof_artifact_paths_from_value(
+    paths: &mut Vec<String>,
+    value: &serde_json::Value,
+) {
+    match value {
+        serde_json::Value::String(value) => collect_proof_artifact_paths_from_text(paths, value),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_test_like_proof_artifact_paths_from_value(paths, value);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                collect_test_like_proof_artifact_paths_from_value(paths, value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn proof_artifact_paths_for_dispatch_packet(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    request_text: &str,
+) -> Vec<String> {
+    let mut paths = Vec::new();
+    for field in [
+        "proof_artifact_paths",
+        "proof_artifact_scope",
+        "proof_scope",
+        "test_owned_paths",
+        "proof_owned_paths",
+        "verification_artifact_paths",
+    ] {
+        if let Some(value) = role_selection
+            .execution_plan
+            .pointer(&format!("/tracked_flow_bootstrap/dev_task/planner_metadata/{field}"))
+        {
+            collect_explicit_proof_artifact_paths_from_value(&mut paths, value);
+        }
+    }
+    for field in ["proof_targets", "acceptance_targets", "verification_commands"] {
+        if let Some(value) = role_selection
+            .execution_plan
+            .pointer(&format!("/tracked_flow_bootstrap/dev_task/planner_metadata/{field}"))
+        {
+            collect_test_like_proof_artifact_paths_from_value(&mut paths, value);
+        }
+    }
+    collect_proof_artifact_paths_from_text(&mut paths, request_text);
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
 pub(crate) fn test_lane_requires_test_write_scope(
     downstream_target: &str,
     downstream_lane_id: Option<&str>,
@@ -174,6 +283,7 @@ pub(crate) struct DownstreamDispatchPacketContract {
     pub handoff_task_class: String,
     pub closure_class: String,
     pub owned_paths: Vec<String>,
+    pub proof_artifact_paths: Vec<String>,
     pub implementation_isolation: serde_json::Value,
 }
 
@@ -283,8 +393,22 @@ impl DownstreamDispatchPacketContract {
             } else {
                 Vec::new()
             };
-        let implementation_isolation =
+        let proof_artifact_paths =
+            proof_artifact_paths_for_dispatch_packet(role_selection, &role_selection.request);
+        let mut implementation_isolation =
             implementation_isolation_contract(handoff_task_class.as_str(), &owned_paths);
+        if !proof_artifact_paths.is_empty() {
+            if let Some(object) = implementation_isolation.as_object_mut() {
+                object.insert(
+                    "proof_artifact_paths".to_string(),
+                    serde_json::json!(proof_artifact_paths.clone()),
+                );
+                object.insert(
+                    "proof_artifact_scope".to_string(),
+                    serde_json::json!(proof_artifact_paths.clone()),
+                );
+            }
+        }
         Self {
             dispatch_target,
             downstream_lane_id,
@@ -295,6 +419,7 @@ impl DownstreamDispatchPacketContract {
             handoff_task_class,
             closure_class,
             owned_paths,
+            proof_artifact_paths,
             implementation_isolation,
         }
     }
@@ -332,6 +457,18 @@ impl DownstreamDispatchPacketContract {
         let Some(object) = packet.as_object_mut() else {
             return repaired;
         };
+        if !self.proof_artifact_paths.is_empty() {
+            repaired |= Self::set_field(
+                object,
+                "proof_artifact_paths",
+                serde_json::json!(self.proof_artifact_paths.clone()),
+            );
+            repaired |= Self::set_field(
+                object,
+                "proof_artifact_scope",
+                serde_json::json!(self.proof_artifact_paths.clone()),
+            );
+        }
         repaired |= Self::set_field(
             object,
             "implementation_isolation",
@@ -373,6 +510,18 @@ impl DownstreamDispatchPacketContract {
             repaired |= crate::runtime_dispatch_state::apply_owned_paths(packet, &self.owned_paths);
         }
         if let Some(object) = packet.as_object_mut() {
+            if !self.proof_artifact_paths.is_empty() {
+                repaired |= Self::set_field(
+                    object,
+                    "proof_artifact_paths",
+                    serde_json::json!(self.proof_artifact_paths.clone()),
+                );
+                repaired |= Self::set_field(
+                    object,
+                    "proof_artifact_scope",
+                    serde_json::json!(self.proof_artifact_paths.clone()),
+                );
+            }
             repaired |= Self::set_field(
                 object,
                 "implementation_isolation",
@@ -1046,7 +1195,7 @@ mod tests {
                                 "src/lib/features/list_view/presentation/stac/widgets/record_detail_view.dart"
                             ],
                             "proof_targets": [
-                                "RecordScheduleActivityDialog widget tests cover switching to Meeting"
+                                "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart covers switching to Meeting"
                             ]
                         }
                     }
@@ -1117,6 +1266,18 @@ mod tests {
             owned_paths.iter().any(|path| path
                 == "src/lib/features/list_view/presentation/stac/widgets/record_detail_view.dart"),
             "autotester should keep production paths as read/write context when inherited from planner metadata"
+        );
+        assert_eq!(
+            packet["delivery_task_packet"]["proof_artifact_paths"],
+            serde_json::json!([
+                "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+            ])
+        );
+        assert_eq!(
+            packet["proof_artifact_paths"],
+            serde_json::json!([
+                "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+            ])
         );
 
         let _ = std::fs::remove_dir_all(project_root);

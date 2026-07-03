@@ -2372,6 +2372,163 @@ fn dispatch_packet_value_field(
         .filter(|value| !value.is_null())
 }
 
+fn push_unique_proof_artifact_path(paths: &mut Vec<String>, value: &str) {
+    let normalized = value
+        .trim()
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | ':' | ')' | '(' | '[' | ']'))
+        .replace('\\', "/");
+    if normalized.is_empty() || !(normalized.contains('/') || normalized.contains('\\')) {
+        return;
+    }
+    if !paths.iter().any(|path| path == &normalized) {
+        paths.push(normalized);
+    }
+}
+
+fn value_path_tokens(value: &str) -> impl Iterator<Item = &str> {
+    value.split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '`'))
+}
+
+fn proof_token_looks_like_artifact_path(value: &str) -> bool {
+    let normalized = value.replace('\\', "/");
+    normalized.contains("/test/")
+        || normalized.contains("/tests/")
+        || normalized.starts_with("test/")
+        || normalized.starts_with("tests/")
+        || normalized.ends_with("_test.rs")
+        || normalized.ends_with("_test.dart")
+        || normalized.ends_with(".test.ts")
+        || normalized.ends_with(".test.tsx")
+        || normalized.ends_with(".spec.ts")
+        || normalized.ends_with(".spec.tsx")
+}
+
+fn collect_explicit_proof_artifact_paths(paths: &mut Vec<String>, value: &serde_json::Value) {
+    match value {
+        serde_json::Value::String(value) => push_unique_proof_artifact_path(paths, value),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_explicit_proof_artifact_paths(paths, value);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                collect_explicit_proof_artifact_paths(paths, value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_test_like_proof_artifact_paths(paths: &mut Vec<String>, value: &serde_json::Value) {
+    match value {
+        serde_json::Value::String(value) => {
+            for token in value_path_tokens(value) {
+                if proof_token_looks_like_artifact_path(token) {
+                    push_unique_proof_artifact_path(paths, token);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_test_like_proof_artifact_paths(paths, value);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                collect_test_like_proof_artifact_paths(paths, value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_dispatch_packet_proof_artifact_paths_from_container(
+    paths: &mut Vec<String>,
+    container: &serde_json::Value,
+) {
+    for field in [
+        "proof_artifact_paths",
+        "proof_artifact_scope",
+        "proof_scope",
+        "test_owned_paths",
+        "proof_owned_paths",
+        "verification_artifact_paths",
+    ] {
+        if let Some(value) = container.get(field) {
+            collect_explicit_proof_artifact_paths(paths, value);
+        }
+    }
+    for field in [
+        "proof_targets",
+        "proof_target",
+        "verification_commands",
+        "acceptance_targets",
+    ] {
+        if let Some(value) = container.get(field) {
+            collect_test_like_proof_artifact_paths(paths, value);
+        }
+    }
+}
+
+fn dispatch_packet_proof_artifact_paths(dispatch_packet_path: &str) -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(dispatch_packet_path) else {
+        return Vec::new();
+    };
+    let Ok(packet) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    collect_dispatch_packet_proof_artifact_paths_from_container(&mut paths, &packet);
+    for field in [
+        "delivery_task_packet",
+        "execution_block_packet",
+        "coach_review_packet",
+        "verifier_proof_packet",
+        "tracked_flow_packet",
+    ] {
+        if let Some(container) = packet.get(field) {
+            collect_dispatch_packet_proof_artifact_paths_from_container(&mut paths, container);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn add_proof_artifact_scope_to_implementation_isolation(
+    implementation_isolation: &mut serde_json::Value,
+    proof_artifact_paths: &[String],
+) {
+    if proof_artifact_paths.is_empty() || implementation_isolation.is_null() {
+        return;
+    }
+    let Some(object) = implementation_isolation.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "proof_artifact_paths".to_string(),
+        serde_json::json!(proof_artifact_paths),
+    );
+    object.insert(
+        "proof_artifact_scope".to_string(),
+        serde_json::json!(proof_artifact_paths),
+    );
+    let scope_policy = object
+        .entry("scope_policy".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(scope_policy) = scope_policy.as_object_mut() {
+        scope_policy.insert(
+            "changed_files_must_be_subset_of_owned_or_proof_paths".to_string(),
+            serde_json::json!(true),
+        );
+        scope_policy.insert(
+            "patch_paths_must_be_subset_of_owned_or_proof_paths".to_string(),
+            serde_json::json!(true),
+        );
+    }
+}
+
 fn host_tool_bridge_request_id_segment(value: &str) -> String {
     let mut segment = value
         .chars()
@@ -2465,6 +2622,8 @@ fn validate_existing_host_bridge_request_matches_expected(
         "implementation_isolation",
         "expected_implementation_artifact_kinds",
         "owned_paths",
+        "proof_artifact_paths",
+        "proof_artifact_scope",
         "read_only_paths",
         "proof_target",
         "request_path",
@@ -2603,6 +2762,8 @@ fn existing_host_bridge_request_needs_pending_contract_refresh(
         "implementation_isolation",
         "expected_implementation_artifact_kinds",
         "owned_paths",
+        "proof_artifact_paths",
+        "proof_artifact_scope",
     ]
     .iter()
     .any(|field| !host_bridge_request_value_matches(existing, expected, field))
@@ -2681,12 +2842,17 @@ fn materialize_host_tool_bridge_request(
             &request_task_class,
             &request_owned_paths,
         );
-    let implementation_isolation = if recomputed_implementation_isolation.is_null() {
+    let mut implementation_isolation = if recomputed_implementation_isolation.is_null() {
         dispatch_packet_value_field(dispatch_packet_path, "implementation_isolation")
             .unwrap_or(serde_json::Value::Null)
     } else {
         recomputed_implementation_isolation
     };
+    let proof_artifact_paths = dispatch_packet_proof_artifact_paths(dispatch_packet_path);
+    add_proof_artifact_scope_to_implementation_isolation(
+        &mut implementation_isolation,
+        &proof_artifact_paths,
+    );
     let expected_implementation_artifact_kinds = if implementation_isolation.is_null() {
         serde_json::json!([])
     } else {
@@ -2716,6 +2882,8 @@ fn materialize_host_tool_bridge_request(
         "implementation_artifacts": [],
         "required_result_fields": default_host_bridge_required_result_fields(),
         "owned_paths": request_owned_paths,
+        "proof_artifact_paths": proof_artifact_paths,
+        "proof_artifact_scope": proof_artifact_paths,
         "read_only_paths": dispatch_packet_string_list(dispatch_packet_path, "read_only_paths"),
         "proof_target": dispatch_packet_string_field(dispatch_packet_path, "proof_target"),
         "request_path": paths.request_path.display().to_string(),
@@ -9450,6 +9618,226 @@ host_tool_bridge:
         assert_eq!(
             request["implementation_isolation"],
             implementation_isolation
+        );
+
+        let _ = std::fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn host_bridge_request_carries_upstream_proof_artifact_scope() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-proof-artifact-scope-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create temp root");
+        let state_root = project_root.join(".vida").join("data").join("state");
+        let packet_dir = state_root
+            .join("runtime-consumption")
+            .join("dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("implementation-proof-scope.json");
+        let proof_paths = serde_json::json!([
+            "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+            "src/test/features/list_view/data/record_chatter_repository_test.dart",
+            "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+        ]);
+        let normalized_proof_paths = serde_json::json!([
+            "src/test/features/list_view/data/record_chatter_repository_test.dart",
+            "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+            "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+        ]);
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "dispatch_target": "developer",
+                "handoff_runtime_role": "worker",
+                "handoff_task_class": "implementation",
+                "owned_paths": ["src/lib/features/list_view"],
+                "proof_artifact_paths": proof_paths,
+                "proof_targets": [
+                    "flutter test src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+                    "flutter test src/test/features/list_view/data/record_chatter_repository_test.dart",
+                    "flutter test src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+                ],
+                "delivery_task_packet": {
+                    "handoff_runtime_role": "worker",
+                    "handoff_task_class": "implementation",
+                    "owned_paths": ["src/lib/features/list_view"],
+                    "proof_artifact_paths": proof_paths,
+                    "verification_commands": [
+                        "flutter test src/test/features/list_view/domain/models/record_chatter_models_test.dart src/test/features/list_view/data/record_chatter_repository_test.dart src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        let selected_cli_entry = serde_yaml::from_str(
+            r#"
+host_tool_bridge:
+  request_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  result_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  receipt_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  adapter_kind: codex_host_tools
+  adapter_capability_id: codex.multi_agent_v1
+  invocation_mode: parent_host_tool_api
+"#,
+        )
+        .expect("host bridge config should parse");
+        let mut receipt = internal_codex_fallback_receipt(
+            packet_path.to_str().expect("packet path should render"),
+        );
+        receipt.run_id = "activity-meeting-event-form-fields".to_string();
+        receipt.dispatch_target = "developer".to_string();
+        receipt.activation_runtime_role = Some("worker".to_string());
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            &state_root,
+            Some(&selected_cli_entry),
+            packet_path.to_str().expect("packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("host bridge request should materialize");
+
+        assert_eq!(request["proof_artifact_paths"], normalized_proof_paths);
+        assert_eq!(request["proof_artifact_scope"], normalized_proof_paths);
+        assert_eq!(
+            request["implementation_isolation"]["scope_policy"]
+                ["changed_files_must_be_subset_of_owned_or_proof_paths"],
+            true
+        );
+
+        let _ = std::fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn host_bridge_request_carries_proof_scope_from_generated_downstream_packet() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-generated-proof-scope-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create temp root");
+        let state_root = project_root.join(".vida").join("data").join("state");
+        let packet_dir = state_root
+            .join("runtime-consumption")
+            .join("dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let packet_path = packet_dir.join("generated-developer.json");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement list view chatter and keep proof tests in scope".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "orchestration_contract": {},
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "activation_runtime_role": "worker",
+                    "runtime_role": "worker",
+                    "task_class": "implementation",
+                    "selected_backend_id": "internal_subagents"
+                },
+                "tracked_flow_bootstrap": {
+                    "dev_task": {
+                        "planner_metadata": {
+                            "owned_paths": ["src/lib/features/list_view"],
+                            "proof_targets": [
+                                "flutter test src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+                                "flutter test src/test/features/list_view/data/record_chatter_repository_test.dart",
+                                "flutter test src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+                            ]
+                        }
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "developer": {
+                                "dispatch_target": "developer",
+                                "task_class": "implementation",
+                                "runtime_role": "worker",
+                                "closure_class": "implementation",
+                                "packet_template_kind": "delivery_task_packet"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let mut upstream_receipt = internal_codex_fallback_receipt("upstream.json");
+        upstream_receipt.run_id = "activity-meeting-event-form-fields".to_string();
+        upstream_receipt.dispatch_target = "autotester".to_string();
+        upstream_receipt.downstream_dispatch_target = Some("developer".to_string());
+        crate::runtime_dispatch_downstream_packets::write_runtime_downstream_dispatch_packet_at_with_owned_paths(
+            &packet_path,
+            &role_selection,
+            &serde_json::json!({ "run_id": "activity-meeting-event-form-fields" }),
+            &upstream_receipt,
+            &[],
+        )
+        .expect("generated downstream packet should write");
+        let selected_cli_entry = serde_yaml::from_str(
+            r#"
+host_tool_bridge:
+  request_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  result_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  receipt_dir: .vida/data/state/runtime-consumption/host-tool-bridge
+  adapter_kind: codex_host_tools
+  adapter_capability_id: codex.multi_agent_v1
+  invocation_mode: parent_host_tool_api
+"#,
+        )
+        .expect("host bridge config should parse");
+        let mut developer_receipt = internal_codex_fallback_receipt(
+            packet_path.to_str().expect("packet path should render"),
+        );
+        developer_receipt.run_id = "activity-meeting-event-form-fields".to_string();
+        developer_receipt.dispatch_target = "developer".to_string();
+        developer_receipt.activation_runtime_role = Some("worker".to_string());
+
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            &state_root,
+            Some(&selected_cli_entry),
+            packet_path.to_str().expect("packet path should render"),
+            "internal_subagents",
+            "middle",
+            &developer_receipt,
+            &role_selection,
+        )
+        .expect("host bridge request should materialize from generated packet");
+
+        assert_eq!(
+            request["proof_artifact_paths"],
+            serde_json::json!([
+                "src/test/features/list_view/data/record_chatter_repository_test.dart",
+                "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+                "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+            ])
         );
 
         let _ = std::fs::remove_dir_all(project_root);
