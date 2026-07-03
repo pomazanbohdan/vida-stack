@@ -34,7 +34,7 @@ impl WorkflowClass {
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
-        match value.trim() {
+        match value {
             "informational_answer" => Some(Self::InformationalAnswer),
             "retrieval_grounded_answer" => Some(Self::RetrievalGroundedAnswer),
             "documentation_mutation" => Some(Self::DocumentationMutation),
@@ -77,7 +77,7 @@ impl RiskTier {
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
-        match value.trim() {
+        match value {
             "R0" => Some(Self::R0),
             "R1" => Some(Self::R1),
             "R2" => Some(Self::R2),
@@ -117,7 +117,7 @@ impl ApprovalStatus {
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
-        match value.trim() {
+        match value {
             "approval_not_required" => Some(Self::ApprovalNotRequired),
             "approval_required" => Some(Self::ApprovalRequired),
             "waiting_for_approval" => Some(Self::WaitingForApproval),
@@ -153,7 +153,7 @@ impl GateLevel {
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
-        match value.trim() {
+        match value {
             "block" => Some(Self::Block),
             "warn" => Some(Self::Warn),
             "observe" => Some(Self::Observe),
@@ -194,7 +194,7 @@ impl LaneStatus {
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
-        match value.trim() {
+        match value {
             "packet_ready" => Some(Self::PacketReady),
             "lane_open" => Some(Self::LaneOpen),
             "lane_running" => Some(Self::LaneRunning),
@@ -693,11 +693,7 @@ impl Release1ContractStatus {
     }
 
     pub(crate) const fn from_bool(ok: bool) -> Self {
-        if ok {
-            Self::Pass
-        } else {
-            Self::Blocked
-        }
+        if ok { Self::Pass } else { Self::Blocked }
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
@@ -1190,6 +1186,10 @@ pub(crate) enum BlockerCode {
     MissingInventoryOrProjectionEvidence,
     MissingProofVerdict,
     MissingClosureProof,
+    MissingStructuredProofEvidence,
+    ProofEvidenceAttachFailed,
+    TaskCloseFailed,
+    PostCloseReceiptBridgeFailed,
     RestoreReconcileNotGreen,
     PendingSpecificationEvidence,
     PendingExecutionPreparationEvidence,
@@ -1207,6 +1207,9 @@ pub(crate) enum BlockerCode {
     MissingExecutionPreparationContract,
     ExecutionPreparationArtifactsUnavailable,
     MissingExecutionPreparationArtifactQueryTarget,
+    HostBridgeResultExecutionStateInvalid,
+    HostBridgeResultSourceDispatchPacketPathMissing,
+    HostBridgeResultStatusInvalid,
     ImplementationReviewDenied,
     ImplementationReviewExpired,
     ImplementationReviewFindings,
@@ -1390,6 +1393,10 @@ impl BlockerCode {
             }
             Self::MissingProofVerdict => "missing_proof_verdict",
             Self::MissingClosureProof => "missing_closure_proof",
+            Self::MissingStructuredProofEvidence => "missing_structured_proof_evidence",
+            Self::ProofEvidenceAttachFailed => "proof_evidence_attach_failed",
+            Self::TaskCloseFailed => "task_close_failed",
+            Self::PostCloseReceiptBridgeFailed => "post_close_receipt_bridge_failed",
             Self::RestoreReconcileNotGreen => "restore_reconcile_not_green",
             Self::PendingSpecificationEvidence => "pending_specification_evidence",
             Self::PendingExecutionPreparationEvidence => "pending_execution_preparation_evidence",
@@ -1411,6 +1418,13 @@ impl BlockerCode {
             Self::MissingExecutionPreparationArtifactQueryTarget => {
                 "missing_execution_preparation_artifact_query_target"
             }
+            Self::HostBridgeResultExecutionStateInvalid => {
+                "host_bridge_result_execution_state_invalid"
+            }
+            Self::HostBridgeResultSourceDispatchPacketPathMissing => {
+                "host_bridge_result_source_dispatch_packet_path_missing"
+            }
+            Self::HostBridgeResultStatusInvalid => "host_bridge_result_status_invalid",
             Self::ImplementationReviewDenied => "implementation_review_denied",
             Self::ImplementationReviewExpired => "implementation_review_expired",
             Self::ImplementationReviewFindings => "implementation_review_findings",
@@ -1423,7 +1437,7 @@ impl BlockerCode {
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
-        match value.trim() {
+        match value {
             "missing_packet" => Some(Self::MissingPacket),
             "missing_lane_receipt" => Some(Self::MissingLaneReceipt),
             "open_delegated_cycle" => Some(Self::OpenDelegatedCycle),
@@ -1604,6 +1618,10 @@ impl BlockerCode {
             }
             "missing_proof_verdict" => Some(Self::MissingProofVerdict),
             "missing_closure_proof" => Some(Self::MissingClosureProof),
+            "missing_structured_proof_evidence" => Some(Self::MissingStructuredProofEvidence),
+            "proof_evidence_attach_failed" => Some(Self::ProofEvidenceAttachFailed),
+            "task_close_failed" => Some(Self::TaskCloseFailed),
+            "post_close_receipt_bridge_failed" => Some(Self::PostCloseReceiptBridgeFailed),
             "restore_reconcile_not_green" => Some(Self::RestoreReconcileNotGreen),
             "pending_specification_evidence" => Some(Self::PendingSpecificationEvidence),
             "pending_execution_preparation_evidence" => {
@@ -1629,6 +1647,13 @@ impl BlockerCode {
             "missing_execution_preparation_artifact_query_target" => {
                 Some(Self::MissingExecutionPreparationArtifactQueryTarget)
             }
+            "host_bridge_result_execution_state_invalid" => {
+                Some(Self::HostBridgeResultExecutionStateInvalid)
+            }
+            "host_bridge_result_source_dispatch_packet_path_missing" => {
+                Some(Self::HostBridgeResultSourceDispatchPacketPathMissing)
+            }
+            "host_bridge_result_status_invalid" => Some(Self::HostBridgeResultStatusInvalid),
             "implementation_review_denied" => Some(Self::ImplementationReviewDenied),
             "implementation_review_expired" => Some(Self::ImplementationReviewExpired),
             "implementation_review_findings" => Some(Self::ImplementationReviewFindings),
@@ -1752,32 +1777,30 @@ pub(crate) fn run_graph_operator_blocker_code_strings() -> &'static [&'static st
 }
 
 pub(crate) fn canonical_blocker_code_str(value: &str) -> Option<&'static str> {
-    let trimmed = value.trim();
-    taskflow_contracts::canonical_blocker_code_str(trimmed)
-        .or_else(|| BlockerCode::from_str(trimmed).map(BlockerCode::as_str))
+    taskflow_contracts::canonical_blocker_code_str(value)
+        .or_else(|| BlockerCode::from_str(value).map(BlockerCode::as_str))
         .or_else(|| {
             RUN_GRAPH_OPERATOR_BLOCKER_CODE_STRINGS
                 .iter()
                 .copied()
-                .find(|code| *code == trimmed)
+                .find(|code| *code == value)
         })
         .or_else(|| {
             EXTENDED_BLOCKER_CODE_STRINGS
                 .iter()
                 .copied()
-                .find(|code| *code == trimmed)
+                .find(|code| *code == value)
         })
 }
 
 pub(crate) fn local_blocker_code_str(value: &str) -> Option<&'static str> {
-    let trimmed = value.trim();
-    BlockerCode::from_str(trimmed)
+    BlockerCode::from_str(value)
         .map(BlockerCode::as_str)
         .or_else(|| {
             EXTENDED_BLOCKER_CODE_STRINGS
                 .iter()
                 .copied()
-                .find(|code| *code == trimmed)
+                .find(|code| *code == value)
         })
 }
 
@@ -1832,87 +1855,86 @@ const RETRIEVAL_TRUST_EVIDENCE_KEYS: &[&str] = &[
 ];
 
 fn canonical_parametric_blocker_code_value(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
+    if value.is_empty() {
         return None;
     }
     if BLOCKER_FAMILY_NAMES
         .iter()
-        .any(|family| trimmed == format!("missing_{family}_family"))
+        .any(|family| value == format!("missing_{family}_family"))
     {
-        return Some(trimmed.to_string());
+        return Some(value.to_string());
     }
-    if trimmed == "missing_triggered_domain_bundle_partition"
-        || trimmed == "cache_registry_contract_missing_triggered_domain_binding"
-        || trimmed == "missing_retrieval_only_optional_context_boundary"
-        || trimmed == "missing_retrieval_trust_evidence"
+    if value == "missing_triggered_domain_bundle_partition"
+        || value == "cache_registry_contract_missing_triggered_domain_binding"
+        || value == "missing_retrieval_only_optional_context_boundary"
+        || value == "missing_retrieval_trust_evidence"
     {
-        return Some(trimmed.to_string());
+        return Some(value.to_string());
     }
     canonical_parametric_blocker_code_with_suffix(
-        trimmed,
+        value,
         "missing_cache_key_input:",
         CACHE_KEY_INPUT_KEYS,
     )
     .or_else(|| {
         canonical_parametric_blocker_code_with_suffix(
-            trimmed,
+            value,
             "missing_invalidation_tuple_key:",
             INVALIDATION_TUPLE_KEYS,
         )
     })
     .or_else(|| {
         canonical_parametric_blocker_code_with_suffix(
-            trimmed,
+            value,
             "invalid_cache_key_input:",
             CACHE_KEY_INPUT_KEYS,
         )
     })
     .or_else(|| {
         canonical_parametric_blocker_code_with_suffix(
-            trimmed,
+            value,
             "invalid_invalidation_tuple_key:",
             INVALIDATION_TUPLE_KEYS,
         )
     })
     .or_else(|| {
         canonical_parametric_blocker_code_with_suffix(
-            trimmed,
+            value,
             "missing_metadata_tuple_key:",
             METADATA_TUPLE_KEYS,
         )
     })
     .or_else(|| {
         canonical_parametric_blocker_code_with_suffix(
-            trimmed,
+            value,
             "invalid_metadata_tuple_key:",
             METADATA_TUPLE_KEYS,
         )
     })
     .or_else(|| {
         canonical_parametric_blocker_code_with_suffix(
-            trimmed,
+            value,
             "cache_key_mismatch:",
             CACHE_KEY_MISMATCH_KEYS,
         )
     })
     .or_else(|| {
         canonical_parametric_blocker_code_with_suffix(
-            trimmed,
+            value,
             "invalidation_tuple_mismatch:",
             INVALIDATION_TUPLE_KEYS,
         )
     })
     .or_else(|| {
         canonical_parametric_blocker_code_with_suffix(
-            trimmed,
+            value,
             "missing_retrieval_optional_boundary_entry:",
             RETRIEVAL_OPTIONAL_BOUNDARY_KEYS,
         )
     })
     .or_else(|| {
         canonical_parametric_blocker_code_with_suffix(
-            trimmed,
+            value,
             "missing_retrieval_trust_evidence_field:",
             RETRIEVAL_TRUST_EVIDENCE_KEYS,
         )
@@ -1931,10 +1953,9 @@ fn canonical_parametric_blocker_code_with_suffix(
 }
 
 pub(crate) fn canonical_blocker_code_value_from_str(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    taskflow_contracts::canonical_blocker_code_value_from_str(trimmed)
-        .or_else(|| local_blocker_code_str(trimmed).map(str::to_string))
-        .or_else(|| canonical_parametric_blocker_code_value(trimmed))
+    taskflow_contracts::canonical_blocker_code_value_from_str(value)
+        .or_else(|| local_blocker_code_str(value).map(str::to_string))
+        .or_else(|| canonical_parametric_blocker_code_value(value))
 }
 
 pub(crate) fn canonical_blocker_code_list<I, S>(values: I) -> Vec<String>
@@ -2267,7 +2288,17 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        blocker_code_str, blocker_code_value, canonical_approval_status_str,
+        ApprovalStatus, BlockerCode, CanonicalApprovalArtifact, CanonicalApprovalRecord,
+        CanonicalArtifactHeader, CanonicalArtifactType, CanonicalClosureAdmissionArtifact,
+        CanonicalClosureAdmissionRecord, CanonicalEvaluationArtifact, CanonicalEvaluationRun,
+        CanonicalFeedbackArtifact, CanonicalFeedbackEvent, CanonicalIncidentEvidenceArtifact,
+        CanonicalIncidentEvidenceBundle, CanonicalLaneExecutionReceipt,
+        CanonicalLaneExecutionReceiptArtifact, CanonicalMemoryArtifact, CanonicalMemoryRecord,
+        CanonicalPolicyDecision, CanonicalPolicyDecisionArtifact, CanonicalToolContract,
+        CanonicalToolContractArtifact, CanonicalTraceArtifact, CanonicalTraceEvent,
+        CompatibilityBoundary, CompatibilityClass, ExceptionTakeoverState, GateLevel, LaneStatus,
+        Release1ContractStatus, Release1ContractType, Release1SchemaVersion, RiskTier,
+        WorkflowClass, blocker_code_str, blocker_code_value, canonical_approval_status_str,
         canonical_artifact_type_str, canonical_blocker_code_list,
         canonical_compatibility_class_str, canonical_gate_level_str,
         canonical_release1_contract_status_str, canonical_release1_contract_type_str,
@@ -2276,17 +2307,7 @@ mod tests {
         cli_probe_incident_baseline_summary, cli_probe_tool_contract_summary,
         cli_probe_trace_baseline_summary, evaluate_policy_gate_protocol_binding,
         exception_takeover_state, missing_downstream_lane_evidence_blocker,
-        release1_contract_status_str, ApprovalStatus, BlockerCode, CanonicalApprovalArtifact,
-        CanonicalApprovalRecord, CanonicalArtifactHeader, CanonicalArtifactType,
-        CanonicalClosureAdmissionArtifact, CanonicalClosureAdmissionRecord,
-        CanonicalEvaluationArtifact, CanonicalEvaluationRun, CanonicalFeedbackArtifact,
-        CanonicalFeedbackEvent, CanonicalIncidentEvidenceArtifact, CanonicalIncidentEvidenceBundle,
-        CanonicalLaneExecutionReceipt, CanonicalLaneExecutionReceiptArtifact,
-        CanonicalMemoryArtifact, CanonicalMemoryRecord, CanonicalPolicyDecision,
-        CanonicalPolicyDecisionArtifact, CanonicalToolContract, CanonicalToolContractArtifact,
-        CanonicalTraceArtifact, CanonicalTraceEvent, CompatibilityBoundary, CompatibilityClass,
-        ExceptionTakeoverState, GateLevel, LaneStatus, Release1ContractStatus,
-        Release1ContractType, Release1SchemaVersion, RiskTier, WorkflowClass,
+        release1_contract_status_str,
     };
 
     #[test]
@@ -2329,56 +2350,13 @@ mod tests {
     }
 
     #[test]
-    fn blocker_code_registry_parity_covers_init_and_host_bridge_surface_literals() {
-        let scoped_surface_literals = [
-            "agent_init_orchestrator_role_forbidden",
-            "agent_init_role_unresolved",
-            "taskflow_consume_bundle_timeout",
-            "host_bridge_request_missing_fields",
-            "host_bridge_request_wrong_transport",
-            "host_bridge_request_not_pending",
-            "host_bridge_receipt_mode_mismatch",
-            "host_bridge_request_identity_mismatch",
-            "host_tool_capability_missing",
-            "host_agent_capacity_unavailable",
-            "host_agent_id_missing",
-            "host_bridge_completion_args_invalid",
-            "host_bridge_request_unreadable",
-            "host_bridge_state_root_missing",
-            "host_bridge_request_untrusted_path",
-            "host_bridge_request_path_missing",
-            "host_bridge_request_path_mismatch",
-            "host_bridge_packet_path_unbounded",
-            "host_bridge_result_path_unbounded",
-            "host_bridge_receipt_path_unbounded",
-            "host_bridge_dispatch_receipt_missing",
-            "host_bridge_dispatch_receipt_inactive",
-            "host_bridge_dispatch_receipt_mismatch",
-            "implementation_artifacts_missing",
-            "implementation_artifact_authority_missing",
-            "implementation_artifact_changed_files_missing",
-            "implementation_artifact_authority_invalid",
-            "implementation_artifact_contract_invalid",
-            "implementation_artifact_receipt_missing",
-            "implementation_artifact_receipt_unverified",
-            "implementation_attempt_scope_guard_violation",
-            "timeout_without_takeover_authority",
-            "agent_init_execute_dispatch_missing_packet",
-            "internal_dispatch_timeout_without_receipt",
-            "internal_codex_carrier_unavailable",
-            "selected_lane_assignment_guard_required",
-            "selected_lane_runtime_assignment_truth_required",
-            "selected_model_profile_over_budget",
-            "selected_external_backend_not_ready",
-            "blocked_dispatch",
-            "auto_dispatch_packet_active_unit_missing",
-            "auto_dispatch_packet_active_unit_mismatch",
-            "auto_dispatch_packet_active_unit_ambiguous",
-            "auto_dispatch_packet_active_unit_unavailable",
-            "auto_dispatch_packet_active_unit_packet_missing",
-        ];
+    fn blocker_code_registry_parity_covers_shared_taskflow_contract_codes() {
+        let scoped_surface_literals = taskflow_contracts::BlockerCode::all()
+            .iter()
+            .map(|code| code.as_str())
+            .collect::<Vec<_>>();
 
-        for code in scoped_surface_literals {
+        for code in scoped_surface_literals.iter().copied() {
             assert_eq!(
                 taskflow_contracts::canonical_blocker_code_str(code),
                 Some(code),
@@ -2392,14 +2370,15 @@ mod tests {
         }
 
         let shared_contract_set =
-            taskflow_contracts::canonical_blocker_code_list(scoped_surface_literals)
+            taskflow_contracts::canonical_blocker_code_list(scoped_surface_literals.iter().copied())
                 .into_iter()
                 .collect::<BTreeSet<_>>();
-        let canonical_set = canonical_blocker_code_list(scoped_surface_literals)
+        let canonical_set = canonical_blocker_code_list(scoped_surface_literals.iter().copied())
             .into_iter()
             .collect::<BTreeSet<_>>();
         let expected_set = scoped_surface_literals
-            .into_iter()
+            .iter()
+            .copied()
             .map(str::to_string)
             .collect::<BTreeSet<_>>();
         assert_eq!(shared_contract_set, expected_set);
@@ -3330,10 +3309,31 @@ mod tests {
     }
 
     #[test]
-    fn blocker_code_canonicalization_trims_surrounding_whitespace() {
+    fn blocker_code_canonicalization_rejects_case_and_whitespace_drift() {
+        assert_eq!(super::canonical_blocker_code_str("missing_packet"), Some("missing_packet"));
+        assert_eq!(BlockerCode::from_str(" open_delegated_cycle "), None);
+        assert_eq!(
+            super::canonical_blocker_code_str(" open_delegated_cycle "),
+            None
+        );
+        assert_eq!(
+            super::canonical_blocker_code_value_from_str("missing_cache_key_input:protocol_binding_revision"),
+            Some("missing_cache_key_input:protocol_binding_revision".to_string())
+        );
+        assert_eq!(
+            super::canonical_blocker_code_value_from_str(" open_delegated_cycle "),
+            None
+        );
         assert_eq!(
             super::canonical_blocker_code_str(" missing_packet "),
-            Some("missing_packet")
+            None
+        );
+        assert_eq!(super::canonical_blocker_code_str("MISSING_PACKET"), None);
+        assert_eq!(
+            super::canonical_blocker_code_value_from_str(
+                " missing_cache_key_input:protocol_binding_revision "
+            ),
+            None
         );
     }
 
@@ -3388,7 +3388,7 @@ mod tests {
     #[test]
     fn blocker_code_normalization_supports_consume_bundle_protocol_binding_codes() {
         let codes = canonical_blocker_code_list([
-            " missing_protocol_binding_receipt ",
+            "missing_protocol_binding_receipt",
             "protocol_binding_not_runtime_ready",
             "policy_denied",
             "unsupported_blocker_code",
@@ -3407,7 +3407,7 @@ mod tests {
     #[test]
     fn blocker_code_normalization_supports_implementation_review_codes() {
         let codes = canonical_blocker_code_list([
-            " implementation_review_denied ",
+            "implementation_review_denied",
             "implementation_review_expired",
             "implementation_review_findings",
             "implementation_review_changed_scope",
@@ -3426,7 +3426,7 @@ mod tests {
     #[test]
     fn blocker_code_normalization_supports_development_flow_completion_codes() {
         let codes = canonical_blocker_code_list([
-            " pending_specification_evidence ",
+            "pending_specification_evidence",
             "pending_execution_preparation_evidence",
             "pending_approval_delegation_evidence",
             "pending_design_finalize",
@@ -3558,7 +3558,7 @@ mod tests {
     #[test]
     fn blocker_code_normalization_supports_parameterized_registry_families() {
         let codes = canonical_blocker_code_list([
-            " missing_metadata_family ",
+            "missing_metadata_family",
             "missing_cache_key_input:protocol_binding_revision",
             "invalid_invalidation_tuple_key:startup_bundle_revision",
             "cache_key_mismatch:protocol_binding_revision",

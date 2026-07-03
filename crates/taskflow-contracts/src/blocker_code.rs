@@ -185,11 +185,10 @@ impl TryFrom<&str> for BlockerCode {
     type Error = UnknownBlockerCode;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let trimmed = value.trim();
         Self::all()
             .iter()
             .copied()
-            .find(|code| code.as_str() == trimmed)
+            .find(|code| code.as_str() == value)
             .ok_or_else(|| UnknownBlockerCode {
                 value: value.to_string(),
             })
@@ -216,10 +215,9 @@ pub fn canonical_blocker_code_str(value: &str) -> Option<&'static str> {
 
 #[must_use]
 pub fn canonical_blocker_code_value_from_str(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    canonical_blocker_code_str(trimmed)
+    canonical_blocker_code_str(value)
         .map(str::to_string)
-        .or_else(|| canonical_parametric_blocker_code_value(trimmed))
+        .or_else(|| canonical_parametric_blocker_code_value(value))
 }
 
 #[must_use]
@@ -360,6 +358,19 @@ mod tests {
     #[test]
     fn blocker_code_rejects_unknown_strings() {
         assert!(canonical_blocker_code_value_from_str("unknown_blocker").is_none());
+    }
+
+    #[test]
+    fn blocker_code_rejects_case_and_whitespace_drift() {
+        assert!(canonical_blocker_code_str("HOST_TOOL_CAPABILITY_MISSING").is_none());
+        assert!(canonical_blocker_code_str(" host_tool_capability_missing ").is_none());
+        assert!(
+            canonical_blocker_code_value_from_str(
+                " selected_lane_runtime_assignment_truth_missing:task=task-a:missing "
+            )
+            .is_none()
+        );
+        assert!(BlockerCode::try_from(" host_tool_capability_missing ").is_err());
     }
 
     #[test]
