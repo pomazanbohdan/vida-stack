@@ -340,6 +340,14 @@ pub fn validate_implementation_artifact_scope(
     changed_files: &[PathBuf],
     owned_paths: &[PathBuf],
 ) -> ImplementationArtifactScopeDecision {
+    validate_implementation_artifact_scope_with_proof_paths(changed_files, owned_paths, &[])
+}
+
+pub fn validate_implementation_artifact_scope_with_proof_paths(
+    changed_files: &[PathBuf],
+    owned_paths: &[PathBuf],
+    proof_artifact_paths: &[PathBuf],
+) -> ImplementationArtifactScopeDecision {
     if changed_files.is_empty() {
         return ImplementationArtifactScopeDecision {
             accepted: false,
@@ -355,9 +363,13 @@ pub fn validate_implementation_artifact_scope(
         };
     }
 
+    let effective_scope = owned_paths
+        .iter()
+        .chain(proof_artifact_paths.iter())
+        .collect::<Vec<_>>();
     let out_of_scope_paths = changed_files
         .iter()
-        .filter(|path| !owned_paths.iter().any(|owned| path_is_within(path, owned)))
+        .filter(|path| !effective_scope.iter().any(|owned| path_is_within(path, owned)))
         .cloned()
         .collect::<Vec<_>>();
 
@@ -368,9 +380,16 @@ pub fn validate_implementation_artifact_scope(
             out_of_scope_paths,
         }
     } else {
+        let blocker_code = if proof_artifact_paths.is_empty()
+            && out_of_scope_paths.iter().any(|path| path_looks_like_proof_or_test(path))
+        {
+            "missing_proof_artifact_scope"
+        } else {
+            "implementation_artifact_out_of_scope"
+        };
         ImplementationArtifactScopeDecision {
             accepted: false,
-            blocker_codes: vec!["implementation_artifact_out_of_scope".to_string()],
+            blocker_codes: vec![blocker_code.to_string()],
             out_of_scope_paths,
         }
     }
@@ -378,6 +397,21 @@ pub fn validate_implementation_artifact_scope(
 
 fn path_is_within(path: &Path, owned: &Path) -> bool {
     path == owned || path.starts_with(owned)
+}
+
+fn path_looks_like_proof_or_test(path: &Path) -> bool {
+    path.components().any(|component| {
+        let value = component.as_os_str().to_string_lossy();
+        matches!(
+            value.as_ref(),
+            "test" | "tests" | "__tests__" | "spec" | "specs" | "proof" | "proofs"
+        ) || value.ends_with("_test.rs")
+            || value.ends_with("_test.dart")
+            || value.ends_with(".test.ts")
+            || value.ends_with(".test.tsx")
+            || value.ends_with(".spec.ts")
+            || value.ends_with(".spec.tsx")
+    })
 }
 
 #[cfg(test)]
@@ -489,6 +523,38 @@ mod tests {
         assert_eq!(
             decision.blocker_codes,
             vec!["implementation_artifact_out_of_scope"]
+        );
+    }
+
+    #[test]
+    fn artifact_scope_accepts_proof_artifact_paths_without_role_names() {
+        let decision = validate_implementation_artifact_scope_with_proof_paths(
+            &[
+                PathBuf::from("src/lib/features/list_view/domain/model.dart"),
+                PathBuf::from("src/test/features/list_view/domain/model_test.dart"),
+            ],
+            &[PathBuf::from("src/lib/features/list_view")],
+            &[PathBuf::from("src/test/features/list_view")],
+        );
+
+        assert!(decision.accepted);
+        assert!(decision.blocker_codes.is_empty());
+        assert!(decision.out_of_scope_paths.is_empty());
+    }
+
+    #[test]
+    fn artifact_scope_reports_missing_proof_scope_for_test_paths() {
+        let decision = validate_implementation_artifact_scope_with_proof_paths(
+            &[PathBuf::from("src/test/features/list_view/domain/model_test.dart")],
+            &[PathBuf::from("src/lib/features/list_view")],
+            &[],
+        );
+
+        assert!(!decision.accepted);
+        assert_eq!(decision.blocker_codes, vec!["missing_proof_artifact_scope"]);
+        assert_eq!(
+            decision.out_of_scope_paths,
+            vec![PathBuf::from("src/test/features/list_view/domain/model_test.dart")]
         );
     }
 }

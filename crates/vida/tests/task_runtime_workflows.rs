@@ -149,6 +149,108 @@ fn task_runtime_workflows_assumption_doubt_test_stale_missing_task_identity_vari
 }
 
 #[test]
+fn closed_task_stale_host_bridge_run_projection_is_not_active_recovery() {
+    let fixture = PersistentRuntimeFixture::state_only("closed-task-stale-host-bridge-run");
+    fixture.boot();
+
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "create",
+            "closed-host-bridge-parent",
+            "Closed Host Bridge Parent",
+            "--type",
+            "epic",
+            "--json",
+        ],
+    );
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "create",
+            "closed-host-bridge-run",
+            "Closed Host Bridge Run",
+            "--type",
+            "task",
+            "--parent-id",
+            "closed-host-bridge-parent",
+            "--json",
+        ],
+    );
+    run_json_success(
+        &fixture,
+        &[
+            "taskflow",
+            "run-graph",
+            "dispatch-init",
+            "closed-host-bridge-run",
+            "--json",
+        ],
+    );
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "close",
+            "closed-host-bridge-run",
+            "--reason",
+            "closed before stale host bridge projection recovery",
+            "--json",
+        ],
+    );
+
+    let run_graph = run_json(
+        &fixture,
+        &[
+            "taskflow",
+            "run-graph",
+            "status",
+            "closed-host-bridge-run",
+            "--json",
+        ],
+    );
+    let run_graph_blockers = json_string_vec(&run_graph, "/blocker_codes");
+    assert!(
+        run_graph_blockers
+            .iter()
+            .any(|code| code == "closed_task_active_run_projection_mismatch"),
+        "closed task projection must fail closed, not remain active: {run_graph:#}"
+    );
+    assert!(
+        run_graph["next_actions"]
+            .to_string()
+            .contains("vida task reconcile-closed-runs --limit 25"),
+        "closed task projection should name the stable reconcile command: {run_graph:#}"
+    );
+
+    let recovery = run_json(
+        &fixture,
+        &[
+            "taskflow",
+            "recovery",
+            "status",
+            "closed-host-bridge-run",
+            "--json",
+        ],
+    );
+    let recovery_blockers = json_string_vec(&recovery, "/blocker_codes");
+    assert!(
+        recovery_blockers
+            .iter()
+            .any(|code| code == "closed_task_active_run_projection_mismatch"),
+        "closed task recovery must fail closed, not remain active: {recovery:#}"
+    );
+    assert!(
+        recovery["next_actions"]
+            .to_string()
+            .contains("vida task reconcile-closed-runs --limit 25"),
+        "closed task recovery should name the stable reconcile command: {recovery:#}"
+    );
+}
+
+#[test]
 #[ignore = "helper process for task_runtime_workflows persisted-state row deletion"]
 fn runtime_delete_run_graph_row_helper_process() {
     if std::env::var(runtime_consumption_support::RUN_GRAPH_DELETE_STATE_DIR_ENV).is_ok() {
@@ -342,14 +444,18 @@ fn task_runtime_workflows_treat_step_as_execution_only_and_subtask_as_work_item(
         invalid_step_payload["graph_issue"]["issue_type"],
         "invalid_parent_child_kind"
     );
-    assert!(invalid_step_payload["graph_issue"]["detail"]
-        .as_str()
-        .expect("graph issue detail")
-        .contains("got `epic`"));
-    assert!(invalid_step_payload["next_actions"][0]
-        .as_str()
-        .expect("next action")
-        .contains("steps require a task or subtask parent"));
+    assert!(
+        invalid_step_payload["graph_issue"]["detail"]
+            .as_str()
+            .expect("graph issue detail")
+            .contains("got `epic`")
+    );
+    assert!(
+        invalid_step_payload["next_actions"][0]
+            .as_str()
+            .expect("next action")
+            .contains("steps require a task or subtask parent")
+    );
     let invalid_step_default = run_failure(
         &fixture,
         &[

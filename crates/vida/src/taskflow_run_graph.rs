@@ -2955,6 +2955,27 @@ fn recovery_surface_contract_with_owned_scope(
             &task_authority_blockers,
             projection_truth.stale_state_suspected,
         );
+        let recommended_command = projection_truth.next_lawful_operator_action.clone();
+        let recommended_surface = recommended_command.as_ref().map(|command| {
+            if command.trim() == closed_task_active_run_projection_mismatch_command() {
+                "vida task reconcile-closed-runs".to_string()
+            } else if command.starts_with("vida lane retire") {
+                "vida lane retire".to_string()
+            } else {
+                "vida taskflow run-graph status".to_string()
+            }
+        });
+        let next_action = recommended_command
+            .as_ref()
+            .map(|command| RecoveryNextAction {
+                command: command.clone(),
+                surface: recommended_surface
+                    .clone()
+                    .unwrap_or_else(|| "vida taskflow run-graph status".to_string()),
+                reason: format!(
+                    "stale TaskFlow task authority requires projection cleanup before recovery; run `{command}`"
+                ),
+            });
         return (
             blocker_codes.clone(),
             Some(RecoveryWhyNotNow {
@@ -2965,9 +2986,9 @@ fn recovery_surface_contract_with_owned_scope(
                 blocker_codes,
                 blocking_surface: Some("vida taskflow recovery latest".to_string()),
             }),
-            None,
-            None,
-            None,
+            next_action,
+            recommended_command,
+            recommended_surface,
         );
     }
 
@@ -6709,9 +6730,10 @@ fn implementation_writer_handoff(
     let verification_required =
         json_bool_field(implementation, "independent_verification_required").unwrap_or(false);
     if verification_required {
-        let verification_node = json_raw_string_field(implementation, "verification_route_task_class")
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "verification".to_string());
+        let verification_node =
+            json_raw_string_field(implementation, "verification_route_task_class")
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "verification".to_string());
         return (
             verification_node,
             None,
@@ -9177,7 +9199,8 @@ fn seeded_run_graph_state_from_role_selection(
         .next()
         .filter(|value| !value.is_empty())
         .or_else(|| {
-            json_raw_string_field(route, "analysis_route_task_class").filter(|value| !value.is_empty())
+            json_raw_string_field(route, "analysis_route_task_class")
+                .filter(|value| !value.is_empty())
         })
         .unwrap_or_else(|| selection.selected_role.clone())
     } else {
@@ -10008,9 +10031,10 @@ pub(crate) async fn derive_advanced_run_graph_state(
             );
         }
 
-        let verification_node = json_raw_string_field(&implementation, "verification_route_task_class")
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "verification".to_string());
+        let verification_node =
+            json_raw_string_field(&implementation, "verification_route_task_class")
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "verification".to_string());
         if existing.next_node.as_deref() == Some("review_ensemble") && existing.status == "ready" {
             return Ok(TaskflowRunGraphAdvancePayload {
                 status: run_graph_state_from_authority_ready_transition(
@@ -10071,9 +10095,10 @@ pub(crate) async fn derive_advanced_run_graph_state(
     }
 
     if existing.task_class == "implementation" && existing.route_task_class == "implementation" {
-        let verification_node = json_raw_string_field(&implementation, "verification_route_task_class")
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "verification".to_string());
+        let verification_node =
+            json_raw_string_field(&implementation, "verification_route_task_class")
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "verification".to_string());
         if existing.active_node != verification_node {
             // fall through
         } else {
@@ -10844,8 +10869,10 @@ mod tests {
         recovery_ready: bool,
         delegated_cycle_open: bool,
     ) -> crate::state_store::RunGraphRecoverySummary {
-        let mut summary =
-            default_run_graph_recovery_summary("task-recovery-classifier", "run-recovery-classifier");
+        let mut summary = default_run_graph_recovery_summary(
+            "task-recovery-classifier",
+            "run-recovery-classifier",
+        );
         summary.recovery_ready = recovery_ready;
         summary.delegation_gate.delegated_cycle_open = delegated_cycle_open;
         summary

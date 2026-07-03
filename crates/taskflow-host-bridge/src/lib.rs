@@ -19,6 +19,7 @@ pub use artifact_scope::{
     host_bridge_record_component, host_bridge_request_implementation_artifacts,
     normalized_host_bridge_attempt_id, normalized_host_bridge_consolidation_receipt_id,
     push_unique_host_bridge_implementation_artifact, validate_implementation_artifact_scope,
+    validate_implementation_artifact_scope_with_proof_paths,
     write_host_bridge_normalized_implementation_artifact, write_host_bridge_request,
 };
 pub use completion::{
@@ -69,9 +70,9 @@ pub use receipt_binding::{
 pub use request::{
     HOST_BRIDGE_REQUIRED_RESULT_FIELDS, HostBridgeRequest, HostBridgeRequestPath,
     default_host_bridge_required_result_fields, effective_host_bridge_request,
-    host_bridge_path_array, host_bridge_request_owned_paths, host_bridge_request_string,
-    host_bridge_required_result_fields, legacy_internal_subagents_host_bridge_request,
-    read_host_bridge_request,
+    host_bridge_path_array, host_bridge_request_owned_paths, host_bridge_request_proof_artifact_paths,
+    host_bridge_request_string, host_bridge_required_result_fields,
+    legacy_internal_subagents_host_bridge_request, read_host_bridge_request,
 };
 
 #[cfg(test)]

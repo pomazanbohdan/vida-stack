@@ -154,6 +154,34 @@ pub fn host_bridge_request_owned_paths(request: &Value) -> Vec<PathBuf> {
     owned_paths
 }
 
+pub fn host_bridge_request_proof_artifact_paths(request: &Value) -> Vec<PathBuf> {
+    for field in [
+        "proof_artifact_scope",
+        "proof_scope",
+        "test_owned_paths",
+        "proof_owned_paths",
+    ] {
+        let paths = host_bridge_path_array(request, field);
+        if !paths.is_empty() {
+            return paths;
+        }
+    }
+    if let Some(implementation_isolation) = request.get("implementation_isolation") {
+        for field in [
+            "proof_artifact_scope",
+            "proof_scope",
+            "test_owned_paths",
+            "proof_owned_paths",
+        ] {
+            let paths = host_bridge_path_array(implementation_isolation, field);
+            if !paths.is_empty() {
+                return paths;
+            }
+        }
+    }
+    Vec::new()
+}
+
 pub fn legacy_internal_subagents_host_bridge_request(request: &Value) -> bool {
     host_bridge_request_string(request, "backend_id") == Some("internal_subagents")
         && host_bridge_request_string(request, "dispatch_transport") == Some("host_tool_bridge")
@@ -352,6 +380,32 @@ mod tests {
         assert_eq!(
             host_bridge_request_owned_paths(&request),
             vec![PathBuf::from("crates/vida")]
+        );
+    }
+
+    #[test]
+    fn request_proof_artifact_paths_support_explicit_request_scope() {
+        let request = serde_json::json!({
+            "proof_artifact_scope": ["src/test/features/list_view", " "]
+        });
+
+        assert_eq!(
+            host_bridge_request_proof_artifact_paths(&request),
+            vec![PathBuf::from("src/test/features/list_view")]
+        );
+    }
+
+    #[test]
+    fn request_proof_artifact_paths_fall_back_to_isolation_scope() {
+        let request = serde_json::json!({
+            "implementation_isolation": {
+                "proof_scope": ["tests/record_chatter"]
+            }
+        });
+
+        assert_eq!(
+            host_bridge_request_proof_artifact_paths(&request),
+            vec![PathBuf::from("tests/record_chatter")]
         );
     }
 

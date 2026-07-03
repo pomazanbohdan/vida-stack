@@ -29,12 +29,12 @@ use taskflow_host_bridge::{
     host_bridge_completed_result_status_is_admissible, host_bridge_completion_retryable_blocker,
     host_bridge_normalized_implementation_artifact_path, host_bridge_operator_fields,
     host_bridge_provenance_public_blocker_code, host_bridge_request_implementation_artifacts,
-    host_bridge_request_owned_paths, host_bridge_request_requires_implementation_artifacts,
-    host_bridge_request_string, normalize_host_bridge_provenance_for_completion,
-    normalized_host_bridge_attempt_id, normalized_host_bridge_consolidation_receipt_id,
-    push_unique_host_bridge_implementation_artifact,
+    host_bridge_request_owned_paths, host_bridge_request_proof_artifact_paths,
+    host_bridge_request_requires_implementation_artifacts, host_bridge_request_string,
+    normalize_host_bridge_provenance_for_completion, normalized_host_bridge_attempt_id,
+    normalized_host_bridge_consolidation_receipt_id, push_unique_host_bridge_implementation_artifact,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
-    validate_host_bridge_request_provenance, validate_implementation_artifact_scope,
+    validate_host_bridge_request_provenance, validate_implementation_artifact_scope_with_proof_paths,
     write_host_bridge_normalized_implementation_artifact, write_host_bridge_request,
 };
 
@@ -209,6 +209,37 @@ fn host_bridge_task_or_request_owned_paths(
     } else {
         task_owned_paths
     }
+}
+
+fn proof_artifact_paths_from_task_or_request(
+    task: &crate::state_store::TaskRecord,
+    request: &serde_json::Value,
+) -> Vec<PathBuf> {
+    let mut paths = host_bridge_request_proof_artifact_paths(request);
+    for target in &task.planner_metadata.proof_targets {
+        for token in target.split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '`')) {
+            let token = token.trim_matches(|ch: char| matches!(ch, '\'' | '"' | ':' | ')' | '('));
+            if token.contains('/') || token.contains('\\') {
+                let normalized = token.replace('\\', "/");
+                if normalized.contains("/test/")
+                    || normalized.contains("/tests/")
+                    || normalized.starts_with("test/")
+                    || normalized.starts_with("tests/")
+                    || normalized.ends_with("_test.rs")
+                    || normalized.ends_with("_test.dart")
+                    || normalized.ends_with(".test.ts")
+                    || normalized.ends_with(".test.tsx")
+                    || normalized.ends_with(".spec.ts")
+                    || normalized.ends_with(".spec.tsx")
+                {
+                    paths.push(PathBuf::from(normalized));
+                }
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 const MAX_HOST_BRIDGE_ARTIFACT_BYTES: u64 = 1024 * 1024;
@@ -1893,6 +1924,7 @@ async fn attach_host_bridge_implementation_artifacts(
     };
     let mut normalized_artifacts = host_bridge_request_implementation_artifacts(&request);
     let owned_paths = host_bridge_task_or_request_owned_paths(&task, &request);
+    let proof_artifact_paths = proof_artifact_paths_from_task_or_request(&task, &request);
     let attempt_id = normalized_host_bridge_attempt_id(&run_id, command.attempt_id.as_deref());
     let consolidation_receipt_id = normalized_host_bridge_consolidation_receipt_id(
         &attempt_id,
@@ -1938,8 +1970,11 @@ async fn attach_host_bridge_implementation_artifacts(
             );
         }
         let changed_file_paths = changed_files.iter().map(PathBuf::from).collect::<Vec<_>>();
-        let scope_decision =
-            validate_implementation_artifact_scope(&changed_file_paths, &owned_paths);
+        let scope_decision = validate_implementation_artifact_scope_with_proof_paths(
+            &changed_file_paths,
+            &owned_paths,
+            &proof_artifact_paths,
+        );
         if !scope_decision.accepted {
             return emit_host_bridge_attach_blocked(
                 &command.request,
@@ -1953,6 +1988,7 @@ async fn attach_host_bridge_implementation_artifacts(
                     "request_path": command.request.display().to_string(),
                     "artifact_path": artifact_path.display().to_string(),
                     "owned_paths": owned_paths,
+                    "proof_artifact_paths": proof_artifact_paths,
                     "out_of_scope_paths": scope_decision.out_of_scope_paths,
                 }),
             );
@@ -10148,7 +10184,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_bridge_attach_artifact_accepts_developer_implementation_request() {
+    async fn agent_host_bridge_attach_uses_task_owned_paths_after_request_scope_stales() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -10229,7 +10265,7 @@ mod tests {
             "result_path": result_path.display().to_string(),
             "receipt_path": receipt_path.display().to_string(),
             "implementation_isolation": {
-                "owned_paths": ["crates/taskflow-host-bridge/src"]
+                "owned_paths": ["crates/vida/src"]
             }
         });
         std::fs::write(
@@ -10297,6 +10333,263 @@ mod tests {
         assert_eq!(attempts[0].attempt_id, "developer-attach-attempt-1");
         assert_eq!(attempts[0].status, "accepted");
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_attach_artifact_accepts_explicit_proof_artifact_scope() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-agent-host-bridge-proof-scope-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let run_id = "run-host-bridge-proof-scope";
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge proof scope attach",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["src/lib/features/list_view".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+        let request_path = root.join("host-tool-bridge/requests/request.json");
+        let packet_path = root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = root.join("host-tool-bridge/results/result.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/receipt.json");
+        let artifact_path = root.join("attempt-artifacts/proof-patch.json");
+        for path in [
+            &request_path,
+            &packet_path,
+            &result_path,
+            &receipt_path,
+            &artifact_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(&packet_path, "{}").expect("write packet");
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "artifact_kind": "patch_proposal",
+                "changed_files": [
+                    "src/lib/features/list_view/domain/model.dart",
+                    "src/test/features/list_view/domain/model_test.dart"
+                ]
+            })
+            .to_string(),
+        )
+        .expect("write artifact");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "req-proof-scope",
+                "run_id": run_id,
+                "task_id": run_id,
+                "dispatch_target": "writer",
+                "task_class": "implementation",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "request_path": request_path.display().to_string(),
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string(),
+                "proof_artifact_scope": ["src/test/features/list_view"],
+                "implementation_isolation": {
+                    "owned_paths": ["src/lib/features/list_view"]
+                }
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        drop(store);
+
+        let exit = run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: vec![artifact_path],
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: Some("proof-scope-attempt-1".to_string()),
+            consolidation_receipt_id: Some("proof-scope-receipt-1".to_string()),
+            complete: false,
+            host_agent_id: None,
+            summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            submit_result: None,
+            validate_result: None,
+            scaffold_result: None,
+            retry_completion: false,
+            result_file: None,
+            receipt_id: None,
+            json: true,
+            state_dir: Some(root.clone()),
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let updated: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read updated request"),
+        )
+        .expect("request json");
+        assert_eq!(
+            updated["implementation_artifacts"][0]["attempt_id"],
+            "proof-scope-attempt-1"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_attach_artifact_reports_missing_proof_scope_for_test_paths() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-agent-host-bridge-missing-proof-scope-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let run_id = "run-host-bridge-missing-proof-scope";
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge missing proof scope",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["src/lib/features/list_view".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+        let request_path = root.join("host-tool-bridge/requests/request.json");
+        let packet_path = root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = root.join("host-tool-bridge/results/result.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/receipt.json");
+        let artifact_path = root.join("attempt-artifacts/proof-patch.json");
+        for path in [
+            &request_path,
+            &packet_path,
+            &result_path,
+            &receipt_path,
+            &artifact_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(&packet_path, "{}").expect("write packet");
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "artifact_kind": "patch_proposal",
+                "changed_files": ["src/test/features/list_view/domain/model_test.dart"]
+            })
+            .to_string(),
+        )
+        .expect("write artifact");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "req-missing-proof-scope",
+                "run_id": run_id,
+                "task_id": run_id,
+                "dispatch_target": "writer",
+                "task_class": "implementation",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "request_path": request_path.display().to_string(),
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string(),
+                "implementation_isolation": {
+                    "owned_paths": ["src/lib/features/list_view"]
+                }
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        drop(store);
+
+        let exit = run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: vec![artifact_path],
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: Some("missing-proof-scope-attempt-1".to_string()),
+            consolidation_receipt_id: Some("missing-proof-scope-receipt-1".to_string()),
+            complete: false,
+            host_agent_id: None,
+            summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            submit_result: None,
+            validate_result: None,
+            scaffold_result: None,
+            retry_completion: false,
+            result_file: None,
+            receipt_id: None,
+            json: true,
+            state_dir: Some(root.clone()),
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::from(1));
+        let updated: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read request"),
+        )
+        .expect("request json");
+        assert!(updated.get("implementation_artifacts").is_none());
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("reopen store");
+        let attempts = store
+            .task_stage_attempts(run_id, "implementation")
+            .await
+            .expect("read attempts");
+        assert!(attempts.is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
