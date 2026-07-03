@@ -231,24 +231,10 @@ fn exception_takeover_owned_write_scope(
     state_root: &Path,
     latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
 ) -> Vec<String> {
-    let Some(run_id) = latest_receipt.map(|receipt| receipt.run_id.as_str()) else {
-        return Vec::new();
-    };
-    let path = state_root
-        .join("lane-exception-path-metadata")
-        .join(format!("{run_id}.json"));
-    let Some(metadata) = crate::read_json_file_if_present(&path) else {
-        return Vec::new();
-    };
-    metadata["owned_write_scope"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect()
+    crate::exception_takeover_metadata::owned_write_scope_for_latest_receipt(
+        state_root,
+        latest_receipt,
+    )
 }
 
 pub(crate) fn merge_live_exception_takeover_write_guard(

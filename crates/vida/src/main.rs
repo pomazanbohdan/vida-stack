@@ -34,6 +34,7 @@ mod docflow_proxy;
 mod docflow_runtime_verdict;
 mod docs_surface;
 mod doctor_surface;
+mod exception_takeover_metadata;
 mod external_provider_health;
 mod hook_template_registry_projection;
 mod host_agent_state;

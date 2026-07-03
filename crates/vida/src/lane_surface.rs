@@ -29,6 +29,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::contract_profile_adapter::render_operator_contract_envelope;
 use crate::taskflow_task_bridge::proxy_state_dir;
+use crate::exception_takeover_metadata::ExceptionTakeoverMetadata;
 use crate::{state_store::StateStore, ProxyArgs};
 
 const LANE_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -175,177 +176,6 @@ enum LaneCommand<'a> {
         host_agents: bool,
         as_json: bool,
     },
-}
-
-#[derive(Clone, Debug, Serialize, serde::Deserialize)]
-struct ExceptionTakeoverMetadata {
-    #[serde(default)]
-    run_id: Option<String>,
-    #[serde(default)]
-    dispatch_target: Option<String>,
-    #[serde(default)]
-    dispatch_packet_path: Option<String>,
-    #[serde(default)]
-    source_exception_path_receipt_id: Option<String>,
-    reason_class: String,
-    active_bounded_unit: String,
-    owned_write_scope: Vec<String>,
-    why_delegated_or_rerouted_path_is_not_currently_lawful: String,
-    why_local_write_is_the_smallest_safe_bounded_workaround: String,
-    return_to_normal_posture_condition: String,
-    verification_plan: Vec<String>,
-    recorded_at: String,
-}
-
-impl ExceptionTakeoverMetadata {
-    fn validate(&self) -> Result<(), String> {
-        for (field, value) in [
-            ("reason_class", self.reason_class.trim()),
-            ("active_bounded_unit", self.active_bounded_unit.trim()),
-            (
-                "why_delegated_or_rerouted_path_is_not_currently_lawful",
-                self.why_delegated_or_rerouted_path_is_not_currently_lawful
-                    .trim(),
-            ),
-            (
-                "why_local_write_is_the_smallest_safe_bounded_workaround",
-                self.why_local_write_is_the_smallest_safe_bounded_workaround
-                    .trim(),
-            ),
-            (
-                "return_to_normal_posture_condition",
-                self.return_to_normal_posture_condition.trim(),
-            ),
-            ("recorded_at", self.recorded_at.trim()),
-        ] {
-            if value.is_empty() {
-                return Err(format!(
-                    "exception takeover metadata field `{field}` must be non-empty"
-                ));
-            }
-        }
-        if self.owned_write_scope.is_empty()
-            || self
-                .owned_write_scope
-                .iter()
-                .any(|value| value.trim().is_empty())
-        {
-            return Err(
-                "exception takeover metadata requires at least one non-empty `owned_write_scope` entry"
-                    .to_string(),
-            );
-        }
-        if self.verification_plan.is_empty()
-            || self
-                .verification_plan
-                .iter()
-                .any(|value| value.trim().is_empty())
-        {
-            return Err(
-                "exception takeover metadata requires at least one non-empty `verification_plan` entry"
-                    .to_string(),
-            );
-        }
-        Ok(())
-    }
-}
-
-impl ExceptionTakeoverMetadata {
-    fn bind_to_receipt(&mut self, receipt: &crate::state_store::RunGraphDispatchReceipt) {
-        self.run_id = Some(receipt.run_id.clone());
-        self.dispatch_target = Some(receipt.dispatch_target.clone());
-        self.dispatch_packet_path = receipt.dispatch_packet_path.clone();
-        self.source_exception_path_receipt_id = receipt.exception_path_receipt_id.clone();
-    }
-
-    fn validate_for_receipt(
-        &self,
-        receipt: &crate::state_store::RunGraphDispatchReceipt,
-    ) -> Result<(), String> {
-        let run_id = self
-            .run_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                "exception takeover metadata is missing receipt-bound `run_id`; record a fresh exception takeover for the current lane before superseding".to_string()
-            })?;
-        if run_id != receipt.run_id {
-            return Err(format!(
-                "exception takeover metadata run_id `{run_id}` does not match current lane `{}`",
-                receipt.run_id
-            ));
-        }
-
-        let dispatch_target = self
-            .dispatch_target
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                "exception takeover metadata is missing receipt-bound `dispatch_target`; record a fresh exception takeover for the current lane before superseding".to_string()
-            })?;
-        if dispatch_target != receipt.dispatch_target {
-            return Err(format!(
-                "exception takeover metadata dispatch_target `{dispatch_target}` does not match current lane target `{}`",
-                receipt.dispatch_target
-            ));
-        }
-
-        let source_receipt_id = self
-            .source_exception_path_receipt_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                "exception takeover metadata is missing receipt-bound `source_exception_path_receipt_id`; record a fresh exception takeover for the current lane before superseding".to_string()
-            })?;
-        let current_exception_receipt = receipt
-            .exception_path_receipt_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                "current lane receipt is missing exception_path_receipt_id; record exception takeover before superseding".to_string()
-            })?;
-        if source_receipt_id != current_exception_receipt {
-            return Err(format!(
-                "exception takeover metadata source receipt `{source_receipt_id}` does not match current exception receipt `{current_exception_receipt}`"
-            ));
-        }
-
-        Ok(())
-    }
-
-    fn matches_summary(
-        &self,
-        summary: &crate::state_store::RunGraphDispatchReceiptSummary,
-    ) -> bool {
-        let run_id_matches = self
-            .run_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some_and(|value| value == summary.run_id);
-        let target_matches = self
-            .dispatch_target
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some_and(|value| value == summary.dispatch_target);
-        let source_receipt_matches = self
-            .source_exception_path_receipt_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some_and(|value| {
-                summary
-                    .exception_path_receipt_id
-                    .as_deref()
-                    .is_some_and(|summary_value| value == summary_value)
-            });
-        run_id_matches && target_matches && source_receipt_matches
-    }
 }
 
 fn lane_usage() -> &'static str {
@@ -1121,7 +951,7 @@ fn active_exception_write_scope(
     }
     exception_path_metadata
         .filter(|metadata| metadata.matches_summary(summary))
-        .map(|metadata| metadata.owned_write_scope.clone())
+        .map(ExceptionTakeoverMetadata::owned_write_scope)
         .unwrap_or_default()
 }
 
@@ -2625,51 +2455,24 @@ fn emit_lane_envelope_with_projection_cache(
 }
 
 fn exception_takeover_metadata_dir(state_root: &Path) -> PathBuf {
-    state_root.join("lane-exception-path-metadata")
+    crate::exception_takeover_metadata::metadata_dir(state_root)
 }
 
 fn exception_takeover_metadata_filename(run_id: &str) -> Result<String, String> {
-    if run_id.is_empty() {
-        return Err("Run id cannot be empty for exception takeover metadata.".to_string());
-    }
-    if !run_id
-        .chars()
-        .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
-    {
-        return Err(format!(
-            "Run id `{run_id}` contains unsupported characters for exception takeover metadata filename."
-        ));
-    }
-    Ok(format!("{run_id}.json"))
+    crate::exception_takeover_metadata::metadata_filename(run_id)
 }
 
 fn exception_takeover_metadata_path(state_root: &Path, run_id: &str) -> Result<PathBuf, String> {
-    let file_name = exception_takeover_metadata_filename(run_id)?;
-    Ok(exception_takeover_metadata_dir(state_root).join(file_name))
+    crate::exception_takeover_metadata::metadata_path(state_root, run_id)
 }
 
 fn read_exception_takeover_metadata(
     state_root: &Path,
     run_id: &str,
 ) -> Result<Option<ExceptionTakeoverMetadata>, String> {
-    let path = exception_takeover_metadata_path(state_root, run_id)?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = std::fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "Failed to read persisted exception takeover metadata `{}`: {error}",
-            path.display()
-        )
-    })?;
-    let metadata: ExceptionTakeoverMetadata = serde_json::from_str(&raw).map_err(|error| {
-        format!(
-            "Failed to decode persisted exception takeover metadata `{}`: {error}",
-            path.display()
-        )
-    })?;
-    metadata.validate()?;
-    Ok(Some(metadata))
+    crate::exception_takeover_metadata::read_validated_exception_takeover_metadata(
+        state_root, run_id,
+    )
 }
 
 fn write_exception_takeover_metadata(
@@ -2677,28 +2480,9 @@ fn write_exception_takeover_metadata(
     run_id: &str,
     metadata: &ExceptionTakeoverMetadata,
 ) -> Result<String, String> {
-    metadata.validate()?;
-    let dir = exception_takeover_metadata_dir(state_root);
-    std::fs::create_dir_all(&dir).map_err(|error| {
-        format!(
-            "Failed to create exception takeover metadata directory `{}`: {error}",
-            dir.display()
-        )
-    })?;
-    let path = exception_takeover_metadata_path(state_root, run_id)?;
-    let encoded = serde_json::to_string_pretty(metadata).map_err(|error| {
-        format!(
-            "Failed to encode exception takeover metadata `{}`: {error}",
-            path.display()
-        )
-    })?;
-    std::fs::write(&path, encoded).map_err(|error| {
-        format!(
-            "Failed to persist exception takeover metadata `{}`: {error}",
-            path.display()
-        )
-    })?;
-    Ok(path.display().to_string())
+    crate::exception_takeover_metadata::write_exception_takeover_metadata(
+        state_root, run_id, metadata,
+    )
 }
 
 fn lane_mutation_status_guard(
@@ -6089,7 +5873,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         let owned_paths_override = exception_path_metadata
                             .as_ref()
                             .filter(|_| takeover_active || missing_owned_scope_handoff)
-                            .map(|metadata| metadata.owned_write_scope.as_slice())
+                            .map(ExceptionTakeoverMetadata::owned_write_scope_slice)
                             .unwrap_or(&[]);
                         if let Err(error) = crate::runtime_dispatch_state::refresh_downstream_dispatch_preview_with_owned_paths(
                         &store,
@@ -8867,9 +8651,11 @@ mod tests {
             Some("/tmp/exception.json")
         );
         assert!(active_envelope.exception_path_metadata.is_some());
-        assert!(active_envelope
-            .historical_exception_path_metadata_path
-            .is_none());
+        assert!(
+            active_envelope
+                .historical_exception_path_metadata_path
+                .is_none()
+        );
         assert_eq!(
             active_envelope.owned_write_scope,
             vec!["crates/vida/src/lane_surface.rs".to_string()]

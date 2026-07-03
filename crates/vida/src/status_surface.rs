@@ -1613,69 +1613,11 @@ fn exception_takeover_metadata_matches_taskflow_active_work(
     latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     taskflow_active_candidates: &[serde_json::Value],
 ) -> bool {
-    let Some(receipt) = latest_receipt else {
-        return false;
-    };
-    let Some(exception_path_receipt_id) = receipt
-        .exception_path_receipt_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return false;
-    };
-    if receipt
-        .supersedes_receipt_id
-        .as_deref()
-        .map(str::trim)
-        .is_none_or(str::is_empty)
-    {
-        return false;
-    }
-    let [candidate] = taskflow_active_candidates else {
-        return false;
-    };
-    let Some(candidate_task_id) = candidate
-        .get("task_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return false;
-    };
-    let metadata_path = state_root
-        .join("lane-exception-path-metadata")
-        .join(format!("{}.json", receipt.run_id));
-    let Some(metadata) = crate::read_json_file_if_present(&metadata_path) else {
-        return false;
-    };
-    let metadata_is_receipt_bound = metadata["run_id"]
-        .as_str()
-        .map(str::trim)
-        .is_some_and(|run_id| run_id == receipt.run_id.as_str())
-        && metadata["dispatch_target"]
-            .as_str()
-            .map(str::trim)
-            .is_some_and(|target| target == receipt.dispatch_target.as_str())
-        && metadata["source_exception_path_receipt_id"]
-            .as_str()
-            .map(str::trim)
-            .is_some_and(|source_receipt_id| source_receipt_id == exception_path_receipt_id);
-    if !metadata_is_receipt_bound {
-        return false;
-    }
-
-    let receipt_run_id = receipt.run_id.trim();
-    !receipt_run_id.is_empty()
-        && (candidate_task_id == receipt_run_id
-            || candidate
-                .get("parent_task_ids")
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::trim)
-                .any(|parent_id| parent_id == receipt_run_id))
+    crate::exception_takeover_metadata::metadata_matches_taskflow_active_work(
+        state_root,
+        latest_receipt,
+        taskflow_active_candidates,
+    )
 }
 
 async fn build_operator_session_projection_for_status(

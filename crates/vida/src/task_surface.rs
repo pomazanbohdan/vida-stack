@@ -1080,113 +1080,29 @@ fn finalize_task_takeover_status_receipt(
     receipt
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-struct TaskExceptionTakeoverMetadata {
-    #[serde(default)]
-    run_id: Option<String>,
-    #[serde(default)]
-    dispatch_target: Option<String>,
-    #[serde(default)]
-    source_exception_path_receipt_id: Option<String>,
-    #[serde(default)]
-    owned_write_scope: Vec<String>,
-}
-
-impl TaskExceptionTakeoverMetadata {
-    fn matches_summary(&self, summary: &state_store::RunGraphDispatchReceiptSummary) -> bool {
-        let run_id_matches = self
-            .run_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some_and(|value| value == summary.run_id);
-        let target_matches = self
-            .dispatch_target
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some_and(|value| value == summary.dispatch_target);
-        let source_receipt_matches = self
-            .source_exception_path_receipt_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some_and(|value| {
-                summary
-                    .exception_path_receipt_id
-                    .as_deref()
-                    .is_some_and(|summary_value| value == summary_value)
-            });
-
-        run_id_matches && target_matches && source_receipt_matches
-    }
-}
-
 fn task_exception_takeover_metadata_filename(run_id: &str) -> Result<String, String> {
-    if run_id.is_empty() {
-        return Err("Run id cannot be empty for exception takeover metadata.".to_string());
-    }
-    if !run_id
-        .chars()
-        .all(|value| value.is_ascii_alphanumeric() || value == '-' || value == '_')
-    {
-        return Err(format!(
-            "Run id `{run_id}` contains unsupported characters for exception takeover metadata filename."
-        ));
-    }
-    Ok(format!("{run_id}.json"))
+    crate::exception_takeover_metadata::metadata_filename(run_id)
 }
 
 fn task_exception_takeover_metadata_path(
     state_root: &std::path::Path,
     run_id: &str,
 ) -> Result<std::path::PathBuf, String> {
-    let file_name = task_exception_takeover_metadata_filename(run_id)?;
-    Ok(state_root
-        .join("lane-exception-path-metadata")
-        .join(file_name))
+    crate::exception_takeover_metadata::metadata_path(state_root, run_id)
 }
 
 fn read_task_exception_takeover_metadata(
     state_root: &std::path::Path,
     run_id: &str,
-) -> Result<Option<TaskExceptionTakeoverMetadata>, String> {
-    let path = task_exception_takeover_metadata_path(state_root, run_id)?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = std::fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "Failed to read persisted exception takeover metadata `{}`: {error}",
-            path.display()
-        )
-    })?;
-    let metadata: TaskExceptionTakeoverMetadata = serde_json::from_str(&raw).map_err(|error| {
-        format!(
-            "Failed to decode persisted exception takeover metadata `{}`: {error}",
-            path.display()
-        )
-    })?;
-    Ok(Some(metadata))
+) -> Result<Option<crate::exception_takeover_metadata::ExceptionTakeoverMetadata>, String> {
+    crate::exception_takeover_metadata::read_exception_takeover_metadata(state_root, run_id)
 }
 
 fn task_exception_takeover_owned_write_scope(
     state_root: &std::path::Path,
     summary: &state_store::RunGraphDispatchReceiptSummary,
 ) -> Vec<String> {
-    read_task_exception_takeover_metadata(state_root, &summary.run_id)
-        .ok()
-        .flatten()
-        .filter(|metadata| metadata.matches_summary(summary))
-        .map(|metadata| {
-            metadata
-                .owned_write_scope
-                .into_iter()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
+    crate::exception_takeover_metadata::owned_write_scope_for_summary(state_root, summary)
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
