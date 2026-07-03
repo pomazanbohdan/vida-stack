@@ -356,6 +356,30 @@ fn infer_host_bridge_state_root_from_request_path(
     None
 }
 
+fn host_bridge_observability_project_root(
+    state_root: Option<&Path>,
+    request_path: &Path,
+) -> Option<PathBuf> {
+    let inferred_state_root = state_root
+        .map(|root| {
+            if root.is_absolute() {
+                root.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| crate::repo_runtime_root())
+                    .join(root)
+            }
+        })
+        .or_else(|| infer_host_bridge_state_root_from_request_path(request_path));
+    match inferred_state_root {
+        Some(state_root) => {
+            crate::taskflow_task_bridge::infer_project_root_from_state_root(&state_root)
+                .filter(|root| crate::looks_like_project_root(root))
+        }
+        None => crate::resolve_runtime_project_root().ok(),
+    }
+}
+
 fn host_bridge_request_path_is_under_state_root(request_path: &Path, state_root: &Path) -> bool {
     let Ok(request_path) = std::fs::canonicalize(request_path) else {
         return false;
@@ -5647,21 +5671,24 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     .as_ref()
                     .map(|path| path.display().to_string());
                 let request_path = command.request.display().to_string();
-                let project_root =
-                    std::env::current_dir().unwrap_or_else(|_| crate::repo_runtime_root());
-                let _ = crate::record_host_agent_handle_state(
-                    &project_root,
-                    &crate::HostAgentHandleStateInput {
-                        host_agent_id,
-                        state: &handle_state,
-                        run_id,
-                        dispatch_target,
-                        request_path: Some(&request_path),
-                        result_path: result_path.as_deref(),
-                        receipt_id: command.receipt_id.as_deref(),
-                        blocker_codes: handle_blocker_codes,
-                    },
-                );
+                if let Some(project_root) = host_bridge_observability_project_root(
+                    command.state_dir.as_deref(),
+                    &command.request,
+                ) {
+                    let _ = crate::record_host_agent_handle_state(
+                        &project_root,
+                        &crate::HostAgentHandleStateInput {
+                            host_agent_id,
+                            state: &handle_state,
+                            run_id,
+                            dispatch_target,
+                            request_path: Some(&request_path),
+                            result_path: result_path.as_deref(),
+                            receipt_id: command.receipt_id.as_deref(),
+                            blocker_codes: handle_blocker_codes,
+                        },
+                    );
+                }
                 return crate::lane_surface::run_lane(crate::ProxyArgs { args: lane_args }).await;
             }
             emit_host_bridge_payload(&payload, command.json)
@@ -6197,6 +6224,7 @@ mod tests {
         dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
         host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
         host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
+        host_bridge_observability_project_root,
         host_bridge_request_has_retryable_dispatch_receipt_for_state_root,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
@@ -8848,6 +8876,57 @@ mod tests {
             std::fs::canonicalize(&state_root).expect("state root should canonicalize")
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_observability_project_root_accepts_project_state_root() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let project_root = harness.path();
+        std::fs::write(project_root.join("vida.config.yaml"), "project: test\n")
+            .expect("project marker should write");
+        std::fs::write(project_root.join("AGENTS.md"), "test project\n")
+            .expect("agents marker should write");
+        std::fs::create_dir_all(project_root.join(".vida/config"))
+            .expect("config marker should initialize");
+        std::fs::create_dir_all(project_root.join(".vida/db"))
+            .expect("db marker should initialize");
+        std::fs::create_dir_all(project_root.join(".vida/project"))
+            .expect("project marker should initialize");
+        let state_root = project_root.join(crate::state_store::default_state_dir());
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should initialize");
+        std::fs::write(&request_path, b"{}").expect("request should write");
+
+        let resolved = host_bridge_observability_project_root(None, &request_path)
+            .expect("project state root should resolve to project root");
+
+        assert_eq!(
+            resolved,
+            std::fs::canonicalize(project_root).expect("project root should canonicalize")
+        );
+        let _ = std::fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn host_bridge_observability_project_root_skips_package_local_state_root() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let package_root = harness.path().join("crates/vida");
+        let state_root = package_root.join(crate::state_store::default_state_dir());
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should initialize");
+        std::fs::write(&request_path, b"{}").expect("request should write");
+
+        let resolved = host_bridge_observability_project_root(None, &request_path);
+
+        assert_eq!(resolved, None);
+        assert!(
+            !package_root
+                .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
+                .exists()
+        );
+        let _ = std::fs::remove_dir_all(harness.path());
     }
 
     #[test]
