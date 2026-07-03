@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn vida() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_vida"))
+    vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
 }
 
 fn unique_state_dir() -> String {
