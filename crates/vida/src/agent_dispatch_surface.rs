@@ -288,14 +288,26 @@ fn refresh_host_bridge_request_proof_artifact_paths(
     request: &mut serde_json::Value,
     proof_artifact_paths: &[PathBuf],
 ) {
-    if !host_bridge_request_proof_artifact_paths(request).is_empty()
-        || proof_artifact_paths.is_empty()
-    {
+    if proof_artifact_paths.is_empty() {
         return;
     }
-    let proof_paths = proof_artifact_paths
+    let mut proof_paths = host_bridge_request_proof_artifact_paths(request)
         .iter()
         .map(|path| path.display().to_string().replace('\\', "/"))
+        .collect::<Vec<_>>();
+    proof_paths.extend(
+        proof_artifact_paths
+            .iter()
+            .map(|path| path.display().to_string().replace('\\', "/")),
+    );
+    proof_paths.sort();
+    proof_paths.dedup();
+    if proof_paths.is_empty() {
+        return;
+    }
+    let proof_paths = proof_paths
+        .iter()
+        .map(String::as_str)
         .collect::<Vec<_>>();
     if let Some(object) = request.as_object_mut() {
         object.insert(
@@ -2057,9 +2069,12 @@ async fn attach_host_bridge_implementation_artifacts(
             );
         }
         let changed_file_paths = changed_files.iter().map(PathBuf::from).collect::<Vec<_>>();
-        if proof_artifact_paths.is_empty() && proof_artifact_scope.proof_intent_present {
-            proof_artifact_scope.paths =
-                collect_test_like_paths_from_values(changed_files.iter().map(String::as_str));
+        if proof_artifact_scope.proof_intent_present {
+            proof_artifact_scope.paths.extend(collect_test_like_paths_from_values(
+                changed_files.iter().map(String::as_str),
+            ));
+            proof_artifact_scope.paths.sort();
+            proof_artifact_scope.paths.dedup();
             proof_artifact_paths = proof_artifact_scope
                 .paths
                 .iter()
@@ -10953,6 +10968,159 @@ mod tests {
             changed_files: Vec::new(),
             attempt_id: Some("prose-proof-scope-attempt-1".to_string()),
             consolidation_receipt_id: Some("prose-proof-scope-receipt-1".to_string()),
+            complete: false,
+            host_agent_id: None,
+            summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            submit_result: None,
+            validate_result: None,
+            scaffold_result: None,
+            retry_completion: false,
+            result_file: None,
+            receipt_id: None,
+            json: true,
+            state_dir: Some(root.clone()),
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let updated: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read updated request"),
+        )
+        .expect("request json");
+        assert_eq!(
+            updated["proof_artifact_paths"],
+            serde_json::json!([
+                "src/test/features/list_view/data/record_chatter_repository_test.dart",
+                "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+                "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+            ])
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_attach_artifact_merges_changed_tests_into_partial_proof_scope() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-agent-host-bridge-partial-proof-scope-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let run_id = "run-host-bridge-partial-proof-scope";
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge partial proof scope attach",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["src/lib/features/list_view".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+        let request_path = root.join("host-tool-bridge/requests/request.json");
+        let packet_path = root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = root.join("host-tool-bridge/results/result.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/receipt.json");
+        let implementation_artifact_path = root.join("attempt-artifacts/developer-patch.json");
+        for path in [
+            &request_path,
+            &packet_path,
+            &result_path,
+            &receipt_path,
+            &implementation_artifact_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "delivery_task_packet": {
+                    "proof_targets": [
+                        "RecordActivityType tests detect meeting from category or label",
+                        "Repository tests prove meeting schedule sends partner_ids/calendar.event fields",
+                        "Widget tests cover compact mini meeting form and wider full meeting form"
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        std::fs::write(
+            &implementation_artifact_path,
+            serde_json::json!({
+                "artifact_kind": "patch_proposal",
+                "changed_files": [
+                    "src/lib/features/list_view/domain/models/record_chatter.dart",
+                    "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+                    "src/test/features/list_view/data/record_chatter_repository_test.dart",
+                    "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+                ]
+            })
+            .to_string(),
+        )
+        .expect("write implementation artifact");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "req-partial-proof-scope",
+                "run_id": run_id,
+                "task_id": run_id,
+                "dispatch_target": "writer",
+                "task_class": "implementation",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "request_path": request_path.display().to_string(),
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string(),
+                "proof_artifact_paths": [
+                    "src/test/features/list_view/domain/models/record_chatter_models_test.dart"
+                ],
+                "implementation_isolation": {
+                    "owned_paths": ["src/lib/features/list_view"],
+                    "proof_artifact_paths": [
+                        "src/test/features/list_view/domain/models/record_chatter_models_test.dart"
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        drop(store);
+
+        let exit = run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: vec![implementation_artifact_path],
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: Some("partial-proof-scope-attempt-1".to_string()),
+            consolidation_receipt_id: Some("partial-proof-scope-receipt-1".to_string()),
             complete: false,
             host_agent_id: None,
             summary: None,
