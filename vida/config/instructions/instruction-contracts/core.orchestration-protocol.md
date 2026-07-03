@@ -401,5 +401,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/core.orchestration-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: 2026-07-03T00:00:00+03:00
+updated_at: 2026-07-03T11:12:39.6247137+03:00
 changelog_ref: core.orchestration-protocol.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: semantic-atom-coverage+legacy-anchor-crosswalk+pre-commit-baseline-audit
+protocol_compression_baseline_ref: e41e56132^:vida/config/instructions/instruction-contracts/core.orchestration-protocol.md
+protocol_compression_audit_at: 2026-07-03T11:12:39.6247137+03:00
+protocol_compression_before_tokens: 8726
+protocol_compression_after_tokens: 4440
+protocol_compression_content_sha256: 2bf99fc5cb92ecaca9f7ebdcb4813e52da73414c677fd2a22e9dac9c94ba3eeb

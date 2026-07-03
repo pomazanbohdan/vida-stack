@@ -3,20 +3,21 @@
 Status: active canonical law
 Revision: 2026-07-03
 
-Purpose: define the project law for writing, reducing, validating, and registering protocol, instruction, bootstrap, and process documents so token use decreases without losing operational quality.
+Purpose: define the project law for writing, compressing, validating, and registering protocol, instruction, bootstrap, and process documents so agent-visible context becomes denser without losing operational meaning.
 
 ## Purpose
 
 1. Protocol and instruction documents MUST be written as compact operational contracts before they are expanded with explanation.
 2. Compression MUST preserve behavior, authority, proof gates, protected atoms, and bootstrap discoverability.
-3. Shorter text is accepted only when the compressed document keeps the same executable meaning for an agent or operator.
+3. Shorter text is accepted only when the compressed document keeps the same executable meaning and required context for an agent or operator.
+4. Token reduction is a measurement, not the primary objective. The primary objective is algorithm-appropriate compression without content, context, or authority loss.
 
 ## Trigger
 
 Apply this law when:
 
 1. creating a new protocol, instruction, bootstrap, process, product-law, or runtime-facing documentation artifact,
-2. revising an existing protocol or instruction for token reduction,
+2. revising an existing protocol or instruction for context-preserving compression,
 3. promoting research into a reusable protocol or instruction,
 4. adding a bootstrap-visible project documentation pointer,
 5. reviewing an agent-facing document whose full body is likely to be loaded during runtime initialization, dispatch, or handoff.
@@ -46,7 +47,7 @@ Each authoring or compression run MUST identify:
 4. loading posture: always-loaded bootstrap, frequently-loaded runtime protocol, task-selected reference, or lazy appendix,
 5. source document or research references,
 6. protected atoms,
-7. target token budget,
+7. token measurement policy: fixed budget, soft budget, or no-fixed-target compression,
 8. required proof commands.
 
 ## Outputs
@@ -59,8 +60,8 @@ A completed protocol-authoring run MUST produce:
 4. bootstrap registration when the document is bootstrap-visible,
 5. token count before/after when compressing an existing artifact,
 6. validation evidence from DocFlow and token counting,
-7. compression route evidence when quality and size conflict,
-8. recorded budget exception when exact anchors or mandatory atoms force a higher token count.
+7. compression route evidence for each high-risk block,
+8. recorded reason when no fixed target is used or when exact anchors and mandatory atoms force a higher token count.
 
 ## Required Protocol Shape
 
@@ -91,9 +92,10 @@ Every authoring or compression run MUST follow this pipeline:
 4. `compress`: apply the selected algorithm without changing protected atoms.
 5. `recover protected atoms`: restore exact identifiers, commands, paths, code spans, field names, dates, and versions.
 6. `recover anchors`: for existing runtime/protocol owners, preserve legacy section headings or add an exact crosswalk.
-7. `validate`: check semantic atoms, protected atoms, references, headings, commands, proof gates, and budget exceptions.
-8. `count tokens`: measure with `tiktoken-cli --model gpt-4o` or the active tokenizer declared by the task.
-9. `register`: update owning maps, catalogs, sidecar, and changelog.
+7. `pre-change audit`: compare compressed output with the pre-change or pre-commit baseline before acceptance.
+8. `validate`: check semantic atoms, protected atoms, references, headings, commands, proof gates, and budget exceptions.
+9. `count tokens`: measure with `tiktoken-cli --model gpt-4o` or the active tokenizer declared by the task.
+10. `register`: update owning maps, catalogs, sidecar, and changelog.
 
 ## Algorithm Library
 
@@ -135,7 +137,7 @@ Intent: reduce low-value text while preserving high-information tokens.
 
 Procedure:
 
-1. Set a token budget for the whole artifact and for each block.
+1. Set the measurement posture for the artifact and each block: fixed budget, soft budget, or no-fixed-target compression.
 2. Score coarse units by relevance, authority, protected-atom density, and duplication.
 3. Remove or move low-value units before token-level compression.
 4. Split retained units into smaller segments.
@@ -189,7 +191,7 @@ Acceptance: no protected atom is altered, normalized, translated, reordered, or 
 
 ### Exact Legacy Anchor Crosswalk
 
-Intent: allow aggressive token reduction of existing protocol owners without breaking references, bootstrap recall, or operator memory.
+Intent: allow structural compression of existing protocol owners without breaking references, bootstrap recall, or operator memory.
 
 Procedure:
 
@@ -200,7 +202,7 @@ Procedure:
 5. Mark removed headings only when their rule is obsolete, superseded, or moved to a named owner.
 6. Count crosswalk tokens as a quality-preservation cost, not as avoidable duplication.
 
-Acceptance: every required legacy anchor is present either as a heading or as an exact crosswalk entry, and the token report records any target-budget exception caused by anchor preservation.
+Acceptance: every required legacy anchor is present either as a heading or as an exact crosswalk entry, and the token report records any size exception caused by anchor preservation.
 
 ### Preserve-Exact Validation
 
@@ -239,9 +241,25 @@ Procedure:
 2. Replace repeated prose with one binding rule, table row, or crosswalk entry.
 3. Preserve operational meaning for triggers, authority, commands, gates, stop conditions, forbidden actions, and proof requirements.
 4. Prefer shorter wording only after the atom list still passes.
-5. Treat a larger-than-target result as acceptable when the excess tokens preserve exact anchors or mandatory atoms.
+5. Treat a larger-than-soft-budget result as acceptable when the excess tokens preserve exact anchors or mandatory atoms.
 
 Acceptance: the new text changes shape and token count, but not executable behavior, authority, proof gates, or discoverability.
+
+### Pre-Change Baseline Audit
+
+Intent: prevent a compressed protocol from being accepted before it is checked against the exact prior version.
+
+Procedure:
+
+1. Identify the baseline source: working-tree pre-edit copy, `git show HEAD:<path>`, or `git show <pre-commit>:<path>`.
+2. Extract legacy headings, command/code blocks, inline code, URLs, paths, ids, environment variables, JSON fields, normative keywords, proof gates, and stop conditions from the baseline.
+3. Compare those atoms with the compressed artifact.
+4. For moved content, name the destination artifact and run the same atom check against the combined retained set.
+5. For changed wording, verify the semantic atom still answers the same trigger, authority, forbidden action, required action, and proof question.
+6. Fix any missing mandatory atom before reporting success.
+7. Record residual differences only when the rule is obsolete, superseded, intentionally moved, or explicitly accepted by the operator.
+
+Acceptance: compression is accepted only after the audit reports `no mandatory content loss` or lists exact intentional deltas with owner-approved rationale.
 
 ### RFC 2119 Normative Rewrite
 
@@ -339,17 +357,17 @@ Acceptance: the report states whether enforcement was source-only, installed-run
 
 ### Token Budget Gate
 
-Intent: make token reduction measurable.
+Intent: make compression measurable without turning raw size reduction into the goal.
 
 Procedure:
 
 1. Count the original artifact with `tiktoken-cli --model gpt-4o` or the active tokenizer.
-2. Set a target budget before rewriting.
-3. Compress and count again.
-4. Fail when the compressed artifact exceeds budget without a recorded exception.
-5. Record before/after counts for compression work.
+2. Declare whether the run uses a fixed budget, soft budget, or no fixed target.
+3. Compress with the selected block algorithms and count again.
+4. Fail only when the selected policy is fixed-budget and the artifact exceeds budget without a recorded exception.
+5. For no-fixed-target runs, record before/after counts as measurement evidence and accept only if content/context validation passes.
 
-Default budgets:
+Default guidance:
 
 1. Always-loaded bootstrap pointer: 50 to 150 tokens.
 2. Runtime capsule: 250 to 700 tokens.
@@ -371,6 +389,7 @@ Known blocks MUST use explicit mappings:
 | `workflow`, `inputs`, `outputs` | block extraction plus table normalization plus semantic atom coverage |
 | `examples`, `rationale`, `explanation` | Diataxis split plus aggressive LLMLingua |
 | `legacy-anchor`, `legacy-crosswalk` | exact legacy anchor crosswalk plus preserve-exact validation |
+| `pre-change-audit` | pre-change baseline audit plus semantic atom coverage |
 | `decision` | ADR/MADR capture |
 | `requirement` | IEEE 29148 requirement quality |
 | `architecture-map` | C4 architecture mapping |
@@ -415,8 +434,26 @@ Unknown block acceptance gate:
 1. protected-atom validation passes,
 2. semantic atom coverage passes,
 3. legacy-anchor coverage passes when compressing an existing owner artifact,
-4. token delta is recorded,
-5. selected algorithm and route are recorded in task or changelog evidence.
+4. pre-change baseline audit passes when compressing an existing artifact,
+5. token delta is recorded,
+6. selected algorithm and route are recorded in task or changelog evidence.
+
+## Processed Artifact Metadata
+
+After a protocol or instruction artifact passes compression audit, its footer SHOULD record:
+
+1. `protocol_authoring_gate: enforced`
+2. `protocol_compression_status: audit_passed`
+3. `protocol_compression_algorithm: <algorithm-route>`
+4. `protocol_compression_baseline_ref: <git-ref-or-baseline-artifact>`
+5. `protocol_compression_audit_at: <timestamp>`
+6. `protocol_compression_before_tokens: <count>`
+7. `protocol_compression_after_tokens: <count>`
+8. `protocol_compression_content_sha256: <sha256-of-content-with-volatile-audit-lines-removed>`
+
+Automation MUST treat `protocol_compression_status: audit_passed` as a skip marker only when the file path, footer `source_path`, and `protocol_compression_content_sha256` match the current artifact content after removing volatile audit metadata lines: `updated_at`, `protocol_compression_audit_at`, `protocol_compression_before_tokens`, `protocol_compression_after_tokens`, and `protocol_compression_content_sha256`. If the hash does not match, rerun pre-change baseline audit before preserving the marker.
+
+Batch selection MUST prefer large protocol/instruction files without `protocol_compression_status: audit_passed`. Already marked files MAY still be rechecked by explicit operator request or when the law changes.
 
 ## Rules
 
@@ -424,10 +461,12 @@ Unknown block acceptance gate:
 2. Authority, trigger, stop, and validation rules MUST be discoverable without reading examples.
 3. Maps and bootstrap carriers MUST point to the canonical law; they MUST NOT duplicate the law.
 4. Compression MUST NOT remove fail-closed behavior, owner boundaries, proof commands, or escalation rules.
-5. Token savings MUST NOT be counted as success unless validation confirms behavior preservation.
-6. When token and quality goals conflict, quality wins and the exception MUST be recorded.
+5. Token savings MUST NOT be counted as success unless validation confirms behavior and context preservation.
+6. When size and quality goals conflict, quality wins and the exception MUST be recorded.
 7. Compression of existing runtime/protocol owners MUST be treated as refactoring: behavioral atoms are preserved, explanatory form may change.
 8. Research baselines MAY measure and recommend protocol changes without becoming gated protocol artifacts unless they explicitly opt in.
+9. A compressed existing protocol MUST be audited against its pre-change or pre-commit baseline before it is accepted.
+10. Accepted compression MUST leave machine-readable metadata so future batches can skip already audited files.
 
 ## Forbidden
 
@@ -439,11 +478,12 @@ Unknown block acceptance gate:
 6. Do not optimize MCP/tool output when the task explicitly targets assistant instruction, reasoning, or response token cost.
 7. Do not claim "content preserved" from token reduction alone.
 8. Do not fake TaskFlow, DocFlow, lane, or receipt evidence when the runtime is under a declared defect bypass.
+9. Do not move mandatory content out of the loaded protocol without naming the destination and proving combined atom coverage.
 
 ## Escalation
 
 1. If exact atoms conflict with readability, preserve exact atoms and record the readability limitation.
-2. If the target budget would remove mandatory semantic atoms, keep the atoms and record a budget exception.
+2. If a token budget would remove mandatory semantic atoms, keep the atoms and record a budget exception.
 3. If a document becomes bootstrap-visible, update `AGENTS.sidecar.md`, `docs/project-root-map.md`, and the owning product/spec maps in the same bounded change.
 4. If DocFlow rejects a valid registration, classify the result as a DocFlow/runtime defect and keep the documentation step open.
 5. If the runtime is declared defective for the active documentation block, use bounded static/source validation and record missing runtime proof as deferred evidence, not as a clean installed-runtime pass.
@@ -463,8 +503,9 @@ When runtime validation is bypassed because the runtime is defective, the minimu
 1. source-built DocFlow `check-file` for each changed protocol or instruction doc,
 2. protected-atom coverage report against the pre-rewrite source when compressing,
 3. semantic atom checklist for hard requirements, prohibitions, triggers, authority, and gates,
-4. `tiktoken-cli --model gpt-4o <changed-doc>`,
-5. explicit note that installed-runtime enforcement is deferred.
+4. pre-change baseline audit against `HEAD:<path>` or the relevant pre-commit ref,
+5. `tiktoken-cli --model gpt-4o <changed-doc>`,
+6. explicit note that installed-runtime enforcement is deferred.
 
 Bootstrap visibility validation:
 
@@ -480,6 +521,21 @@ Bootstrap visibility validation:
 3. Research notes SHOULD be lazy-load references unless promoted into law.
 4. A protocol rewrite is incomplete until token count is measured or a missing-tokenizer blocker is recorded.
 5. The default tokenizer is `gpt-4o` through `tiktoken-cli` unless the task declares another model.
+6. A fixed token target is optional; when omitted, acceptance depends on pre-change audit, semantic atom coverage, protected-atom validation, and measured token delta.
+
+## Automation
+
+The default automation loop for large protocol batches uses `docflow protocol-compression-inventory --root <root> --limit <n>` and then:
+
+1. discover protocol/instruction markdown under bootstrap-visible and runtime-instruction roots,
+2. skip artifacts whose footer has `protocol_compression_status: audit_passed` unless they changed since the recorded audit,
+3. count tokens with `tiktoken-cli --model gpt-4o`,
+4. choose the largest unprocessed files,
+5. run the algorithmic pipeline and pre-change baseline audit,
+6. write footer metadata and changelog evidence,
+7. rerun source DocFlow `check-file`, protected-atom audit, semantic audit, token count, and diff hygiene.
+
+Automation output MUST list skipped, selected, passed, blocked, and changed-since-audit files separately.
 
 ## Source References
 
@@ -500,7 +556,7 @@ Bootstrap visibility validation:
 3. Bootstrap visibility: project-visible through `AGENTS.sidecar.md`
 4. Runtime enforcement: deferred until a runtime/DocFlow consumer is implemented
 5. Initial task: `protocol-authoring-token-economy-law-doc-20260703`
-6. Session hardening: source-only enforcement split, legacy-anchor crosswalk, quality-preserving refactor gate, research exemption
+6. Session hardening: source-only enforcement split, legacy-anchor crosswalk, quality-preserving refactor gate, research exemption, pre-change baseline audit, processed-artifact metadata
 
 -----
 artifact_path: product/spec/protocol-authoring-and-token-economy-law
@@ -511,5 +567,13 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/protocol-authoring-and-token-economy-law.md
 created_at: 2026-07-03T00:00:00+03:00
-updated_at: 2026-07-03T10:44:28.4021126+03:00
+updated_at: 2026-07-03T11:37:00.3370916+03:00
 changelog_ref: protocol-authoring-and-token-economy-law.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: semantic-atom-coverage+source-docflow-gate+pre-change-baseline-audit
+protocol_compression_baseline_ref: e41e56132:docs/product/spec/protocol-authoring-and-token-economy-law.md
+protocol_compression_audit_at: 2026-07-03T11:12:39.6247137+03:00
+protocol_compression_before_tokens: 4416
+protocol_compression_after_tokens: 6368
+protocol_compression_content_sha256: 0553851e97c7fad98c8e99edd6f5000352f5238f797e7201080f66ce48e90c04

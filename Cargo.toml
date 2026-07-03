@@ -53,6 +53,7 @@ effectum = "0.7.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 serde-jsonlines = "0.7.0"
+sha2 = "0.10.9"
 service-manager = "0.11.0"
 thiserror = "2.0.18"
 time = { version = "0.3.49", features = ["formatting", "parsing", "serde"] }

@@ -14,9 +14,10 @@ use docflow_validation::{ValidationIssue, validate_markdown_footer};
 use ignore::WalkBuilder;
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 use time::format_description::well_known::Rfc3339;
 
 mod closeout_verdict;
@@ -95,6 +96,11 @@ pub enum Command {
     CheckFile(FileArgs),
     ReadinessFile(FileArgs),
     ReportCheck(FileArgs),
+    #[command(
+        about = "inventory protocol/instruction compression audit markers and select next unprocessed files",
+        long_about = "Scan protocol/instruction markdown, skip valid `protocol_compression_status: audit_passed` files, report stale/invalid markers, and list the largest unprocessed files for the next compression batch."
+    )]
+    ProtocolCompressionInventory(ProtocolCompressionInventoryArgs),
 }
 
 #[derive(Debug, Args)]
@@ -125,6 +131,16 @@ pub struct ReadinessArgs {
     pub path: String,
     #[arg(long)]
     pub content: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ProtocolCompressionInventoryArgs {
+    #[arg(long, default_value = "vida/config/instructions")]
+    pub root: String,
+    #[arg(long, default_value_t = 10)]
+    pub limit: usize,
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1198,6 +1214,7 @@ pub fn run_with_exit(cli: Cli) -> RunResult {
             }
             Err(error) => render_file_read_error("reporting", "issues", &args.path, &error.to_string(), args.json),
         },
+        Command::ProtocolCompressionInventory(args) => render_protocol_compression_inventory(&args),
     };
     RunResult { output, exit_code }
 }
@@ -3138,6 +3155,25 @@ const PROTOCOL_AUTHORING_LAW_ATOMS: &[(&str, &str)] = &[
     ("token_counter", "tiktoken-cli --model gpt-4o"),
 ];
 
+const PROTOCOL_COMPRESSION_REQUIRED_METADATA: &[&str] = &[
+    "protocol_authoring_gate",
+    "protocol_compression_status",
+    "protocol_compression_algorithm",
+    "protocol_compression_baseline_ref",
+    "protocol_compression_audit_at",
+    "protocol_compression_before_tokens",
+    "protocol_compression_after_tokens",
+    "protocol_compression_content_sha256",
+];
+
+const PROTOCOL_COMPRESSION_HASH_EXCLUDED_METADATA: &[&str] = &[
+    "updated_at",
+    "protocol_compression_audit_at",
+    "protocol_compression_before_tokens",
+    "protocol_compression_after_tokens",
+    "protocol_compression_content_sha256",
+];
+
 fn metadata_value(content: &str, key: &str) -> Option<String> {
     let prefix = format!("{key}:");
     content.lines().find_map(|line| {
@@ -3151,10 +3187,43 @@ fn metadata_value(content: &str, key: &str) -> Option<String> {
     })
 }
 
+fn strip_metadata_lines(content: &str, keys: &[&str]) -> String {
+    let prefixes = keys.iter().map(|key| format!("{key}:")).collect::<Vec<_>>();
+    let mut stripped = content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !prefixes.iter().any(|prefix| trimmed.starts_with(prefix))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if content.ends_with('\n') {
+        stripped.push('\n');
+    }
+    stripped
+}
+
+fn sha256_hex(content: &str) -> String {
+    Sha256::digest(content.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn protocol_compression_hash_content(content: &str) -> String {
+    strip_metadata_lines(content, PROTOCOL_COMPRESSION_HASH_EXCLUDED_METADATA)
+}
+
 fn metadata_date_at_or_after(content: &str, key: &str, threshold: &str) -> bool {
     metadata_value(content, key)
         .and_then(|value| value.get(..10).map(str::to_string))
         .is_some_and(|date| date.as_str() >= threshold)
+}
+
+fn metadata_positive_u64(content: &str, key: &str) -> bool {
+    metadata_value(content, key)
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|value| value > 0)
 }
 
 fn has_heading(content: &str, heading: &str) -> bool {
@@ -3171,6 +3240,11 @@ fn is_protocol_authoring_law(rel: &str, content: &str) -> bool {
 fn has_protocol_authoring_opt_in(content: &str) -> bool {
     metadata_value(content, "protocol_authoring_gate")
         .is_some_and(|value| value.eq_ignore_ascii_case("enforced"))
+}
+
+fn has_protocol_compression_audit_marker(content: &str) -> bool {
+    metadata_value(content, "protocol_compression_status")
+        .is_some_and(|value| value.eq_ignore_ascii_case("audit_passed"))
 }
 
 fn is_protocol_instruction_or_bootstrap_doc(rel: &str, content: &str) -> bool {
@@ -3190,7 +3264,8 @@ fn is_protocol_instruction_or_bootstrap_doc(rel: &str, content: &str) -> bool {
 
 fn is_protocol_authoring_gate_subject(rel: &str, content: &str) -> bool {
     is_protocol_authoring_law(rel, content)
-        || has_protocol_authoring_opt_in(content)
+        || (has_protocol_authoring_opt_in(content)
+            && !has_protocol_compression_audit_marker(content))
         || (is_project_visible_doc(rel)
             && is_protocol_instruction_or_bootstrap_doc(rel, content)
             && (metadata_date_at_or_after(content, "created_at", PROTOCOL_AUTHORING_GATE_DATE)
@@ -3219,7 +3294,7 @@ fn protocol_authoring_validation_issues(rel: &str, content: &str) -> Vec<Validat
         }
     }
 
-    if is_protocol_authoring_law(rel, content) || has_protocol_authoring_opt_in(content) {
+    if is_protocol_authoring_law(rel, content) {
         for (code, atom) in PROTOCOL_AUTHORING_LAW_ATOMS {
             if !content.contains(atom) {
                 let issue_code = format!("missing_protocol_authoring_atom_{code}");
@@ -3237,6 +3312,92 @@ fn protocol_authoring_validation_issues(rel: &str, content: &str) -> Vec<Validat
     issues
 }
 
+fn protocol_compression_metadata_validation_issues(
+    rel: &str,
+    content: &str,
+) -> Vec<ValidationIssue> {
+    if !has_protocol_compression_audit_marker(content) {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    for key in PROTOCOL_COMPRESSION_REQUIRED_METADATA {
+        if metadata_value(content, key).is_none_or(|value| value.is_empty()) {
+            issues.push(custom_validation_issue(
+                rel,
+                "missing_protocol_compression_metadata",
+                format!("Protocol compression audit marker requires footer metadata `{key}`."),
+            ));
+        }
+    }
+
+    if !metadata_value(content, "protocol_authoring_gate")
+        .is_some_and(|value| value.eq_ignore_ascii_case("enforced"))
+    {
+        issues.push(custom_validation_issue(
+            rel,
+            "invalid_protocol_compression_authoring_gate",
+            "Protocol compression audit marker requires `protocol_authoring_gate: enforced`."
+                .to_string(),
+        ));
+    }
+
+    if metadata_value(content, "source_path").is_none_or(|value| value != rel) {
+        issues.push(custom_validation_issue(
+            rel,
+            "invalid_protocol_compression_source_path",
+            format!(
+                "Protocol compression audit marker requires footer `source_path` to match `{rel}`."
+            ),
+        ));
+    }
+
+    if !metadata_positive_u64(content, "protocol_compression_before_tokens") {
+        issues.push(custom_validation_issue(
+            rel,
+            "invalid_protocol_compression_before_tokens",
+            "Protocol compression audit marker requires positive `protocol_compression_before_tokens`."
+                .to_string(),
+        ));
+    }
+
+    if !metadata_positive_u64(content, "protocol_compression_after_tokens") {
+        issues.push(custom_validation_issue(
+            rel,
+            "invalid_protocol_compression_after_tokens",
+            "Protocol compression audit marker requires positive `protocol_compression_after_tokens`."
+                .to_string(),
+        ));
+    }
+
+    if metadata_value(content, "protocol_compression_audit_at")
+        .and_then(|value| value.get(..10).map(str::to_string))
+        .is_none()
+    {
+        issues.push(custom_validation_issue(
+            rel,
+            "invalid_protocol_compression_audit_at",
+            "Protocol compression audit marker requires parseable `protocol_compression_audit_at`."
+                .to_string(),
+        ));
+    }
+
+    if let Some(expected_hash) = metadata_value(content, "protocol_compression_content_sha256") {
+        let actual_hash = sha256_hex(&protocol_compression_hash_content(content));
+        if expected_hash != actual_hash {
+            issues.push(custom_validation_issue(
+                rel,
+                "stale_protocol_compression_audit_marker",
+                format!(
+                    "Protocol compression audit marker hash does not match current artifact content (expected `{expected_hash}`, actual `{actual_hash}`)."
+                ),
+            ));
+        }
+    }
+
+    issues
+}
+
 fn collect_file_validation_issues(
     scope_root: &std::path::Path,
     rel: &str,
@@ -3247,7 +3408,192 @@ fn collect_file_validation_issues(
         scope_root, rel, content,
     ));
     issues.extend(protocol_authoring_validation_issues(rel, content));
+    issues.extend(protocol_compression_metadata_validation_issues(
+        rel, content,
+    ));
     issues
+}
+
+#[derive(Debug, Serialize)]
+struct ProtocolCompressionInventoryRow {
+    path: String,
+    status: String,
+    tokens: Option<u64>,
+    bytes: u64,
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProtocolCompressionInventoryPayload {
+    root: String,
+    selected_count: usize,
+    skipped_count: usize,
+    stale_count: usize,
+    invalid_count: usize,
+    selected: Vec<ProtocolCompressionInventoryRow>,
+    skipped: Vec<ProtocolCompressionInventoryRow>,
+    stale: Vec<ProtocolCompressionInventoryRow>,
+    invalid: Vec<ProtocolCompressionInventoryRow>,
+}
+
+fn token_count_for_path(path: &std::path::Path) -> Option<u64> {
+    let output = ProcessCommand::new("tiktoken-cli")
+        .arg("--model")
+        .arg("gpt-4o")
+        .arg(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().find_map(|line| {
+        line.split_whitespace()
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+    })
+}
+
+fn compression_marker_status(rel: &str, content: &str) -> (&'static str, String) {
+    if !has_protocol_compression_audit_marker(content) {
+        return ("unprocessed", "missing audit marker".to_string());
+    }
+
+    let issues = protocol_compression_metadata_validation_issues(rel, content);
+    if issues.is_empty() {
+        return ("audit_passed", "valid audit marker".to_string());
+    }
+
+    if issues
+        .iter()
+        .any(|issue| issue.code == "stale_protocol_compression_audit_marker")
+    {
+        return (
+            "stale_marker",
+            "content hash does not match marker".to_string(),
+        );
+    }
+
+    (
+        "invalid_marker",
+        issues
+            .iter()
+            .map(|issue| issue.code.clone())
+            .collect::<Vec<_>>()
+            .join(","),
+    )
+}
+
+fn render_protocol_compression_inventory(args: &ProtocolCompressionInventoryArgs) -> String {
+    let root = std::path::PathBuf::from(&args.root);
+    let scope_root = detect_project_root_for(&root).unwrap_or_else(runtime_root);
+    let mut selected = Vec::new();
+    let mut skipped = Vec::new();
+    let mut stale = Vec::new();
+    let mut invalid = Vec::new();
+
+    for entry in WalkBuilder::new(&root)
+        .standard_filters(true)
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_type()
+                .is_some_and(|file_type| file_type.is_file())
+        })
+    {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("md") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(path) else {
+            continue;
+        };
+        let rel = normalize_path_for_root(path, &scope_root);
+        if !is_protocol_instruction_or_bootstrap_doc(&rel, &content) {
+            continue;
+        }
+        let tokens = token_count_for_path(path);
+        let bytes = content.len() as u64;
+        let (status, reason) = compression_marker_status(&rel, &content);
+        let row = ProtocolCompressionInventoryRow {
+            path: rel,
+            status: status.to_string(),
+            tokens,
+            bytes,
+            reason,
+        };
+        match status {
+            "audit_passed" => skipped.push(row),
+            "stale_marker" => stale.push(row),
+            "invalid_marker" => invalid.push(row),
+            _ => selected.push(row),
+        }
+    }
+
+    selected.sort_by(|left, right| {
+        right
+            .tokens
+            .unwrap_or(right.bytes)
+            .cmp(&left.tokens.unwrap_or(left.bytes))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    selected.truncate(args.limit);
+    skipped.sort_by(|left, right| left.path.cmp(&right.path));
+    stale.sort_by(|left, right| left.path.cmp(&right.path));
+    invalid.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let payload = ProtocolCompressionInventoryPayload {
+        root: args.root.clone(),
+        selected_count: selected.len(),
+        skipped_count: skipped.len(),
+        stale_count: stale.len(),
+        invalid_count: invalid.len(),
+        selected,
+        skipped,
+        stale,
+        invalid,
+    };
+
+    if args.json {
+        return serde_json::to_string(&payload).unwrap_or_else(|error| {
+            format!(
+                "{{\"protocol_compression_inventory\":{{\"root\":\"{}\",\"error\":\"{}\"}}}}",
+                args.root, error
+            )
+        });
+    }
+
+    let render_rows = |rows: &[ProtocolCompressionInventoryRow]| {
+        rows.iter()
+            .map(|row| {
+                format!(
+                    "  - {} [{} tokens={} bytes={}] {}",
+                    row.path,
+                    row.status,
+                    row.tokens
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    row.bytes,
+                    row.reason
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    format!(
+        "protocol-compression-inventory\n  root: {}\n  selected: {}\n  skipped: {}\n  stale: {}\n  invalid: {}\nselected_files:\n{}\nstale_markers:\n{}\ninvalid_markers:\n{}\nskipped_files:\n{}",
+        payload.root,
+        payload.selected_count,
+        payload.skipped_count,
+        payload.stale_count,
+        payload.invalid_count,
+        render_rows(&payload.selected),
+        render_rows(&payload.stale),
+        render_rows(&payload.invalid),
+        render_rows(&payload.skipped),
+    )
 }
 
 fn normalized_report_lines(content: &str) -> Vec<String> {
@@ -5064,7 +5410,10 @@ fn collect_tree_issues(
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, activation_issue_for, protocol_coverage_issue_for, run, run_with_exit};
+    use super::{
+        Cli, activation_issue_for, protocol_compression_hash_content, protocol_coverage_issue_for,
+        run, run_with_exit, sha256_hex,
+    };
     use clap::Parser;
     use serde_json::Value;
     use std::fs;
@@ -6265,7 +6614,9 @@ mod tests {
 
         let cli = Cli::parse_from(["docflow", "report-check", "--path", &path]);
         let rendered = run(cli);
-        assert!(rendered.contains("verdict: ok"));
+        if !rendered.contains("verdict: ok") {
+            panic!("rendered: {rendered}");
+        }
 
         fs::remove_file(path).expect("temp report should be removed");
     }
@@ -6355,7 +6706,9 @@ mod tests {
         ]);
         let rendered = run(cli);
         assert!(!rendered.contains("missing_protocol_authoring_block"));
-        assert!(rendered.contains("verdict: ok"));
+        if !rendered.contains("verdict: ok") {
+            panic!("rendered: {rendered}");
+        }
 
         fs::remove_dir_all(root).expect("temp root should be removed");
     }
@@ -6458,6 +6811,111 @@ mod tests {
         let rendered = run(cli);
         assert!(rendered.contains("missing_protocol_authoring_atom_auto_algorithm_selection"));
         assert!(rendered.contains("missing_protocol_authoring_atom_quality_risk"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    fn protocol_doc_with_footer(source_path: &str, footer_tail: &str) -> String {
+        format!(
+            "# New Protocol\n\n## Purpose\n\nCompact purpose.\n\n## Trigger\n\nWhen a new protocol is authored.\n\n## Scope\n\nProcess docs.\n\n## Authority\n\nThe owner doc governs.\n\n## Inputs\n\nPath and task.\n\n## Outputs\n\nValidated markdown.\n\n## Rules\n\nKeep rules compact.\n\n## Forbidden\n\nDo not drop protected atoms.\n\n## Escalation\n\nRecord blockers.\n\n## Validation\n\nRun DocFlow.\n\n## Token Budget\n\nRecord token posture.\n\n## Metadata\n\nFooter below.\n\n-----\nartifact_path: process/new-protocol\nartifact_type: process_doc\nartifact_version: '1'\nartifact_revision: 2026-07-03\nschema_version: '1'\nstatus: canonical\nsource_path: {source_path}\ncreated_at: 2026-07-03T00:00:00+03:00\nupdated_at: 2026-07-03T00:00:00+03:00\nchangelog_ref: new-protocol.changelog.jsonl\n{footer_tail}"
+        )
+    }
+
+    fn audited_protocol_doc(source_path: &str) -> String {
+        let without_hash = protocol_doc_with_footer(
+            source_path,
+            "protocol_authoring_gate: enforced\nprotocol_compression_status: audit_passed\nprotocol_compression_algorithm: semantic-atom-coverage+pre-change-baseline-audit\nprotocol_compression_baseline_ref: HEAD:process/new-protocol.md\nprotocol_compression_audit_at: 2026-07-03T00:00:00+03:00\nprotocol_compression_before_tokens: 100\nprotocol_compression_after_tokens: 80\n",
+        );
+        let hash = sha256_hex(&protocol_compression_hash_content(&without_hash));
+        format!("{without_hash}protocol_compression_content_sha256: {hash}\n")
+    }
+
+    #[test]
+    fn check_file_blocks_incomplete_protocol_compression_marker() {
+        let path = temp_path("protocol-compression-metadata-missing");
+        let content =
+            protocol_doc_with_footer(&path, "protocol_compression_status: audit_passed\n");
+        fs::write(&path, content).expect("protocol doc should exist");
+
+        let cli = Cli::parse_from(["docflow", "check-file", "--path", &path]);
+        let rendered = run(cli);
+        assert!(rendered.contains("missing_protocol_compression_metadata"));
+        assert!(rendered.contains("protocol_compression_content_sha256"));
+
+        fs::remove_file(path).expect("temp protocol doc should be removed");
+    }
+
+    #[test]
+    fn check_file_blocks_stale_protocol_compression_marker_hash() {
+        let path = temp_path("protocol-compression-metadata-stale");
+        let mut content = audited_protocol_doc(&path);
+        content = content.replace(
+            "protocol_compression_content_sha256: ",
+            "protocol_compression_content_sha256: stale",
+        );
+        fs::write(&path, content).expect("protocol doc should exist");
+
+        let cli = Cli::parse_from(["docflow", "check-file", "--path", &path]);
+        let rendered = run(cli);
+        assert!(rendered.contains("stale_protocol_compression_audit_marker"));
+
+        fs::remove_file(path).expect("temp protocol doc should be removed");
+    }
+
+    #[test]
+    fn check_file_accepts_complete_protocol_compression_marker() {
+        let path = temp_path("protocol-compression-metadata-valid");
+        fs::write(&path, audited_protocol_doc(&path)).expect("protocol doc should exist");
+
+        let cli = Cli::parse_from(["docflow", "check-file", "--path", &path]);
+        let rendered = run(cli);
+        assert!(!rendered.contains("missing_protocol_compression_metadata"));
+        assert!(!rendered.contains("stale_protocol_compression_audit_marker"));
+        if !rendered.contains("verdict: ok") {
+            panic!("rendered: {rendered}");
+        }
+
+        fs::remove_file(path).expect("temp protocol doc should be removed");
+    }
+
+    #[test]
+    fn protocol_compression_inventory_splits_selected_skipped_and_stale() {
+        let root = temp_dir("protocol-compression-inventory");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(root.join("AGENTS.sidecar.md"), "# Sidecar\n")
+            .expect("sidecar should establish project root");
+        fs::write(
+            root.join("docs/process/unprocessed-protocol.md"),
+            protocol_doc_with_footer("docs/process/unprocessed-protocol.md", ""),
+        )
+        .expect("unprocessed protocol should exist");
+        fs::write(
+            root.join("docs/process/processed-protocol.md"),
+            audited_protocol_doc("docs/process/processed-protocol.md"),
+        )
+        .expect("processed protocol should exist");
+        let stale = audited_protocol_doc("docs/process/stale-protocol.md").replace(
+            "protocol_compression_content_sha256: ",
+            "protocol_compression_content_sha256: stale",
+        );
+        fs::write(root.join("docs/process/stale-protocol.md"), stale)
+            .expect("stale protocol should exist");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "protocol-compression-inventory",
+            "--root",
+            root.join("docs/process").to_string_lossy().as_ref(),
+            "--limit",
+            "10",
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("selected: 1"));
+        assert!(rendered.contains("skipped: 1"));
+        assert!(rendered.contains("stale: 1"));
+        assert!(rendered.contains("docs/process/unprocessed-protocol.md [unprocessed"));
+        assert!(rendered.contains("docs/process/processed-protocol.md [audit_passed"));
+        assert!(rendered.contains("docs/process/stale-protocol.md [stale_marker"));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
     }
