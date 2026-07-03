@@ -1,8 +1,8 @@
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
-use serde_json::{Value, json};
+use runtime_path_policy::{read_bounded_text_file_under_root, ArtifactPathKind, StateRoot};
+use serde_json::{json, Value};
 
 use crate::config_value_utils::{
     load_project_overlay_yaml, yaml_bool, yaml_lookup, yaml_string, yaml_string_list,
@@ -135,7 +135,6 @@ impl RequirementSourceInput {
 fn read_requirement_source_file(path: &Path) -> Result<RequirementSourceInput, String> {
     let project_root = requirement_source_project_root()?;
     let relative_path = validate_requirement_source_path(path)?;
-    reject_symlink_components(&project_root, &relative_path)?;
     let content = read_bounded_requirement_source_file(&project_root, &relative_path)?;
     let display_path = relative_path.display().to_string();
     let redaction = redact_requirement_source_content(content.trim());
@@ -160,23 +159,15 @@ fn read_bounded_requirement_source_file(
     project_root: &Path,
     relative_path: &Path,
 ) -> Result<String, String> {
-    let source_path = project_root.join(relative_path);
-    let metadata = fs::metadata(&source_path)
-        .map_err(|error| format!("{}: {error}", relative_path.display()))?;
-    if !metadata.is_file() {
-        return Err(format!(
-            "{}: source file must be a regular file",
-            relative_path.display()
-        ));
-    }
-    if metadata.len() > MAX_SOURCE_FILE_BYTES {
-        return Err(format!(
-            "{}: source file exceeds {MAX_SOURCE_FILE_BYTES} byte limit",
-            relative_path.display()
-        ));
-    }
-    fs::read_to_string(&source_path)
-        .map_err(|error| format!("{}: {error}", relative_path.display()))
+    let state_root = StateRoot::open(project_root)
+        .map_err(|error| format!("{}: {error}", project_root.display()))?;
+    read_bounded_text_file_under_root(
+        &state_root,
+        relative_path,
+        ArtifactPathKind::RequirementSourceFile,
+        MAX_SOURCE_FILE_BYTES,
+    )
+    .map_err(|error| format!("{}: {error}", relative_path.display()))
 }
 
 fn requirement_source_project_root() -> Result<PathBuf, String> {
@@ -334,22 +325,6 @@ fn validate_requirement_source_path(path: &Path) -> Result<PathBuf, String> {
     }
 
     Ok(relative)
-}
-
-fn reject_symlink_components(project_root: &Path, relative_path: &Path) -> Result<(), String> {
-    let mut current = PathBuf::from(project_root);
-    for component in relative_path.components() {
-        current.push(component.as_os_str());
-        let metadata = fs::symlink_metadata(&current)
-            .map_err(|error| format!("{}: {error}", relative_path.display()))?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!(
-                "{}: source file path must not contain symlinks",
-                relative_path.display()
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value, String> {
