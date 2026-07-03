@@ -32,9 +32,11 @@ use taskflow_host_bridge::{
     host_bridge_request_owned_paths, host_bridge_request_proof_artifact_paths,
     host_bridge_request_requires_implementation_artifacts, host_bridge_request_string,
     normalize_host_bridge_provenance_for_completion, normalized_host_bridge_attempt_id,
-    normalized_host_bridge_consolidation_receipt_id, push_unique_host_bridge_implementation_artifact,
+    normalized_host_bridge_consolidation_receipt_id,
+    push_unique_host_bridge_implementation_artifact,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
-    validate_host_bridge_request_provenance, validate_implementation_artifact_scope_with_proof_paths,
+    validate_host_bridge_request_provenance,
+    validate_implementation_artifact_scope_with_proof_paths,
     write_host_bridge_normalized_implementation_artifact, write_host_bridge_request,
 };
 
@@ -217,22 +219,33 @@ fn proof_artifact_paths_from_task_or_request(
 ) -> Vec<PathBuf> {
     let mut paths = host_bridge_request_proof_artifact_paths(request);
     for target in &task.planner_metadata.proof_targets {
-        for token in target.split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '`')) {
-            let token = token.trim_matches(|ch: char| matches!(ch, '\'' | '"' | ':' | ')' | '('));
-            if token.contains('/') || token.contains('\\') {
-                let normalized = token.replace('\\', "/");
-                if normalized.contains("/test/")
-                    || normalized.contains("/tests/")
-                    || normalized.starts_with("test/")
-                    || normalized.starts_with("tests/")
-                    || normalized.ends_with("_test.rs")
-                    || normalized.ends_with("_test.dart")
-                    || normalized.ends_with(".test.ts")
-                    || normalized.ends_with(".test.tsx")
-                    || normalized.ends_with(".spec.ts")
-                    || normalized.ends_with(".spec.tsx")
-                {
-                    paths.push(PathBuf::from(normalized));
+        push_test_like_path_tokens_from_str(&mut paths, target);
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+async fn proof_artifact_paths_from_task_request_or_attempts(
+    store: &crate::state_store::StateStore,
+    task: &crate::state_store::TaskRecord,
+    request: &serde_json::Value,
+) -> Vec<PathBuf> {
+    let mut paths = proof_artifact_paths_from_task_or_request(task, request);
+    if let Ok(attempts) = store.task_attempts_for_task(&task.id).await {
+        for attempt in attempts {
+            if attempt.stage_id == "implementation" || attempt.status != "accepted" {
+                continue;
+            }
+            for artifact_ref in attempt.artifact_refs {
+                let artifact_path = PathBuf::from(&artifact_ref);
+                if let Ok(artifact) = read_canonical_host_bridge_json_artifact(
+                    &artifact_path,
+                    "upstream proof artifact",
+                ) {
+                    collect_test_like_path_tokens_from_value(&mut paths, &artifact);
+                } else {
+                    push_test_like_path_tokens_from_str(&mut paths, &artifact_ref);
                 }
             }
         }
@@ -240,6 +253,45 @@ fn proof_artifact_paths_from_task_or_request(
     paths.sort();
     paths.dedup();
     paths
+}
+
+fn collect_test_like_path_tokens_from_value(paths: &mut Vec<PathBuf>, value: &serde_json::Value) {
+    match value {
+        serde_json::Value::String(value) => push_test_like_path_tokens_from_str(paths, value),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_test_like_path_tokens_from_value(paths, value);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                collect_test_like_path_tokens_from_value(paths, value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_test_like_path_tokens_from_str(paths: &mut Vec<PathBuf>, value: &str) {
+    for token in value.split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '`')) {
+        let token = token.trim_matches(|ch: char| matches!(ch, '\'' | '"' | ':' | ')' | '('));
+        if token.contains('/') || token.contains('\\') {
+            let normalized = token.replace('\\', "/");
+            if normalized.contains("/test/")
+                || normalized.contains("/tests/")
+                || normalized.starts_with("test/")
+                || normalized.starts_with("tests/")
+                || normalized.ends_with("_test.rs")
+                || normalized.ends_with("_test.dart")
+                || normalized.ends_with(".test.ts")
+                || normalized.ends_with(".test.tsx")
+                || normalized.ends_with(".spec.ts")
+                || normalized.ends_with(".spec.tsx")
+            {
+                paths.push(PathBuf::from(normalized));
+            }
+        }
+    }
 }
 
 const MAX_HOST_BRIDGE_ARTIFACT_BYTES: u64 = 1024 * 1024;
@@ -1924,7 +1976,8 @@ async fn attach_host_bridge_implementation_artifacts(
     };
     let mut normalized_artifacts = host_bridge_request_implementation_artifacts(&request);
     let owned_paths = host_bridge_task_or_request_owned_paths(&task, &request);
-    let proof_artifact_paths = proof_artifact_paths_from_task_or_request(&task, &request);
+    let proof_artifact_paths =
+        proof_artifact_paths_from_task_request_or_attempts(&store, &task, &request).await;
     let attempt_id = normalized_host_bridge_attempt_id(&run_id, command.attempt_id.as_deref());
     let consolidation_receipt_id = normalized_host_bridge_consolidation_receipt_id(
         &attempt_id,
@@ -10577,10 +10630,9 @@ mod tests {
         .await;
 
         assert_eq!(exit, ExitCode::from(1));
-        let updated: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&request_path).expect("read request"),
-        )
-        .expect("request json");
+        let updated: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&request_path).expect("read request"))
+                .expect("request json");
         assert!(updated.get("implementation_artifacts").is_none());
         let store = state_store::StateStore::open(root.clone())
             .await
@@ -10590,6 +10642,184 @@ mod tests {
             .await
             .expect("read attempts");
         assert!(attempts.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_attach_artifact_accepts_upstream_proof_target_scope() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-agent-host-bridge-upstream-proof-scope-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let run_id = "run-host-bridge-upstream-proof-scope";
+        let task = store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge upstream proof scope attach",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["src/lib/features/list_view".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+        let request_path = root.join("host-tool-bridge/requests/request.json");
+        let packet_path = root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = root.join("host-tool-bridge/results/result.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/receipt.json");
+        let upstream_proof_artifact_path =
+            root.join("attempt-artifacts/upstream-proof-result.json");
+        let implementation_artifact_path = root.join("attempt-artifacts/developer-patch.json");
+        for path in [
+            &request_path,
+            &packet_path,
+            &result_path,
+            &receipt_path,
+            &upstream_proof_artifact_path,
+            &implementation_artifact_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(&packet_path, "{}").expect("write packet");
+        std::fs::write(
+            &upstream_proof_artifact_path,
+            serde_json::json!({
+                "status": "pass",
+                "execution_state": "executed",
+                "proof_targets": [
+                    "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+                    "src/test/features/list_view/data/record_chatter_repository_test.dart",
+                    "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+                ],
+                "verification_commands": [
+                    "flutter test src/test/features/list_view/domain/models/record_chatter_models_test.dart src/test/features/list_view/data/record_chatter_repository_test.dart src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+                ]
+            })
+            .to_string(),
+        )
+        .expect("write upstream proof artifact");
+        store
+            .record_task_attempt(crate::state_store::RecordTaskAttemptRequest {
+                attempt_id: Some("proof-attempt-1".to_string()),
+                task_id: run_id.to_string(),
+                stage_id: "proof".to_string(),
+                backend: "host_tool_bridge".to_string(),
+                model_profile: "proof-agent".to_string(),
+                isolation: "proof_contract".to_string(),
+                freshness: Some(task.updated_at.clone()),
+                status: "accepted".to_string(),
+                artifact_refs: vec![upstream_proof_artifact_path.display().to_string()],
+                consolidation_receipt_id: Some("proof-receipt-1".to_string()),
+                selected_model_profile_readiness_status: None,
+                budget_posture: None,
+                cap_posture: None,
+                write_scope_classification: None,
+            })
+            .await
+            .expect("record upstream proof attempt");
+        std::fs::write(
+            &implementation_artifact_path,
+            serde_json::json!({
+                "artifact_kind": "patch_proposal",
+                "changed_files": [
+                    "src/lib/features/list_view/domain/models/record_chatter.dart",
+                    "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+                    "src/test/features/list_view/data/record_chatter_repository_test.dart",
+                    "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+                ]
+            })
+            .to_string(),
+        )
+        .expect("write implementation artifact");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "req-upstream-proof-scope",
+                "run_id": run_id,
+                "task_id": run_id,
+                "dispatch_target": "writer",
+                "task_class": "implementation",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "request_path": request_path.display().to_string(),
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string(),
+                "implementation_isolation": {
+                    "owned_paths": ["src/lib/features/list_view"]
+                }
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        drop(store);
+
+        let exit = run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: vec![implementation_artifact_path],
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: Some("implementation-attempt-1".to_string()),
+            consolidation_receipt_id: Some("implementation-receipt-1".to_string()),
+            complete: false,
+            host_agent_id: None,
+            summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            submit_result: None,
+            validate_result: None,
+            scaffold_result: None,
+            retry_completion: false,
+            result_file: None,
+            receipt_id: None,
+            json: true,
+            state_dir: Some(root.clone()),
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let updated: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read updated request"),
+        )
+        .expect("request json");
+        assert_eq!(
+            updated["implementation_artifacts"][0]["attempt_id"],
+            "implementation-attempt-1"
+        );
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("reopen store");
+        let attempts = store
+            .task_stage_attempts(run_id, "implementation")
+            .await
+            .expect("read implementation attempts");
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].status, "accepted");
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
