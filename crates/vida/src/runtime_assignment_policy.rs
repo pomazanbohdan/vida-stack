@@ -220,6 +220,48 @@ pub(crate) fn backend_admissibility_key_for_dispatch_target(
     }
 }
 
+pub(crate) fn backend_admissibility_requires_strict_dispatch_target(
+    dispatch_target: &str,
+    dispatch_contract_lane: Option<&DispatchContractLane<'_>>,
+) -> bool {
+    matches!(
+        backend_admissibility_key_for_dispatch_target(dispatch_target, dispatch_contract_lane)
+            .as_str(),
+        "implementation" | "verification" | "architecture"
+    )
+}
+
+pub(crate) fn backend_is_admissible_for_dispatch_target(
+    execution_plan: &serde_json::Value,
+    backend_id: &str,
+    dispatch_target: &str,
+    dispatch_contract_lane: Option<&DispatchContractLane<'_>>,
+) -> bool {
+    let canonical_target =
+        backend_admissibility_key_for_dispatch_target(dispatch_target, dispatch_contract_lane)
+            .into_string();
+    let strict_required = backend_admissibility_requires_strict_dispatch_target(
+        dispatch_target,
+        dispatch_contract_lane,
+    );
+    let Some(matrix) = execution_plan["backend_admissibility_matrix"].as_array() else {
+        return !strict_required;
+    };
+    let Some(row) = matrix
+        .iter()
+        .find(|entry| entry["backend_id"].as_str() == Some(backend_id))
+    else {
+        return !strict_required;
+    };
+    let Some(lane_admissibility) = row["lane_admissibility"].as_object() else {
+        return !strict_required;
+    };
+    lane_admissibility
+        .get(canonical_target.as_str())
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(!strict_required)
+}
+
 pub(crate) fn canonical_dispatch_target_alias(value: &str) -> Option<&'static str> {
     use crate::runtime_contract_vocab::{
         DISPATCH_TARGET_ANALYSIS, DISPATCH_TARGET_CLOSURE, DISPATCH_TARGET_COACH,

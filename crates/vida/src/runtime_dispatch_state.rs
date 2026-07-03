@@ -5,7 +5,7 @@ use time::format_description::well_known::Rfc3339;
 
 use super::*;
 use crate::release1_contracts::canonical_lane_status_str;
-use crate::runtime_assignment_policy::{canonical_dispatch_target_name, DispatchContractLane};
+use crate::runtime_assignment_policy::{DispatchContractLane, canonical_dispatch_target_name};
 use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
 use crate::runtime_contract_vocab::{
     RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM,
@@ -1515,28 +1515,26 @@ pub(crate) fn dispatch_target_runtime_assignment(
     (serde_json::Value::Null, "missing")
 }
 
-fn backend_admissibility_key_for_dispatch_target(
-    execution_plan: &serde_json::Value,
+fn backend_admissibility_context_for_dispatch_target<'a>(
+    execution_plan: &'a serde_json::Value,
     dispatch_target: &str,
-) -> String {
+) -> (String, Option<DispatchContractLane<'a>>) {
     let policy_dispatch_target =
         policy_dispatch_target_for_admissibility(execution_plan, dispatch_target);
     let lane = dispatch_contract_lane(execution_plan, &policy_dispatch_target)
         .map(DispatchContractLane::from_value);
-    crate::runtime_assignment_policy::backend_admissibility_key_for_dispatch_target(
-        &policy_dispatch_target,
-        lane.as_ref(),
-    )
-    .into_string()
+    (policy_dispatch_target, lane)
 }
 
 fn dispatch_target_requires_strict_backend_admissibility(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
 ) -> bool {
-    matches!(
-        backend_admissibility_key_for_dispatch_target(execution_plan, dispatch_target).as_str(),
-        "implementation" | "verification"
+    let (policy_dispatch_target, lane) =
+        backend_admissibility_context_for_dispatch_target(execution_plan, dispatch_target);
+    crate::runtime_assignment_policy::backend_admissibility_requires_strict_dispatch_target(
+        &policy_dispatch_target,
+        lane.as_ref(),
     )
 }
 
@@ -1545,26 +1543,14 @@ pub(crate) fn backend_is_admissible_for_dispatch_target(
     backend_id: &str,
     dispatch_target: &str,
 ) -> bool {
-    let canonical_target =
-        backend_admissibility_key_for_dispatch_target(execution_plan, dispatch_target);
-    let strict_required =
-        dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target);
-    let Some(matrix) = execution_plan["backend_admissibility_matrix"].as_array() else {
-        return !strict_required;
-    };
-    let Some(row) = matrix
-        .iter()
-        .find(|entry| entry["backend_id"].as_str() == Some(backend_id))
-    else {
-        return !strict_required;
-    };
-    let Some(lane_admissibility) = row["lane_admissibility"].as_object() else {
-        return !strict_required;
-    };
-    lane_admissibility
-        .get(canonical_target.as_str())
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(!strict_required)
+    let (policy_dispatch_target, lane) =
+        backend_admissibility_context_for_dispatch_target(execution_plan, dispatch_target);
+    crate::runtime_assignment_policy::backend_is_admissible_for_dispatch_target(
+        execution_plan,
+        backend_id,
+        &policy_dispatch_target,
+        lane.as_ref(),
+    )
 }
 
 fn assignment_selects_backend(assignment: &serde_json::Value, backend_id: &str) -> bool {
@@ -1657,22 +1643,17 @@ pub(crate) fn backend_is_admissible_or_runtime_selected_carrier_for_dispatch_tar
     if backend_is_admissible_for_dispatch_target(execution_plan, backend_id, dispatch_target) {
         return true;
     }
-    if dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target) {
-        return false;
-    }
-    let route_assignment_match =
+    let route_assignment =
         execution_plan_route_for_dispatch_target(execution_plan, dispatch_target)
             .map(runtime_assignment_from_route)
-            .filter(|assignment| !assignment.is_null())
-            .is_some_and(|assignment| {
-                assignment_is_internal_host_carrier(execution_plan, assignment, backend_id)
-                    || assignment_selects_explicit_dispatch_backend(
-                        execution_plan,
-                        assignment,
-                        backend_id,
-                    )
-            });
-    route_assignment_match || {
+            .filter(|assignment| !assignment.is_null());
+    let route_internal_host_carrier_match = route_assignment.as_ref().is_some_and(|assignment| {
+        assignment_is_internal_host_carrier(execution_plan, assignment, backend_id)
+    });
+    let route_explicit_backend_match = route_assignment.as_ref().is_some_and(|assignment| {
+        assignment_selects_explicit_dispatch_backend(execution_plan, assignment, backend_id)
+    });
+    let execution_plan_assignment_match = {
         let assignment = runtime_assignment_from_execution_plan(execution_plan);
         assignment_is_internal_host_carrier(execution_plan, assignment, backend_id)
             || assignment_selects_explicit_dispatch_backend(execution_plan, assignment, backend_id)
@@ -1698,7 +1679,20 @@ fn route_selected_backend_for_dispatch_target(
                 .and_then(|route| route_selected_backend(execution_plan, route))
         })
 }
+    };
+    if execution_plan_assignment_match {
+        return true;
+    }
+    if route_explicit_backend_match && !route_internal_host_carrier_match {
+        return true;
+    }
+    if dispatch_target_requires_strict_backend_admissibility(execution_plan, dispatch_target) {
+        return false;
+    }
+    if route_internal_host_carrier_match || route_explicit_backend_match {
+        return true;
 
+    false
 fn route_has_backend_hints(execution_plan: &serde_json::Value, route: &serde_json::Value) -> bool {
     let _ = execution_plan;
     route_primary_backend_hint_from_route(route).is_some()
@@ -1724,9 +1718,9 @@ fn admissible_backend_candidates_for_dispatch_target(
     let target_assignment_is_route_scoped = matches!(
         target_assignment_source,
         "route_carrier_runtime_assignment" | "route_runtime_assignment"
-    );
-    let explicit_runtime_assignment_backend =
-        runtime_assignment_selected_backend_for_target(execution_plan, dispatch_target);
+    ) || (target_assignment_source
+        .starts_with("dispatch_contract_")
+        && explicit_runtime_assignment_backend.is_some());
     let route_primary = route_primary_backend_hint_from_route(route);
     let route_fallback = fallback_executor_backend_from_route(route);
     let route_fanout = fanout_executor_backends_from_route(route);
@@ -1743,6 +1737,8 @@ fn admissible_backend_candidates_for_dispatch_target(
         .chain(route_fallback.iter())
         .chain(route_fanout.iter())
         .any(|backend_id| {
+    let explicit_runtime_assignment_backend =
+        explicit_runtime_assignment_selected_backend_for_target(execution_plan, dispatch_target);
             backend_policy_from_execution_plan(execution_plan, backend_id).is_some()
                 || backend_has_execution_plan_dispatch_metadata(execution_plan, backend_id)
         });
@@ -1925,12 +1921,41 @@ pub(crate) fn downstream_selected_backend(
         "spec-pack" | "work-pool-pack" | "dev-pack" | "closure" => activation_agent_type
             .map(str::to_string)
             .or_else(|| inherited_selected_backend.map(str::to_string)),
-        _ => admissible_selected_backend_for_dispatch_target(
+        _ => explicit_runtime_assignment_selected_backend_for_target(
             &role_selection.execution_plan,
             dispatch_target,
-            activation_agent_type,
-            inherited_selected_backend,
-        ),
+        )
+        .filter(|backend_id| {
+            backend_is_admissible_or_runtime_selected_carrier_for_dispatch_target(
+                &role_selection.execution_plan,
+                backend_id,
+                dispatch_target,
+            )
+        })
+        .or_else(|| {
+            json_string(
+                role_selection
+                    .execution_plan
+                    .get("development_flow")
+                    .and_then(|flow| flow.get(dispatch_target))
+                    .and_then(|lane| lane.get("executor_backend")),
+            )
+            .filter(|backend_id| {
+                backend_is_admissible_for_dispatch_target(
+                    &role_selection.execution_plan,
+                    backend_id,
+                    dispatch_target,
+                )
+            })
+        })
+        .or_else(|| {
+            admissible_selected_backend_for_dispatch_target(
+                &role_selection.execution_plan,
+                dispatch_target,
+                activation_agent_type,
+                inherited_selected_backend,
+            )
+        }),
     }
 }
 
@@ -2201,12 +2226,7 @@ fn runtime_assignment_selected_backend_for_target(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
 ) -> Option<String> {
-    let (assignment, _) = dispatch_target_runtime_assignment(execution_plan, dispatch_target);
-    json_string(assignment.get("effective_selected_backend"))
-        .or_else(|| json_string(assignment.get("selected_dispatch_backend_id")))
-        .or_else(|| json_string(assignment.get("dispatch_backend_id")))
-        .or_else(|| json_string(assignment.get("selected_backend_id")))
-        .or_else(|| json_string(assignment.get("selected_backend")))
+    explicit_runtime_assignment_selected_backend_for_target(execution_plan, dispatch_target)
         .or_else(|| {
             json_string(
                 execution_plan
@@ -2239,6 +2259,20 @@ fn selected_backend_override_conflicts_with_runtime_assignment(
         backend_execution_dimension(&override_backend_class),
         "internal"
     ) || selected_backend_override == "internal_subagents"
+fn explicit_runtime_assignment_selected_backend_for_target(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> Option<String> {
+    let (assignment, _) = dispatch_target_runtime_assignment(execution_plan, dispatch_target);
+    json_string(assignment.get("effective_selected_backend"))
+        .or_else(|| json_string(assignment.get("selected_dispatch_backend_id")))
+        .or_else(|| json_string(assignment.get("dispatch_backend_id")))
+        .or_else(|| json_string(assignment.get("selected_backend_id")))
+        .or_else(|| json_string(assignment.get("selected_backend")))
+        .or_else(|| json_string(assignment.get("selected_carrier_id")))
+        .or_else(|| json_string(assignment.get("selected_agent_id")))
+}
+
 }
 
 fn current_selected_backend_override<'a>(
@@ -20725,8 +20759,8 @@ host_environment:
     }
 
     #[test]
-    fn downstream_selected_backend_prefers_explicit_runtime_assignment_over_internal_verification_fallback(
-    ) {
+    fn downstream_selected_backend_prefers_explicit_runtime_assignment_over_internal_verification_fallback()
+     {
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -25206,8 +25240,8 @@ agent_system:
     }
 
     #[test]
-    fn mixed_backend_implementer_receipt_uses_internal_fallback_when_external_primary_is_inadmissible(
-    ) {
+    fn mixed_backend_implementer_receipt_uses_internal_fallback_when_external_primary_is_inadmissible()
+     {
         let mut execution_plan = mixed_backend_execution_plan();
         execution_plan["backend_admissibility_matrix"] = json!([
             {

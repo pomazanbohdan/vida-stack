@@ -30,10 +30,15 @@ fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String 
     .into_string()
 }
 
-fn backend_admissibility_key_for_dispatch_target(
+/// Check whether a backend is admissible for a given dispatch target (lane).
+/// When no admissibility matrix is present, keep fail-open behavior for backward
+/// compatibility. Once a matrix exists, write-producing lanes fail closed if the
+/// backend row, lane mapping, or canonical lane key is missing.
+fn backend_is_admissible_for_dispatch_target(
+    backend_id: &str,
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
-) -> String {
+) -> bool {
     let policy_dispatch_target =
         crate::runtime_dispatch_state::policy_dispatch_target_for_admissibility(
             execution_plan,
@@ -41,52 +46,12 @@ fn backend_admissibility_key_for_dispatch_target(
         );
     let lane = crate::dispatch_contract_lane(execution_plan, &policy_dispatch_target)
         .map(DispatchContractLane::from_value);
-    crate::runtime_assignment_policy::backend_admissibility_key_for_dispatch_target(
+    crate::runtime_assignment_policy::backend_is_admissible_for_dispatch_target(
+        execution_plan,
+        backend_id,
         &policy_dispatch_target,
         lane.as_ref(),
     )
-    .into_string()
-}
-
-fn dispatch_target_requires_strict_admissibility(
-    execution_plan: &serde_json::Value,
-    dispatch_target: &str,
-) -> bool {
-    matches!(
-        backend_admissibility_key_for_dispatch_target(execution_plan, dispatch_target).as_str(),
-        "implementation" | "verification" | "architecture"
-    )
-}
-
-/// Check whether a backend is admissible for a given dispatch target (lane).
-/// When no admissibility matrix is present, keep fail-open behavior for backward
-/// compatibility. Once a matrix exists, write-producing lanes fail closed if the
-/// backend row, lane mapping, or canonical lane key is missing.
-fn backend_is_admissible_for_dispatch_target(
-    execution_plan: &serde_json::Value,
-    backend_id: &str,
-    dispatch_target: &str,
-) -> bool {
-    let canonical_target =
-        backend_admissibility_key_for_dispatch_target(execution_plan, dispatch_target);
-    let strict_required =
-        dispatch_target_requires_strict_admissibility(execution_plan, dispatch_target);
-    let Some(matrix) = execution_plan["backend_admissibility_matrix"].as_array() else {
-        return !strict_required;
-    };
-    let Some(row) = matrix
-        .iter()
-        .find(|entry| entry["backend_id"].as_str() == Some(backend_id))
-    else {
-        return !strict_required;
-    };
-    let Some(lane_admissibility) = row["lane_admissibility"].as_object() else {
-        return !strict_required;
-    };
-    lane_admissibility
-        .get(canonical_target.as_str())
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(!strict_required)
 }
 
 fn execution_plan_backend_class(
@@ -9938,8 +9903,8 @@ agent_system:
     }
 
     #[test]
-    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing(
-    ) {
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing()
+     {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -10010,8 +9975,8 @@ agent_system:
     }
 
     #[test]
-    fn backend_is_admissible_for_dispatch_target_fails_closed_for_execution_preparation_when_canonical_lane_key_missing(
-    ) {
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_execution_preparation_when_canonical_lane_key_missing()
+     {
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
