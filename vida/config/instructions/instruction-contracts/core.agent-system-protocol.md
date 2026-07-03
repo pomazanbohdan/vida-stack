@@ -1,15 +1,10 @@
 # Agent System Protocol (ASP)
 
-Purpose: define one generic, portable protocol for agent-system initialization, routing, fallback, and score-state adjustment.
+Purpose: generic portable protocol for agent-system initialization, routing, fallback, and score-state adjustment.
 
 ## Core Contract
 
-Canonical model:
-
-1. `agent system` = orchestration/runtime layer
-2. `agent backend` = concrete backend class
-3. `agent lane class` = semantic lane class
-4. `worker packet` = canonical delegated execution artifact
+Canonical model: `agent system` = orchestration/runtime layer; `agent backend` = concrete backend class; `agent lane class` = semantic lane class; `worker packet` = canonical delegated execution artifact.
 
 ## Scope
 
@@ -34,14 +29,7 @@ Activate this protocol when at least one is true:
 4. fallback or escalation between eligible backend classes must be decided,
 5. route policy requires worker-first execution rather than local orchestration.
 
-Primary activating companions:
-
-1. `instruction-contracts/core.orchestration-protocol`
-2. `runtime-instructions/core.capability-registry-protocol`
-3. `runtime-instructions/core.context-governance-protocol`
-4. `runtime-instructions/work.project-agent-extension-protocol`
-5. `runtime-instructions/work.verification-lane-protocol`
-6. `instruction-contracts/bridge.instruction-activation-protocol`
+Primary activating companions: `instruction-contracts/core.orchestration-protocol`, `runtime-instructions/core.capability-registry-protocol`, `runtime-instructions/core.context-governance-protocol`, `runtime-instructions/work.project-agent-extension-protocol`, `runtime-instructions/work.verification-lane-protocol`, `instruction-contracts/bridge.instruction-activation-protocol`.
 
 ## Canonical State-Surface Note
 
@@ -59,11 +47,7 @@ Primary activating companions:
 
 ## Modes
 
-Supported system modes:
-
-1. `native`
-2. `hybrid`
-3. `disabled`
+Supported system modes: `native`, `hybrid`, `disabled`.
 
 Mode-synced execution rule:
 
@@ -82,11 +66,7 @@ Root-lane identity rule:
 
 ## Backend Classes
 
-Framework backend classes are generic:
-
-1. one framework-internal backend class
-2. one external execution backend class
-3. one external review backend class
+Framework backend classes are generic: one framework-internal backend class, one external execution backend class, one external review backend class.
 
 Project docs/config may bind concrete backends to these classes.
 
@@ -110,43 +90,13 @@ Hard rule:
 
 ## Routing Contract
 
-Routing input:
+Routing input: task class, activated mode, configured backend order, backend availability, backend score state, optional project overlay model/profile policy, route-level write and verification policy, optional project role/skill/profile/flow extension registries and validation posture, interaction ownership requirement, context-isolation requirement, statefulness requirement, task dependency / parallel-safety posture, required tool and MCP surface fit.
 
-1. task class,
-2. activated mode,
-3. configured backend order,
-4. backend availability,
-5. backend score state,
-6. optional project overlay model/profile policy,
-7. route-level write and verification policy,
-8. optional project role/skill/profile/flow extension registries and their validation posture,
-9. interaction ownership requirement,
-10. context-isolation requirement,
-11. statefulness requirement,
-12. task dependency / parallel-safety posture,
-13. required tool and MCP surface fit.
-
-Routing output:
-
-1. chosen backend,
-2. selected model,
-3. selected profile,
-4. reason,
-5. effective score,
-6. fallback backends,
-7. effective write scope,
-8. verification gate,
-9. effective route-law metadata,
-10. effective lane-class source,
-11. effective flow-set source.
-12. effective route control limits,
-13. effective verification posture.
-14. selected orchestration pattern,
-15. selection basis.
+Routing output: chosen backend, selected model, selected profile, reason, effective score, fallback backends, effective write scope, verification gate, effective route-law metadata, effective lane-class source, effective flow-set source, effective route control limits, effective verification posture, selected orchestration pattern, selection basis.
 
 ## Agent Selection Doctrine
 
-Agent selection must be explicit about both the chosen lane/backend and the orchestration pattern used to reach it.
+Agent selection must explicitly name both chosen lane/backend and orchestration pattern.
 
 Supported selection patterns:
 
@@ -167,47 +117,20 @@ Selection rules:
 6. do not choose a specialist whose allowed tools, MCP servers, or write scope do not match the task's required execution surface.
 7. do not use parallel specialist selection when candidates share the same writable scope or resumable state namespace without explicit serialization.
 
-Minimum selection basis:
-
-1. `task_class`
-2. `interaction_ownership`
-3. `tool_fit`
-4. `write_scope_fit`
-5. `statefulness_need`
-6. `context_isolation_need`
-7. `parallel_safety`
-8. `verification_posture`
+Minimum selection basis: `task_class`, `interaction_ownership`, `tool_fit`, `write_scope_fit`, `statefulness_need`, `context_isolation_need`, `parallel_safety`, `verification_posture`.
 
 ## Route Receipt Minimum Contract
 
-When routing resolves one executable lane for a bounded task or execution slice, the route receipt must expose enough law for downstream execution and recovery owners to operate without reconstruction.
+When routing resolves one executable lane for a bounded task/slice, the route receipt must expose enough law for downstream execution and recovery without reconstruction.
 
-Minimum receipt fields:
-
-1. `task_class`
-2. `chosen_backend`
-3. `selected_profile`
-4. `effective_write_scope`
-5. `verification_gate`
-6. `verification_route_task_class`
-7. `independent_verification_required`
-8. `effective_route_control_limits`
-   - `max_rounds`
-   - `max_stalls`
-   - `max_resets`
-   - `max_budget_units`
-   - `max_total_runtime_seconds`
-9. `selected_orchestration_pattern`
-10. `selection_basis`
-11. `reason`
-12. `fallback_backends`
+Minimum receipt fields: `task_class`, `chosen_backend`, `selected_profile`, `effective_write_scope`, `verification_gate`, `verification_route_task_class`, `independent_verification_required`, `effective_route_control_limits` (`max_rounds`, `max_stalls`, `max_resets`, `max_budget_units`, `max_total_runtime_seconds`), `selected_orchestration_pattern`, `selection_basis`, `reason`, `fallback_backends`.
 
 Rules:
 
-1. execution must consume the route receipt as the current control law, not infer missing limits from chat context,
+1. execution must consume the route receipt as current control law, not infer missing limits from chat context,
 2. if a control limit is omitted by project configuration, the runtime may derive a default, but the receipt must still materialize the effective value,
 3. route receipt law must be stable enough for checkpoint/recovery and verification owners to resume without recomputing routing decisions,
-4. if the route depends on specialist choice, the receipt must make visible why that agent/lane was lawful for the task instead of leaving agent choice implicit.
+4. if route depends on specialist choice, the receipt must show why that agent/lane was lawful instead of leaving choice implicit.
 
 Project extension rule:
 
@@ -239,7 +162,7 @@ Project extension rule:
 
 ## Saturation-Recovery Rule
 
-When delegated lane creation fails because of thread, depth, or agent saturation, the orchestrator must run an explicit recovery loop before concluding that no worker-first path is available.
+When delegated lane creation fails because of thread, depth, or agent saturation, the orchestrator must run explicit recovery before concluding no worker-first path is available.
 
 Required recovery order:
 
@@ -294,5 +217,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/core.agent-system-protocol.md
 created_at: '2026-03-09T22:51:59+02:00'
-updated_at: '2026-03-13T07:44:24+02:00'
+updated_at: 2026-07-03T14:24:00+03:00
 changelog_ref: core.agent-system-protocol.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: registry-compaction+route-atom-validation+law-preserve-exact
+protocol_compression_baseline_ref: 0d538023e:vida/config/instructions/instruction-contracts/core.agent-system-protocol.md
+protocol_compression_audit_at: 2026-07-03T14:24:00+03:00
+protocol_compression_before_tokens: 2928
+protocol_compression_after_tokens: 2919
+protocol_compression_content_sha256: 2d841a73e224e5d397bd98f5e4c069e40734dbdaab387aabe63408165178825b

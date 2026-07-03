@@ -1,43 +1,39 @@
 # Form-Task Protocol (FTP)
 
-Purpose: define a single, user-confirmed bridge between approved specification and development execution.
+Purpose: user-confirmed bridge from approved specification to development execution.
 
-Scope:
+Scope: `/vida-form-task` command mode; import mode from `work-pool-pack` and orchestration protocol; covers spec completion through development start.
 
-1. Command mode: `/vida-form-task`.
-2. Import mode: callable from `work-pool-pack` and orchestration protocol.
-3. Covers everything between spec completion and development start.
-
-Epic planning is built into this protocol; no separate epic command is used.
+Epic planning is built in; no separate epic command.
 
 ## Command Layer Mapping
 
-For `/vida-form-task`, FTP layers map to CLP as follows:
+| CLP layer | FTP gates |
+| --- | --- |
+| `CL1 Intake` | `FTP-0 Intake` + `FTP-0.5 Scope Contract` |
+| `CL2 Reality And Inputs` | `FTP-1 Preflight` + `FTP-1.5 Change-Impact Reconciliation` |
+| `CL3 Contract And Decisions` | `FTP-2 Option Synthesis` + `FTP-3 User Approval Questions` |
+| `CL4 Materialization` | `FTP-4 Task Pool Build` + `FTP-5 Dependency Graph + Track Routing` |
+| `CL5 Gates And Handoff` | `FTP-6 Readiness Verdict` + `FTP-7 Launch Gate` |
 
-1. `CL1 Intake` -> `FTP-0 Intake` + `FTP-0.5 Scope Contract`
-2. `CL2 Reality And Inputs` -> `FTP-1 Preflight` + `FTP-1.5 Change-Impact Reconciliation`
-3. `CL3 Contract And Decisions` -> `FTP-2 Option Synthesis` + `FTP-3 User Approval Questions`
-4. `CL4 Materialization` -> `FTP-4 Task Pool Build` + `FTP-5 Dependency Graph + Track Routing`
-5. `CL5 Gates And Handoff` -> `FTP-6 Readiness Verdict` + `FTP-7 Launch Gate`
-
-Canonical layer source: `command-instructions/routing.command-layer-protocol`
+Canonical layer: `command-instructions/routing.command-layer-protocol`
 
 ## Core Contract
 
 `/vida-form-task` must:
 
 1. study approved spec inputs,
-2. generate task-scope options,
+2. generate scope options,
 3. ask structured approval questions,
-4. create/update tasks and dependencies in the DB-backed `vida taskflow task` surface,
-5. block implementation start until explicit user confirmation,
+4. create/update DB-backed `vida taskflow task` tasks/dependencies,
+5. block implementation until explicit user confirmation,
 6. hand off execution only to `command-instructions/execution.implement-execution-protocol`.
-7. own epic-level scope boundary and ordering approval before task generation.
+7. own epic-level boundary and ordering approval before task generation.
 
 ## Mandatory Inputs
 
 1. Normalized `spec_intake` artifact when the upstream scope originated from mixed research, release signals, or unresolved user clarification.
-1. Spec scope and decisions.
+1. Spec scope/decisions.
 1.1. Equivalent bugfix paths may use approved `issue_contract` input from `runtime-instructions/bridge.issue-contract-protocol` instead of a longer SCP artifact when the scope is already bounded.
 1.2. Non-equivalent issue/release paths must carry `spec_delta` reconciliation state before task materialization continues.
 1.3. SCP-driven paths must carry a compact `draft_execution_spec` artifact before task-pool build.
@@ -50,11 +46,7 @@ Canonical layer source: `command-instructions/routing.command-layer-protocol`
 
 ## Epic Scope Contract (Built-in)
 
-Before task-pool build, FTP must produce and approve scope contract:
-
-1. `IN/OUT` scope boundary,
-2. dependency ordering and phase fit,
-3. explicit user approval for scope contract.
+Before task-pool build, FTP must produce and approve scope contract: `IN/OUT` boundary, dependency ordering/phase fit, user approval.
 
 No task materialization in the DB-backed task surface before scope contract approval.
 No task materialization in the DB-backed task surface from raw research/release/chat text without either normalized `spec_intake`, approved SCP artifact, or approved `issue_contract`.
@@ -101,14 +93,7 @@ Card rules:
 3. Recommendation is first option.
 4. If user picks `Other`, capture exact text and re-check conflicts.
 
-Decision outputs from cards are mandatory inputs for TaskFlow planning:
-
-1. `scope_boundary` -> step grouping and exclusions.
-2. `delivery_cut` -> MVP-first or full-slice queue ordering.
-3. `dependency_strategy` -> sequential chain vs parallel-safe waves.
-4. `risk_policy` -> conservative/balanced/aggressive verification depth.
-5. `launch_decision` -> start dev now or keep in revision loop.
-6. `draft_execution_spec_review` -> confirms the contract that task materialization may expand from.
+Decision outputs are mandatory TaskFlow planning inputs: `scope_boundary` -> grouping/exclusions; `delivery_cut` -> MVP-first or full-slice ordering; `dependency_strategy` -> sequential chain vs parallel-safe waves; `risk_policy` -> conservative/balanced/aggressive verification depth; `launch_decision` -> start dev now or revise; `draft_execution_spec_review` -> confirms materialization contract.
 
 If any required decision is missing, task-pool build is blocked.
 If the draft execution-spec is not approved, task-pool build is blocked.
@@ -119,23 +104,9 @@ After cards are approved, FTP must produce execution-ready TaskFlow plan metadat
 
 ## Delivery-Task Card Contract
 
-Before a task may enter the ready queue, FTP must materialize a bounded delivery-task card.
+Before ready queue entry, FTP must materialize a bounded delivery-task card.
 
-Required fields:
-
-1. `task_id`
-2. `parent_epic`
-3. `milestone_id`
-4. `goal`
-5. `non_goals`
-6. `scope_in`
-7. `scope_out`
-8. `owned_paths` or `owned_areas`
-9. `acceptance_checks`
-10. `validation_commands`
-11. `definition_of_done`
-12. `stop_rules`
-13. `handoff_target`
+Required fields: `task_id`, `parent_epic`, `milestone_id`, `goal`, `non_goals`, `scope_in`, `scope_out`, `owned_paths` or `owned_areas`, `acceptance_checks`, `validation_commands`, `definition_of_done`, `stop_rules`, `handoff_target`.
 
 Readiness rule:
 
@@ -143,19 +114,9 @@ Readiness rule:
 2. if `definition_of_done`, `validation_commands`, or `owned_paths` are missing, the task must remain blocked,
 3. if the task still requires the worker to infer scope from repository context, the task must remain blocked.
 
-Per planned block, minimum fields:
+Per planned block, minimum fields: `block_id`, `goal`, `acceptance_check`, `depends_on`, `next_step` (`-` only for terminal block), `track_id` (`main` by default).
 
-1. `block_id`.
-2. `goal`.
-3. `acceptance_check`.
-4. `depends_on`.
-5. `next_step` (`-` only for terminal block).
-6. `track_id` (`main` by default).
-
-Routing policy:
-
-1. `dependency_strategy=sequential` -> single chain on `main` track.
-2. `dependency_strategy=parallel-safe` -> split into non-overlapping tracks and add merge checkpoints.
+Routing policy: `dependency_strategy=sequential` -> single chain on `main`; `dependency_strategy=parallel-safe` -> non-overlapping tracks plus merge checkpoints.
 
 Before execution handoff, run:
 
@@ -163,7 +124,7 @@ Before execution handoff, run:
 bash todo-plan-validate.sh <task_id> [--diff-aware]  # legacy script name
 ```
 
-`--strict` should be used when queue is ready for immediate autonomous execution.
+Use `--strict` when queue is ready for immediate autonomous execution.
 
 ## Gate Sequence
 
@@ -193,31 +154,11 @@ bash todo-plan-validate.sh <task_id> [--diff-aware]  # legacy script name
 
 ## Blocker Codes
 
-1. `BLK_SPEC_MISSING`.
-2. `BLK_SCP_NOT_READY`.
-3. `BLK_API_REALITY_MISSING`.
-4. `BLK_WVP_EVIDENCE_MISSING`.
-5. `BLK_DECISION_CONFLICT`.
-6. `BLK_AC_MISSING`.
-7. `BLK_DEP_CYCLE`.
-8. `BLK_USER_LAUNCH_PENDING`.
-9. `BLK_SCOPE_CONTRACT_PENDING`.
-10. `BLK_CHANGE_IMPACT_PENDING`.
-11. `BLK_PLAN_DECISIONS_MISSING`.
-12. `BLK_PLAN_INTEGRITY_FAILED`.
-13. `BLK_TASK_TOO_LARGE`.
-14. `BLK_SCOPE_OVERLAP`.
-15. `BLK_VALIDATION_MISSING`.
-16. `BLK_DONE_RULE_MISSING`.
+`BLK_SPEC_MISSING`, `BLK_SCP_NOT_READY`, `BLK_API_REALITY_MISSING`, `BLK_WVP_EVIDENCE_MISSING`, `BLK_DECISION_CONFLICT`, `BLK_AC_MISSING`, `BLK_DEP_CYCLE`, `BLK_USER_LAUNCH_PENDING`, `BLK_SCOPE_CONTRACT_PENDING`, `BLK_CHANGE_IMPACT_PENDING`, `BLK_PLAN_DECISIONS_MISSING`, `BLK_PLAN_INTEGRITY_FAILED`, `BLK_TASK_TOO_LARGE`, `BLK_SCOPE_OVERLAP`, `BLK_VALIDATION_MISSING`, `BLK_DONE_RULE_MISSING`.
 
-`BLK_CHANGE_IMPACT_PENDING` is raised when approved spec/decisions changed after pool creation.
-Resolution route is owned by `runtime-instructions/work.change-impact-reconciliation-protocol`.
+`BLK_CHANGE_IMPACT_PENDING` means approved spec/decisions changed after pool creation; resolution is owned by `runtime-instructions/work.change-impact-reconciliation-protocol`.
 
-Task-pool rebuild obligations for this owner:
-
-1. run `reflection-pack` for artifact sync,
-2. run `/vida-spec review` for contract alignment,
-3. re-run `/vida-form-task` to rebuild queue/dependencies.
+Task-pool rebuild obligations: run `reflection-pack` for artifact sync; run `/vida-spec review` for contract alignment; re-run `/vida-form-task` to rebuild queue/dependencies.
 
 ## Launch Rule (Hard)
 
@@ -228,9 +169,7 @@ Task-pool rebuild obligations for this owner:
 3. User gave explicit launch confirmation in `FTP-7`.
 4. every ready leaf task satisfies the delivery-task card contract.
 
-Execution target:
-
-1. `/vida-implement` must run by `command-instructions/execution.implement-execution-protocol` only.
+Execution target: `/vida-implement` must run by `command-instructions/execution.implement-execution-protocol` only.
 
 Without confirmation, `/vida-form-task` ends with `WAITING_USER_CONFIRMATION` and no dev start.
 
@@ -266,5 +205,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/command-instructions/planning.form-task-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-13T06:52:32+02:00'
+updated_at: 2026-07-03T14:18:00+03:00
 changelog_ref: planning.form-task-protocol.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: table-normalization+registry-compaction+gate-preserve-exact
+protocol_compression_baseline_ref: 0d538023e:vida/config/instructions/command-instructions/planning.form-task-protocol.md
+protocol_compression_audit_at: 2026-07-03T14:18:00+03:00
+protocol_compression_before_tokens: 2524
+protocol_compression_after_tokens: 2517
+protocol_compression_content_sha256: d5f52b1a61b86d7314366e15e735ee4fceb96fe2d8dfff8553e908c73796dfbe
