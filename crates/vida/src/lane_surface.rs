@@ -4551,6 +4551,14 @@ fn materialize_host_bridge_completion_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("parent host bridge reported internal agent completion");
+    let task_class = request
+        .get("task_class")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let requires_implementation_artifacts =
+        host_bridge_request_requires_implementation_artifacts(dispatch_target, task_class);
+    let supplied_no_code_change = supplied_no_code_change && !requires_implementation_artifacts;
     let implementation_artifacts = if supplied_no_code_change {
         HostBridgeImplementationArtifacts {
             artifacts: serde_json::json!([]),
@@ -4577,13 +4585,6 @@ fn materialize_host_bridge_completion_evidence(
             task_updated_at: authority.task_updated_at.as_str(),
         },
     );
-    let task_class = request
-        .get("task_class")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let requires_implementation_artifacts =
-        host_bridge_request_requires_implementation_artifacts(dispatch_target, task_class);
     let implementation_scope_validation =
         if requires_implementation_artifacts && !supplied_no_code_change {
             host_bridge_implementation_scope_validation(
@@ -12611,7 +12612,7 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_completion_accepts_explicit_no_code_change_without_patch_artifacts() {
+    fn host_bridge_completion_rejects_implementation_no_code_without_patch_artifacts() {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -12704,7 +12705,7 @@ mod tests {
         receipt.selected_backend = Some("internal_subagents".to_string());
         let authoritative_owned_paths = vec!["crates/vida/src/lane_surface.rs".to_string()];
 
-        let evidence = materialize_host_bridge_completion_evidence(
+        let error = materialize_host_bridge_completion_evidence(
             &root,
             request_path.to_str().expect("request path should be utf8"),
             None,
@@ -12729,27 +12730,14 @@ mod tests {
             false,
             true,
         )
-        .expect("explicit no-code result should satisfy implementation evidence");
+        .expect_err("implementation no-code marker must not bypass artifact evidence");
 
-        assert!(evidence.blocker_codes.is_empty());
-        assert_eq!(evidence.allowed_next_node.as_deref(), Some("coach"));
-        let result: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&result_path).expect("read host bridge result"),
-        )
-        .expect("host bridge result should be json");
-        assert_eq!(
-            result["implementation_artifact_source"],
-            "explicit_no_code_change"
-        );
-        assert_eq!(result["implementation_artifacts"], serde_json::json!([]));
-        assert_eq!(result["scope_validation"], serde_json::Value::Null);
         assert!(
-            !result["blocker_codes"]
-                .as_array()
-                .expect("blocker codes")
-                .iter()
-                .any(|code| code == "implementation_artifacts_missing")
+            error.contains("implementation_artifacts_missing"),
+            "unexpected error: {error}"
         );
+        assert!(!result_path.exists());
+        assert!(!bridge_receipt_path.exists());
 
         let _ = std::fs::remove_dir_all(&root);
     }
