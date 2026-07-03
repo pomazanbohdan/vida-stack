@@ -1295,6 +1295,125 @@ fn active_step_attribution_help_surfaces_are_discoverable() {
 }
 
 #[test]
+fn task_steps_outputs_default_toon_json_and_filters() {
+    let state_dir = unique_state_dir();
+    create_session_triage_task(
+        &state_dir,
+        "task-steps-epic",
+        "Task steps epic",
+        "epic",
+        "open",
+        "0",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        "task-steps-parent-a",
+        "Task steps parent A",
+        "task",
+        "in_progress",
+        "1",
+        Some("task-steps-epic"),
+    );
+    create_session_triage_task(
+        &state_dir,
+        "task-steps-parent-b",
+        "Task steps parent B",
+        "task",
+        "open",
+        "2",
+        Some("task-steps-epic"),
+    );
+
+    let step_a = vida()
+        .args([
+            "task",
+            "create",
+            "task-steps-step-a",
+            "Task steps step A",
+            "--type",
+            "step",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            "task-steps-parent-a",
+            "--owned-path",
+            "crates/vida/src/task_surface.rs",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("task step a create should run");
+    assert_success(&step_a, "task step a create");
+
+    let step_b = vida()
+        .args([
+            "task",
+            "create",
+            "task-steps-step-b",
+            "Task steps step B",
+            "--type",
+            "step",
+            "--status",
+            "closed",
+            "--parent-id",
+            "task-steps-parent-b",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("task step b create should run");
+    assert_success(&step_b, "task step b create");
+
+    let default_output = vida()
+        .args(["task", "steps", "--since", "3h", "--with-parent"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("task steps default output should run");
+    assert_success(&default_output, "task steps default");
+    let default_stdout = String::from_utf8_lossy(&default_output.stdout);
+    assert_not_json_output("vida task steps", &default_stdout);
+    assert!(default_stdout.contains("task_steps[2]{id,status,parent_id,parent_title,created,closed,close_reason,owned_paths}:"));
+    assert!(default_stdout.contains("task-steps-step-a"));
+    assert!(default_stdout.contains("Task steps parent A"));
+
+    let json_output = vida()
+        .args([
+            "task",
+            "steps",
+            "--since",
+            "3h",
+            "--with-parent",
+            "--parent-id",
+            "task-steps-parent-a",
+            "--status",
+            "in_progress",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("task steps json output should run");
+    assert_success(&json_output, "task steps json");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&json_output.stdout).expect("task steps json should parse");
+    assert_eq!(payload["surface"], "vida task steps");
+    assert_eq!(payload["status"], "success");
+    assert_eq!(payload["count"], 1);
+    let row = &payload["steps"][0];
+    assert_eq!(row["id"], "task-steps-step-a");
+    assert_eq!(row["status"], "in_progress");
+    assert_eq!(row["parent_id"], "task-steps-parent-a");
+    assert_eq!(row["parent_title"], "Task steps parent A");
+    assert!(row["created"].as_str().is_some_and(|value| !value.is_empty()));
+    assert!(row["closed"].is_null());
+    assert!(row["close_reason"].is_null());
+    assert_eq!(
+        row["owned_paths"],
+        serde_json::json!(["crates/vida/src/task_surface.rs"])
+    );
+}
+
+#[test]
 fn taskflow_route_topic_help_documents_run_id_for_route_surfaces() {
     let route_help = vida()
         .args(["taskflow", "help", "route"])

@@ -4240,10 +4240,214 @@ fn task_stage_ensemble_next_command(
     }
 }
 
+#[derive(Debug, serde::Serialize)]
+struct TaskStepRow {
+    id: String,
+    status: String,
+    parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_title: Option<String>,
+    created: String,
+    closed: Option<String>,
+    close_reason: Option<String>,
+    owned_paths: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct TaskStepsReceipt {
+    surface: &'static str,
+    status: &'static str,
+    since: String,
+    count: usize,
+    parent_id: Option<String>,
+    status_filter: Option<String>,
+    steps: Vec<TaskStepRow>,
+}
+
 fn print_task_steps_help() {
     println!(
-        "vida task steps\n  Execution steps are non-bounded child records under a task, subtask, or defect.\n  orchestrator-init keeps the parent as active_bounded_unit and exposes active_step, active_parent_task, and active_epic.\n  Inspect with: vida orchestrator-init --fields status,active_bounded_unit,active_step,active_parent_task,active_epic\n  Related: vida doctor active-task-attribution --help"
+        "vida task steps\n  Execution steps are non-bounded child records under a task, subtask, or defect.\n  Default output is compact TOON/plain; use --json for machine-readable rows.\n  Examples:\n    vida task steps --since 3h --with-parent\n    vida task steps --parent-id <task-id> --status in_progress --json\n  Fields: id, status, parent_id, parent_title, created, closed, close_reason, owned_paths.\n  Inspect attribution with: vida orchestrator-init --fields status,active_bounded_unit,active_step,active_parent_task,active_epic\n  Related: vida doctor active-task-attribution --help"
     );
+}
+
+fn parse_task_steps_since(value: &str) -> Result<std::time::Duration, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("--since must not be empty".to_string());
+    }
+    let (number, multiplier) = match value.chars().last() {
+        Some('s') => (&value[..value.len() - 1], 1),
+        Some('m') => (&value[..value.len() - 1], 60),
+        Some('h') => (&value[..value.len() - 1], 60 * 60),
+        Some('d') => (&value[..value.len() - 1], 24 * 60 * 60),
+        Some(ch) if ch.is_ascii_digit() => (value, 1),
+        Some(_) | None => return Err(format!("unsupported --since value: {value}")),
+    };
+    let amount = number
+        .parse::<u64>()
+        .map_err(|_| format!("unsupported --since value: {value}"))?;
+    Ok(std::time::Duration::from_secs(amount.saturating_mul(multiplier)))
+}
+
+fn task_step_timestamp(value: &str) -> Option<i64> {
+    if let Ok(raw) = value.trim().parse::<i64>() {
+        return Some(if raw > 10_000_000_000 {
+            raw / 1_000_000_000
+        } else {
+            raw
+        });
+    }
+    time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(|value| value.unix_timestamp())
+}
+
+fn task_step_recent_enough(task: &state_store::TaskRecord, cutoff: i64) -> bool {
+    let created = task_step_timestamp(&task.created_at);
+    let closed = task
+        .closed_at
+        .as_deref()
+        .and_then(task_step_timestamp);
+    created.into_iter().chain(closed).any(|ts| ts >= cutoff)
+}
+
+fn task_step_rows(
+    rows: Vec<state_store::TaskRecord>,
+    since: std::time::Duration,
+    parent_id: Option<&str>,
+    status: Option<&str>,
+    with_parent: bool,
+) -> Vec<TaskStepRow> {
+    let cutoff = time::OffsetDateTime::now_utc().unix_timestamp() - since.as_secs() as i64;
+    let task_by_id: BTreeMap<&str, &state_store::TaskRecord> =
+        rows.iter().map(|task| (task.id.as_str(), task)).collect();
+    let mut steps = rows
+        .iter()
+        .filter(|task| {
+            taskflow_core::issue_type_is_execution_step(&taskflow_core::normalize_issue_type(
+                &task.issue_type,
+            ))
+        })
+        .filter(|task| task_step_recent_enough(task, cutoff))
+        .filter(|task| {
+            parent_id
+                .map(|expected| StateStore::parent_id_for_task(task).as_deref() == Some(expected))
+                .unwrap_or(true)
+        })
+        .filter(|task| {
+            status
+                .map(|expected| StateStore::task_status_matches_filter(&task.status, expected))
+                .unwrap_or(true)
+        })
+        .map(|task| {
+            let parent_id = StateStore::parent_id_for_task(task);
+            let parent_title = if with_parent {
+                parent_id
+                    .as_deref()
+                    .and_then(|id| task_by_id.get(id).map(|parent| parent.title.clone()))
+            } else {
+                None
+            };
+            TaskStepRow {
+                id: task.id.clone(),
+                status: task.status.clone(),
+                parent_id,
+                parent_title,
+                created: task.created_at.clone(),
+                closed: task.closed_at.clone(),
+                close_reason: task.close_reason.clone(),
+                owned_paths: task.planner_metadata.owned_paths.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    steps.sort_by(|left, right| right.created.cmp(&left.created).then_with(|| left.id.cmp(&right.id)));
+    steps
+}
+
+fn print_task_steps_receipt(render: RenderMode, receipt: &TaskStepsReceipt, as_json: bool) {
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(receipt).expect("task steps receipt should serialize")
+        );
+        return;
+    }
+    let _ = render;
+    println!(
+        "task_steps[{}]{{id,status,parent_id,parent_title,created,closed,close_reason,owned_paths}}:",
+        receipt.count
+    );
+    for row in &receipt.steps {
+        println!(
+            "  {}",
+            serde_json::to_string(&serde_json::json!([
+                row.id,
+                row.status,
+                row.parent_id,
+                row.parent_title,
+                row.created,
+                row.closed,
+                row.close_reason,
+                row.owned_paths
+            ]))
+            .expect("task step row should serialize")
+        );
+    }
+}
+
+async fn run_task_steps(command: TaskStepsArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .unwrap_or_else(state_store::default_state_dir);
+    let since = match parse_task_steps_since(&command.since) {
+        Ok(value) => value,
+        Err(error) => {
+            if command.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "surface": "vida task steps",
+                        "status": "blocked",
+                        "blocker_codes": ["invalid_since_filter"],
+                        "error": error,
+                    })
+                );
+            } else {
+                eprintln!("{error}");
+            }
+            return ExitCode::from(2);
+        }
+    };
+    let (rows, _metadata) = match load_task_snapshot_rows_authoritative_first(&state_dir).await {
+        Ok(value) => value,
+        Err(error) => {
+            return emit_task_state_store_open_error(
+                "vida task steps",
+                &state_dir,
+                command.render,
+                command.json,
+                &error,
+            )
+        }
+    };
+    let steps = task_step_rows(
+        rows,
+        since,
+        command.parent_id.as_deref(),
+        command.status.as_deref(),
+        command.with_parent,
+    );
+    let receipt = TaskStepsReceipt {
+        surface: "vida task steps",
+        status: "success",
+        since: command.since,
+        count: steps.len(),
+        parent_id: command.parent_id,
+        status_filter: command.status,
+        steps,
+    };
+    print_task_steps_receipt(command.render, &receipt, command.json);
+    ExitCode::SUCCESS
 }
 
 fn task_progress_row_from_record(task: &state_store::TaskRecord) -> TaskProgressRow {
@@ -11748,10 +11952,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 ExitCode::from(2)
             }
         },
-        TaskCommand::Steps(_) => {
-            print_task_steps_help();
-            ExitCode::SUCCESS
-        }
+        TaskCommand::Steps(command) => run_task_steps(command).await,
         TaskCommand::Import(command) => run_task_bulk_import(command).await,
         TaskCommand::ImportJsonl(command) => run_task_import_jsonl(command).await,
         TaskCommand::ReplaceJsonl(command) => run_task_replace_jsonl(command).await,
