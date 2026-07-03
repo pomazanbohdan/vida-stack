@@ -39,8 +39,98 @@ const VIDA_SURREALKV_MAX_MEMTABLE_SIZE_BYTES: usize = 16 * 1024 * 1024;
 const VIDA_SURREALKV_BLOCK_CACHE_CAPACITY_BYTES: u64 = 16 * 1024 * 1024;
 const VIDA_SURREALKV_VLOG_MAX_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 
-pub(super) struct AuthoritativeOpenGuard {
+pub(super) struct ExclusiveFileAcquireGuard {
     file: std::fs::File,
+}
+
+pub(super) struct ExclusiveFileAcquireGuardSpec {
+    guard_file_name: &'static str,
+    retry_count: usize,
+    retry_delay_ms: u64,
+    timeout_message: &'static str,
+    include_windows_raw_lock_codes: bool,
+}
+
+impl ExclusiveFileAcquireGuardSpec {
+    pub(super) const fn new(
+        guard_file_name: &'static str,
+        retry_count: usize,
+        retry_delay_ms: u64,
+        timeout_message: &'static str,
+        include_windows_raw_lock_codes: bool,
+    ) -> Self {
+        Self {
+            guard_file_name,
+            retry_count,
+            retry_delay_ms,
+            timeout_message,
+            include_windows_raw_lock_codes,
+        }
+    }
+}
+
+impl ExclusiveFileAcquireGuard {
+    pub(super) async fn acquire(
+        root: &Path,
+        spec: ExclusiveFileAcquireGuardSpec,
+    ) -> Result<Self, StateStoreError> {
+        let guard_path = root.join(spec.guard_file_name);
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&guard_path)?;
+        for attempt in 0..spec.retry_count {
+            match file.try_lock_exclusive() {
+                Ok(()) => return Ok(Self { file }),
+                Err(error)
+                    if exclusive_file_lock_contention_error(
+                        &error,
+                        spec.include_windows_raw_lock_codes,
+                    ) =>
+                {
+                    if attempt + 1 < spec.retry_count {
+                        tokio::time::sleep(std::time::Duration::from_millis(spec.retry_delay_ms))
+                            .await;
+                        continue;
+                    }
+                    return Err(StateStoreError::Io(error));
+                }
+                Err(error) => return Err(StateStoreError::Io(error)),
+            }
+        }
+
+        Err(StateStoreError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            spec.timeout_message,
+        )))
+    }
+}
+
+impl Drop for ExclusiveFileAcquireGuard {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+fn exclusive_file_lock_contention_error(
+    error: &std::io::Error,
+    include_windows_raw_lock_codes: bool,
+) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::Interrupted
+    ) || error.raw_os_error().is_some_and(|code| {
+        code == libc::EWOULDBLOCK
+            || code == libc::EAGAIN
+            || (include_windows_raw_lock_codes && cfg!(windows) && matches!(code, 5 | 32 | 33))
+    })
+}
+
+pub(super) struct AuthoritativeOpenGuard {
+    _guard: ExclusiveFileAcquireGuard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,54 +196,23 @@ fn local_process_liveness(process_id: u32) -> ProcessLiveness {
 
 impl AuthoritativeOpenGuard {
     pub(super) async fn acquire(root: &Path) -> Result<Self, StateStoreError> {
-        let guard_path = root.join(".vida-authoritative-open.guard");
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(&guard_path)?;
-        for attempt in 0..AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT {
-            match file.try_lock_exclusive() {
-                Ok(()) => {
-                    return Ok(Self { file });
-                }
-                Err(error) if Self::is_lock_contention_error(&error) => {
-                    if attempt + 1 < AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT {
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS,
-                        ))
-                        .await;
-                        continue;
-                    }
-                    return Err(StateStoreError::Io(error));
-                }
-                Err(error) => return Err(StateStoreError::Io(error)),
-            }
-        }
-
-        Err(StateStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "timed out while waiting for authoritative datastore access serialization guard",
-        )))
+        Ok(Self {
+            _guard: ExclusiveFileAcquireGuard::acquire(
+                root,
+                ExclusiveFileAcquireGuardSpec::new(
+                    ".vida-authoritative-open.guard",
+                    AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT,
+                    AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS,
+                    "timed out while waiting for authoritative datastore access serialization guard",
+                    true,
+                ),
+            )
+            .await?,
+        })
     }
 
     fn is_lock_contention_error(error: &std::io::Error) -> bool {
-        matches!(
-            error.kind(),
-            std::io::ErrorKind::WouldBlock
-                | std::io::ErrorKind::TimedOut
-                | std::io::ErrorKind::Interrupted
-        ) || error.raw_os_error().is_some_and(|code| {
-            code == libc::EWOULDBLOCK
-                || code == libc::EAGAIN
-                || (cfg!(windows) && matches!(code, 5 | 32 | 33))
-        })
-    }
-}
-
-impl Drop for AuthoritativeOpenGuard {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
+        exclusive_file_lock_contention_error(error, true)
     }
 }
 
@@ -686,7 +745,42 @@ mod tests {
                 StateStore::error_is_lock_contention(&error),
                 "Windows raw OS error {code} should be retried as lock contention"
             );
+            assert!(
+                !exclusive_file_lock_contention_error(
+                    &std::io::Error::from_raw_os_error(code),
+                    false
+                ),
+                "non-authoritative guards should preserve their narrower raw OS code contract"
+            );
         }
+    }
+
+    #[tokio::test]
+    async fn exclusive_file_acquire_guard_preserves_path_and_timeout_message() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-exclusive-file-acquire-guard-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create acquire guard test root");
+
+        let message = "timed out while waiting for test acquisition guard";
+        let error = match ExclusiveFileAcquireGuard::acquire(
+            &root,
+            ExclusiveFileAcquireGuardSpec::new(".vida-test-acquire.guard", 0, 25, message, false),
+        )
+        .await
+        {
+            Ok(_) => panic!("zero-attempt acquire should return timeout error"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains(message));
+        assert!(root.join(".vida-test-acquire.guard").exists());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

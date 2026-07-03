@@ -1,8 +1,7 @@
 #![allow(dead_code)]
 
+use super::state_store_open::{ExclusiveFileAcquireGuard, ExclusiveFileAcquireGuardSpec};
 use super::*;
-use fs2::FileExt;
-use std::fs::OpenOptions;
 use taskflow_authority::scheduler_claim;
 
 const RESERVATION_ACQUIRE_GUARD_RETRY_DELAY_MS: u64 = 25;
@@ -11,55 +10,24 @@ const RESERVATION_ACQUIRE_GUARD_RETRY_COUNT: usize =
     (RESERVATION_ACQUIRE_GUARD_MAX_WAIT_MS / RESERVATION_ACQUIRE_GUARD_RETRY_DELAY_MS) as usize;
 
 struct ReservationAcquireGuard {
-    file: std::fs::File,
+    _guard: ExclusiveFileAcquireGuard,
 }
 
 impl ReservationAcquireGuard {
     async fn acquire(root: &std::path::Path) -> Result<Self, StateStoreError> {
-        let guard_path = root.join(".vida-scheduler-dispatch-reservation-acquire.guard");
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(&guard_path)?;
-        for attempt in 0..RESERVATION_ACQUIRE_GUARD_RETRY_COUNT {
-            match file.try_lock_exclusive() {
-                Ok(()) => return Ok(Self { file }),
-                Err(error) if Self::is_lock_contention_error(&error) => {
-                    if attempt + 1 < RESERVATION_ACQUIRE_GUARD_RETRY_COUNT {
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            RESERVATION_ACQUIRE_GUARD_RETRY_DELAY_MS,
-                        ))
-                        .await;
-                        continue;
-                    }
-                    return Err(StateStoreError::Io(error));
-                }
-                Err(error) => return Err(StateStoreError::Io(error)),
-            }
-        }
-
-        Err(StateStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "timed out while waiting for scheduler reservation acquisition guard",
-        )))
-    }
-
-    fn is_lock_contention_error(error: &std::io::Error) -> bool {
-        matches!(
-            error.kind(),
-            std::io::ErrorKind::WouldBlock
-                | std::io::ErrorKind::TimedOut
-                | std::io::ErrorKind::Interrupted
-        ) || error
-            .raw_os_error()
-            .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
-    }
-}
-
-impl Drop for ReservationAcquireGuard {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
+        Ok(Self {
+            _guard: ExclusiveFileAcquireGuard::acquire(
+                root,
+                ExclusiveFileAcquireGuardSpec::new(
+                    ".vida-scheduler-dispatch-reservation-acquire.guard",
+                    RESERVATION_ACQUIRE_GUARD_RETRY_COUNT,
+                    RESERVATION_ACQUIRE_GUARD_RETRY_DELAY_MS,
+                    "timed out while waiting for scheduler reservation acquisition guard",
+                    false,
+                ),
+            )
+            .await?,
+        })
     }
 }
 
@@ -400,66 +368,6 @@ impl StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fs2::FileExt;
-    use std::fs::OpenOptions;
-
-    const RESERVATION_ACQUIRE_GUARD_RETRY_DELAY_MS: u64 = 25;
-    const RESERVATION_ACQUIRE_GUARD_MAX_WAIT_MS: u64 = 30_000;
-    const RESERVATION_ACQUIRE_GUARD_RETRY_COUNT: usize =
-        (RESERVATION_ACQUIRE_GUARD_MAX_WAIT_MS / RESERVATION_ACQUIRE_GUARD_RETRY_DELAY_MS) as usize;
-
-    struct ReservationAcquireGuard {
-        file: std::fs::File,
-    }
-
-    impl ReservationAcquireGuard {
-        async fn acquire(root: &std::path::Path) -> Result<Self, StateStoreError> {
-            let guard_path = root.join(".vida-scheduler-dispatch-reservation-acquire.guard");
-            let file = OpenOptions::new()
-                .create(true)
-                .read(true)
-                .write(true)
-                .open(&guard_path)?;
-            for attempt in 0..RESERVATION_ACQUIRE_GUARD_RETRY_COUNT {
-                match file.try_lock_exclusive() {
-                    Ok(()) => return Ok(Self { file }),
-                    Err(error) if Self::is_lock_contention_error(&error) => {
-                        if attempt + 1 < RESERVATION_ACQUIRE_GUARD_RETRY_COUNT {
-                            tokio::time::sleep(std::time::Duration::from_millis(
-                                RESERVATION_ACQUIRE_GUARD_RETRY_DELAY_MS,
-                            ))
-                            .await;
-                            continue;
-                        }
-                        return Err(StateStoreError::Io(error));
-                    }
-                    Err(error) => return Err(StateStoreError::Io(error)),
-                }
-            }
-
-            Err(StateStoreError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "timed out while waiting for scheduler reservation acquisition guard",
-            )))
-        }
-
-        fn is_lock_contention_error(error: &std::io::Error) -> bool {
-            matches!(
-                error.kind(),
-                std::io::ErrorKind::WouldBlock
-                    | std::io::ErrorKind::TimedOut
-                    | std::io::ErrorKind::Interrupted
-            ) || error
-                .raw_os_error()
-                .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
-        }
-    }
-
-    impl Drop for ReservationAcquireGuard {
-        fn drop(&mut self) {
-            let _ = self.file.unlock();
-        }
-    }
 
     fn reservation_request(
         reservation_id: &str,
@@ -516,9 +424,11 @@ mod tests {
             .await
             .expect_err("duplicate task should block");
 
-        assert!(error
-            .to_string()
-            .contains("scheduler_task_already_reserved:task-1:reservation-1"));
+        assert!(
+            error
+                .to_string()
+                .contains("scheduler_task_already_reserved:task-1:reservation-1")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -544,9 +454,11 @@ mod tests {
             .await
             .expect_err("conflict domain should block");
 
-        assert!(error
-            .to_string()
-            .contains("scheduler_conflict_domain_reserved:domain-a:reservation-1"));
+        assert!(
+            error
+                .to_string()
+                .contains("scheduler_conflict_domain_reserved:domain-a:reservation-1")
+        );
         let _ = fs::remove_dir_all(root);
     }
 

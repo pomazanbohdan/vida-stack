@@ -1,8 +1,7 @@
 #![allow(dead_code)]
 
+use super::state_store_open::{ExclusiveFileAcquireGuard, ExclusiveFileAcquireGuardSpec};
 use super::*;
-use fs2::FileExt;
-use std::fs::OpenOptions;
 use taskflow_authority::scheduler_claim;
 
 const CLAIM_ACQUIRE_GUARD_RETRY_DELAY_MS: u64 = 25;
@@ -12,55 +11,24 @@ const CLAIM_ACQUIRE_GUARD_RETRY_COUNT: usize =
 const DEFAULT_ORCHESTRATOR_CLAIM_LEASE_SECONDS: i64 = 60;
 
 struct ClaimAcquireGuard {
-    file: std::fs::File,
+    _guard: ExclusiveFileAcquireGuard,
 }
 
 impl ClaimAcquireGuard {
     async fn acquire(root: &std::path::Path) -> Result<Self, StateStoreError> {
-        let guard_path = root.join(".vida-orchestrator-claim-acquire.guard");
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(&guard_path)?;
-        for attempt in 0..CLAIM_ACQUIRE_GUARD_RETRY_COUNT {
-            match file.try_lock_exclusive() {
-                Ok(()) => return Ok(Self { file }),
-                Err(error) if Self::is_lock_contention_error(&error) => {
-                    if attempt + 1 < CLAIM_ACQUIRE_GUARD_RETRY_COUNT {
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            CLAIM_ACQUIRE_GUARD_RETRY_DELAY_MS,
-                        ))
-                        .await;
-                        continue;
-                    }
-                    return Err(StateStoreError::Io(error));
-                }
-                Err(error) => return Err(StateStoreError::Io(error)),
-            }
-        }
-
-        Err(StateStoreError::Io(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "timed out while waiting for orchestrator claim acquisition guard",
-        )))
-    }
-
-    fn is_lock_contention_error(error: &std::io::Error) -> bool {
-        matches!(
-            error.kind(),
-            std::io::ErrorKind::WouldBlock
-                | std::io::ErrorKind::TimedOut
-                | std::io::ErrorKind::Interrupted
-        ) || error
-            .raw_os_error()
-            .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
-    }
-}
-
-impl Drop for ClaimAcquireGuard {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
+        Ok(Self {
+            _guard: ExclusiveFileAcquireGuard::acquire(
+                root,
+                ExclusiveFileAcquireGuardSpec::new(
+                    ".vida-orchestrator-claim-acquire.guard",
+                    CLAIM_ACQUIRE_GUARD_RETRY_COUNT,
+                    CLAIM_ACQUIRE_GUARD_RETRY_DELAY_MS,
+                    "timed out while waiting for orchestrator claim acquisition guard",
+                    false,
+                ),
+            )
+            .await?,
+        })
     }
 }
 
@@ -846,9 +814,11 @@ mod tests {
             ))
             .await
             .expect_err("same task should block");
-        assert!(same_task_error
-            .to_string()
-            .contains("orchestrator_claim_conflict_task:task:claim-1"));
+        assert!(
+            same_task_error
+                .to_string()
+                .contains("orchestrator_claim_conflict_task:task:claim-1")
+        );
 
         let same_domain_error = store
             .acquire_orchestrator_claim(claim_request(
@@ -861,9 +831,11 @@ mod tests {
             ))
             .await
             .expect_err("same conflict domain should block");
-        assert!(same_domain_error
-            .to_string()
-            .contains("orchestrator_claim_conflict_conflict_domain:conflict_domain:claim-1"));
+        assert!(
+            same_domain_error
+                .to_string()
+                .contains("orchestrator_claim_conflict_conflict_domain:conflict_domain:claim-1")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -895,9 +867,11 @@ mod tests {
             .await
             .expect_err("path intersection should block");
 
-        assert!(error
-            .to_string()
-            .contains("orchestrator_claim_conflict_owned_path:owned_path:claim-1"));
+        assert!(
+            error
+                .to_string()
+                .contains("orchestrator_claim_conflict_owned_path:owned_path:claim-1")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -927,9 +901,11 @@ mod tests {
             .await
             .expect_err("exclusive write should block shared-read path");
 
-        assert!(error
-            .to_string()
-            .contains("orchestrator_claim_conflict_read_only_path:read_only_path:claim-1"));
+        assert!(
+            error
+                .to_string()
+                .contains("orchestrator_claim_conflict_read_only_path:read_only_path:claim-1")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1036,9 +1012,11 @@ mod tests {
             .release_orchestrator_claim("claim-1", 1, "done")
             .await
             .expect_err("stale revision should fail");
-        assert!(mismatch
-            .to_string()
-            .contains("orchestrator_claim_resource_revision_mismatch:claim-1:1:2"));
+        assert!(
+            mismatch
+                .to_string()
+                .contains("orchestrator_claim_resource_revision_mismatch:claim-1:1:2")
+        );
 
         let released = store
             .release_orchestrator_claim("claim-1", 2, "done")
@@ -1051,9 +1029,11 @@ mod tests {
             .heartbeat_orchestrator_claim("claim-1", 3, 60)
             .await
             .expect_err("released claim heartbeat should fail");
-        assert!(released_heartbeat
-            .to_string()
-            .contains("orchestrator_claim_not_active_for_heartbeat:claim-1"));
+        assert!(
+            released_heartbeat
+                .to_string()
+                .contains("orchestrator_claim_not_active_for_heartbeat:claim-1")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1163,9 +1143,11 @@ mod tests {
             ))
             .await
             .expect_err("expired matching claim should require reclaim");
-        assert!(error
-            .to_string()
-            .contains("orchestrator_claim_expired_requires_reclaim:claim-1:task"));
+        assert!(
+            error
+                .to_string()
+                .contains("orchestrator_claim_expired_requires_reclaim:claim-1:task")
+        );
 
         let expired = store
             .orchestrator_claim("claim-1")
