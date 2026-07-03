@@ -3361,6 +3361,30 @@ fn configured_internal_host_carrier_exists(
     carriers
         .iter()
         .any(|row| row["role_id"].as_str() == Some(backend_id))
+#[derive(Clone, Copy)]
+enum ConfiguredSubagentEntryPolicy {
+    EnabledOnly,
+    AnyEntry,
+}
+
+fn configured_external_backend_entry_with_policy<'a>(
+    overlay: &'a serde_yaml::Value,
+    backend_id: &str,
+    policy: ConfiguredSubagentEntryPolicy,
+) -> Option<&'a serde_yaml::Value> {
+    let entry = match policy {
+        ConfiguredSubagentEntryPolicy::EnabledOnly => {
+            configured_subagent_entry(overlay, backend_id)?
+        }
+        ConfiguredSubagentEntryPolicy::AnyEntry => {
+            configured_subagent_entry_any(overlay, backend_id)?
+        }
+    };
+    (yaml_string(yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
+        == Some("external_cli"))
+    .then_some(entry)
+}
+
         || overlay
             .and_then(|overlay| configured_subagent_entry(overlay, backend_id))
             .and_then(|entry| yaml_string(yaml_lookup(entry, &["subagent_backend_class"])))
@@ -3372,20 +3396,22 @@ pub(crate) fn configured_external_backend_entry<'a>(
     overlay: &'a serde_yaml::Value,
     backend_id: &str,
 ) -> Option<&'a serde_yaml::Value> {
-    let entry = configured_subagent_entry(overlay, backend_id)?;
-    (yaml_string(yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
-        == Some("external_cli"))
-    .then_some(entry)
+    configured_external_backend_entry_with_policy(
+        overlay,
+        backend_id,
+        ConfiguredSubagentEntryPolicy::EnabledOnly,
+    )
 }
 
 pub(crate) fn configured_external_backend_entry_any<'a>(
     overlay: &'a serde_yaml::Value,
     backend_id: &str,
 ) -> Option<&'a serde_yaml::Value> {
-    let entry = configured_subagent_entry_any(overlay, backend_id)?;
-    (yaml_string(yaml_lookup(entry, &["subagent_backend_class"])).as_deref()
-        == Some("external_cli"))
-    .then_some(entry)
+    configured_external_backend_entry_with_policy(
+        overlay,
+        backend_id,
+        ConfiguredSubagentEntryPolicy::AnyEntry,
+    )
 }
 
 pub(crate) fn selected_external_backend_for_system(
@@ -4809,6 +4835,14 @@ host_environment:
       execution_class: external
 agent_system:
   subagents:
+        assert!(
+            configured_external_backend_entry_any(&overlay, "qwen_dispatch").is_some(),
+            "any-entry lookup should keep disabled or missing-enabled external backend visibility"
+        );
+        assert!(
+            configured_external_backend_entry_any(&overlay, "missing_backend").is_none(),
+            "unknown backend should still fail closed"
+        );
     alpha_external:
       enabled: true
       subagent_backend_class: external_cli
