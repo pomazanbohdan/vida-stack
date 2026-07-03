@@ -2280,9 +2280,11 @@ mod tests {
         });
         let validation = validate_draft(&draft, &[]);
         assert_eq!(validation.status, "blocked");
-        assert!(validation
-            .blocker_codes
-            .contains(&"missing_dependency".to_string()));
+        assert!(
+            validation
+                .blocker_codes
+                .contains(&"missing_dependency".to_string())
+        );
     }
 
     #[test]
@@ -2318,9 +2320,11 @@ mod tests {
             draft.nodes[1].owned_paths,
             vec!["crates/vida/src/state_store_task_models.rs".to_string()]
         );
-        assert!(draft.nodes[2]
-            .owned_paths
-            .contains(&"crates/vida/src/taskflow_consume_bundle.rs".to_string()));
+        assert!(
+            draft.nodes[2]
+                .owned_paths
+                .contains(&"crates/vida/src/taskflow_consume_bundle.rs".to_string())
+        );
         assert_eq!(draft.edges[0].task_id, draft.nodes[1].task_id);
         assert_eq!(draft.edges[0].depends_on_id, draft.nodes[0].task_id);
         assert_eq!(draft.edges[1].task_id, draft.nodes[2].task_id);
@@ -2365,18 +2369,22 @@ mod tests {
 
         assert_eq!(draft.validation.status, "valid");
         assert!(draft.nodes.len() >= 4);
-        assert!(draft
-            .nodes
-            .iter()
-            .any(|node| node.title.contains("Wire task state and schema surfaces")));
+        assert!(
+            draft
+                .nodes
+                .iter()
+                .any(|node| node.title.contains("Wire task state and schema surfaces"))
+        );
         assert!(draft.nodes.iter().any(|node| {
             node.title
                 .contains("Wire runtime and orchestration surfaces")
         }));
-        assert!(draft
-            .nodes
-            .iter()
-            .any(|node| node.title.starts_with("Prove ")));
+        assert!(
+            draft
+                .nodes
+                .iter()
+                .any(|node| node.title.starts_with("Prove "))
+        );
         assert_eq!(draft.edges.len(), draft.nodes.len() - 1);
     }
 
@@ -2397,10 +2405,12 @@ mod tests {
         .expect("draft should generate");
 
         assert_eq!(draft.validation.status, "valid");
-        assert!(draft
-            .nodes
-            .iter()
-            .all(|node| node.evidence_confidence == "low"));
+        assert!(
+            draft
+                .nodes
+                .iter()
+                .all(|node| node.evidence_confidence == "low")
+        );
         assert!(draft.nodes.iter().all(|node| {
             node.operator_truth
                 .iter()
@@ -2441,12 +2451,16 @@ mod tests {
             .iter()
             .find(|node| node.title.contains("Align docs and artifact surfaces"))
             .expect("draft should include docs alignment node");
-        assert!(docs_node
-            .owned_paths
-            .contains(&"docs/product/spec/task-graph-adaptive-planner-contract.md".to_string()));
-        assert!(!docs_node
-            .owned_paths
-            .contains(&"docs/product/spec/task-graph-adaptive-planner-design.md".to_string()));
+        assert!(
+            docs_node
+                .owned_paths
+                .contains(&"docs/product/spec/task-graph-adaptive-planner-contract.md".to_string())
+        );
+        assert!(
+            !docs_node
+                .owned_paths
+                .contains(&"docs/product/spec/task-graph-adaptive-planner-design.md".to_string())
+        );
     }
 
     #[test]
@@ -2492,10 +2506,12 @@ mod tests {
                 && source.reference == "audit-p1-planner-context-input-contract-remediation"
                 && source.status == "provided"
         }));
-        assert!(draft
-            .input_contract
-            .operator_truth
-            .contains(&"planner_input_contract_foundation_only".to_string()));
+        assert!(
+            draft
+                .input_contract
+                .operator_truth
+                .contains(&"planner_input_contract_foundation_only".to_string())
+        );
     }
 
     #[test]
@@ -2525,14 +2541,18 @@ mod tests {
             "backlog_reference_missing",
             "context_reference_missing",
         ] {
-            assert!(draft
-                .input_contract
-                .missing_context
-                .contains(&missing.to_string()));
-            assert!(draft
-                .input_contract
-                .operator_truth
-                .contains(&format!("{missing}_requires_operator_confirmation")));
+            assert!(
+                draft
+                    .input_contract
+                    .missing_context
+                    .contains(&missing.to_string())
+            );
+            assert!(
+                draft
+                    .input_contract
+                    .operator_truth
+                    .contains(&format!("{missing}_requires_operator_confirmation"))
+            );
         }
     }
 
@@ -2596,10 +2616,12 @@ mod tests {
 
         assert_eq!(draft.validation.status, "valid");
         assert_eq!(draft.input_contract.status, "partial");
-        assert!(draft
-            .input_contract
-            .operator_truth
-            .contains(&"planner_input_contract_foundation_only".to_string()));
+        assert!(
+            draft
+                .input_contract
+                .operator_truth
+                .contains(&"planner_input_contract_foundation_only".to_string())
+        );
     }
 
     #[test]
@@ -2619,10 +2641,12 @@ mod tests {
         .expect("draft should generate");
 
         assert_eq!(draft.validation.status, "blocked");
-        assert!(draft
-            .validation
-            .blocker_codes
-            .contains(&"missing_plan_context".to_string()));
+        assert!(
+            draft
+                .validation
+                .blocker_codes
+                .contains(&"missing_plan_context".to_string())
+        );
         assert!(draft.validation.issues.iter().any(|issue| {
             issue.contains(
                 "required PlanGraph input context is missing: spec_reference_missing, backlog_reference_missing, context_reference_missing",
@@ -2745,9 +2769,11 @@ mod tests {
         let validation = validate_draft(&draft, &[]);
 
         assert_eq!(validation.status, "blocked");
-        assert!(validation
-            .blocker_codes
-            .contains(&"cyclic_dependency".to_string()));
+        assert!(
+            validation
+                .blocker_codes
+                .contains(&"cyclic_dependency".to_string())
+        );
     }
 
     #[tokio::test]
@@ -2914,16 +2940,18 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
-        assert!(receipt
-            .validation
-            .blocker_codes
-            .contains(&"existing_task_conflict".to_string()));
+        assert!(
+            receipt
+                .validation
+                .blocker_codes
+                .contains(&"existing_task_conflict".to_string())
+        );
         let _ = std::fs::remove_dir_all(state_dir);
     }
 
     #[tokio::test]
-    async fn dry_run_receipt_blocks_legacy_description_embedded_metadata_without_structured_metadata(
-    ) {
+    async fn dry_run_receipt_blocks_legacy_description_embedded_metadata_without_structured_metadata()
+     {
         let state_dir = test_state_dir("legacy-description-metadata-blocked");
         let store = StateStore::open(state_dir.clone())
             .await
@@ -2979,15 +3007,19 @@ mod tests {
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
         assert!(receipt.skipped_existing_task_ids.is_empty());
-        assert!(receipt
-            .validation
-            .blocker_codes
-            .contains(&"existing_task_conflict".to_string()));
-        assert!(receipt
-            .validation
-            .issues
-            .iter()
-            .any(|issue| issue.contains("conflicts with PlanGraph draft: description differs")));
+        assert!(
+            receipt
+                .validation
+                .blocker_codes
+                .contains(&"existing_task_conflict".to_string())
+        );
+        assert!(
+            receipt
+                .validation
+                .issues
+                .iter()
+                .any(|issue| issue.contains("conflicts with PlanGraph draft: description differs"))
+        );
         assert!(receipt.validation.issues.iter().any(|issue| {
             issue.contains("conflicts with PlanGraph draft: planner metadata differs")
         }));
@@ -3032,18 +3064,22 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
-        assert!(receipt
-            .validation
-            .blocker_codes
-            .contains(&"cyclic_dependency".to_string()));
+        assert!(
+            receipt
+                .validation
+                .blocker_codes
+                .contains(&"cyclic_dependency".to_string())
+        );
         let store = StateStore::open_existing(state_dir.clone())
             .await
             .expect("state store should open");
-        assert!(store
-            .list_tasks(None, true)
-            .await
-            .expect("tasks should list")
-            .is_empty());
+        assert!(
+            store
+                .list_tasks(None, true)
+                .await
+                .expect("tasks should list")
+                .is_empty()
+        );
         let _ = std::fs::remove_dir_all(state_dir);
     }
 
@@ -3083,18 +3119,22 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert!(receipt.created_task_ids.is_empty());
-        assert!(receipt
-            .validation
-            .blocker_codes
-            .contains(&"missing_plan_context".to_string()));
+        assert!(
+            receipt
+                .validation
+                .blocker_codes
+                .contains(&"missing_plan_context".to_string())
+        );
         let store = StateStore::open_existing(state_dir.clone())
             .await
             .expect("state store should open");
-        assert!(store
-            .list_tasks(None, true)
-            .await
-            .expect("tasks should list")
-            .is_empty());
+        assert!(
+            store
+                .list_tasks(None, true)
+                .await
+                .expect("tasks should list")
+                .is_empty()
+        );
         let _ = std::fs::remove_dir_all(state_dir);
     }
 

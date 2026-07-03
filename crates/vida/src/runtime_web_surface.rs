@@ -3,15 +3,15 @@ use std::process::{Command, ExitCode};
 
 use serde_json::Value;
 
-use crate::release1_contracts::{blocker_code_str, BlockerCode};
+use crate::release1_contracts::{BlockerCode, blocker_code_str};
 use crate::release1_operator_output::{
-    finalize_release1_operator_truth, shared_operator_output_contract_parity_error,
-    FinalizedRelease1OperatorTruth,
+    FinalizedRelease1OperatorTruth, finalize_release1_operator_truth,
+    shared_operator_output_contract_parity_error,
 };
 use crate::surface_render::print_surface_json;
 use crate::{
-    print_surface_header, print_surface_line, RuntimeArgs, RuntimeCommand, RuntimeWebCommand,
-    RuntimeWebRestartArgs, RuntimeWebStatusArgs,
+    RuntimeArgs, RuntimeCommand, RuntimeWebCommand, RuntimeWebRestartArgs, RuntimeWebStatusArgs,
+    print_surface_header, print_surface_line,
 };
 
 const RUNTIME_WEB_STATUS_SURFACE: &str = "vida runtime web status";
@@ -905,25 +905,29 @@ fn unresolved_root_component_results(
 }
 
 fn runtime_web_restart_actions_from_results(results: &[ComponentRestartResult]) -> Value {
-    serde_json::json!(results
-        .iter()
-        .map(|result| {
-            serde_json::json!({
-                "component_id": result.component_id,
-                "action": result.action,
+    serde_json::json!(
+        results
+            .iter()
+            .map(|result| {
+                serde_json::json!({
+                    "component_id": result.component_id,
+                    "action": result.action,
+                })
             })
-        })
-        .collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    )
 }
 
 fn runtime_web_restart_blocked_components_from_results(
     results: &[ComponentRestartResult],
 ) -> Value {
-    serde_json::json!(results
-        .iter()
-        .filter(|result| result.action == "blocked")
-        .map(|result| result.component_id)
-        .collect::<Vec<_>>())
+    serde_json::json!(
+        results
+            .iter()
+            .filter(|result| result.action == "blocked")
+            .map(|result| result.component_id)
+            .collect::<Vec<_>>()
+    )
 }
 
 fn runtime_web_restart_components(
@@ -1444,10 +1448,12 @@ mod tests {
             payload["restart"]["execution_receipts"][0]["status"],
             "blocked"
         );
-        assert!(payload["restart"]["execution_receipts"][0]["command"]
-            .as_array()
-            .expect("command should render")
-            .is_empty());
+        assert!(
+            payload["restart"]["execution_receipts"][0]["command"]
+                .as_array()
+                .expect("command should render")
+                .is_empty()
+        );
         assert_eq!(
             payload["restart"]["execution_receipts"][0]["stderr"],
             PROJECT_ADAPTER_EXECUTION_DISABLED_REASON

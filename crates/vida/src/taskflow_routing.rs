@@ -1398,14 +1398,16 @@ mod tests {
                 .len(),
             2
         );
-        assert!(payload["candidate_pool"]
-            .as_array()
-            .expect("candidate pool should render")
-            .iter()
-            .any(|row| {
-                row["status"].as_str() == Some("rejected")
-                    && row["carrier_id"].as_str() == Some("junior")
-            }));
+        assert!(
+            payload["candidate_pool"]
+                .as_array()
+                .expect("candidate pool should render")
+                .iter()
+                .any(|row| {
+                    row["status"].as_str() == Some("rejected")
+                        && row["carrier_id"].as_str() == Some("junior")
+                })
+        );
         assert_eq!(
             payload["selection_source"].as_str(),
             Some("route_primary_hint")
@@ -1441,9 +1443,11 @@ mod tests {
         let route = &execution_plan["development_flow"]["implementation"];
         let payload = route_explain_payload(&execution_plan, "implementation", Some(route));
         assert_eq!(route_explain_status(&payload, Some(false)), "blocked");
-        assert!(route_explain_blocker_codes(&payload, Some(false))
-            .iter()
-            .any(|code| code == "selected_backend_not_admissible_for_dispatch_target"));
+        assert!(
+            route_explain_blocker_codes(&payload, Some(false))
+                .iter()
+                .any(|code| code == "selected_backend_not_admissible_for_dispatch_target")
+        );
     }
 
     #[test]
@@ -1538,78 +1542,98 @@ mod tests {
                 "write_scope"
             ])
         );
-        assert!(payload["route_field_truth"]
-            .as_array()
-            .expect("route field truth should render")
-            .iter()
-            .any(|row| {
-                row["field"].as_str() == Some("imported_price_authority_override")
-                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
-            }));
-        assert!(payload["route_field_truth"]
-            .as_array()
-            .expect("route field truth should render")
-            .iter()
-            .any(|row| {
-                row["field"].as_str() == Some("max_cli_subagent_calls")
-                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
-            }));
-        assert!(payload["route_field_truth"]
-            .as_array()
-            .expect("route field truth should render")
-            .iter()
-            .any(|row| {
-                row["field"].as_str() == Some("semantic_cache_authoritative")
-                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
-            }));
-        assert!(payload["route_field_truth"]
-            .as_array()
-            .expect("route field truth should render")
-            .iter()
-            .any(|row| {
-                row["field"].as_str() == Some("semantic_score_override_authority")
-                    && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
-            }));
-        assert!(payload["route_field_truth"]
-            .as_array()
-            .expect("route field truth should render")
-            .iter()
-            .any(|row| {
-                row["field"].as_str() == Some("provider_price_snapshot")
-                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
-            }));
-        assert!(payload["route_field_truth"]
-            .as_array()
-            .expect("route field truth should render")
-            .iter()
-            .any(|row| {
-                row["field"].as_str() == Some("dispatch_required")
-                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
-            }));
-        assert!(payload["route_field_truth"]
-            .as_array()
-            .expect("route field truth should render")
-            .iter()
-            .any(|row| {
-                row["field"].as_str() == Some("semantic_scoring_order")
-                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
-            }));
-        assert!(payload["route_field_truth"]
-            .as_array()
-            .expect("route field truth should render")
-            .iter()
-            .any(|row| {
-                row["field"].as_str() == Some("semantic_route_cache")
-                    && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
-            }));
+        assert!(
+            payload["route_field_truth"]
+                .as_array()
+                .expect("route field truth should render")
+                .iter()
+                .any(|row| {
+                    row["field"].as_str() == Some("imported_price_authority_override")
+                        && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+                })
+        );
+        assert!(
+            payload["route_field_truth"]
+                .as_array()
+                .expect("route field truth should render")
+                .iter()
+                .any(|row| {
+                    row["field"].as_str() == Some("max_cli_subagent_calls")
+                        && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+                })
+        );
+        assert!(
+            payload["route_field_truth"]
+                .as_array()
+                .expect("route field truth should render")
+                .iter()
+                .any(|row| {
+                    row["field"].as_str() == Some("semantic_cache_authoritative")
+                        && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+                })
+        );
+        assert!(
+            payload["route_field_truth"]
+                .as_array()
+                .expect("route field truth should render")
+                .iter()
+                .any(|row| {
+                    row["field"].as_str() == Some("semantic_score_override_authority")
+                        && row["truth"].as_str() == Some("rejected_no_runtime_consumer")
+                })
+        );
+        assert!(
+            payload["route_field_truth"]
+                .as_array()
+                .expect("route field truth should render")
+                .iter()
+                .any(|row| {
+                    row["field"].as_str() == Some("provider_price_snapshot")
+                        && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
+                })
+        );
+        assert!(
+            payload["route_field_truth"]
+                .as_array()
+                .expect("route field truth should render")
+                .iter()
+                .any(|row| {
+                    row["field"].as_str() == Some("dispatch_required")
+                        && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
+                })
+        );
+        assert!(
+            payload["route_field_truth"]
+                .as_array()
+                .expect("route field truth should render")
+                .iter()
+                .any(|row| {
+                    row["field"].as_str() == Some("semantic_scoring_order")
+                        && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
+                })
+        );
+        assert!(
+            payload["route_field_truth"]
+                .as_array()
+                .expect("route field truth should render")
+                .iter()
+                .any(|row| {
+                    row["field"].as_str() == Some("semantic_route_cache")
+                        && row["truth"].as_str() == Some("diagnostic_only_no_execution_actuation")
+                })
+        );
         assert_eq!(route_explain_status(&payload, Some(true)), "blocked");
         let blockers = route_explain_blocker_codes(&payload, Some(true));
-        assert!(blockers
-            .iter()
-            .any(|code| code == "model_selection_disabled"));
-        assert!(blockers
-            .iter()
-            .any(|code| code == "route_fields_not_behavioral"));
+        assert!(
+            blockers
+                .iter()
+                .any(|code| code == "model_selection_disabled")
+        );
+        assert!(
+            blockers
+                .iter()
+                .any(|code| code == "route_fields_not_behavioral")
+        );
     }
 
     #[test]

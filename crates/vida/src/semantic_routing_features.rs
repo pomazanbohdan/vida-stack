@@ -723,10 +723,12 @@ mod tests {
         assert!(feature.signals.requires_reasoning);
         assert!(feature.signals.has_multi_step);
         assert!(matches!(feature.complexity_band, "medium_high" | "complex"));
-        assert!(feature
-            .matched_terms
-            .expert_verbs
-            .contains(&"design".to_string()));
+        assert!(
+            feature
+                .matched_terms
+                .expert_verbs
+                .contains(&"design".to_string())
+        );
     }
 
     #[test]
@@ -769,18 +771,24 @@ mod tests {
         assert!(feature.guardrail_risk.prompt_injection_score >= 60);
         assert!(feature.guardrail_risk.pii_detected);
         assert_eq!(feature.guardrail_risk.language, "latin");
-        assert!(feature
-            .guardrail_risk
-            .suggested_route_constraints
-            .contains(&"verification_required"));
-        assert!(feature
-            .guardrail_risk
-            .suggested_route_constraints
-            .contains(&"quality_floor_high"));
-        assert!(feature
-            .guardrail_risk
-            .suggested_route_constraints
-            .contains(&"privacy_review"));
+        assert!(
+            feature
+                .guardrail_risk
+                .suggested_route_constraints
+                .contains(&"verification_required")
+        );
+        assert!(
+            feature
+                .guardrail_risk
+                .suggested_route_constraints
+                .contains(&"quality_floor_high")
+        );
+        assert!(
+            feature
+                .guardrail_risk
+                .suggested_route_constraints
+                .contains(&"privacy_review")
+        );
         assert!(feature.guardrail_risk.advisory_only);
     }
 

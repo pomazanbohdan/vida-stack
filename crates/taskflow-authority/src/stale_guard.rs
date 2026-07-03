@@ -61,11 +61,18 @@ pub fn missing_task_stale_blocked_run_can_retire(
         return false;
     }
 
-    let blocked_or_running = matches!(receipt.lane_status, "lane_running" | "lane_blocked");
+    let blocked_or_running = matches!(
+        receipt.lane_status,
+        "lane_running" | "lane_blocked" | "lane_exception_takeover"
+    );
     let prelaunch_packet_ready = receipt.dispatch_status == "executed"
         && receipt.lane_status == "lane_completed"
         && receipt.downstream_dispatch_status == Some("packet_ready");
-    (receipt.dispatch_status == "blocked" && blocked_or_running) || prelaunch_packet_ready
+    let exception_takeover_bridge_pending = receipt.dispatch_status == "bridge_request_pending"
+        && receipt.lane_status == "lane_exception_takeover";
+    (receipt.dispatch_status == "blocked" && blocked_or_running)
+        || prelaunch_packet_ready
+        || exception_takeover_bridge_pending
 }
 
 pub fn stale_run_retire_admissibility(
@@ -167,6 +174,34 @@ mod tests {
                 &receipt
             ));
         }
+    }
+
+    #[test]
+    fn missing_task_stale_blocked_run_accepts_exception_takeover_bridge_pending_receipt() {
+        let receipt = StaleRunGraphReceipt {
+            dispatch_status: "bridge_request_pending",
+            lane_status: "lane_exception_takeover",
+            downstream_dispatch_status: None,
+        };
+
+        assert!(missing_task_stale_blocked_run_can_retire(
+            &active_status(),
+            &receipt
+        ));
+    }
+
+    #[test]
+    fn missing_task_stale_blocked_run_accepts_blocked_exception_takeover_receipt() {
+        let receipt = StaleRunGraphReceipt {
+            dispatch_status: "blocked",
+            lane_status: "lane_exception_takeover",
+            downstream_dispatch_status: None,
+        };
+
+        assert!(missing_task_stale_blocked_run_can_retire(
+            &active_status(),
+            &receipt
+        ));
     }
 
     #[test]

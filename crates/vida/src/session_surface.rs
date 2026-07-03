@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::release1_contracts::{blocker_code_str, BlockerCode};
+use crate::release1_contracts::{BlockerCode, blocker_code_str};
 use crate::release1_operator_output::build_release1_operator_output_payload;
 use crate::state_store::{StateStore, TaskRecord};
 use crate::surface_render::print_surface_json;

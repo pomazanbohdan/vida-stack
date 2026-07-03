@@ -1,6 +1,7 @@
 use crate::{
-    build_runtime_execution_plan_from_snapshot, dispatch_contract_execution_lane_sequence,
-    print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
+    RenderMode, RuntimeConsumptionLaneSelection, build_runtime_execution_plan_from_snapshot,
+    dispatch_contract_execution_lane_sequence, print_surface_header, print_surface_line,
+    read_or_sync_launcher_activation_snapshot,
     release1_operator_output::{
         canonical_release1_blocker_code_entries, finalize_release1_operator_truth,
         shared_operator_output_contract_parity_error,
@@ -12,13 +13,12 @@ use crate::{
     },
     taskflow_layer4::print_taskflow_proxy_help,
     taskflow_task_bridge::proxy_state_dir,
-    RenderMode, RuntimeConsumptionLaneSelection,
 };
 use std::collections::BTreeSet;
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 use taskflow_authority::run_graph_transition::{
-    ready_run_graph_transition, run_graph_handoff, ReadyRunGraphTransitionInput,
-    RunGraphDispatchTargetFormat as DispatchTargetFormat,
+    ReadyRunGraphTransitionInput, RunGraphDispatchTargetFormat as DispatchTargetFormat,
+    ready_run_graph_transition, run_graph_handoff,
 };
 use time::format_description::well_known::Rfc3339;
 
@@ -27,7 +27,7 @@ const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_SECONDS: u64 = 60;
 const RUN_GRAPH_DISPATCH_INIT_TIMEOUT_BLOCKER: &str = "run_graph_dispatch_init_timeout";
 const TASKFLOW_RECOVERY_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 const DISPATCH_INIT_FAST_CACHE_SCHEMA_VERSION: u64 = 6;
-const DISPATCH_INIT_IDENTITY_BACKFILL_OPEN_TIMEOUT: Duration = Duration::from_secs(2);
+const DISPATCH_INIT_IDENTITY_BACKFILL_OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn projection_component(value: &str) -> String {
     value
@@ -2819,41 +2819,18 @@ fn categorize_recovery_diagnosis(
         return "runtime_defect".to_string();
     }
 
-    // Check for carrier unavailable blocker codes
-    for code in blocker_codes {
-        let code_lower = code.to_lowercase();
-        if code_lower.contains("carrier_unavailable")
-            || code_lower.contains("codex_carrier_unavailable")
-            || code_lower == "internal_codex_carrier_unavailable"
-        {
-            return "carrier_unavailable".to_string();
-        }
+    let blocker_classification = classify_recovery_blocker_codes(blocker_codes);
+
+    if blocker_classification.carrier_unavailable {
+        return "carrier_unavailable".to_string();
     }
 
-    // Check for packet invalid blocker codes
-    for code in blocker_codes {
-        let code_lower = code.to_lowercase();
-        if code_lower.contains("packet") && code_lower.contains("invalid")
-            || code_lower == "packet_invalid"
-            || code_lower.contains("receipt") && code_lower.contains("invalid")
-        {
-            return "packet_invalid".to_string();
-        }
+    if blocker_classification.packet_invalid {
+        return "packet_invalid".to_string();
     }
 
-    // Check for user action needed (delegation gates, open cycles, etc.)
-    if summary.delegation_gate.delegated_cycle_open {
+    if summary.delegation_gate.delegated_cycle_open || blocker_classification.user_action_needed {
         return "user_action_needed".to_string();
-    }
-    for code in blocker_codes {
-        let code_lower = code.to_lowercase();
-        if code_lower == "open_delegated_cycle"
-            || code_lower.contains("user_action")
-            || code_lower.contains("delegate")
-            || code_lower == "internal_activation_view_only"
-        {
-            return "user_action_needed".to_string();
-        }
     }
 
     // Default to runtime_defect for any other blocker
@@ -2874,6 +2851,49 @@ fn categorize_recovery_diagnosis(
     }
 
     "user_action_needed".to_string()
+}
+
+#[derive(Debug, Default)]
+struct RecoveryBlockerCodeClassification {
+    carrier_unavailable: bool,
+    packet_invalid: bool,
+    user_action_needed: bool,
+}
+
+fn classify_recovery_blocker_codes(blocker_codes: &[String]) -> RecoveryBlockerCodeClassification {
+    let mut classification = RecoveryBlockerCodeClassification::default();
+    for code in blocker_codes {
+        classification.record(code);
+    }
+    classification
+}
+
+impl RecoveryBlockerCodeClassification {
+    fn record(&mut self, code: &str) {
+        let code = code.to_lowercase();
+        self.carrier_unavailable |= recovery_blocker_code_is_carrier_unavailable(&code);
+        self.packet_invalid |= recovery_blocker_code_is_packet_invalid(&code);
+        self.user_action_needed |= recovery_blocker_code_is_user_action_needed(&code);
+    }
+}
+
+fn recovery_blocker_code_is_carrier_unavailable(code: &str) -> bool {
+    code.contains("carrier_unavailable")
+        || code.contains("codex_carrier_unavailable")
+        || code == "internal_codex_carrier_unavailable"
+}
+
+fn recovery_blocker_code_is_packet_invalid(code: &str) -> bool {
+    code.contains("packet") && code.contains("invalid")
+        || code == "packet_invalid"
+        || code.contains("receipt") && code.contains("invalid")
+}
+
+fn recovery_blocker_code_is_user_action_needed(code: &str) -> bool {
+    code == "open_delegated_cycle"
+        || code.contains("user_action")
+        || code.contains("delegate")
+        || code == "internal_activation_view_only"
 }
 
 fn recovery_surface_contract(
@@ -6291,14 +6311,14 @@ fn run_graph_issue_evidence(
             )
         })?
     };
-    let canonical_blocker_codes =
-        canonical_release1_blocker_code_entries(&serde_json::json!([blocker_code])).ok_or_else(
-            || {
-                format!(
+    let canonical_blocker_codes = canonical_release1_blocker_code_entries(&serde_json::json!([
+        blocker_code
+    ]))
+    .ok_or_else(|| {
+        format!(
             "run-graph blocker code `{blocker_code}` is not canonical (must be lowercase/digits/_)"
         )
-            },
-        )?;
+    })?;
     let canonical_blocker_code = canonical_blocker_codes
         .first()
         .expect("canonical block list always non-empty")
@@ -10654,9 +10674,15 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [head, subcommand, task_id, task_class, node, status, route_task_class]
-            if head == "run-graph" && subcommand == "update" =>
-        {
+        [
+            head,
+            subcommand,
+            task_id,
+            task_class,
+            node,
+            status,
+            route_task_class,
+        ] if head == "run-graph" && subcommand == "update" => {
             let existing = match store.run_graph_status(task_id).await {
                 Ok(existing) => existing,
                 Err(StateStoreError::MissingTask { .. }) => {
@@ -10705,9 +10731,16 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [head, subcommand, task_id, task_class, node, status, route_task_class, meta_json]
-            if head == "run-graph" && subcommand == "update" =>
-        {
+        [
+            head,
+            subcommand,
+            task_id,
+            task_class,
+            node,
+            status,
+            route_task_class,
+            meta_json,
+        ] if head == "run-graph" && subcommand == "update" => {
             let meta: serde_json::Value = match serde_json::from_str(meta_json) {
                 Ok(meta) => meta,
                 Err(error) => {
@@ -10807,6 +10840,45 @@ mod tests {
         std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), nanos))
     }
 
+    fn recovery_classifier_summary(
+        recovery_ready: bool,
+        delegated_cycle_open: bool,
+    ) -> crate::state_store::RunGraphRecoverySummary {
+        let mut summary =
+            default_run_graph_recovery_summary("task-recovery-classifier", "run-recovery-classifier");
+        summary.recovery_ready = recovery_ready;
+        summary.delegation_gate.delegated_cycle_open = delegated_cycle_open;
+        summary
+    }
+
+    fn recovery_classifier_projection_truth(
+        stale_state_suspected: bool,
+        active_exception_takeover: bool,
+    ) -> RunGraphProjectionTruth {
+        let dispatch_receipt = active_exception_takeover.then(|| {
+            let mut receipt = clean_ready_downstream_dispatch_receipt("run-recovery-classifier");
+            receipt.lane_status = "lane_exception_takeover".to_string();
+            receipt.exception_path_receipt_id = Some("exception-receipt".to_string());
+            receipt.supersedes_receipt_id = Some("exception-receipt".to_string());
+            receipt
+        });
+        RunGraphProjectionTruth {
+            projection_source: "test".to_string(),
+            projection_reason: "classifier test projection".to_string(),
+            dispatch_receipt_present: dispatch_receipt.is_some(),
+            continuation_binding_present: false,
+            projection_vs_receipt_parity: "aligned".to_string(),
+            stale_state_suspected,
+            next_lawful_operator_action: None,
+            dispatch_receipt,
+            continuation_binding: None,
+        }
+    }
+
+    fn blocker_codes(codes: &[&str]) -> Vec<String> {
+        codes.iter().map(|code| (*code).to_string()).collect()
+    }
+
     #[test]
     fn recommended_surface_for_command_uses_default_human_surface_without_json_bias() {
         assert_eq!(
@@ -10824,6 +10896,84 @@ mod tests {
         assert_eq!(
             recommended_surface_for_command("vida custom surface --json --details"),
             "vida custom surface --details"
+        );
+    }
+
+    #[test]
+    fn categorize_recovery_diagnosis_preserves_blocker_precedence() {
+        let projection_truth = recovery_classifier_projection_truth(false, false);
+        let delegated_summary = recovery_classifier_summary(true, true);
+        let ready_summary = recovery_classifier_summary(true, false);
+
+        assert_eq!(
+            categorize_recovery_diagnosis(
+                &blocker_codes(&[
+                    "receipt_invalid",
+                    "open_delegated_cycle",
+                    "internal_codex_carrier_unavailable",
+                ]),
+                &delegated_summary,
+                &projection_truth,
+            ),
+            "carrier_unavailable"
+        );
+        assert_eq!(
+            categorize_recovery_diagnosis(
+                &blocker_codes(&["open_delegated_cycle", "receipt_invalid"]),
+                &delegated_summary,
+                &projection_truth,
+            ),
+            "packet_invalid"
+        );
+        assert_eq!(
+            categorize_recovery_diagnosis(
+                &blocker_codes(&["unexpected_runtime_fault"]),
+                &delegated_summary,
+                &projection_truth,
+            ),
+            "user_action_needed"
+        );
+        assert_eq!(
+            categorize_recovery_diagnosis(
+                &blocker_codes(&["internal_activation_view_only", "unexpected_runtime_fault"]),
+                &ready_summary,
+                &projection_truth,
+            ),
+            "user_action_needed"
+        );
+    }
+
+    #[test]
+    fn categorize_recovery_diagnosis_preserves_fallback_categories() {
+        let ready_summary = recovery_classifier_summary(true, false);
+        let blocked_summary = recovery_classifier_summary(false, false);
+        let active_exception_projection = recovery_classifier_projection_truth(false, true);
+        let stale_projection = recovery_classifier_projection_truth(true, false);
+        let clean_projection = recovery_classifier_projection_truth(false, false);
+
+        assert_eq!(
+            categorize_recovery_diagnosis(&[], &ready_summary, &active_exception_projection),
+            "runtime_defect"
+        );
+        assert_eq!(
+            categorize_recovery_diagnosis(
+                &blocker_codes(&["unexpected_runtime_fault"]),
+                &ready_summary,
+                &clean_projection,
+            ),
+            "runtime_defect"
+        );
+        assert_eq!(
+            categorize_recovery_diagnosis(&[], &ready_summary, &stale_projection),
+            "runtime_defect"
+        );
+        assert_eq!(
+            categorize_recovery_diagnosis(&[], &blocked_summary, &clean_projection),
+            "runtime_defect"
+        );
+        assert_eq!(
+            categorize_recovery_diagnosis(&[], &ready_summary, &clean_projection),
+            "user_action_needed"
         );
     }
 
@@ -10908,8 +11058,8 @@ mod tests {
         .expect("designer should resolve from configured flow lane catalog");
         assert_eq!(designer.dispatch_target, "designer");
         assert_eq!(
-            execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]["designer"]
-                ["runtime_assignment"]["selected_backend_id"],
+            execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]["designer"]["runtime_assignment"]
+                ["selected_backend_id"],
             "internal_subagents"
         );
     }
@@ -11034,16 +11184,17 @@ mod tests {
         inject_task_planner_metadata(&mut selection, &planner_metadata);
 
         assert_eq!(
-            selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]["planner_metadata"]
-                ["owned_paths"],
+            selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]["planner_metadata"]["owned_paths"],
             serde_json::json!([
                 "crates/vida/src/runtime_dispatch_execution.rs",
                 "docs/product/spec/codex-host-agent-boundary-and-cli-bridge-design.md"
             ])
         );
-        assert!(selection
-            .request
-            .contains("Owned paths: crates/vida/src/runtime_dispatch_execution.rs"));
+        assert!(
+            selection
+                .request
+                .contains("Owned paths: crates/vida/src/runtime_dispatch_execution.rs")
+        );
     }
 
     fn clean_ready_downstream_dispatch_receipt(run_id: &str) -> RunGraphDispatchReceipt {
@@ -11205,11 +11356,13 @@ mod tests {
             evidence["next_action"]["command"],
             "vida lane show run-recovery-false --json"
         );
-        assert!(evidence["next_actions"]
-            .as_array()
-            .is_some_and(|actions| actions.iter().any(|action| action
-                .as_str()
-                .is_some_and(|text| text.contains("recommended recovery command")))));
+        assert!(
+            evidence["next_actions"]
+                .as_array()
+                .is_some_and(|actions| actions.iter().any(|action| action
+                    .as_str()
+                    .is_some_and(|text| text.contains("recommended recovery command"))))
+        );
         assert_eq!(
             shared_operator_output_contract_parity_error(&evidence),
             None
@@ -11721,12 +11874,16 @@ agent_system:
         .expect("run-graph status payload should build");
 
         assert_eq!(payload["artifact_refs"]["repair_target"], "designer");
-        assert!(payload["artifact_refs"]
-            .get("downstream_dispatch_target")
-            .is_none());
-        assert!(payload["artifact_refs"]
-            .get("downstream_dispatch_ready")
-            .is_none());
+        assert!(
+            payload["artifact_refs"]
+                .get("downstream_dispatch_target")
+                .is_none()
+        );
+        assert!(
+            payload["artifact_refs"]
+                .get("downstream_dispatch_ready")
+                .is_none()
+        );
         assert_eq!(
             payload["projection_truth"]["stale_downstream_projection_suppressed"],
             true
@@ -11749,10 +11906,11 @@ agent_system:
 
         assert!(!gate.supported);
         assert_eq!(gate.status, "blocked_lineage_preconditions_not_verified");
-        assert!(gate
-            .blocker_codes
-            .iter()
-            .any(|code| code == "missing_run_graph_status"));
+        assert!(
+            gate.blocker_codes
+                .iter()
+                .any(|code| code == "missing_run_graph_status")
+        );
     }
 
     #[test]
@@ -11821,11 +11979,13 @@ agent_system:
 
         assert!(!gate.supported);
         assert_eq!(gate.status, "blocked_task_run_mapping_mismatch");
-        assert!(gate
-            .blocker_codes
-            .iter()
-            .any(|code| code == "blocked_task_run_mapping_mismatch"));
+        assert!(
+            gate.blocker_codes
+                .iter()
+                .any(|code| code == "blocked_task_run_mapping_mismatch")
+        );
     }
+    use crate::RuntimeConsumptionLaneSelection;
     use crate::build_compiled_agent_extension_bundle_for_root;
     use crate::launcher_activation_snapshot::config_file_digest;
     use crate::launcher_activation_snapshot::pack_router_keywords_json;
@@ -11833,7 +11993,6 @@ agent_system:
     use crate::state_store::LauncherActivationSnapshot;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::guard_current_dir;
-    use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
     use std::path::Path;
 
@@ -12297,9 +12456,11 @@ agent_system:
         assert_eq!(payload["surface"], "vida taskflow recovery status");
         assert_eq!(payload["run_id"], "run-missing-recovery-json");
         assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| !codes.is_empty()));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| !codes.is_empty())
+        );
         assert_eq!(
             payload["artifact_refs"]["surface"],
             "vida taskflow recovery status"
@@ -12311,9 +12472,11 @@ agent_system:
         assert_eq!(payload["shared_fields"]["status"], "blocked");
         assert_eq!(payload["operator_contracts"]["status"], "blocked");
         assert_eq!(payload["error_kind"], "run_graph_recovery_unreadable");
-        assert!(payload["next_actions"][0]
-            .as_str()
-            .is_some_and(|action| action.contains("vida taskflow run-graph status")));
+        assert!(
+            payload["next_actions"][0]
+                .as_str()
+                .is_some_and(|action| action.contains("vida taskflow run-graph status"))
+        );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
@@ -12379,13 +12542,15 @@ agent_system:
         let diagnosis_value = payload["diagnosis"]
             .as_str()
             .expect("diagnosis should be a string");
-        assert!([
-            "runtime_defect",
-            "carrier_unavailable",
-            "packet_invalid",
-            "user_action_needed"
-        ]
-        .contains(&diagnosis_value));
+        assert!(
+            [
+                "runtime_defect",
+                "carrier_unavailable",
+                "packet_invalid",
+                "user_action_needed"
+            ]
+            .contains(&diagnosis_value)
+        );
         // diagnosis_detail contains the old diagnosis object
         assert!(payload.get("diagnosis_detail").is_some());
         assert_eq!(
@@ -12490,9 +12655,11 @@ agent_system:
         let command =
             next_lawful_operator_action_for_projection(&status, Some(&receipt), None, false, false);
 
-        assert!(command
-            .as_deref()
-            .is_some_and(|value| value == "vida lane show run-configured-backend-blocked --json"));
+        assert!(
+            command.as_deref().is_some_and(
+                |value| value == "vida lane show run-configured-backend-blocked --json"
+            )
+        );
     }
 
     #[test]
@@ -12739,24 +12906,30 @@ agent_system:
         .expect("status payload should render");
 
         assert_eq!(payload["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .expect("blocker_codes should be an array")
-            .iter()
-            .any(|value| value == "missing_owned_write_scope"));
-        assert!(payload["next_actions"]
-            .as_array()
-            .expect("next_actions should be an array")
-            .iter()
-            .any(|value| value.as_str().is_some_and(|action| action
-                .contains("vida taskflow packet render run-status-missing-owned-scope"))));
-        assert!(payload["next_actions"]
-            .as_array()
-            .expect("next_actions should be an array")
-            .iter()
-            .all(|value| value
-                .as_str()
-                .is_some_and(|action| !action.contains("--json"))));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .expect("blocker_codes should be an array")
+                .iter()
+                .any(|value| value == "missing_owned_write_scope")
+        );
+        assert!(
+            payload["next_actions"]
+                .as_array()
+                .expect("next_actions should be an array")
+                .iter()
+                .any(|value| value.as_str().is_some_and(|action| action
+                    .contains("vida taskflow packet render run-status-missing-owned-scope")))
+        );
+        assert!(
+            payload["next_actions"]
+                .as_array()
+                .expect("next_actions should be an array")
+                .iter()
+                .all(|value| value
+                    .as_str()
+                    .is_some_and(|action| !action.contains("--json")))
+        );
     }
 
     #[test]
@@ -12961,9 +13134,11 @@ agent_system:
             payload["recommended_surface"],
             serde_json::json!("vida lane show")
         );
-        assert!(payload["recommended_command"]
-            .as_str()
-            .is_some_and(|value| value == "vida lane show run-terminal-write-blocked --json"));
+        assert!(
+            payload["recommended_command"]
+                .as_str()
+                .is_some_and(|value| value == "vida lane show run-terminal-write-blocked --json")
+        );
         assert_eq!(
             payload["why_not_now"]["category"],
             serde_json::json!("run_graph_blocked_state")
@@ -13315,13 +13490,15 @@ agent_system:
         assert_eq!(payload["status"], "blocked");
         assert_eq!(payload["shared_fields"]["status"], "blocked");
         assert_eq!(payload["operator_contracts"]["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .expect("blocker_codes should be an array")
-            .iter()
-            .any(|code| code
-                .as_str()
-                .is_some_and(|code| code == "run_graph_status_unavailable")));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .expect("blocker_codes should be an array")
+                .iter()
+                .any(|code| code
+                    .as_str()
+                    .is_some_and(|code| code == "run_graph_status_unavailable"))
+        );
         assert_eq!(payload["error_kind"], "run_graph_status_unavailable");
         assert_eq!(
             payload["artifact_refs"]["surface"],
@@ -13335,13 +13512,15 @@ agent_system:
             payload["recommended_command"],
             serde_json::json!("vida taskflow run-graph latest")
         );
-        assert!(payload["next_actions"]
-            .as_array()
-            .expect("next_actions should be an array")
-            .iter()
-            .any(|action| action
-                .as_str()
-                .is_some_and(|action| action.contains("vida taskflow run-graph latest"))));
+        assert!(
+            payload["next_actions"]
+                .as_array()
+                .expect("next_actions should be an array")
+                .iter()
+                .any(|action| action
+                    .as_str()
+                    .is_some_and(|action| action.contains("vida taskflow run-graph latest")))
+        );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
@@ -13359,13 +13538,15 @@ agent_system:
         assert_eq!(payload["status"], "blocked");
         assert_eq!(payload["shared_fields"]["status"], "blocked");
         assert_eq!(payload["operator_contracts"]["status"], "blocked");
-        assert!(payload["blocker_codes"]
-            .as_array()
-            .expect("blocker_codes should be an array")
-            .iter()
-            .any(|code| code
-                .as_str()
-                .is_some_and(|code| code == fallback_dispatch_issue_code())));
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .expect("blocker_codes should be an array")
+                .iter()
+                .any(|code| code
+                    .as_str()
+                    .is_some_and(|code| code == fallback_dispatch_issue_code()))
+        );
         assert_eq!(payload["error_kind"], "projection_truth_unavailable");
         assert_eq!(
             payload["artifact_refs"]["surface"],
@@ -13379,13 +13560,15 @@ agent_system:
             payload["recommended_command"],
             serde_json::json!("vida taskflow run-graph latest")
         );
-        assert!(payload["next_actions"]
-            .as_array()
-            .expect("next_actions should be an array")
-            .iter()
-            .any(|action| action
-                .as_str()
-                .is_some_and(|action| action.contains("vida status"))));
+        assert!(
+            payload["next_actions"]
+                .as_array()
+                .expect("next_actions should be an array")
+                .iter()
+                .any(|action| action
+                    .as_str()
+                    .is_some_and(|action| action.contains("vida status")))
+        );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
@@ -13473,9 +13656,11 @@ agent_system:
             payload["projection_truth"]["dispatch_receipt"]["blocker_code"],
             serde_json::json!("configured_backend_dispatch_failed")
         );
-        assert!(payload["next_actions"]
-            .as_array()
-            .is_some_and(|actions| !actions.is_empty()));
+        assert!(
+            payload["next_actions"]
+                .as_array()
+                .is_some_and(|actions| !actions.is_empty())
+        );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
@@ -13517,7 +13702,7 @@ agent_system:
             downstream_dispatch_note: None,
             downstream_dispatch_ready: false,
             downstream_dispatch_blockers: vec![
-                "internal_dispatch_timeout_without_receipt".to_string()
+                "internal_dispatch_timeout_without_receipt".to_string(),
             ],
             downstream_dispatch_packet_path: None,
             downstream_dispatch_status: Some("blocked".to_string()),
@@ -13669,7 +13854,7 @@ agent_system:
             downstream_dispatch_note: None,
             downstream_dispatch_ready: false,
             downstream_dispatch_blockers: vec![
-                "internal_dispatch_timeout_without_receipt".to_string()
+                "internal_dispatch_timeout_without_receipt".to_string(),
             ],
             downstream_dispatch_packet_path: None,
             downstream_dispatch_status: Some("blocked".to_string()),
@@ -14365,10 +14550,12 @@ agent_system:
         .expect("compact summary should exist");
 
         assert!(summary.stale_state_suspected);
-        assert!(summary
-            .route_truth
-            .projection_reason
-            .contains("looks stale"));
+        assert!(
+            summary
+                .route_truth
+                .projection_reason
+                .contains("looks stale")
+        );
         assert_eq!(
             summary.recommended_command.as_deref(),
             Some("vida taskflow run-graph status run-stale --json")
@@ -14628,7 +14815,7 @@ agent_system:
                         "crates/vida/src/runtime_dispatch_state.rs".to_string(),
                     ],
                     proof_targets: vec![
-                        "cargo test -p vida design_backed -- --nocapture".to_string()
+                        "cargo test -p vida design_backed -- --nocapture".to_string(),
                     ],
                     ..crate::state_store::TaskPlannerMetadata::default()
                 },
@@ -14713,7 +14900,7 @@ agent_system:
                         "crates/vida/src/runtime_dispatch_state.rs".to_string(),
                     ],
                     proof_targets: vec![
-                        "cargo test -p vida design_backed -- --nocapture".to_string()
+                        "cargo test -p vida design_backed -- --nocapture".to_string(),
                     ],
                     ..crate::state_store::TaskPlannerMetadata::default()
                 },
@@ -14745,8 +14932,8 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn derive_seeded_run_graph_keeps_design_backed_qwen_remediation_out_of_worker_without_explicit_terms(
-    ) {
+    async fn derive_seeded_run_graph_keeps_design_backed_qwen_remediation_out_of_worker_without_explicit_terms()
+     {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
 
@@ -14804,18 +14991,20 @@ agent_system:
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
-        assert!(!payload
-            .role_selection
-            .matched_terms
-            .iter()
-            .any(|term| term == "existing_design_backed_work_pool_override"
-                || term == "existing_design_backed_generic_override"));
+        assert!(
+            !payload
+                .role_selection
+                .matched_terms
+                .iter()
+                .any(|term| term == "existing_design_backed_work_pool_override"
+                    || term == "existing_design_backed_generic_override")
+        );
         assert_ne!(payload.status.route_task_class, "implementation");
     }
 
     #[tokio::test]
-    async fn derive_seeded_run_graph_keeps_design_backed_blocker_out_of_worker_without_explicit_terms(
-    ) {
+    async fn derive_seeded_run_graph_keeps_design_backed_blocker_out_of_worker_without_explicit_terms()
+     {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
 
@@ -14869,14 +15058,16 @@ agent_system:
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
-        assert!(payload
-            .role_selection
-            .matched_terms
-            .iter()
-            .all(|term| term != ".rs"
-                && term != "crates/"
-                && term != "src/"
-                && term != "existing_design_backed_generic_override"));
+        assert!(
+            payload
+                .role_selection
+                .matched_terms
+                .iter()
+                .all(|term| term != ".rs"
+                    && term != "crates/"
+                    && term != "src/"
+                    && term != "existing_design_backed_generic_override")
+        );
         assert_ne!(
             payload.role_selection.tracked_flow_entry.as_deref(),
             Some("dev-pack")
@@ -14938,11 +15129,13 @@ agent_system:
             payload.role_selection.reason,
             "auto_existing_design_backed_implementation_request_override"
         );
-        assert!(!payload
-            .role_selection
-            .matched_terms
-            .iter()
-            .any(|term| term == "existing_design_backed_generic_override"));
+        assert!(
+            !payload
+                .role_selection
+                .matched_terms
+                .iter()
+                .any(|term| term == "existing_design_backed_generic_override")
+        );
     }
 
     #[tokio::test]
@@ -15066,20 +15259,22 @@ agent_system:
             payload.role_selection.reason,
             "configured_dev_team_first_step_dispatch_init"
         );
-        assert!(payload
-            .role_selection
-            .matched_terms
-            .iter()
-            .any(|term| term == "dev_team_flow_id:runtime_defect_remediation"));
+        assert!(
+            payload
+                .role_selection
+                .matched_terms
+                .iter()
+                .any(|term| term == "dev_team_flow_id:runtime_defect_remediation")
+        );
         assert_eq!(payload.status.task_class, "specification");
         assert_eq!(payload.status.route_task_class, "specification");
         assert_eq!(payload.status.next_node.as_deref(), Some("specifier"));
         assert_eq!(payload.status.handoff_state, "awaiting_specifier");
-        let design_doc_path = payload.role_selection.execution_plan["tracked_flow_bootstrap"]
-            ["design_doc_path"]
-            .as_str()
-            .expect("design doc path should be injected")
-            .replace('\\', "/");
+        let design_doc_path =
+            payload.role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
+                .as_str()
+                .expect("design doc path should be injected")
+                .replace('\\', "/");
         assert_eq!(
             design_doc_path,
             "docs/product/spec/design-backed-dispatch-init-routing-design.md"
@@ -15582,10 +15777,12 @@ agent_system:
                 .await
                 .expect("dispatch init artifacts should be prepared from planner metadata");
         assert_eq!(artifacts.dispatch_receipt.dispatch_target, "developer");
-        assert!(artifacts
-            .dispatch_receipt
-            .downstream_dispatch_blockers
-            .is_empty());
+        assert!(
+            artifacts
+                .dispatch_receipt
+                .downstream_dispatch_blockers
+                .is_empty()
+        );
 
         let packet =
             crate::read_json_file_if_present(std::path::Path::new(&artifacts.dispatch_packet_path))
@@ -16052,12 +16249,16 @@ agent_system:
             context.role_selection["compiled_bundle"],
             serde_json::Value::Null
         );
-        assert!(context
-            .request_text
-            .contains("Graph summary must respect open delegated cycle gate"));
-        assert!(context
-            .request_text
-            .contains("crates/vida/src/taskflow_proxy.rs"));
+        assert!(
+            context
+                .request_text
+                .contains("Graph summary must respect open delegated cycle gate")
+        );
+        assert!(
+            context
+                .request_text
+                .contains("crates/vida/src/taskflow_proxy.rs")
+        );
     }
 
     #[tokio::test]
@@ -16113,11 +16314,13 @@ agent_system:
             .await
             .expect("status lookup should succeed");
         assert_eq!(status.run_id, "task-dispatch-init-read-mostly");
-        assert!(store
-            .run_graph_dispatch_receipt("task-dispatch-init-read-mostly")
-            .await
-            .expect("receipt lookup should succeed")
-            .is_some());
+        assert!(
+            store
+                .run_graph_dispatch_receipt("task-dispatch-init-read-mostly")
+                .await
+                .expect("receipt lookup should succeed")
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -16177,11 +16380,13 @@ agent_system:
         let store = StateStore::open(harness.path().to_path_buf())
             .await
             .expect("reopen store");
-        assert!(store
-            .run_graph_dispatch_receipt("task-dispatch-init-stale-snapshot")
-            .await
-            .expect("receipt lookup should succeed")
-            .is_some());
+        assert!(
+            store
+                .run_graph_dispatch_receipt("task-dispatch-init-stale-snapshot")
+                .await
+                .expect("receipt lookup should succeed")
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -16268,11 +16473,13 @@ agent_system:
             .record_run_graph_status(&payload.status)
             .await
             .expect("persist status without context");
-        assert!(store
-            .run_graph_dispatch_context("task-dispatch-context-repair")
-            .await
-            .expect("context lookup should succeed")
-            .is_none());
+        assert!(
+            store
+                .run_graph_dispatch_context("task-dispatch-context-repair")
+                .await
+                .expect("context lookup should succeed")
+                .is_none()
+        );
 
         let dispatch_init = run_graph_dispatch_init(&store, "task-dispatch-context-repair")
             .await
@@ -16280,16 +16487,20 @@ agent_system:
 
         assert_eq!(dispatch_init["run_id"], "task-dispatch-context-repair");
         assert!(dispatch_init["dispatch_packet_path"].as_str().is_some());
-        assert!(store
-            .run_graph_dispatch_context("task-dispatch-context-repair")
-            .await
-            .expect("repaired context lookup should succeed")
-            .is_some());
-        assert!(store
-            .run_graph_dispatch_receipt("task-dispatch-context-repair")
-            .await
-            .expect("receipt lookup should succeed")
-            .is_some());
+        assert!(
+            store
+                .run_graph_dispatch_context("task-dispatch-context-repair")
+                .await
+                .expect("repaired context lookup should succeed")
+                .is_some()
+        );
+        assert!(
+            store
+                .run_graph_dispatch_receipt("task-dispatch-context-repair")
+                .await
+                .expect("receipt lookup should succeed")
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -16414,11 +16625,13 @@ agent_system:
             "task-dispatch-init-idempotent-fast-path",
             current_config_digest.as_deref()
         ));
-        assert!(read_run_graph_dispatch_init_fast_cache(
-            store.root(),
-            "task-dispatch-init-idempotent-fast-path"
-        )
-        .is_some());
+        assert!(
+            read_run_graph_dispatch_init_fast_cache(
+                store.root(),
+                "task-dispatch-init-idempotent-fast-path"
+            )
+            .is_some()
+        );
         let cache_path = run_graph_dispatch_init_fast_cache_path(
             store.root(),
             "task-dispatch-init-idempotent-fast-path",
@@ -16436,11 +16649,13 @@ agent_system:
             serde_json::to_string_pretty(&legacy_cache_payload).expect("cache should encode"),
         )
         .expect("legacy cache payload should write");
-        assert!(read_run_graph_dispatch_init_fast_cache(
-            store.root(),
-            "task-dispatch-init-idempotent-fast-path"
-        )
-        .is_none());
+        assert!(
+            read_run_graph_dispatch_init_fast_cache(
+                store.root(),
+                "task-dispatch-init-idempotent-fast-path"
+            )
+            .is_none()
+        );
         write_run_graph_dispatch_init_fast_cache(
             store.root(),
             "task-dispatch-init-idempotent-fast-path",
@@ -16448,11 +16663,13 @@ agent_system:
             &second,
         )
         .expect("cache should rewrite with current schema");
-        assert!(read_run_graph_dispatch_init_fast_cache(
-            store.root(),
-            "task-dispatch-init-idempotent-fast-path"
-        )
-        .is_some());
+        assert!(
+            read_run_graph_dispatch_init_fast_cache(
+                store.root(),
+                "task-dispatch-init-idempotent-fast-path"
+            )
+            .is_some()
+        );
 
         let mut receipt = store
             .run_graph_dispatch_receipt("task-dispatch-init-idempotent-fast-path")
@@ -16464,11 +16681,13 @@ agent_system:
             .record_run_graph_dispatch_receipt(&receipt)
             .await
             .expect("non-routed receipt should persist and invalidate fast cache");
-        assert!(read_run_graph_dispatch_init_fast_cache(
-            store.root(),
-            "task-dispatch-init-idempotent-fast-path"
-        )
-        .is_none());
+        assert!(
+            read_run_graph_dispatch_init_fast_cache(
+                store.root(),
+                "task-dispatch-init-idempotent-fast-path"
+            )
+            .is_none()
+        );
     }
 
     #[tokio::test]
@@ -16531,14 +16750,16 @@ agent_system:
             .await
             .expect("receipt lookup should succeed")
             .expect("receipt should exist");
-        assert!(!existing_dispatch_receipt_matches_current_seed(
-            &store,
-            "task-dispatch-init-stale-backend-packet",
-            &receipt,
-            None
-        )
-        .await
-        .expect("stale packet check should succeed"));
+        assert!(
+            !existing_dispatch_receipt_matches_current_seed(
+                &store,
+                "task-dispatch-init-stale-backend-packet",
+                &receipt,
+                None
+            )
+            .await
+            .expect("stale packet check should succeed")
+        );
 
         let second = run_graph_dispatch_init(&store, "task-dispatch-init-stale-backend-packet")
             .await
@@ -16625,14 +16846,16 @@ agent_system:
             .await
             .expect("receipt lookup should succeed")
             .expect("receipt should exist");
-        assert!(!existing_dispatch_receipt_matches_current_seed(
-            &store,
-            "task-dispatch-init-stale-owned-scope-packet",
-            &receipt,
-            None
-        )
-        .await
-        .expect("stale owned-scope packet check should succeed"));
+        assert!(
+            !existing_dispatch_receipt_matches_current_seed(
+                &store,
+                "task-dispatch-init-stale-owned-scope-packet",
+                &receipt,
+                None
+            )
+            .await
+            .expect("stale owned-scope packet check should succeed")
+        );
 
         let second = run_graph_dispatch_init(&store, "task-dispatch-init-stale-owned-scope-packet")
             .await
@@ -16826,11 +17049,10 @@ agent_system:
         let refreshed_selection = refreshed_context
             .role_selection()
             .expect("refreshed role selection should decode");
-        assert!(dispatch_context_route_assignment_catalog_drift(
-            store.root(),
-            &refreshed_selection
-        )
-        .is_none());
+        assert!(
+            dispatch_context_route_assignment_catalog_drift(store.root(), &refreshed_selection)
+                .is_none()
+        );
 
         let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
             &refreshed_selection.execution_plan,
@@ -16900,8 +17122,8 @@ agent_system:
             &std::fs::read_to_string(&cache_path).expect("dispatch-init cache should be readable"),
         )
         .expect("dispatch-init cache should decode");
-        stale_cache_payload["dispatch_init_dev_team_route_signature"]
-            ["allowed_next_lane_sequence"] = serde_json::json!(["analyst", "developer"]);
+        stale_cache_payload["dispatch_init_dev_team_route_signature"]["allowed_next_lane_sequence"] =
+            serde_json::json!(["analyst", "developer"]);
         stale_cache_payload["dispatch_init_dev_team_route_signature"]["execution_lane_sequence"] =
             serde_json::json!(["analyst", "developer"]);
         std::fs::write(
@@ -16934,8 +17156,8 @@ agent_system:
         );
         stale_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_sequence"] =
             serde_json::json!(["analyst", "developer"]);
-        stale_selection.execution_plan["development_flow"]["dispatch_contract"]
-            ["execution_lane_sequence"] = serde_json::json!(["analyst", "developer"]);
+        stale_selection.execution_plan["development_flow"]["dispatch_contract"]["execution_lane_sequence"] =
+            serde_json::json!(["analyst", "developer"]);
         context.role_selection =
             serde_json::to_value(&stale_selection).expect("selection should serialize");
         store
@@ -16943,15 +17165,17 @@ agent_system:
             .await
             .expect("stale dispatch context should persist");
 
-        assert!(dispatch_context_configured_dev_team_route_drift(
-            &store,
-            "task-dispatch-init-dev-team-sequence-drift-refresh",
-            &stale_selection,
-            None,
-        )
-        .await
-        .expect("drift check should run")
-        .is_some());
+        assert!(
+            dispatch_context_configured_dev_team_route_drift(
+                &store,
+                "task-dispatch-init-dev-team-sequence-drift-refresh",
+                &stale_selection,
+                None,
+            )
+            .await
+            .expect("drift check should run")
+            .is_some()
+        );
 
         let second =
             run_graph_dispatch_init(&store, "task-dispatch-init-dev-team-sequence-drift-refresh")
@@ -16970,15 +17194,17 @@ agent_system:
         let refreshed_selection = refreshed_context
             .role_selection()
             .expect("refreshed role selection should decode");
-        assert!(dispatch_context_configured_dev_team_route_drift(
-            &store,
-            "task-dispatch-init-dev-team-sequence-drift-refresh",
-            &refreshed_selection,
-            None,
-        )
-        .await
-        .expect("drift check should run after refresh")
-        .is_none());
+        assert!(
+            dispatch_context_configured_dev_team_route_drift(
+                &store,
+                "task-dispatch-init-dev-team-sequence-drift-refresh",
+                &refreshed_selection,
+                None,
+            )
+            .await
+            .expect("drift check should run after refresh")
+            .is_none()
+        );
         let dispatch_contract =
             &refreshed_selection.execution_plan["development_flow"]["dispatch_contract"];
         assert_eq!(
@@ -17082,11 +17308,10 @@ agent_system:
         let refreshed_selection = refreshed_context
             .role_selection()
             .expect("refreshed role selection should decode");
-        assert!(dispatch_context_route_assignment_catalog_drift(
-            store.root(),
-            &refreshed_selection
-        )
-        .is_none());
+        assert!(
+            dispatch_context_route_assignment_catalog_drift(store.root(), &refreshed_selection)
+                .is_none()
+        );
 
         let route = crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
             &refreshed_selection.execution_plan,
@@ -17739,11 +17964,13 @@ agent_system:
             .expect("reconciled status should load");
         assert_eq!(reconciled.status, "completed");
         assert_eq!(reconciled.lifecycle_stage, "closure_complete");
-        assert!(store
-            .run_graph_continuation_binding("run-terminal-update")
-            .await
-            .expect("continuation binding lookup should succeed")
-            .is_none());
+        assert!(
+            store
+                .run_graph_continuation_binding("run-terminal-update")
+                .await
+                .expect("continuation binding lookup should succeed")
+                .is_none()
+        );
     }
 
     #[test]
@@ -18198,8 +18425,8 @@ agent_system:
     }
 
     #[test]
-    fn next_lawful_operator_action_uses_downstream_execute_command_after_terminal_ready_downstream_handoff(
-    ) {
+    fn next_lawful_operator_action_uses_downstream_execute_command_after_terminal_ready_downstream_handoff()
+     {
         let status = RunGraphStatus {
             run_id: "run-terminal-ready-handoff".to_string(),
             task_id: "task-terminal-ready-handoff".to_string(),
@@ -18412,14 +18639,16 @@ agent_system:
             Some("vida agent-init --dispatch-packet coach-packet.json --execute-dispatch --json")
         );
         assert_eq!(recommended_surface.as_deref(), Some("vida agent-init"));
-        assert!(recommended_command
-            .as_deref()
-            .is_some_and(|command| !command.contains("exception-takeover")));
+        assert!(
+            recommended_command
+                .as_deref()
+                .is_some_and(|command| !command.contains("exception-takeover"))
+        );
     }
 
     #[test]
-    fn recovery_surface_contract_keeps_materialization_only_receipt_blocked_after_terminal_completion(
-    ) {
+    fn recovery_surface_contract_keeps_materialization_only_receipt_blocked_after_terminal_completion()
+     {
         let summary = crate::state_store::RunGraphRecoverySummary {
             run_id: "run-terminal-materialization".to_string(),
             task_id: "run-terminal-materialization".to_string(),
@@ -18478,8 +18707,8 @@ agent_system:
     }
 
     #[test]
-    fn run_graph_status_surface_keeps_materialization_only_receipt_blocked_after_terminal_completion(
-    ) {
+    fn run_graph_status_surface_keeps_materialization_only_receipt_blocked_after_terminal_completion()
+     {
         let mut status = default_run_graph_state(
             "run-terminal-materialization-status",
             "implementation",
@@ -18663,9 +18892,11 @@ agent_system:
             recommended_surface.as_deref(),
             Some("vida taskflow run-graph status")
         );
-        assert!(recommended_command
-            .as_deref()
-            .is_some_and(|command| !command.contains("exception-takeover")));
+        assert!(
+            recommended_command
+                .as_deref()
+                .is_some_and(|command| !command.contains("exception-takeover"))
+        );
     }
 
     #[test]
@@ -18853,16 +19084,20 @@ agent_system:
         let (_codes, why_not_now, next_action, _command, _surface) =
             recovery_surface_contract(&summary, &projection_truth);
 
-        assert!(why_not_now
-            .as_ref()
-            .map(|value| value.summary.contains("looks stale"))
-            .unwrap_or(false));
-        assert!(next_action
-            .as_ref()
-            .map(|value| value
-                .reason
-                .contains("stale delegated execution is suspected"))
-            .unwrap_or(false));
+        assert!(
+            why_not_now
+                .as_ref()
+                .map(|value| value.summary.contains("looks stale"))
+                .unwrap_or(false)
+        );
+        assert!(
+            next_action
+                .as_ref()
+                .map(|value| value
+                    .reason
+                    .contains("stale delegated execution is suspected"))
+                .unwrap_or(false)
+        );
     }
 
     #[test]
@@ -18913,18 +19148,24 @@ agent_system:
             why_not_now.as_ref().map(|value| value.category.as_str()),
             Some("stale_run_graph_blocked_state")
         );
-        assert!(why_not_now
-            .as_ref()
-            .and_then(|value| Some(value.summary.as_str()))
-            .is_some_and(|value| value.contains("persisted dispatch evidence looks stale")));
-        assert!(why_not_now
-            .as_ref()
-            .and_then(|value| Some(value.summary.as_str()))
-            .is_some_and(|value| !value.contains("delegated cycle remains open")));
-        assert!(why_not_now
-            .as_ref()
-            .and_then(|value| Some(value.summary.as_str()))
-            .is_some_and(|value| !value.contains("actively open")));
+        assert!(
+            why_not_now
+                .as_ref()
+                .and_then(|value| Some(value.summary.as_str()))
+                .is_some_and(|value| value.contains("persisted dispatch evidence looks stale"))
+        );
+        assert!(
+            why_not_now
+                .as_ref()
+                .and_then(|value| Some(value.summary.as_str()))
+                .is_some_and(|value| !value.contains("delegated cycle remains open"))
+        );
+        assert!(
+            why_not_now
+                .as_ref()
+                .and_then(|value| Some(value.summary.as_str()))
+                .is_some_and(|value| !value.contains("actively open"))
+        );
     }
 
     #[test]
@@ -19100,9 +19341,11 @@ agent_system:
             "vida taskflow run-graph status run-terminal-bind"
         );
         assert_eq!(next_action.surface, "vida taskflow run-graph status");
-        assert!(next_action
-            .reason
-            .contains("inspect the authoritative run state"));
+        assert!(
+            next_action
+                .reason
+                .contains("inspect the authoritative run state")
+        );
     }
 
     #[test]
@@ -19120,9 +19363,11 @@ agent_system:
 
         assert_eq!(next_action.command, "vida status");
         assert_eq!(next_action.surface, "vida status");
-        assert!(next_action
-            .reason
-            .contains("inspect the authoritative run state"));
+        assert!(
+            next_action
+                .reason
+                .contains("inspect the authoritative run state")
+        );
     }
 
     #[test]
@@ -19143,9 +19388,11 @@ agent_system:
             "vida taskflow run-graph status run-open"
         );
         assert_eq!(next_action.surface, "vida taskflow run-graph status");
-        assert!(next_action
-            .reason
-            .contains("inspect the authoritative run state"));
+        assert!(
+            next_action
+                .reason
+                .contains("inspect the authoritative run state")
+        );
     }
 
     #[test]
@@ -19154,23 +19401,29 @@ agent_system:
 
         assert_eq!(payload["status"], "blocked");
         assert_eq!(payload["blocker_codes"][0], "missing_run_id");
-        assert!(payload["error"]
-            .as_str()
-            .expect("error should be a string")
-            .contains("<run-id>"));
-        assert!(payload["next_actions"]
-            .as_array()
-            .expect("next_actions should be an array")
-            .iter()
-            .any(|value| value
+        assert!(
+            payload["error"]
                 .as_str()
-                .is_some_and(|action| action.contains("run-graph latest"))));
-        assert!(payload["next_actions"]
-            .as_array()
-            .expect("next_actions should be an array")
-            .iter()
-            .all(|value| value
-                .as_str()
-                .is_some_and(|action| !action.contains("--json"))));
+                .expect("error should be a string")
+                .contains("<run-id>")
+        );
+        assert!(
+            payload["next_actions"]
+                .as_array()
+                .expect("next_actions should be an array")
+                .iter()
+                .any(|value| value
+                    .as_str()
+                    .is_some_and(|action| action.contains("run-graph latest")))
+        );
+        assert!(
+            payload["next_actions"]
+                .as_array()
+                .expect("next_actions should be an array")
+                .iter()
+                .all(|value| value
+                    .as_str()
+                    .is_some_and(|action| !action.contains("--json")))
+        );
     }
 }

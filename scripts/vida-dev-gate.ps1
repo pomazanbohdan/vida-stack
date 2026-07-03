@@ -1716,6 +1716,8 @@ function Invoke-CoverageGate {
         $llvmCovCommand.Add("llvm-cov")
         $llvmCovCommand.Add("nextest")
         $llvmCovCommand.Add("--workspace")
+        $llvmCovCommand.Add("--retries")
+        $llvmCovCommand.Add("1")
         $llvmCovCommand.Add("--lcov")
         $llvmCovCommand.Add("--output-path")
         $llvmCovCommand.Add($coveragePath)

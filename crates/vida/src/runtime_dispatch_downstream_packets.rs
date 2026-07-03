@@ -11,9 +11,9 @@ use crate::runtime_dispatch_packets::{
     runtime_escalation_packet, runtime_execution_block_packet, runtime_verifier_proof_packet,
 };
 use crate::{
-    derive_lane_status, dispatch_contract_allowed_next_lane_sequence, dispatch_contract_lane,
+    RuntimeConsumptionLaneSelection, derive_lane_status,
+    dispatch_contract_allowed_next_lane_sequence, dispatch_contract_lane,
     downstream_activation_fields, json_string, validate_runtime_dispatch_packet_contract,
-    RuntimeConsumptionLaneSelection,
 };
 
 fn neutral_downstream_activation_evidence() -> serde_json::Value {
@@ -655,10 +655,12 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     );
     body.insert(
         "downstream_lane_status".to_string(),
-        serde_json::json!(receipt
-            .downstream_dispatch_status
-            .as_deref()
-            .map(|status| { derive_lane_status(status, None, None).as_str().to_string() })),
+        serde_json::json!(
+            receipt
+                .downstream_dispatch_status
+                .as_deref()
+                .map(|status| { derive_lane_status(status, None, None).as_str().to_string() })
+        ),
     );
     body.insert(
         "downstream_supersedes_receipt_id".to_string(),
@@ -973,8 +975,7 @@ mod tests {
     #[test]
     fn downstream_packet_canonicalizes_lane_id_to_top_level_dispatch_target() {
         let mut role_selection = role_selection_with_empty_request();
-        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]
-            ["coach_test_gate"] = serde_json::json!({
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"]["coach_test_gate"] = serde_json::json!({
             "dispatch_target": "coach",
             "task_class": "coach",
             "runtime_role": "coach",
@@ -1102,8 +1103,7 @@ mod tests {
             "worker"
         );
         assert_eq!(
-            packet["delivery_task_packet"]["implementation_isolation"]
-                ["canonical_worktree_writes_allowed"],
+            packet["delivery_task_packet"]["implementation_isolation"]["canonical_worktree_writes_allowed"],
             false
         );
         let owned_paths = packet["delivery_task_packet"]["owned_paths"]
@@ -1114,9 +1114,8 @@ mod tests {
             "autotester owned scope should include a test write root: {owned_paths:?}"
         );
         assert!(
-            owned_paths
-                .iter()
-                .any(|path| path == "src/lib/features/list_view/presentation/stac/widgets/record_detail_view.dart"),
+            owned_paths.iter().any(|path| path
+                == "src/lib/features/list_view/presentation/stac/widgets/record_detail_view.dart"),
             "autotester should keep production paths as read/write context when inherited from planner metadata"
         );
 

@@ -9,11 +9,21 @@ fn vida() -> Command {
 }
 
 fn run_json(project_root: &Path, state_dir: &Path, args: &[&str]) -> Value {
-    let output = vida()
-        .args(args)
+    let mut command = vida();
+    if let ["task", subcommand, rest @ ..] = args {
+        command
+            .arg("task")
+            .arg(subcommand)
+            .arg("--state-dir")
+            .arg(state_dir)
+            .args(rest);
+    } else {
+        command.args(args).arg("--state-dir").arg(state_dir);
+    }
+    let output = command
         .current_dir(project_root)
         .env("VIDA_STATE_DIR", state_dir)
-        .env_remove("VIDA_ROOT")
+        .env("VIDA_ROOT", project_root)
         .env_remove("VIDA_CONFIG")
         .output()
         .expect("vida command should run");
@@ -111,12 +121,12 @@ fn generic_runtime_protocol_migration_fixture_project_without_vida_stack_docs_ca
         task["task"]["work_item_kind"]["default_flow_binding"],
         "default_delivery"
     );
+    let source_repo = task["task"]["source_repo"]
+        .as_str()
+        .expect("source_repo should render");
     assert!(
-        task["task"]["source_repo"]
-            .as_str()
-            .expect("source_repo should render")
-            .contains("vida-generic-runtime-fixture-project"),
-        "source repo should be the fixture project, not the vida-stack checkout"
+        source_repo.contains("vida-generic-runtime-fixture-project"),
+        "source repo should be the fixture project, not the vida-stack checkout: {source_repo}"
     );
 
     let ready = run_json(&project_root, &state_dir, &["task", "ready", "--json"]);

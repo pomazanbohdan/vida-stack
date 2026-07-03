@@ -1,7 +1,7 @@
 use crate::{
-    dispatch_contract_execution_lane_sequence, dispatch_contract_lane,
-    runtime_assignment_from_execution_plan, selected_backend_from_execution_plan_route,
-    RuntimeConsumptionLaneSelection,
+    RuntimeConsumptionLaneSelection, dispatch_contract_execution_lane_sequence,
+    dispatch_contract_lane, runtime_assignment_from_execution_plan,
+    selected_backend_from_execution_plan_route,
 };
 
 pub(crate) fn fallback_runtime_consumption_run_graph_status(

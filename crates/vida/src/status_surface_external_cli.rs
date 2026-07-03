@@ -268,7 +268,7 @@ fn command_output_with_timeout(
             Err(error) => {
                 return Err(format!(
                     "Failed to inspect `{command}` readiness probe: {error}"
-                ))
+                ));
             }
         }
     }
@@ -296,7 +296,7 @@ fn adapter_prewrite_guard_capabilities(adapter_command: &str) -> serde_json::Val
                 "status": "probe_failed",
                 "pre_write_enforcement": false,
                 "error": error,
-            })
+            });
         }
     };
     if !output.status.success() {
@@ -856,9 +856,12 @@ fn pi_style_external_cli_carrier_readiness(
             backend_id,
             "pi_provider_command_not_found",
             true,
-            serde_json::Value::String(crate::release1_contracts::blocker_code_str(
-                crate::release1_contracts::BlockerCode::ToolExecutionFailed,
-            ).to_string()),
+            serde_json::Value::String(
+                crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::ToolExecutionFailed,
+                )
+                .to_string(),
+            ),
             profile_projection,
             selected_profile,
             expected_model_ref,
@@ -866,7 +869,9 @@ fn pi_style_external_cli_carrier_readiness(
             command_missing_status(provider_source, provider_command),
             serde_json::json!({"status":"not_checked"}),
             serde_json::json!({"status":"not_checked"}),
-            vec![format!("Install or expose Pi provider command `{provider_command}` on PATH before dispatch.")],
+            vec![format!(
+                "Install or expose Pi provider command `{provider_command}` on PATH before dispatch."
+            )],
         );
     }
     if !external_cli_probe_command_is_config_safe(provider_command) {
@@ -918,9 +923,12 @@ fn pi_style_external_cli_carrier_readiness(
                         backend_id,
                         "pi_model_unavailable",
                         true,
-                        serde_json::Value::String(crate::release1_contracts::blocker_code_str(
-                            crate::release1_contracts::BlockerCode::ModelNotPinned,
-                        ).to_string()),
+                        serde_json::Value::String(
+                            crate::release1_contracts::blocker_code_str(
+                                crate::release1_contracts::BlockerCode::ModelNotPinned,
+                            )
+                            .to_string(),
+                        ),
                         profile_projection,
                         selected_profile,
                         expected_model_ref.clone(),
@@ -932,7 +940,10 @@ fn pi_style_external_cli_carrier_readiness(
                             "expected_model_ref": expected,
                         }),
                         serde_json::json!({"status":"not_checked"}),
-                        vec![format!("Pi model catalog does not include selected model `{expected}` for profile `{}`.", selected_profile_id.as_str().unwrap_or("unknown"))],
+                        vec![format!(
+                            "Pi model catalog does not include selected model `{expected}` for profile `{}`.",
+                            selected_profile_id.as_str().unwrap_or("unknown")
+                        )],
                     );
                 }
                 Err(error) => {
@@ -3396,16 +3407,18 @@ agent_system:
         assert_eq!(summary["status"], "pass");
         assert_eq!(summary["requires_external_cli"], false);
         assert_eq!(summary["blocked_primary_backends"][0], "hermes_cli");
-        assert!(summary["route_primary_external_required_backends"]
-            .as_array()
-            .expect("required backends should be an array")
-            .is_empty());
+        assert!(
+            summary["route_primary_external_required_backends"]
+                .as_array()
+                .expect("required backends should be an array")
+                .is_empty()
+        );
         assert_eq!(summary["blocker_code"], serde_json::Value::Null);
     }
 
     #[test]
-    fn route_primary_backends_discovers_real_project_shape_without_requiring_legacy_external_routes(
-    ) {
+    fn route_primary_backends_discovers_real_project_shape_without_requiring_legacy_external_routes()
+     {
         let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
@@ -3416,9 +3429,11 @@ agent_system:
         .expect("project config should parse");
 
         let backends = super::route_primary_external_backends(&overlay);
-        assert!(backends
-            .iter()
-            .any(|backend| backend == "internal_subagents"));
+        assert!(
+            backends
+                .iter()
+                .any(|backend| backend == "internal_subagents")
+        );
         assert!(!backends.iter().any(|backend| backend == "qwen_cli"));
         let required_external =
             super::route_primary_external_backends_without_internal_fallback(&overlay);

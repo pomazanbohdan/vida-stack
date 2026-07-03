@@ -1,5 +1,5 @@
 use taskflow_authority::continuation_transition::{
-    decide_continuation_gate, ContinuationGateInput,
+    ContinuationGateInput, decide_continuation_gate,
 };
 
 fn explicit_binding_is_admissible_for_status(
@@ -2085,13 +2085,16 @@ mod tests {
         assert_eq!(summary["binding_source"], "latest_run_graph_status");
         assert_eq!(summary["continuation_required_now"], true);
         assert_eq!(summary["pause_boundary_gate"], "non_blocking_only");
-        assert!(summary["next_actions"]
-            .as_array()
-            .is_some_and(
-                |rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
-                    value.contains("consume continue --run-id task-1") && !value.contains("--json")
-                }))
-            ));
+        assert!(
+            summary["next_actions"]
+                .as_array()
+                .is_some_and(
+                    |rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
+                        value.contains("consume continue --run-id task-1")
+                            && !value.contains("--json")
+                    }))
+                )
+        );
     }
 
     #[test]
@@ -2277,8 +2280,8 @@ mod tests {
     }
 
     #[test]
-    fn taskflow_active_work_truth_promotes_single_in_progress_task_when_runtime_summary_is_ambiguous(
-    ) {
+    fn taskflow_active_work_truth_promotes_single_in_progress_task_when_runtime_summary_is_ambiguous()
+     {
         let active_task = task_record(
             "agent-mode-external-report-receipt-blocker-batch-20260521",
             "in_progress",
@@ -2946,8 +2949,8 @@ mod tests {
     }
 
     #[test]
-    fn blocked_latest_run_graph_status_accepts_explicit_same_run_binding_with_exception_takeover_receipt(
-    ) {
+    fn blocked_latest_run_graph_status_accepts_explicit_same_run_binding_with_exception_takeover_receipt()
+     {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             "taskflow-case-18-rollout-regression-gate",
             "taskflow-case-18-rollout-regression-gate",
@@ -3030,14 +3033,16 @@ mod tests {
                         && value.contains("run-blocked")
                 }))
             ));
-        assert!(summary["next_actions"]
-            .as_array()
-            .is_some_and(
-                |rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
-                    value.contains("vida taskflow recovery status run-blocked")
-                        && !value.contains("--json")
-                }))
-            ));
+        assert!(
+            summary["next_actions"]
+                .as_array()
+                .is_some_and(
+                    |rows| rows.iter().any(|row| row.as_str().is_some_and(|value| {
+                        value.contains("vida taskflow recovery status run-blocked")
+                            && !value.contains("--json")
+                    }))
+                )
+        );
     }
 
     #[test]
@@ -3245,8 +3250,8 @@ mod tests {
     }
 
     #[test]
-    fn blocked_latest_run_graph_status_accepts_superseded_exception_even_when_lane_status_is_stale_recorded(
-    ) {
+    fn blocked_latest_run_graph_status_accepts_superseded_exception_even_when_lane_status_is_stale_recorded()
+     {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             "run-stale-lane-status",
             "run-stale-lane-status",
@@ -3349,13 +3354,15 @@ mod tests {
             summary["binding_source"],
             "latest_run_graph_exception_takeover_dispatch"
         );
-        assert!(!summary["next_actions"]
-            .as_array()
-            .expect("next actions should be present")
-            .iter()
-            .any(|action| action.as_str().is_some_and(|value| value.contains(
-                "consume continue --run-id runtime-audit-state-store-init-lock-timeout"
-            ))));
+        assert!(
+            !summary["next_actions"]
+                .as_array()
+                .expect("next actions should be present")
+                .iter()
+                .any(|action| action.as_str().is_some_and(|value| value.contains(
+                    "consume continue --run-id runtime-audit-state-store-init-lock-timeout"
+                )))
+        );
     }
 
     #[test]
@@ -3990,8 +3997,10 @@ mod tests {
             summary["active_bounded_unit"]["task_id"],
             "taskflow-case-18-rollout-regression-gate"
         );
-        assert!(summary["taskflow_active_candidates"]
-            .as_array()
-            .is_some_and(Vec::is_empty));
+        assert!(
+            summary["taskflow_active_candidates"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+        );
     }
 }

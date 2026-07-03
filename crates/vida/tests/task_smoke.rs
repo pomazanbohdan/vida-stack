@@ -1320,7 +1320,7 @@ fn seed_model_profile_readiness_dispatch_context(state_dir: &str) {
             "selected_backend_id": "internal_subagents",
             "selected_carrier_id": "internal_subagents",
             "selected_model_profile_id": "codex_gpt55_low_write",
-            "selected_model_ref": "gpt-5.5",
+            "selected_model_ref": "byteshape/qwen3.6-35b-a3b-mtp",
             "selected_model_provider": "openai-codex",
             "selected_reasoning_effort": "low",
             "selected_reasoning_control_mode": "fixed",
@@ -6357,6 +6357,7 @@ fn operator_json_surfaces_reuse_fresh_projection_before_store_open() {
 
     let graph_projection = serde_json::json!({
         "surface": "vida taskflow graph-summary",
+        "projection_contract_version": "taskflow-graph-summary-projection-v2",
         "status": "pass",
         "cache_probe": "graph-summary-reused",
         "shared_fields": {
@@ -17905,7 +17906,7 @@ fn latest_run_projection_consistency_aligns_explicit_binding_scheduler_next_lawf
                                 "selected_backend_id": "internal_subagents",
                                 "selected_carrier_id": "internal_subagents",
                                 "selected_model_profile_id": "codex_gpt55_low_write",
-                                "selected_model_ref": "gpt-5.5",
+                                "selected_model_ref": "byteshape/qwen3.6-35b-a3b-mtp",
                                 "selected_model_provider": "openai-codex",
                                 "selected_reasoning_effort": "low",
                                 "budget_verdict": "within_budget",
@@ -17924,7 +17925,7 @@ fn latest_run_projection_consistency_aligns_explicit_binding_scheduler_next_lawf
                                         "selected_backend_id": "internal_subagents",
                                         "selected_carrier_id": "internal_subagents",
                                         "selected_model_profile_id": "codex_gpt55_low_write",
-                                        "selected_model_ref": "gpt-5.5",
+                                        "selected_model_ref": "byteshape/qwen3.6-35b-a3b-mtp",
                                         "selected_model_provider": "openai-codex",
                                         "selected_reasoning_effort": "low",
                                         "budget_verdict": "within_budget",

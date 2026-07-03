@@ -1154,12 +1154,12 @@ impl From<TaskDependencyJsonlRecord> for TaskDependencyRecord {
 #[cfg(test)]
 mod tests {
     use super::{
+        TaskDependencyJsonlRecord, TaskJsonlRecord, TaskPlannerMetadata, TaskProviderMapping,
+        TaskStorageRow, WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
         apply_provider_mapping_to_task_jsonl_record, canonical_work_item_issue_type,
         normalize_work_item_issue_type, task_work_item_kind, work_item_contributes_to_task_stats,
         work_item_is_active_bounded_unit_candidate, work_item_is_execution_step,
         work_item_is_program_container, work_item_requires_parent, work_item_taxonomy_entry,
-        TaskDependencyJsonlRecord, TaskJsonlRecord, TaskPlannerMetadata, TaskProviderMapping,
-        TaskStorageRow, WORK_ITEM_TAXONOMY, WORK_ITEM_TAXONOMY_SCHEMA_VERSION,
     };
 
     #[test]

@@ -1,9 +1,10 @@
 use super::*;
 use taskflow_authority::task_attempts::{
-    decide_task_attempt_binding, decide_task_attempt_rollup,
+    TaskAttemptBindingDecision, TaskAttemptBindingInput, TaskAttemptRollupAttempt,
+    TaskAttemptRollupInput, TaskAttemptSummaryInput, decide_task_attempt_binding,
+    decide_task_attempt_rollup,
     normalize_task_attempt_status as normalize_authority_attempt_status,
-    summarize_task_stage_attempts, TaskAttemptBindingDecision, TaskAttemptBindingInput,
-    TaskAttemptRollupAttempt, TaskAttemptRollupInput, TaskAttemptSummaryInput,
+    summarize_task_stage_attempts,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, SurrealValue, PartialEq, Eq)]
@@ -910,8 +911,10 @@ mod tests {
     #[test]
     fn task_attempt_statuses_fail_closed() {
         let error = normalize_task_attempt_status("completed").expect_err("completed is legacy");
-        assert!(error
-            .to_string()
-            .contains("expected one of submitted, running, produced"));
+        assert!(
+            error
+                .to_string()
+                .contains("expected one of submitted, running, produced")
+        );
     }
 }

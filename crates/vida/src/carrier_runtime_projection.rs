@@ -546,18 +546,15 @@ agent_system:
         );
 
         assert_eq!(
-            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["fanout"]
-                ["max_attempts"],
+            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["fanout"]["max_attempts"],
             2
         );
         assert_eq!(
-            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["attempts"][0]
-                ["carrier_id"],
+            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["attempts"][0]["carrier_id"],
             "vibe_cli"
         );
         assert_eq!(
-            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["consolidator"]
-                ["model_profile_id"],
+            projection.carrier_runtime["stage_attempt_policies"]["analysis"]["consolidator"]["model_profile_id"],
             "codex_medium"
         );
     }

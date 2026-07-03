@@ -1,6 +1,6 @@
 use vida_contracts::{
-    unsupported_operation_problem, VidaCommandEnvelope, VidaCommandResponse, VidaProblem,
-    VidaResponseStatus,
+    VidaCommandEnvelope, VidaCommandResponse, VidaProblem, VidaResponseStatus,
+    unsupported_operation_problem,
 };
 
 pub(crate) trait VidaClient {

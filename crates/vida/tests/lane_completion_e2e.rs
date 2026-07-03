@@ -18,11 +18,16 @@ fn run_vida_json_with_state(
     args: &[&str],
     state_root: &std::path::Path,
 ) -> (serde_json::Value, bool) {
-    let output = vida()
-        .args(args)
-        .env("VIDA_STATE_DIR", state_root)
-        .output()
-        .expect("vida command should launch");
+    let mut command = vida();
+    command.args(args).env("VIDA_STATE_DIR", state_root);
+    if let Some(project_root) = state_root
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+    {
+        command.current_dir(project_root);
+    }
+    let output = command.output().expect("vida command should launch");
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
             "json output should parse for args {args:?}: {error}\nstatus: {:?}\nstdout: {}\nstderr: {}",
@@ -508,8 +513,22 @@ fn host_bridge_zombie_d_result_validation_matrix_covers_boundary_rows() {
 fn lane_public_surface_matrix_fails_closed_with_json_contracts() {
     let root = unique_lane_state_root("vida-lane-surface-matrix");
     let state_root = root.join(".vida/data/state");
+    std::fs::create_dir_all(&root).expect("lane matrix root should exist");
+    let init = vida()
+        .arg("init")
+        .current_dir(&root)
+        .env("VIDA_STATE_DIR", &state_root)
+        .output()
+        .expect("init should launch");
+    assert!(
+        init.status.success(),
+        "init should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&init.stdout),
+        String::from_utf8_lossy(&init.stderr)
+    );
     let boot = vida()
         .arg("boot")
+        .current_dir(&root)
         .env("VIDA_STATE_DIR", &state_root)
         .output()
         .expect("boot should launch");

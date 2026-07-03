@@ -701,10 +701,12 @@ mod tests {
 
         let registry = load_pack_registry_from_overlay(root.path(), &overlay);
 
-        assert!(registry
-            .blocker_codes
-            .iter()
-            .any(|code| code.contains("missing_pack_step_terminal_proof_target:bad_pack")));
+        assert!(
+            registry
+                .blocker_codes
+                .iter()
+                .any(|code| code.contains("missing_pack_step_terminal_proof_target:bad_pack"))
+        );
     }
 
     #[test]
@@ -763,22 +765,30 @@ mod tests {
 
         let registry = load_pack_registry_from_overlay(root.path(), &overlay);
 
-        assert!(registry
-            .blocker_codes
-            .iter()
-            .any(|code| code == "pack_aliases_not_supported:bad-pack"));
-        assert!(registry
-            .blocker_codes
-            .iter()
-            .any(|code| code == "unknown_pack_flow_id:bad-pack:missing-flow"));
-        assert!(registry
-            .blocker_codes
-            .iter()
-            .any(|code| code == "non_canonical_pack_step_role:bad-pack:developer-role"));
-        assert!(registry
-            .blocker_codes
-            .iter()
-            .any(|code| code == "missing_pack_step_command_ref:bad-pack:0"));
+        assert!(
+            registry
+                .blocker_codes
+                .iter()
+                .any(|code| code == "pack_aliases_not_supported:bad-pack")
+        );
+        assert!(
+            registry
+                .blocker_codes
+                .iter()
+                .any(|code| code == "unknown_pack_flow_id:bad-pack:missing-flow")
+        );
+        assert!(
+            registry
+                .blocker_codes
+                .iter()
+                .any(|code| code == "non_canonical_pack_step_role:bad-pack:developer-role")
+        );
+        assert!(
+            registry
+                .blocker_codes
+                .iter()
+                .any(|code| code == "missing_pack_step_command_ref:bad-pack:0")
+        );
     }
 
     #[test]

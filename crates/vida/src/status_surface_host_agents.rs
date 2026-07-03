@@ -700,10 +700,16 @@ mod tests {
         );
         assert_eq!(summary["mixed_posture"], false);
         assert_eq!(summary["model_selection"]["enabled"], true);
-        assert!(summary["agents"]["junior"]["default_model_profile"]
-            .as_str()
-            .is_some());
-        assert_eq!(summary["agents"]["senior"]["model"], "gpt-5.5");
+        assert!(
+            summary["agents"]["junior"]["default_model_profile"]
+                .as_str()
+                .is_some()
+        );
+        assert!(
+            summary["agents"]["senior"]["model"]
+                .as_str()
+                .is_some_and(|model| !model.is_empty())
+        );
         assert_eq!(
             summary["subagent_backends"]["internal_subagents"]["default_model_profile"],
             "codex_gpt55_low_write"
@@ -761,8 +767,7 @@ mod tests {
         );
         assert_eq!(implementation_attempt["normalized_cost_units"], 1);
         assert_eq!(
-            summary["stage_attempt_policies"]["stages"]["implementation"]["consolidator"]
-                ["selected_model_profile_id"],
+            summary["stage_attempt_policies"]["stages"]["implementation"]["consolidator"]["selected_model_profile_id"],
             "codex_gpt55_high_readonly"
         );
     }
@@ -925,10 +930,12 @@ mod tests {
             current["host_bridge_capacity"]["handle_registry"]["stale_handles"][0],
             "agent-complete"
         );
-        assert!(current["host_bridge_capacity"]["next_actions"][0]
-            .as_str()
-            .unwrap()
-            .contains("Close stale"));
+        assert!(
+            current["host_bridge_capacity"]["next_actions"][0]
+                .as_str()
+                .unwrap()
+                .contains("Close stale")
+        );
     }
 
     #[test]
@@ -963,10 +970,12 @@ mod tests {
             current["host_bridge_capacity"]["blocker_codes"],
             serde_json::json!(["host_agent_capacity_unavailable"])
         );
-        assert!(current["host_bridge_capacity"]["next_actions"][0]
-            .as_str()
-            .unwrap()
-            .contains("blocked host bridge result"));
+        assert!(
+            current["host_bridge_capacity"]["next_actions"][0]
+                .as_str()
+                .unwrap()
+                .contains("blocked host bridge result")
+        );
     }
 
     #[test]

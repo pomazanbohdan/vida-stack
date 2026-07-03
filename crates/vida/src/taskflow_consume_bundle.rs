@@ -1773,10 +1773,9 @@ mod tests {
         taskflow_docflow_seam_receipt_backed_check,
     };
     use crate::{
-        release_contract_adapters::release_contract_status,
-        runtime_consumption_surface::build_docflow_receipt_evidence, temp_state::TempStateHarness,
         DoctorLauncherSummary, RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence,
-        TaskflowConsumeBundlePayload,
+        TaskflowConsumeBundlePayload, release_contract_adapters::release_contract_status,
+        runtime_consumption_surface::build_docflow_receipt_evidence, temp_state::TempStateHarness,
     };
 
     fn minimal_payload_for_operator_contract_status_checks() -> TaskflowConsumeBundlePayload {
@@ -2320,7 +2319,10 @@ dev_team:
                 "{flow_id} must keep per-task lane order sequential"
             );
             assert_eq!(
-                crate::yaml_bool(crate::yaml_lookup(flow, &["allow_parallel_handoffs"]), false),
+                crate::yaml_bool(
+                    crate::yaml_lookup(flow, &["allow_parallel_handoffs"]),
+                    false
+                ),
                 true,
                 "{flow_id} must permit cross-task parallel handoffs when execution semantics admit disjoint work"
             );
@@ -2393,8 +2395,10 @@ dev_team:
             .collect::<Vec<_>>();
         assert!(blockers.contains(&"unsupported_flow_knob:unsupported_flow_knob"));
         assert!(blockers.contains(&"unsupported_flow_step_knob:unsupported_step_knob"));
-        assert!(blockers
-            .contains(&"unknown_lifecycle_hook_template:flow:invalid_flow:hardcoded_cli_hook"));
+        assert!(
+            blockers
+                .contains(&"unknown_lifecycle_hook_template:flow:invalid_flow:hardcoded_cli_hook")
+        );
         assert!(blockers.contains(
             &"unknown_lifecycle_hook_template:flow_step:invalid_flow:0:hardcoded_step_hook"
         ));
@@ -2663,11 +2667,13 @@ dev_team:
             }),
         );
         assert_eq!(readiness["status"], "blocked");
-        assert!(readiness["blockers"]
-            .as_array()
-            .expect("readiness blockers should be array")
-            .iter()
-            .any(|entry| entry == "model_price_freshness_policy_incomplete:developer"));
+        assert!(
+            readiness["blockers"]
+                .as_array()
+                .expect("readiness blockers should be array")
+                .iter()
+                .any(|entry| entry == "model_price_freshness_policy_incomplete:developer")
+        );
         assert_eq!(
             readiness["roles"][0]["selected_model"]["pricing_freshness_status"],
             "missing"
@@ -2709,11 +2715,13 @@ dev_team:
         );
 
         assert_eq!(readiness["status"], "config_unreadable");
-        assert!(readiness["blockers"]
-            .as_array()
-            .expect("readiness blockers should be array")
-            .iter()
-            .any(|entry| entry == "dev_team_config_unreadable: expected_regular_file"));
+        assert!(
+            readiness["blockers"]
+                .as_array()
+                .expect("readiness blockers should be array")
+                .iter()
+                .any(|entry| entry == "dev_team_config_unreadable: expected_regular_file")
+        );
     }
 
     #[test]
@@ -3344,15 +3352,17 @@ dev_team:
         let actions = consume_bundle_check_next_actions(&[
             "missing_retrieval_trust_evidence_field:source".to_string(),
         ]);
-        assert!(actions
-            .iter()
-            .any(|action| action.contains("vida taskflow protocol-binding sync --json")));
-        assert!(actions.iter().any(|action| action
-            .contains("rerun `vida taskflow consume bundle check --json` only to verify")));
         assert!(
-            !actions.iter().any(|action| action.contains(
-                "then `vida taskflow consume bundle check --json` to materialize"
-            )),
+            actions
+                .iter()
+                .any(|action| action.contains("vida taskflow protocol-binding sync --json"))
+        );
+        assert!(actions.iter().any(|action| {
+            action.contains("rerun `vida taskflow consume bundle check --json` only to verify")
+        }));
+        assert!(
+            !actions.iter().any(|action| action
+                .contains("then `vida taskflow consume bundle check --json` to materialize")),
             "bundle check must not recommend itself as the command that materializes missing retrieval trust evidence"
         );
     }
@@ -3454,8 +3464,8 @@ dev_team:
     }
 
     #[test]
-    fn taskflow_docflow_seam_receipt_backed_check_does_not_require_receipt_when_docflow_inputs_are_ready(
-    ) {
+    fn taskflow_docflow_seam_receipt_backed_check_does_not_require_receipt_when_docflow_inputs_are_ready()
+     {
         let payload = minimal_payload_for_operator_contract_status_checks();
         let docflow_verdict = RuntimeConsumptionDocflowVerdict {
             status: "pass".to_string(),

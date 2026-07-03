@@ -110,7 +110,9 @@ fn run_pricing_status(args: &[String]) -> ExitCode {
         print_json(&payload);
     } else {
         println!("VIDA price catalog readiness: profile-local compatibility mode");
-        println!("Use `vida taskflow pricing status` for operator readiness; machine-readable fields are explicit opt-in.");
+        println!(
+            "Use `vida taskflow pricing status` for operator readiness; machine-readable fields are explicit opt-in."
+        );
     }
     ExitCode::SUCCESS
 }
@@ -250,7 +252,7 @@ fn run_pricing_import(args: &[String]) -> ExitCode {
                 "vida taskflow pricing import",
                 vec![error.blocker_code],
                 vec![error.next_action],
-            )
+            );
         }
     };
 
@@ -262,7 +264,7 @@ fn run_pricing_import(args: &[String]) -> ExitCode {
                 "vida taskflow pricing import",
                 vec![blocker],
                 vec!["Source file must be a JSON provider snapshot.".to_string()],
-            )
+            );
         }
     };
 

@@ -730,9 +730,11 @@ agent_extensions:
         assert_eq!(command_parity.source_alias_count, 1);
         assert_eq!(command_parity.runtime_alias_count, 1);
         assert!(runtime_projection.is_file());
-        assert!(fs::read_to_string(runtime_projection)
-            .expect("runtime command projection should be readable")
-            .contains("command_id: agent-init-worker"));
+        assert!(
+            fs::read_to_string(runtime_projection)
+                .expect("runtime command projection should be readable")
+                .contains("command_id: agent-init-worker")
+        );
     }
 
     #[cfg(unix)]

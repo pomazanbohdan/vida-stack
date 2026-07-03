@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::release1_contracts::{
-    blocker_code_str, canonical_release1_contract_status_str, BlockerCode,
+    BlockerCode, blocker_code_str, canonical_release1_contract_status_str,
 };
 use crate::state_store::TaskRecord;
 
@@ -51,7 +51,7 @@ pub(crate) fn set_test_proxy_state_dir_override(path: Option<PathBuf>) {
 }
 
 pub(crate) fn infer_project_root_from_state_root(state_root: &Path) -> Option<PathBuf> {
-    state_root
+    let activated_root = state_root
         .ancestors()
         .find(|path| super::looks_like_project_root(path))
         .map(|path| {
@@ -60,7 +60,23 @@ pub(crate) fn infer_project_root_from_state_root(state_root: &Path) -> Option<Pa
             } else {
                 path.to_path_buf()
             }
-        })
+        });
+    activated_root.or_else(|| infer_project_root_from_native_state_root_shape(state_root))
+}
+
+pub(crate) fn infer_project_root_from_native_state_root_shape(
+    state_root: &Path,
+) -> Option<PathBuf> {
+    let state = state_root.file_name()?.to_string_lossy();
+    let data = state_root.parent()?.file_name()?.to_string_lossy();
+    let vida = state_root
+        .parent()?
+        .parent()?
+        .file_name()?
+        .to_string_lossy();
+    (state == "state" && data == "data" && vida == ".vida")
+        .then(|| state_root.parent()?.parent()?.parent().map(PathBuf::from))
+        .flatten()
 }
 
 fn read_runtime_consumption_snapshot(state_root: &Path) -> Result<serde_json::Value, String> {

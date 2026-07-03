@@ -5,9 +5,8 @@ use time::format_description::well_known::Rfc3339;
 use crate::runtime_dispatch_state::load_project_overlay_yaml_for_root;
 use crate::state_store::LauncherActivationSnapshot;
 use crate::{
-    build_compiled_agent_extension_bundle_for_root, config_file_path, config_file_path_for_root,
-    load_project_overlay_yaml, split_csv_like, yaml_lookup, yaml_string, StateStore,
-    StateStoreError,
+    StateStore, StateStoreError, build_compiled_agent_extension_bundle_for_root, config_file_path,
+    config_file_path_for_root, load_project_overlay_yaml, split_csv_like, yaml_lookup, yaml_string,
 };
 
 pub(crate) fn pack_router_keywords_json(config: &serde_yaml::Value) -> serde_json::Value {
@@ -105,13 +104,23 @@ pub(crate) async fn read_or_sync_launcher_activation_snapshot(
 
 fn launcher_activation_project_root(store: &StateStore) -> Result<PathBuf, String> {
     crate::taskflow_task_bridge::infer_project_root_from_state_root(store.root())
+        .filter(|project_root| config_file_path_for_root(project_root).is_file())
         .or_else(|| crate::resolve_runtime_project_root().ok())
+        .or_else(compile_time_workspace_project_root)
         .ok_or_else(|| {
             format!(
                 "Unable to resolve launcher activation project root from state dir {}",
                 store.root().display()
             )
         })
+}
+
+fn compile_time_workspace_project_root() -> Option<PathBuf> {
+    let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR")?);
+    let workspace_root = manifest_dir.parent()?.parent()?.to_path_buf();
+    config_file_path_for_root(&workspace_root)
+        .is_file()
+        .then_some(workspace_root)
 }
 
 fn normalize_root_arg(path: &Path) -> String {

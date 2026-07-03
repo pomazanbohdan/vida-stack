@@ -980,10 +980,10 @@ pub(crate) fn runtime_escalation_packet(run_id: &str, dispatch_target: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::{
+        ImplementationArtifactAuthority, RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH,
         delivery_packet_owned_paths, host_bridge_completion_retryable_blocker,
         implementation_artifact_scope_validation, runtime_coach_review_packet,
-        tracked_design_doc_owned_paths, ImplementationArtifactAuthority,
-        RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH,
+        tracked_design_doc_owned_paths,
     };
 
     #[test]
@@ -1040,19 +1040,25 @@ mod tests {
 
         assert_eq!(packet["reviewed_dispatch_target"], "implementer");
         assert_eq!(packet["source_packet_id"], "run-1::implementer::delivery");
-        assert!(packet["review_goal"]
-            .as_str()
-            .expect("review goal")
-            .contains("bounded `implementer` delivery/result"));
-        assert!(packet["blocking_question"]
-            .as_str()
-            .expect("blocking question")
-            .contains("bounded `implementer` delivery/result"));
-        assert!(packet["expected_output"]
-            .as_array()
-            .expect("expected output")
-            .iter()
-            .any(|value| value.as_str() == Some("decision=approve|rework|blocker")));
+        assert!(
+            packet["review_goal"]
+                .as_str()
+                .expect("review goal")
+                .contains("bounded `implementer` delivery/result")
+        );
+        assert!(
+            packet["blocking_question"]
+                .as_str()
+                .expect("blocking question")
+                .contains("bounded `implementer` delivery/result")
+        );
+        assert!(
+            packet["expected_output"]
+                .as_array()
+                .expect("expected output")
+                .iter()
+                .any(|value| value.as_str() == Some("decision=approve|rework|blocker"))
+        );
     }
 
     fn implementation_artifact(
@@ -1109,11 +1115,13 @@ mod tests {
             );
 
             assert_eq!(validation["status"], "blocked");
-            assert!(validation["blocker_codes"]
-                .as_array()
-                .expect("blocker codes")
-                .iter()
-                .any(|code| code == "implementation_artifact_authority_invalid"));
+            assert!(
+                validation["blocker_codes"]
+                    .as_array()
+                    .expect("blocker codes")
+                    .iter()
+                    .any(|code| code == "implementation_artifact_authority_invalid")
+            );
         }
     }
 
@@ -1131,10 +1139,12 @@ mod tests {
         );
 
         assert_eq!(validation["status"], "blocked");
-        assert!(validation["blocker_codes"]
-            .as_array()
-            .expect("blocker codes")
-            .iter()
-            .any(|code| code == "implementation_artifact_receipt_missing"));
+        assert!(
+            validation["blocker_codes"]
+                .as_array()
+                .expect("blocker codes")
+                .iter()
+                .any(|code| code == "implementation_artifact_receipt_missing")
+        );
     }
 }

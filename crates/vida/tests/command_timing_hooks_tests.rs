@@ -6,6 +6,14 @@ fn vida() -> Command {
     vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_vida"))
 }
 
+fn dev_gate_script() -> String {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/vida-dev-gate.ps1");
+    std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!("dev gate script should read at {}: {error}", path.display())
+    })
+}
+
 fn vida_timing_from_stderr(stderr: &[u8]) -> Value {
     let stderr = String::from_utf8_lossy(stderr);
     let line = stderr
@@ -131,5 +139,112 @@ fn command_timing_quiet_mode_suppresses_timing_summary() {
     assert!(
         !stderr.contains("vida_timing"),
         "quiet output mode should suppress timing summary, got: {stderr}"
+    );
+}
+
+#[test]
+fn coverage_gate_default_blocks_missing_artifacts_without_workspace_run() {
+    let script = dev_gate_script();
+    let missing_check = script
+        .split("if (-not $RefreshCoverage)")
+        .nth(1)
+        .expect("coverage gate should branch on RefreshCoverage");
+
+    assert!(
+        missing_check.contains("coverage-artifact-admission")
+            && missing_check
+                .contains("existing coverage artifacts required; pass -RefreshCoverage"),
+        "missing artifact admission should emit an actionable blocked timing record"
+    );
+    assert!(
+        missing_check.contains("exit_status = \"blocked\"")
+            && missing_check.contains("artifact_refs = $missingArtifacts"),
+        "missing artifact record should be blocked and include artifact refs"
+    );
+    assert!(
+        missing_check.contains("exit 2"),
+        "missing artifacts should fail fast before any workspace coverage run"
+    );
+}
+
+#[test]
+fn coverage_gate_reuses_artifacts_by_default_and_refresh_runs_workspace_proofs() {
+    let script = dev_gate_script();
+
+    assert!(
+        script.contains(
+            "Add-SkippedRecord \"cargo-llvm-cov-nextest-workspace-lcov\" \"existing LCOV artifact reused; pass -RefreshCoverage to regenerate\""
+        ),
+        "default coverage mode should reuse existing LCOV artifact instead of running workspace coverage"
+    );
+    assert!(
+        script.contains(
+            "Add-SkippedRecord \"cargo-crap-workspace-json\" \"existing cargo-crap artifact reused; pass -RefreshCoverage to regenerate\""
+        ),
+        "default coverage mode should reuse existing CRAP artifact instead of running workspace CRAP"
+    );
+    for expected in [
+        "$llvmCovCommand.Add(\"cargo\")",
+        "$llvmCovCommand.Add(\"llvm-cov\")",
+        "$llvmCovCommand.Add(\"nextest\")",
+        "$llvmCovCommand.Add(\"--workspace\")",
+        "$crapCommand.Add(\"cargo\")",
+        "$crapCommand.Add(\"crap\")",
+        "$crapCommand.Add(\"--workspace\")",
+    ] {
+        assert!(
+            script.contains(expected),
+            "RefreshCoverage path should include workspace proof token {expected}"
+        );
+    }
+}
+
+#[test]
+fn coverage_gate_preserves_diagnostics_for_flaky_workspace_and_crap_regressions() {
+    let script = dev_gate_script();
+
+    assert!(
+        script.contains("latest-{0}-artifacts.json")
+            && script.contains("[progress] {0} artifacts ready before wait")
+            && script.contains("stdout: {0}")
+            && script.contains("stderr: {0}"),
+        "long coverage proofs should publish artifact paths before waiting"
+    );
+    assert!(
+        script.contains("New-NextestSummary")
+            && script.contains("summary_artifact_path")
+            && script.contains("nextest_summary"),
+        "flaky nextest workspace failures should leave a compact summary artifact"
+    );
+    for expected in [
+        "\"quality\"",
+        "\"gate\"",
+        "\"--prepush\"",
+        "\"--crap-file\"",
+        "$crapPath",
+        "\"--coverage-threshold\"",
+        "$thresholdText",
+    ] {
+        assert!(
+            script.contains(expected),
+            "coverage gate should route CRAP regression evidence through vida quality gate token {expected}"
+        );
+    }
+}
+
+#[test]
+fn proof_ladder_smoke_covers_lock_contention_retry_contract() {
+    let script = dev_gate_script();
+
+    assert!(
+        script.contains("state_store_read_lock_contention")
+            && script.contains("Invoke-InstalledVidaStatusWithRetry")
+            && script.contains("-MaxAttempts 3"),
+        "script smoke should exercise retryable state lock contention"
+    );
+    assert!(
+        script.contains("expected one retryable attempt")
+            && script.contains("final attempt status was"),
+        "lock contention smoke should assert retry and final pass diagnostics"
     );
 }

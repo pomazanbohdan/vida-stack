@@ -86,9 +86,11 @@ mod runtime_dispatch_receipt_helpers;
 mod runtime_dispatch_result_evidence;
 mod runtime_dispatch_state;
 pub(crate) use runtime_dispatch_state::{
-    active_downstream_dispatch_target, admissible_selected_backend_for_dispatch_target,
-    agent_init_command_for_packet_path, agent_init_execute_command_for_packet_path,
-    apply_dispatch_execution_timeout_to_receipt,
+    INTERNAL_CODEX_CARRIER_UNAVAILABLE, INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT,
+    ModelProfileCatalog, RuntimeAgentLaneDispatch, RuntimeDispatchPacketContext,
+    RuntimeDispatchTargetResolution, active_downstream_dispatch_target,
+    admissible_selected_backend_for_dispatch_target, agent_init_command_for_packet_path,
+    agent_init_execute_command_for_packet_path, apply_dispatch_execution_timeout_to_receipt,
     apply_dispatch_handoff_timeout_to_receipt_for_state_root,
     apply_existing_executed_dispatch_result_to_receipt,
     apply_first_handoff_execution_to_run_graph_status,
@@ -150,9 +152,7 @@ pub(crate) use runtime_dispatch_state::{
     try_bridge_bounded_implementer_completion_to_downstream_receipt,
     try_bridge_bounded_specification_completion_to_downstream_receipt,
     validate_runtime_dispatch_packet_contract, write_runtime_dispatch_packet,
-    write_runtime_dispatch_result, ModelProfileCatalog, RuntimeAgentLaneDispatch,
-    RuntimeDispatchPacketContext, RuntimeDispatchTargetResolution,
-    INTERNAL_CODEX_CARRIER_UNAVAILABLE, INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT,
+    write_runtime_dispatch_result,
 };
 mod runtime_dispatch_status;
 mod runtime_lane_summary;
@@ -217,10 +217,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::contract_profile_adapter::{
-    blocker_code as blocker_code_value, blocker_code_str, BlockerCode,
+    BlockerCode, blocker_code as blocker_code_value, blocker_code_str,
 };
 use agent_extension_bundle_validation::{
-    extend_agent_extension_bundle_validation_errors, AgentExtensionBundleValidationInput,
+    AgentExtensionBundleValidationInput, extend_agent_extension_bundle_validation_errors,
 };
 use agent_extension_catalog_projection::build_agent_extension_catalog_projection;
 use agent_extension_registry_projection::build_agent_extension_registry_projection;
@@ -229,7 +229,7 @@ pub(crate) use bootstrap_value_utils::{
     normalize_root_arg, slugify_project_id, trimmed_non_empty,
 };
 use carrier_runtime_projection::build_carrier_runtime_projection;
-use clap::{error::ErrorKind, Parser};
+use clap::{Parser, error::ErrorKind};
 pub(crate) use cli::*;
 pub(crate) use compiled_agent_extension_bundle::build_compiled_agent_extension_bundle_for_root;
 pub(crate) use config_value_utils::{
@@ -256,12 +256,12 @@ pub(crate) use docflow_runtime_verdict::{
 };
 use hook_template_registry_projection::build_hook_template_registry_projection;
 pub(crate) use host_agent_state::{
+    HOST_AGENT_OBSERVABILITY_STATE, HostAgentFeedbackInput, HostAgentHandleStateInput,
+    PROMPT_LIFECYCLE_STATE, WORKER_SCORECARDS_STATE, WORKER_STRATEGY_STATE,
     append_host_agent_observability_event, host_agent_observability_state_path,
     load_or_initialize_host_agent_observability_state, load_or_initialize_worker_scorecards,
     read_json_file_if_present, record_host_agent_handle_state, refresh_worker_strategy,
-    worker_scorecards_state_path, worker_strategy_state_path, HostAgentFeedbackInput,
-    HostAgentHandleStateInput, HOST_AGENT_OBSERVABILITY_STATE, PROMPT_LIFECYCLE_STATE,
-    WORKER_SCORECARDS_STATE, WORKER_STRATEGY_STATE,
+    worker_scorecards_state_path, worker_strategy_state_path,
 };
 pub(crate) use init_surfaces::resolve_init_bootstrap_source_root;
 pub(crate) use launcher_activation_snapshot::{
@@ -272,9 +272,9 @@ use launcher_task_commands::{
     build_task_close_command, build_task_create_command, build_task_ensure_command,
     build_task_show_command, infer_feature_request_slug, infer_feature_request_title, shell_quote,
 };
+pub(crate) use project_activator_surface::ProjectActivationAnswers;
 pub(crate) use project_activator_surface::build_project_activator_view;
 pub(crate) use project_activator_surface::merge_project_activation_into_init_view;
-pub(crate) use project_activator_surface::ProjectActivationAnswers;
 pub(crate) use project_bootstrap_defaults::*;
 pub(crate) use project_root_paths::{
     ensure_dir, looks_like_project_root, resolve_repo_root, resolve_runtime_project_root,
@@ -285,7 +285,7 @@ pub(crate) use registry_projection_utils::{
     registry_ids_by_key, registry_row_map_by_id, registry_rows_by_key,
 };
 use release1_contracts::{
-    derive_lane_status, missing_downstream_lane_evidence_blocker, LaneStatus,
+    LaneStatus, derive_lane_status, missing_downstream_lane_evidence_blocker,
 };
 use root_command_router::run_root_command;
 use runtime_assignment_builder::{
@@ -305,29 +305,28 @@ pub(crate) use runtime_assignment_projection_utils::{
 };
 #[allow(unused_imports)]
 pub(crate) use runtime_consumption_state::{
-    apply_runtime_consumption_final_dispatch_receipt_blocker,
-    latest_admissible_retrieval_trust_signal,
-    runtime_consumption_final_dispatch_receipt_blocker_code,
     RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER,
     RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION,
     RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER,
     RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_NEXT_ACTION,
+    apply_runtime_consumption_final_dispatch_receipt_blocker,
+    latest_admissible_retrieval_trust_signal,
+    runtime_consumption_final_dispatch_receipt_blocker_code,
 };
 pub(crate) use runtime_consumption_state::{
-    latest_final_runtime_consumption_dispatch_receipt_summary,
+    RuntimeReflexLoopEvidenceRefs, RuntimeReflexLoopRecord, RuntimeReflexLoopStage,
+    RuntimeReflexLoopSummary, latest_final_runtime_consumption_dispatch_receipt_summary,
     latest_final_runtime_consumption_snapshot_path,
     latest_recorded_final_runtime_consumption_snapshot_path, latest_runtime_reflex_loop_record,
     latest_terminal_consume_continue_snapshot_run_id,
     runtime_consumption_snapshot_has_release_admission_evidence, runtime_consumption_summary,
     runtime_reflex_loop_record, runtime_reflex_loop_summary, write_runtime_consumption_snapshot,
-    RuntimeReflexLoopEvidenceRefs, RuntimeReflexLoopRecord, RuntimeReflexLoopStage,
-    RuntimeReflexLoopSummary,
 };
 pub(crate) use runtime_consumption_surface::{
-    blocking_lane_selection, build_docflow_runtime_evidence, doctor_launcher_summary_for_root,
     DoctorLauncherSummary, RuntimeConsumptionClosureAdmission, RuntimeConsumptionDocflowActivation,
     RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence, TaskflowConsumeBundleCheck,
-    TaskflowConsumeBundlePayload, TaskflowDirectConsumptionPayload,
+    TaskflowConsumeBundlePayload, TaskflowDirectConsumptionPayload, blocking_lane_selection,
+    build_docflow_runtime_evidence, doctor_launcher_summary_for_root,
 };
 pub(crate) use runtime_lane_summary::role_exists_in_lane_bundle;
 pub(crate) use shell_runtime_helpers::{
@@ -550,8 +549,8 @@ pub(crate) async fn run(cli: Cli) -> ExitCode {
 }
 
 pub(crate) use development_flow_orchestration::{
-    build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
-    RuntimeConsumptionLaneSelection,
+    RuntimeConsumptionLaneSelection, build_runtime_execution_plan_from_snapshot,
+    build_runtime_lane_selection_with_store,
 };
 
 #[cfg(test)]
@@ -598,47 +597,63 @@ mod tests {
         assert!(harness.path().join("README.md").is_file());
         assert!(harness.path().join(DEFAULT_PROJECT_ROOT_MAP).is_file());
         assert!(harness.path().join(DEFAULT_PROJECT_PRODUCT_INDEX).is_file());
-        assert!(harness
-            .path()
-            .join(DEFAULT_PROJECT_PRODUCT_SPEC_INDEX)
-            .is_file());
-        assert!(harness
-            .path()
-            .join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE)
-            .is_file());
+        assert!(
+            harness
+                .path()
+                .join(DEFAULT_PROJECT_PRODUCT_SPEC_INDEX)
+                .is_file()
+        );
+        assert!(
+            harness
+                .path()
+                .join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE)
+                .is_file()
+        );
         assert!(harness.path().join(DEFAULT_PROJECT_PROCESS_INDEX).is_file());
-        assert!(harness
-            .path()
-            .join(DEFAULT_PROJECT_RESEARCH_INDEX)
-            .is_file());
+        assert!(
+            harness
+                .path()
+                .join(DEFAULT_PROJECT_RESEARCH_INDEX)
+                .is_file()
+        );
         assert!(harness.path().join(".vida/config").is_dir());
         assert!(harness.path().join(".vida/db").is_dir());
         assert!(harness.path().join(".vida/cache").is_dir());
         assert!(harness.path().join(".vida/framework").is_dir());
         assert!(harness.path().join(".vida/project").is_dir());
-        assert!(harness
-            .path()
-            .join(".vida/project/agent-extensions/index.md")
-            .is_file());
-        assert!(harness
-            .path()
-            .join(".vida/project/agent-extensions/roles.yaml")
-            .is_file());
-        assert!(harness
-            .path()
-            .join(".vida/project/agent-extensions/roles.sidecar.yaml")
-            .is_file());
+        assert!(
+            harness
+                .path()
+                .join(".vida/project/agent-extensions/index.md")
+                .is_file()
+        );
+        assert!(
+            harness
+                .path()
+                .join(".vida/project/agent-extensions/roles.yaml")
+                .is_file()
+        );
+        assert!(
+            harness
+                .path()
+                .join(".vida/project/agent-extensions/roles.sidecar.yaml")
+                .is_file()
+        );
         assert!(harness.path().join(".vida/receipts").is_dir());
         assert!(harness.path().join(".vida/runtime").is_dir());
         assert!(harness.path().join(".vida/scratchpad").is_dir());
-        assert!(harness
-            .path()
-            .join("vida/config/instructions/bundles/framework-source")
-            .is_dir());
-        assert!(harness
-            .path()
-            .join("vida/config/instructions/bundles/framework-memory-source")
-            .is_dir());
+        assert!(
+            harness
+                .path()
+                .join("vida/config/instructions/bundles/framework-source")
+                .is_dir()
+        );
+        assert!(
+            harness
+                .path()
+                .join("vida/config/instructions/bundles/framework-memory-source")
+                .is_dir()
+        );
     }
 
     #[cfg(windows)]

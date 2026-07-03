@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 
-use crate::state_store::{work_item_is_program_container, StateStore, StateStoreError, TaskRecord};
+use crate::state_store::{StateStore, StateStoreError, TaskRecord, work_item_is_program_container};
 use operator_output::toon_report::OperatorToonField;
 
 #[derive(Debug, Clone)]
@@ -208,7 +208,7 @@ fn parse_taskflow_closeout_args(args: &[String]) -> Result<TaskflowCloseoutComma
             value => {
                 return Err(format!(
                     "unexpected vida taskflow closeout argument `{value}`"
-                ))
+                ));
             }
         }
         index += 1;

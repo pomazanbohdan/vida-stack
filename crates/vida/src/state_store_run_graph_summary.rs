@@ -1,4 +1,5 @@
 use super::*;
+use crate::RuntimeConsumptionLaneSelection;
 use crate::release1_contracts::lane_status_has_required_evidence;
 use crate::state_store::state_store_task_models::{
     task_has_label, task_is_spec_pack_child, task_is_work_pool_pack_child,
@@ -7,15 +8,15 @@ use crate::taskflow_run_graph::{
     approval_delegation_transition_kind, clear_run_graph_dispatch_init_fast_cache,
     is_dispatch_resume_handoff_done,
 };
-use crate::RuntimeConsumptionLaneSelection;
 use taskflow_authority::run_graph_evidence::{
-    blocked_source_lane_from_packet_evidence, downstream_handoff_ready_from_completion_evidence,
-    normalize_run_graph_node, rework_route_from_completion_evidence, RunGraphBlockedSourceLane,
-    RunGraphCompletionEvidence, RunGraphDownstreamPacketEvidence, RunGraphReworkEvidence,
+    RunGraphBlockedSourceLane, RunGraphCompletionEvidence, RunGraphDownstreamPacketEvidence,
+    RunGraphReworkEvidence, blocked_source_lane_from_packet_evidence,
+    downstream_handoff_ready_from_completion_evidence, normalize_run_graph_node,
+    rework_route_from_completion_evidence,
 };
 use taskflow_authority::run_graph_transition::{
-    admit_run_graph_transition, ready_run_graph_transition, ReadyRunGraphTransitionInput,
-    RunGraphAuthorityInput, RunGraphDispatchTargetFormat,
+    ReadyRunGraphTransitionInput, RunGraphAuthorityInput, RunGraphDispatchTargetFormat,
+    admit_run_graph_transition, ready_run_graph_transition,
 };
 use taskflow_core::run_graph::model::{
     DispatchReceiptSnapshot as CoreDispatchReceiptSnapshot,
@@ -2041,12 +2042,12 @@ impl StateStore {
         else {
             return Ok(None);
         };
-        let current_stable_fallback = evidence["current_session"]
-            ["fallback_replaces_legacy_stable_worktree_state_hash"]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
+        let current_stable_fallback =
+            evidence["current_session"]["fallback_replaces_legacy_stable_worktree_state_hash"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
         let mut scope = CurrentSessionRunGraphClaimScope {
             run_ids: Vec::new(),
             task_ids: Vec::new(),
@@ -2175,12 +2176,12 @@ impl StateStore {
             .ok_or_else(|| StateStoreError::InvalidTaskRecord {
                 reason: "test run-graph claim requires current session id".to_string(),
             })?;
-        let claim_session_id = current_session
-            ["fallback_replaces_legacy_stable_worktree_state_hash"]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(current_session_id);
+        let claim_session_id =
+            current_session["fallback_replaces_legacy_stable_worktree_state_hash"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(current_session_id);
         let worktree_environment_id = current_session["worktree_environment_id"]
             .as_str()
             .unwrap_or_else(|| self.root().to_str().unwrap_or_default())
@@ -2312,11 +2313,11 @@ impl StateStore {
             .ok_or_else(|| StateStoreError::InvalidTaskRecord {
                 reason: "run-graph mutation requires an active current session id".to_string(),
             })?;
-        let current_stable_fallback = evidence["current_session"]
-            ["fallback_replaces_legacy_stable_worktree_state_hash"]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
+        let current_stable_fallback =
+            evidence["current_session"]["fallback_replaces_legacy_stable_worktree_state_hash"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
 
         let active_claims = self.active_orchestrator_claims().await?;
         let run_task_id = self
@@ -5345,12 +5346,14 @@ mod tests {
         );
 
         let rows = vec![test_task_record("alias-task", "merged")];
-        assert!(store
-            .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
-                &status, &rows,
-            )
-            .await
-            .expect("task row lookup should succeed"));
+        assert!(
+            store
+                .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
+                    &status, &rows,
+                )
+                .await
+                .expect("task row lookup should succeed")
+        );
 
         close_store_and_remove_root(store, root).await;
     }
@@ -5373,10 +5376,12 @@ mod tests {
         status.recovery_ready = false;
         status.policy_gate = "historical_closed_task_stale_run_retired".to_string();
 
-        assert!(store
-            .run_graph_status_is_stale_for_task_continuation_binding(&status)
-            .await
-            .expect("terminal closure classifier should succeed"));
+        assert!(
+            store
+                .run_graph_status_is_stale_for_task_continuation_binding(&status)
+                .await
+                .expect("terminal closure classifier should succeed")
+        );
 
         let mut malicious_status = status.clone();
         malicious_status.run_id = "malicious-retired-run".to_string();
@@ -5387,18 +5392,22 @@ mod tests {
         malicious_status.checkpoint_kind = "execution_cursor".to_string();
         malicious_status.recovery_ready = true;
 
-        assert!(!store
-            .run_graph_status_is_stale_for_task_continuation_binding(&malicious_status)
-            .await
-            .expect("contradictory retired closure classifier should fail closed"));
+        assert!(
+            !store
+                .run_graph_status_is_stale_for_task_continuation_binding(&malicious_status)
+                .await
+                .expect("contradictory retired closure classifier should fail closed")
+        );
 
         let mut open_status = sample_run_graph_status();
         open_status.run_id = "active-run".to_string();
         open_status.task_id = "active-runtime-task".to_string();
-        assert!(!store
-            .run_graph_status_is_stale_for_task_continuation_binding(&open_status)
-            .await
-            .expect("active status classifier should succeed"));
+        assert!(
+            !store
+                .run_graph_status_is_stale_for_task_continuation_binding(&open_status)
+                .await
+                .expect("active status classifier should succeed")
+        );
 
         close_store_and_remove_root(store, root).await;
     }
@@ -6969,11 +6978,13 @@ mod tests {
             .await
             .expect("read run graph status");
         assert_eq!(loaded.run_id, "run-read-only-owner-evidence");
-        assert!(store
-            .run_graph_owner_evidence_record("run-read-only-owner-evidence", "run_graph_status")
-            .await
-            .expect("read owner evidence")
-            .is_none());
+        assert!(
+            store
+                .run_graph_owner_evidence_record("run-read-only-owner-evidence", "run_graph_status")
+                .await
+                .expect("read owner evidence")
+                .is_none()
+        );
 
         close_store_and_remove_root(store, root).await;
     }
@@ -6998,19 +7009,23 @@ mod tests {
             .record_run_graph_status(&ownerless)
             .await
             .expect("persist ownerless run graph status");
-        assert!(store
-            .run_graph_legacy_ownerless("legacy-ownerless-run")
-            .await
-            .expect("classify ownerless run"));
+        assert!(
+            store
+                .run_graph_legacy_ownerless("legacy-ownerless-run")
+                .await
+                .expect("classify ownerless run")
+        );
 
         store
             .record_run_graph_owner_evidence("legacy-ownerless-run", "dispatch_context")
             .await
             .expect("record owner evidence");
-        assert!(!store
-            .run_graph_legacy_ownerless("legacy-ownerless-run")
-            .await
-            .expect("owner evidence should make run non-ownerless"));
+        assert!(
+            !store
+                .run_graph_legacy_ownerless("legacy-ownerless-run")
+                .await
+                .expect("owner evidence should make run non-ownerless")
+        );
 
         let mut claimed = sample_run_graph_status();
         claimed.run_id = "legacy-claimed-run".to_string();
@@ -7019,10 +7034,12 @@ mod tests {
             .record_run_graph_status(&claimed)
             .await
             .expect("persist claim-backed run graph status");
-        assert!(store
-            .run_graph_legacy_ownerless("legacy-claimed-run")
-            .await
-            .expect("classify pre-claim run"));
+        assert!(
+            store
+                .run_graph_legacy_ownerless("legacy-claimed-run")
+                .await
+                .expect("classify pre-claim run")
+        );
         let claim = store
             .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
                 claim_id: "legacy-claimed-run-write".to_string(),
@@ -7042,18 +7059,22 @@ mod tests {
             })
             .await
             .expect("acquire claim");
-        assert!(!store
-            .run_graph_legacy_ownerless("legacy-claimed-run")
-            .await
-            .expect("claim should make run non-ownerless"));
+        assert!(
+            !store
+                .run_graph_legacy_ownerless("legacy-claimed-run")
+                .await
+                .expect("claim should make run non-ownerless")
+        );
         store
             .release_orchestrator_claim(&claim.claim_id, claim.resource_revision, "test release")
             .await
             .expect("release claim");
-        assert!(store
-            .run_graph_legacy_ownerless("legacy-claimed-run")
-            .await
-            .expect("released claim should not block ownerless classification"));
+        assert!(
+            store
+                .run_graph_legacy_ownerless("legacy-claimed-run")
+                .await
+                .expect("released claim should not block ownerless classification")
+        );
 
         let mut expired = sample_run_graph_status();
         expired.run_id = "legacy-expired-claim-run".to_string();
@@ -7088,10 +7109,12 @@ mod tests {
                 .expect("expire stale claims"),
             1
         );
-        assert!(store
-            .run_graph_legacy_ownerless("legacy-expired-claim-run")
-            .await
-            .expect("expired claim should not block ownerless classification"));
+        assert!(
+            store
+                .run_graph_legacy_ownerless("legacy-expired-claim-run")
+                .await
+                .expect("expired claim should not block ownerless classification")
+        );
 
         close_store_and_remove_root(store, root).await;
     }
@@ -7526,11 +7549,13 @@ mod tests {
                 .run_id,
             "run-foreign"
         );
-        assert!(store
-            .latest_run_graph_status_for_current_session()
-            .await
-            .expect("read scoped latest")
-            .is_none());
+        assert!(
+            store
+                .latest_run_graph_status_for_current_session()
+                .await
+                .expect("read scoped latest")
+                .is_none()
+        );
 
         let mut current_status = sample_run_graph_status();
         current_status.run_id = "run-current".to_string();
@@ -8232,8 +8257,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_explicit_continuation_binding_for_current_session_uses_current_owner_evidence_without_claim(
-    ) {
+    async fn latest_explicit_continuation_binding_for_current_session_uses_current_owner_evidence_without_claim()
+     {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
         unsafe {
@@ -8251,11 +8276,13 @@ mod tests {
             .await
             .expect("persist owner-evidence binding");
 
-        assert!(store
-            .active_orchestrator_claims()
-            .await
-            .expect("read claims")
-            .is_empty());
+        assert!(
+            store
+                .active_orchestrator_claims()
+                .await
+                .expect("read claims")
+                .is_empty()
+        );
         assert_eq!(
             store
                 .latest_explicit_run_graph_continuation_binding_for_current_session()
@@ -8315,11 +8342,13 @@ mod tests {
             .await
             .expect("persist owner-evidence binding");
 
-        assert!(store
-            .active_orchestrator_claims()
-            .await
-            .expect("read claims")
-            .is_empty());
+        assert!(
+            store
+                .active_orchestrator_claims()
+                .await
+                .expect("read claims")
+                .is_empty()
+        );
         assert_eq!(
             store
                 .latest_run_graph_status_for_current_session()
@@ -8481,8 +8510,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch(
-    ) {
+    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -9516,8 +9545,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active(
-    ) {
+    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10556,18 +10585,20 @@ mod tests {
             .await
             .expect("record completed explicit binding");
 
-        assert!(store
-            .latest_explicit_run_graph_continuation_binding()
-            .await
-            .expect("read latest explicit binding")
-            .is_none());
+        assert!(
+            store
+                .latest_explicit_run_graph_continuation_binding()
+                .await
+                .expect("read latest explicit binding")
+                .is_none()
+        );
 
         close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
-    async fn active_exception_takeover_reconciles_stale_continuation_binding_for_next_lawful_sources(
-    ) {
+    async fn active_exception_takeover_reconciles_stale_continuation_binding_for_next_lawful_sources()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10890,8 +10921,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open(
-    ) {
+    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -11414,8 +11445,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none(
-    ) {
+    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

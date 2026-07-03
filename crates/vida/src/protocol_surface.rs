@@ -631,10 +631,12 @@ mod tests {
             "runtime-instructions/work.requirement-analysis-protocol"
         );
         assert_eq!(target.kind, "runtime_instruction");
-        assert!(target
-            .aliases
-            .iter()
-            .any(|alias| alias == "requirement-analysis"));
+        assert!(
+            target
+                .aliases
+                .iter()
+                .any(|alias| alias == "requirement-analysis")
+        );
         assert!(
             path.ends_with(
                 "vida/config/instructions/runtime-instructions/work.requirement-analysis-protocol.md"

@@ -3,8 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::prelude::*;
 use interprocess::local_socket::{
-    tokio::{prelude::*, Stream as LocalSocketStream},
     GenericNamespaced, ListenerOptions, ToNsName,
+    tokio::{Stream as LocalSocketStream, prelude::*},
 };
 use serde_json::json;
 use tarpc::serde_transport;

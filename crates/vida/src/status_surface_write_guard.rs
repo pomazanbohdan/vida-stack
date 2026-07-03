@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::release1_contracts::{blocker_code_str, BlockerCode};
+use crate::release1_contracts::{BlockerCode, blocker_code_str};
 
 fn looks_like_runtime_root_session_write_guard_candidate(value: &serde_json::Value) -> bool {
     matches!(
@@ -395,8 +395,8 @@ fn runtime_root_session_write_guard_from_snapshot(
     if looks_like_runtime_root_session_write_guard_candidate(direct_guard) {
         return Some(direct_guard.clone());
     }
-    let execution_plan_contract_guard = &snapshot["payload"]["role_selection"]["execution_plan"]
-        ["orchestration_contract"]["root_session_write_guard"];
+    let execution_plan_contract_guard = &snapshot["payload"]["role_selection"]["execution_plan"]["orchestration_contract"]
+        ["root_session_write_guard"];
     if looks_like_runtime_root_session_write_guard_candidate(execution_plan_contract_guard) {
         return Some(execution_plan_contract_guard.clone());
     }
@@ -645,10 +645,20 @@ mod tests {
         fs::write(
             metadata_dir.join("run-1.json"),
             serde_json::json!({
+                "run_id": "run-1",
+                "dispatch_target": "spec-pack",
+                "source_exception_path_receipt_id": "receipt-1",
+                "reason_class": "test_exception_takeover",
+                "active_bounded_unit": "run-1:spec-pack",
                 "owned_write_scope": [
                     "crates/vida/src/init_surfaces.rs",
                     "docs/product/spec/orchestrator-runtime-contract-hardening-design.md"
-                ]
+                ],
+                "why_delegated_or_rerouted_path_is_not_currently_lawful": "test delegated path blocked",
+                "why_local_write_is_the_smallest_safe_bounded_workaround": "test bounded write scope",
+                "return_to_normal_posture_condition": "test verification completes",
+                "verification_plan": ["test"],
+                "recorded_at": "2026-05-13T00:00:00Z"
             })
             .to_string(),
         )
@@ -690,7 +700,17 @@ mod tests {
         fs::write(
             metadata_dir.join("run-1.json"),
             serde_json::json!({
-                "owned_write_scope": ["crates/vida/src/status_surface_write_guard.rs"]
+                "run_id": "run-1",
+                "dispatch_target": "spec-pack",
+                "source_exception_path_receipt_id": "receipt-1",
+                "reason_class": "test_exception_takeover",
+                "active_bounded_unit": "run-1:spec-pack",
+                "owned_write_scope": ["crates/vida/src/status_surface_write_guard.rs"],
+                "why_delegated_or_rerouted_path_is_not_currently_lawful": "test delegated path blocked",
+                "why_local_write_is_the_smallest_safe_bounded_workaround": "test bounded write scope",
+                "return_to_normal_posture_condition": "test verification completes",
+                "verification_plan": ["test"],
+                "recorded_at": "2026-05-13T00:00:00Z"
             })
             .to_string(),
         )

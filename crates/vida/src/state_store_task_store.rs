@@ -7,15 +7,15 @@ use serde_json::Deserializer;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use taskflow_authority::task_transition::{
-    admit_task_lifecycle, lifecycle_status_from_str, TaskLifecycleAdmissionStatus,
-    TaskLifecycleRuntimeEvidence,
+    TaskLifecycleAdmissionStatus, TaskLifecycleRuntimeEvidence, admit_task_lifecycle,
+    lifecycle_status_from_str,
 };
 use taskflow_core::task::aggregate::{
+    TaskAggregateTaskSnapshot, TaskCloseCommand, TaskCreateCommand, TaskDependencyMutationCommand,
+    TaskMetadataUpdateCommand, TaskMutationPlan, TaskReparentCommand, TaskStatusUpdateCommand,
     ensure_task_mutation_plan_covers_persistence, plan_add_task_dependency, plan_close_task,
     plan_create_task, plan_remove_task_dependency, plan_reparent_tasks, plan_update_task_metadata,
-    plan_update_task_status, TaskAggregateTaskSnapshot, TaskCloseCommand, TaskCreateCommand,
-    TaskDependencyMutationCommand, TaskMetadataUpdateCommand, TaskMutationPlan,
-    TaskReparentCommand, TaskStatusUpdateCommand,
+    plan_update_task_status,
 };
 use taskflow_core::task::lifecycle::{TaskLifecycleEvent, TaskLifecycleInput, TaskLifecycleStatus};
 
@@ -2728,8 +2728,15 @@ impl StateStore {
                 return Err(StateStoreError::InvalidTaskRecord {
                     reason: format!(
                         "add_task_dependencies_bulk aggregate plan does not cover operation touched set: expected=[{}] actual=[{}]",
-                        touched_task_ids.iter().cloned().collect::<Vec<_>>().join(","),
-                        planned_touched_task_ids.into_iter().collect::<Vec<_>>().join(",")
+                        touched_task_ids
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(","),
+                        planned_touched_task_ids
+                            .into_iter()
+                            .collect::<Vec<_>>()
+                            .join(",")
                     ),
                 });
             }
@@ -3433,8 +3440,15 @@ impl StateStore {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
                     "update_task aggregate plan does not cover operation touched set: expected=[{}] actual=[{}]",
-                    touched_task_ids.iter().cloned().collect::<Vec<_>>().join(","),
-                    planned_touched_task_ids.into_iter().collect::<Vec<_>>().join(",")
+                    touched_task_ids
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    planned_touched_task_ids
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                        .join(",")
                 ),
             });
         }
@@ -4034,8 +4048,15 @@ impl StateStore {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
                     "defect_batch_rehome aggregate plan does not cover operation touched set: expected=[{}] actual=[{}]",
-                    touched_task_ids.iter().cloned().collect::<Vec<_>>().join(","),
-                    planned_touched_task_ids.into_iter().collect::<Vec<_>>().join(",")
+                    touched_task_ids
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    planned_touched_task_ids
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                        .join(",")
                 ),
             });
         }
@@ -4536,9 +4557,11 @@ mod tests {
 
         let error = StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_root)
             .expect_err("hash drift must reject snapshot");
-        assert!(error
-            .to_string()
-            .contains("task snapshot metadata byte_len does not match snapshot body"));
+        assert!(
+            error
+                .to_string()
+                .contains("task snapshot metadata byte_len does not match snapshot body")
+        );
         let _ = fs::remove_dir_all(
             state_root
                 .ancestors()
@@ -4566,9 +4589,11 @@ mod tests {
 
         let error = StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_root)
             .expect_err("newer marker must reject snapshot");
-        assert!(error
-            .to_string()
-            .contains("task snapshot metadata is older than latest state mutation marker"));
+        assert!(
+            error
+                .to_string()
+                .contains("task snapshot metadata is older than latest state mutation marker")
+        );
         let _ = fs::remove_dir_all(
             state_root
                 .ancestors()
@@ -4608,9 +4633,11 @@ mod tests {
 
         let error = StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_root)
             .expect_err("old snapshot must be invalid after direct store mutation");
-        assert!(error
-            .to_string()
-            .contains("task snapshot metadata is older than latest state mutation marker"));
+        assert!(
+            error
+                .to_string()
+                .contains("task snapshot metadata is older than latest state mutation marker")
+        );
 
         store
             .refresh_task_snapshot()
@@ -4647,9 +4674,11 @@ mod tests {
             .await
             .expect_err("bug alias must still require a parent");
 
-        assert!(error
-            .to_string()
-            .contains("Only parent-optional work item kinds can have no parent"));
+        assert!(
+            error
+                .to_string()
+                .contains("Only parent-optional work item kinds can have no parent")
+        );
         close_store_and_remove_root(store, root).await;
     }
 
@@ -5041,11 +5070,13 @@ mod tests {
         assert_eq!(parent.status, "in_progress");
         assert!(parent.closed_at.is_none());
         assert!(parent.close_reason.is_none());
-        assert!(store
-            .validate_task_graph()
-            .await
-            .expect("validate")
-            .is_empty());
+        assert!(
+            store
+                .validate_task_graph()
+                .await
+                .expect("validate")
+                .is_empty()
+        );
         close_store_and_remove_root(store, root).await;
     }
 
@@ -5128,11 +5159,13 @@ mod tests {
         assert_eq!(parent.status, "closed");
         assert_eq!(parent.closed_at, closed_at);
         assert_eq!(parent.close_reason, close_reason);
-        assert!(store
-            .validate_task_graph()
-            .await
-            .expect("validate")
-            .is_empty());
+        assert!(
+            store
+                .validate_task_graph()
+                .await
+                .expect("validate")
+                .is_empty()
+        );
         close_store_and_remove_root(store, root).await;
     }
 
@@ -5222,11 +5255,13 @@ mod tests {
         assert!(moving_child.dependencies.iter().any(|dependency| {
             dependency.edge_type == "parent-child" && dependency.depends_on_id == "target-parent"
         }));
-        assert!(store
-            .validate_task_graph()
-            .await
-            .expect("validate")
-            .is_empty());
+        assert!(
+            store
+                .validate_task_graph()
+                .await
+                .expect("validate")
+                .is_empty()
+        );
 
         close_store_and_remove_root(store, root).await;
     }
@@ -5297,12 +5332,14 @@ mod tests {
             .await
             .expect("close task");
 
-        assert!(store
-            .active_orchestrator_claims()
-            .await
-            .expect("active claims")
-            .iter()
-            .all(|claim| claim.task_id.as_deref() != Some("claimed-task")));
+        assert!(
+            store
+                .active_orchestrator_claims()
+                .await
+                .expect("active claims")
+                .iter()
+                .all(|claim| claim.task_id.as_deref() != Some("claimed-task"))
+        );
         let claim = store
             .orchestrator_claim("claim-claimed-task")
             .await
@@ -5388,11 +5425,13 @@ mod tests {
         let parent = store.show_task("closed-parent").await.expect("load parent");
         assert_eq!(parent.status, "in_progress");
         assert!(parent.closed_at.is_none());
-        assert!(store
-            .validate_task_graph()
-            .await
-            .expect("validate")
-            .is_empty());
+        assert!(
+            store
+                .validate_task_graph()
+                .await
+                .expect("validate")
+                .is_empty()
+        );
         close_store_and_remove_root(store, root).await;
     }
 
@@ -5468,11 +5507,13 @@ mod tests {
             StateStore::parent_id_for_task(&child).as_deref(),
             Some("unchanged-parent")
         );
-        assert!(store
-            .validate_task_graph()
-            .await
-            .expect("validate")
-            .is_empty());
+        assert!(
+            store
+                .validate_task_graph()
+                .await
+                .expect("validate")
+                .is_empty()
+        );
 
         close_store_and_remove_root(store, root).await;
     }
@@ -5541,11 +5582,13 @@ mod tests {
             parent.close_reason.as_deref(),
             Some("all direct child tasks closed after closing `update-close-child`")
         );
-        assert!(store
-            .validate_task_graph()
-            .await
-            .expect("validate")
-            .is_empty());
+        assert!(
+            store
+                .validate_task_graph()
+                .await
+                .expect("validate")
+                .is_empty()
+        );
         close_store_and_remove_root(store, root).await;
     }
 
@@ -5692,20 +5735,24 @@ mod tests {
         assert_eq!(appended.status, "closed");
         assert_eq!(appended.closed_at, closed_child.closed_at);
         assert_eq!(appended.close_reason, closed_child.close_reason);
-        assert!(appended
-            .notes
-            .as_deref()
-            .is_some_and(|notes| notes.contains("post-close scorecard")));
+        assert!(
+            appended
+                .notes
+                .as_deref()
+                .is_some_and(|notes| notes.contains("post-close scorecard"))
+        );
 
         let parent_after_append = store.show_task("note-parent").await.expect("show parent");
         assert_eq!(parent_after_append.status, closed_parent.status);
         assert_eq!(parent_after_append.closed_at, closed_parent.closed_at);
         assert_eq!(parent_after_append.close_reason, closed_parent.close_reason);
-        assert!(store
-            .validate_task_graph()
-            .await
-            .expect("validate")
-            .is_empty());
+        assert!(
+            store
+                .validate_task_graph()
+                .await
+                .expect("validate")
+                .is_empty()
+        );
 
         close_store_and_remove_root(store, root).await;
     }
@@ -5777,11 +5824,13 @@ mod tests {
             parent.close_reason.as_deref(),
             Some("all direct child tasks closed after closing `done-close-child`")
         );
-        assert!(store
-            .validate_task_graph()
-            .await
-            .expect("validate")
-            .is_empty());
+        assert!(
+            store
+                .validate_task_graph()
+                .await
+                .expect("validate")
+                .is_empty()
+        );
         close_store_and_remove_root(store, root).await;
     }
 
@@ -6041,11 +6090,13 @@ mod tests {
         assert_eq!(async_parent.status, "paused");
         assert_eq!(route_parent.status, "paused");
         assert_eq!(runtime_epic.status, "in_progress");
-        assert!(store
-            .validate_task_graph()
-            .await
-            .expect("validate")
-            .is_empty());
+        assert!(
+            store
+                .validate_task_graph()
+                .await
+                .expect("validate")
+                .is_empty()
+        );
         close_store_and_remove_root(store, root).await;
     }
 
@@ -6137,11 +6188,13 @@ mod tests {
         );
         assert!(feature.closed_at.is_none());
         assert!(feature.close_reason.is_none());
-        assert!(store
-            .validate_task_graph()
-            .await
-            .expect("validate graph")
-            .is_empty());
+        assert!(
+            store
+                .validate_task_graph()
+                .await
+                .expect("validate graph")
+                .is_empty()
+        );
         close_store_and_remove_root(store, root).await;
     }
 
@@ -6205,11 +6258,13 @@ mod tests {
         );
         assert!(feature.closed_at.is_none());
         assert!(feature.close_reason.is_none());
-        assert!(store
-            .validate_task_graph()
-            .await
-            .expect("validate graph")
-            .is_empty());
+        assert!(
+            store
+                .validate_task_graph()
+                .await
+                .expect("validate graph")
+                .is_empty()
+        );
         close_store_and_remove_root(store, root).await;
     }
 
@@ -6333,13 +6388,15 @@ mod tests {
             receipt.downstream_dispatch_status.as_deref(),
             Some("packet_ready")
         );
-        assert!(!receipt
-            .downstream_dispatch_blockers
-            .iter()
-            .any(|blocker| matches!(
-                blocker.as_str(),
-                "pending_design_finalize" | "pending_spec_task_close"
-            )));
+        assert!(
+            !receipt
+                .downstream_dispatch_blockers
+                .iter()
+                .any(|blocker| matches!(
+                    blocker.as_str(),
+                    "pending_design_finalize" | "pending_spec_task_close"
+                ))
+        );
 
         let refreshed = store
             .run_graph_status("feature-z-spec")
@@ -6526,13 +6583,15 @@ mod tests {
             "spec_first_work_pool_handoff_reconciliation"
         );
         assert!(receipt.downstream_dispatch_ready);
-        assert!(!receipt
-            .downstream_dispatch_blockers
-            .iter()
-            .any(|blocker| matches!(
-                blocker.as_str(),
-                "pending_design_finalize" | "pending_spec_task_close"
-            )));
+        assert!(
+            !receipt
+                .downstream_dispatch_blockers
+                .iter()
+                .any(|blocker| matches!(
+                    blocker.as_str(),
+                    "pending_design_finalize" | "pending_spec_task_close"
+                ))
+        );
         let repaired_parent = store
             .show_task("feature-live")
             .await
@@ -6898,10 +6957,12 @@ mod tests {
         assert!(!receipt.downstream_dispatch_ready);
         assert!(receipt.downstream_dispatch_blockers.is_empty());
         assert!(receipt.downstream_dispatch_packet_path.is_none());
-        assert!(receipt
-            .downstream_dispatch_result_path
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty()));
+        assert!(
+            receipt
+                .downstream_dispatch_result_path
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        );
         let resolved = crate::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
             &store,
             Some("run-close-task"),
@@ -7255,11 +7316,13 @@ mod tests {
         assert_eq!(reconciled.status, "completed");
         assert_eq!(reconciled.active_node, "closure");
         assert_eq!(reconciled.lifecycle_stage, "closure_complete");
-        assert!(store
-            .run_graph_continuation_binding(run_id)
-            .await
-            .expect("read binding")
-            .is_none());
+        assert!(
+            store
+                .run_graph_continuation_binding(run_id)
+                .await
+                .expect("read binding")
+                .is_none()
+        );
 
         close_store_and_remove_root(store, root).await;
     }

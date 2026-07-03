@@ -4,9 +4,9 @@ use std::process::{Command, ExitCode};
 use serde::Serialize;
 
 use crate::release1_operator_output::{
-    finalize_operator_surface_verdict, RELEASE1_OPERATOR_CONTRACT_SPEC,
+    RELEASE1_OPERATOR_CONTRACT_SPEC, finalize_operator_surface_verdict,
 };
-use crate::state_store::{work_item_is_program_container, StateStore, StateStoreError, TaskRecord};
+use crate::state_store::{StateStore, StateStoreError, TaskRecord, work_item_is_program_container};
 
 #[derive(Debug, Clone)]
 struct TaskflowReceiptPackCommand {
@@ -160,15 +160,21 @@ fn print_taskflow_receipt_pack_help() {
     println!();
     println!("Purpose:");
     println!("  Build a compact read-only evidence pack for final operator reports.");
-    println!("  It aggregates closed tasks, closure receipts, verification counts, quality gate command refs, artifacts, and git refs.");
+    println!(
+        "  It aggregates closed tasks, closure receipts, verification counts, quality gate command refs, artifacts, and git refs."
+    );
     println!();
     println!("Canonical command:");
-    println!("  vida taskflow receipt-pack --since <commit-or-time> [--fields <field,...>] [--state-dir <path>] [--json]");
+    println!(
+        "  vida taskflow receipt-pack --since <commit-or-time> [--fields <field,...>] [--state-dir <path>] [--json]"
+    );
     println!("  Default human output is compact TOON/plain.");
     println!("  Use --json only when a machine-readable payload is required.");
     println!();
     println!("Returned fields:");
-    println!("  closed_tasks, closed_epics, exception_receipts, verification_receipts, quality_gates, artifacts, git_refs");
+    println!(
+        "  closed_tasks, closed_epics, exception_receipts, verification_receipts, quality_gates, artifacts, git_refs"
+    );
 }
 
 async fn build_taskflow_receipt_pack_payload(

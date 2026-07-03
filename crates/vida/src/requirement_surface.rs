@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::config_value_utils::{
     load_project_overlay_yaml, yaml_bool, yaml_lookup, yaml_string, yaml_string_list,

@@ -5,7 +5,7 @@ use docflow_cli::Cli as DocflowCli;
 
 use crate::taskflow_spec_bootstrap::run_docflow_cli_command_with_exit;
 
-use super::{resolve_repo_root, ProxyArgs};
+use super::{ProxyArgs, resolve_repo_root};
 
 fn proxy_requested_help(args: &[String]) -> bool {
     matches!(

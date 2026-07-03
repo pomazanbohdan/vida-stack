@@ -5,9 +5,9 @@ use crate::state_store::{
     TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode, TaskGraphIssue,
     TaskProgressSummary, TaskRecord,
 };
-use crate::{print_surface_header, print_surface_line, RenderMode};
+use crate::{RenderMode, print_surface_header, print_surface_line};
 use taskflow_core::task::import_export::{
-    task_export_jsonl_success_fields, TaskExportJsonlSummary,
+    TaskExportJsonlSummary, task_export_jsonl_success_fields,
 };
 
 pub(crate) fn task_read_metadata_value(
@@ -2470,8 +2470,11 @@ mod tests {
         assert!(!text.contains("\n  next: forged-from-kind"));
         assert!(!text.contains("\n  next: forged"));
         assert_eq!(text.matches("\n  ready_for_close:").count(), 1);
-        assert!(text
-            .contains(r"task: TASK-1\n  ready_for_close: true\n  next: forged-command\u{1b}[31m"));
+        assert!(
+            text.contains(
+                r"task: TASK-1\n  ready_for_close: true\n  next: forged-command\u{1b}[31m"
+            )
+        );
         assert!(text.contains(r"kind: epic\n  next: forged-from-kind\u{1b}[35m"));
         assert!(text.contains(r"next: vida task close injected\n  next: forged\u{1b}[0m"));
     }

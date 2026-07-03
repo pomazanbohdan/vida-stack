@@ -294,7 +294,9 @@ fn print_docs_update_text(project_root: &Path, writes: &[ScopedDocWrite]) {
         };
         println!("{status}: {}", write.path);
     }
-    println!("excluded: AGENTS.sidecar.md, vida.config.yaml, README.md, docs/**, non-protocol instruction files, vida/config/framework-memory/**, .vida/**");
+    println!(
+        "excluded: AGENTS.sidecar.md, vida.config.yaml, README.md, docs/**, non-protocol instruction files, vida/config/framework-memory/**, .vida/**"
+    );
 }
 
 #[cfg(test)]
@@ -368,9 +370,11 @@ mod tests {
                 && write.status == ScopedDocWriteStatus::Updated),
             "writes: {writes:?}"
         );
-        assert!(!writes
-            .iter()
-            .any(|write| write.path.ends_with("role.demo-contract.md")));
+        assert!(
+            !writes
+                .iter()
+                .any(|write| write.path.ends_with("role.demo-contract.md"))
+        );
         assert_eq!(
             fs::read_to_string(project_root.join("AGENTS.md")).expect("agents should read"),
             "# canonical agents\n"

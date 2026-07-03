@@ -3,8 +3,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use crate::{
-    state_store::StateStore, DiagnosticsArgs, DiagnosticsCommand, DiagnosticsEvidenceCheckArgs,
-    DiagnosticsPostCommitArgs, DiagnosticsRulesCheckArgs,
+    DiagnosticsArgs, DiagnosticsCommand, DiagnosticsEvidenceCheckArgs, DiagnosticsPostCommitArgs,
+    DiagnosticsRulesCheckArgs, state_store::StateStore,
 };
 
 const DIAGNOSTICS_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
@@ -813,11 +813,11 @@ pub(crate) async fn run_diagnostics(args: DiagnosticsArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_evidence_check_diagnostics, build_rules_check_diagnostics,
-        closed_task_active_run_projection_mismatch_next_action,
+        POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME, build_evidence_check_diagnostics,
+        build_rules_check_diagnostics, closed_task_active_run_projection_mismatch_next_action,
         compact_host_dispatch_preflight_for_diagnostics, missing_task_actionability,
         post_commit_closed_task_active_run_projection_mismatch, post_commit_default_clear_command,
-        post_commit_default_lines, run_post_commit, POST_COMMIT_DIAGNOSTICS_PROJECTION_NAME,
+        post_commit_default_lines, run_post_commit,
     };
     use crate::test_cli_support::guard_current_dir;
     use crate::{
@@ -913,8 +913,10 @@ mod tests {
             &closed_task_ids,
             false,
         ));
-        assert!(closed_task_active_run_projection_mismatch_next_action()
-            .contains("vida task reconcile-closed-runs --limit 25"));
+        assert!(
+            closed_task_active_run_projection_mismatch_next_action()
+                .contains("vida task reconcile-closed-runs --limit 25")
+        );
         assert!(!closed_task_active_run_projection_mismatch_next_action().contains("--json"));
 
         let payload = serde_json::json!({
@@ -932,9 +934,11 @@ mod tests {
             post_commit_default_clear_command(&payload),
             Some("vida task reconcile-closed-runs --limit 25")
         );
-        assert!(!post_commit_default_clear_command(&payload)
-            .unwrap()
-            .contains("--json"));
+        assert!(
+            !post_commit_default_clear_command(&payload)
+                .unwrap()
+                .contains("--json")
+        );
     }
 
     #[test]
@@ -963,16 +967,22 @@ mod tests {
         let lines = post_commit_default_lines(&payload);
 
         assert!(lines.contains(&"blocker_codes: 1".to_string()));
-        assert!(lines.contains(&"blockers: closed_task_active_run_projection_mismatch".to_string()));
+        assert!(
+            lines.contains(&"blockers: closed_task_active_run_projection_mismatch".to_string())
+        );
         assert!(lines.contains(&"run_id: run-1".to_string()));
         assert!(lines.contains(&"task_id: task-1".to_string()));
-        assert!(lines
-            .contains(&"clear_command: vida task reconcile-closed-runs --limit 25".to_string()));
+        assert!(
+            lines
+                .contains(&"clear_command: vida task reconcile-closed-runs --limit 25".to_string())
+        );
         assert!(lines.contains(&"upstream_issue_owner: pomazanbohdan/vida-stack".to_string()));
-        assert!(lines.contains(
-            &"upstream_issue_tracker: https://github.com/pomazanbohdan/vida-stack/issues"
-                .to_string()
-        ));
+        assert!(
+            lines.contains(
+                &"upstream_issue_tracker: https://github.com/pomazanbohdan/vida-stack/issues"
+                    .to_string()
+            )
+        );
         assert!(lines.iter().all(|line| !line.contains("--json")));
     }
 

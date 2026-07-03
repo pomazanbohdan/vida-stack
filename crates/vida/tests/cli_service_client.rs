@@ -504,7 +504,9 @@ fn cli_mutation_entry_architecture_lint_covers_service_first_boundary() {
             "{command} must enter through service_client_cli::{runner}"
         );
     }
-    assert!(router.contains("Some(Command::Taskflow(args)) => run_taskflow_proxy(args).await"));
+    assert!(router.contains(
+        "Some(Command::Taskflow(args)) => {\n            run_taskflow_proxy(normalize_taskflow_team_continue_alias(args)).await\n        }"
+    ));
     assert!(
         router.contains("Some(Command::Docflow(args)) => docflow_proxy::run_docflow_proxy(args)")
     );

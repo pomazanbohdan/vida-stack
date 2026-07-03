@@ -3,11 +3,11 @@ use std::process::ExitCode;
 use serde::Serialize;
 
 use crate::contract_profile_adapter::{
-    blocker_code_str, canonical_approval_status_str, canonical_gate_level_str,
-    render_operator_contract_envelope, BlockerCode,
+    BlockerCode, blocker_code_str, canonical_approval_status_str, canonical_gate_level_str,
+    render_operator_contract_envelope,
 };
 use crate::taskflow_task_bridge::proxy_state_dir;
-use crate::{state_store::StateStore, ProxyArgs};
+use crate::{ProxyArgs, state_store::StateStore};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApprovalCommand<'a> {
@@ -709,9 +709,11 @@ mod tests {
         assert_eq!(envelope.approval_status, "waiting_for_approval");
         assert_eq!(envelope.gate_level, "block");
         assert!(envelope.approval_scope.contains("task_id=approval-test"));
-        assert!(envelope
-            .decision_reason
-            .contains("waiting for explicit approval"));
+        assert!(
+            envelope
+                .decision_reason
+                .contains("waiting for explicit approval")
+        );
         assert_eq!(envelope.expiry_state, "not_tracked");
         assert_eq!(envelope.trace_id, None);
         assert_eq!(envelope.workflow_class, None);
@@ -832,11 +834,13 @@ mod tests {
         assert_eq!(envelope.approval_status, "approved");
         assert_eq!(envelope.gate_level, "observe");
         assert_eq!(envelope.expiry_state, "not_applicable");
-        assert!(envelope
-            .next_actions
-            .first()
-            .expect("next action should exist")
-            .contains("consume continue"));
+        assert!(
+            envelope
+                .next_actions
+                .first()
+                .expect("next action should exist")
+                .contains("consume continue")
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

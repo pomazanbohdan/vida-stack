@@ -751,10 +751,10 @@ pub(crate) fn blocking_lane_selection(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_docflow_receipt_evidence, canonical_closure_admission_artifact_json,
-        doctor_launcher_summary_for_root, launcher_binary_fingerprint_skipped,
-        LauncherBinaryEvidence, RuntimeConsumptionClosureAdmission, RuntimeConsumptionEvidence,
-        CANONICAL_LAUNCHER_COMMAND,
+        CANONICAL_LAUNCHER_COMMAND, LauncherBinaryEvidence, RuntimeConsumptionClosureAdmission,
+        RuntimeConsumptionEvidence, build_docflow_receipt_evidence,
+        canonical_closure_admission_artifact_json, doctor_launcher_summary_for_root,
+        launcher_binary_fingerprint_skipped,
     };
     use std::path::PathBuf;
 
@@ -821,11 +821,13 @@ mod tests {
         assert_eq!(summary.taskflow_surface, "vida taskflow");
         assert_eq!(summary.active_executable_path, current_exe);
         assert!(!summary.active_executable_fingerprint.is_empty());
-        assert!(summary.installed_binaries.iter().any(|binary| binary.active
-            && PathBuf::from(&binary.path)
-                == PathBuf::from(&summary.active_executable_path)
-                    .canonicalize()
-                    .expect("active executable path should canonicalize")));
+        assert!(summary.installed_binaries.iter().any(|binary| {
+            binary.active
+                && PathBuf::from(&binary.path)
+                    == PathBuf::from(&summary.active_executable_path)
+                        .canonicalize()
+                        .expect("active executable path should canonicalize")
+        }));
     }
 
     #[test]
@@ -993,7 +995,7 @@ mod tests {
                 requirement: "docflow_readiness".to_string(),
                 status: "pass".to_string(),
                 evidence_refs: vec![
-                    "vida docflow readiness-check --profile active-canon".to_string()
+                    "vida docflow readiness-check --profile active-canon".to_string(),
                 ],
                 blockers: Vec::new(),
             }],

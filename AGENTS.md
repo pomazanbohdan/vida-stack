@@ -130,10 +130,3 @@ source_path: install/assets/AGENTS.scaffold.md
 created_at: '2026-03-14T18:10:00+02:00'
 updated_at: 2026-04-30T22:15:50.5483113Z
 changelog_ref: AGENTS.scaffold.changelog.jsonl
-
-<!-- lean-ctx -->
-## lean-ctx
-
-Prefer lean-ctx MCP tools over native equivalents for token savings.
-Full rules: @LEAN-CTX.md
-<!-- /lean-ctx -->

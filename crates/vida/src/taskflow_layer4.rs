@@ -257,7 +257,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Canonical commands:");
             println!("  vida task next [--scope <task-id>] [--state-dir <path>] [--json]");
-            println!("  vida taskflow next [--scope <task-id>] [--state-dir <path>] [--refresh|--no-cache] [--json]");
+            println!(
+                "  vida taskflow next [--scope <task-id>] [--state-dir <path>] [--refresh|--no-cache] [--json]"
+            );
             println!("  Default human output is compact TOON; --json emits machine-readable JSON.");
             println!(
                 "  JSON cache writes use authoritative recompute before updating taskflow-next-latest."

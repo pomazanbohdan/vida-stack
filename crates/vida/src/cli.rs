@@ -29,7 +29,7 @@ const PROOF_AFTER_HELP: &str = "Proof operations:\n  vida proof browser --route 
 const SESSION_AFTER_HELP: &str = "Session operations:\n  vida session triage\n  vida session triage --task <task-id>\n  vida session triage --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const QUALITY_AFTER_HELP: &str = "Quality operations:\n  vida quality gate --prepush\n  vida quality gate --prepush --advise\n  vida quality gate --prepush --json --advise\n\nOptions:\n  --prepush                        Evaluate the pre-push quality gate advisor\n  --advise                         Include remediation guidance\n  --coverage-file <path>           Read LCOV coverage evidence from this file\n  --crap-file <path>               Read cargo-crap JSON evidence from this file\n  --crap-baseline-file <path>      Optional previous cargo-crap JSON baseline used to detect CRAP>1000 growth\n  --task-exception-note <note>     TaskFlow exception note allowing touched high-CRAP functions for this push\n  --coverage-threshold <percent>   Coverage threshold used for covered-line deficit math\n  --project-root <path>            Repository root used for git dirty/changed file evidence\n  --json                           Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const DOCTOR_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida doctor` is a fixed runtime-integrity diagnostic projection; it supports compact default output, `--summary`, and `--json`, not ad-hoc `--fields`, `--view`, or `--details` selectors.\n  Use `vida status --json --fields ... --view ...` for top-level status field selection and `vida task show --view ...` for TaskFlow record field selection.";
-const DIAGNOSTICS_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida diagnostics` subcommands are fixed evidence and rules projections; use `--json` on the selected subcommand for the full machine-readable payload.\n  They do not support ad-hoc `--fields`, `--view`, or `--details` selectors; use `vida task show --view ...` or `vida status --json --fields ... --view ...` when row or status field selection is required.";
+const DIAGNOSTICS_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida diagnostics` subcommands are fixed evidence and rules projections; use `--json` on the selected subcommand for the full machine-readable payload.\n  `vida diagnostics` does not support ad-hoc `--fields`, `--view`, or `--details` selectors; use `vida task show --view ...` or `vida status --json --fields ... --view ...` when row or status field selection is required.";
 const LANE_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida lane` is a fixed lane/takeover diagnostic projection; it supports compact default output and `--json`, not ad-hoc `--fields`, `--view`, or `--details` selectors.\n  Use `vida taskflow run-graph status <run-id> --json` and `vida taskflow recovery status <run-id> --json` for full machine-readable run-graph detail.";
 const RECOVERY_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida recovery` is a TaskFlow recovery alias with fixed diagnostic projections; use default output for operators and `--json` for full machine-readable recovery detail.\n  It does not support ad-hoc `--fields`, `--view`, or `--details` selectors; use `vida task show --view ...` or `vida status --json --fields ... --view ...` for selectable records.";
 const REQUIREMENT_AFTER_HELP: &str = "Requirement operations:\n  vida requirement analyze --input \"Need editable meeting event fields\" --json\n  vida requirement analyze --task-id task-1 --input \"Build feature\" --artifact-path artifacts/requirement-analysis.json\n\nAnalyze contract:\n  Inputs: --input <text>, --source-file <path>, --task-id <id>, --request-id <id>, --depth-mode quick|standard|critical, --artifact-path <path>, --codebase-inspected.\n  JSON output includes: task_id, request_id, source_inputs, requirement_classification, depth_mode, requirement_atoms, selected_methods, selected_roles, role_findings_summary, detected_conflicts, open_questions, working_assumptions, solution_options, recommended_option, readiness_verdict, downstream_routes, acceptance_criteria, test_matrix, output_contract, codebase_impact, developer_handoff.\n  Default output is compact TOON/plain with readiness, artifact path, required-field summary, output modes, routes, and developer handoff. Use --json for the full machine-readable artifact.";
@@ -5340,7 +5340,9 @@ mod tests {
         assert!(coder_help.contains("provider-check"));
         assert!(coder_help.contains("run"));
         assert!(coder_help.contains("Default output is compact TOON/plain"));
-        assert!(coder_help.contains("Use --json only when a machine-readable payload is required."));
+        assert!(
+            coder_help.contains("Use --json only when a machine-readable payload is required.")
+        );
         assert!(coder_help.contains("vida coder capabilities\n"));
         assert!(!coder_help.contains("vida coder capabilities --json"));
 
@@ -5515,8 +5517,10 @@ mod tests {
         let agent_init_help = agent_init_error.to_string();
         assert_help_has_no_blank_description_rows("agent-init", &agent_init_help);
         assert!(agent_init_help.contains("Optional request text"));
-        assert!(agent_init_help
-            .contains("return receipt-backed execution or host-bridge handoff state"));
+        assert!(
+            agent_init_help
+                .contains("return receipt-backed execution or host-bridge handoff state")
+        );
         assert!(agent_init_help.contains("Default blocked output is compact TOON/plain"));
         assert!(agent_init_help.contains(
             "Use --json only when a machine-readable payload or full blocked evidence is required"

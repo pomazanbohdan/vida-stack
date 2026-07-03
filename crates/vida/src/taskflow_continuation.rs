@@ -3,10 +3,9 @@ use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    print_surface_header, print_surface_line,
+    RenderMode, print_surface_header, print_surface_line,
     state_store::{RunGraphContinuationBinding, RunGraphStatus, StateStore, TaskRecord},
     taskflow_task_bridge::proxy_state_dir,
-    RenderMode,
 };
 
 pub(crate) const CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE: &str =
@@ -909,8 +908,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_for_stale_status(
-    ) {
+    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_for_stale_status()
+     {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

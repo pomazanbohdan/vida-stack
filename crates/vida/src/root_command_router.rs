@@ -1,20 +1,21 @@
 use std::{ffi::OsString, process::ExitCode};
 
 use super::{
+    AgentArgs, AgentCommand, Cli, CoderCommand, Command, ReleaseCommand, SessionArgs,
+    SessionCommand, StateArgs, StateCommand, StateResetArgs, TaskArgs, TaskCommand,
     agent_dispatch_surface, agent_feedback_surface, approval_surface, diagnostics_surface,
     docflow_proxy, docs_surface, doctor_surface, init_surfaces, lane_surface, memory_surface,
     orchestrator_session_surface, pack_surface, print_root_help, project_activator_surface,
     proof_surface, protocol_surface, quality_surface, release_surface, requirement_surface,
     run_taskflow_proxy, runtime_web_surface, service_client_cli, session_surface, status_surface,
-    task_surface, AgentArgs, AgentCommand, Cli, CoderCommand, Command, ReleaseCommand, SessionArgs,
-    SessionCommand, StateArgs, StateCommand, StateResetArgs, TaskArgs, TaskCommand,
+    task_surface,
 };
 use crate::cli::{command_metadata_by_name, command_metadata_for_command};
 use crate::root_state_binding::{
-    bind_runtime_state_dir_for_project_bound_command,
+    RuntimeStateDirGuard, bind_runtime_state_dir_for_project_bound_command,
     bind_runtime_state_dir_override_for_project_bound_command,
     normalize_runtime_state_dir_env_for_parse, preserve_runtime_state_dir_env_for_parse_only,
-    preserve_runtime_state_dir_env_for_project_bound_command, RuntimeStateDirGuard,
+    preserve_runtime_state_dir_env_for_project_bound_command,
 };
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
@@ -286,77 +287,81 @@ fn release_command_label(args: &super::ReleaseArgs) -> String {
 }
 
 fn task_command_has_explicit_state_dir(args: &TaskArgs) -> bool {
+    task_command_explicit_state_dir(args).is_some()
+}
+
+fn task_command_explicit_state_dir(args: &TaskArgs) -> Option<&std::path::Path> {
     match &args.command {
-        TaskCommand::Import(command) => command.state_dir.is_some(),
-        TaskCommand::ImportJsonl(command) => command.state_dir.is_some(),
-        TaskCommand::ReplaceJsonl(command) => command.state_dir.is_some(),
-        TaskCommand::ExportJsonl(command) => command.state_dir.is_some(),
-        TaskCommand::List(command) => command.state_dir.is_some(),
-        TaskCommand::Search(command) => command.state_dir.is_some(),
-        TaskCommand::Show(command) => command.state_dir.is_some(),
-        TaskCommand::ValidatorPacket(command) => command.state_dir.is_some(),
-        TaskCommand::Progress(command) => command.state_dir.is_some(),
-        TaskCommand::ClosureReady(command) => command.state_dir.is_some(),
-        TaskCommand::Closeout(command) => command.state_dir.is_some(),
+        TaskCommand::Import(command) => command.state_dir.as_deref(),
+        TaskCommand::ImportJsonl(command) => command.state_dir.as_deref(),
+        TaskCommand::ReplaceJsonl(command) => command.state_dir.as_deref(),
+        TaskCommand::ExportJsonl(command) => command.state_dir.as_deref(),
+        TaskCommand::List(command) => command.state_dir.as_deref(),
+        TaskCommand::Search(command) => command.state_dir.as_deref(),
+        TaskCommand::Show(command) => command.state_dir.as_deref(),
+        TaskCommand::ValidatorPacket(command) => command.state_dir.as_deref(),
+        TaskCommand::Progress(command) => command.state_dir.as_deref(),
+        TaskCommand::ClosureReady(command) => command.state_dir.as_deref(),
+        TaskCommand::Closeout(command) => command.state_dir.as_deref(),
         TaskCommand::Proof(command) => match &command.command {
-            super::TaskProofCommand::Status(command) => command.state_dir.is_some(),
-            super::TaskProofCommand::AttachBrowser(command) => command.state_dir.is_some(),
-            super::TaskProofCommand::AttachEvidence(command) => command.state_dir.is_some(),
+            super::TaskProofCommand::Status(command) => command.state_dir.as_deref(),
+            super::TaskProofCommand::AttachBrowser(command) => command.state_dir.as_deref(),
+            super::TaskProofCommand::AttachEvidence(command) => command.state_dir.as_deref(),
         },
-        TaskCommand::Ready(command) => command.state_dir.is_some(),
-        TaskCommand::Next(command) => command.state_dir.is_some(),
-        TaskCommand::NextLawful(command) => command.state_dir.is_some(),
-        TaskCommand::NextDisplayId(command) => command.state_dir.is_some(),
-        TaskCommand::Create(command) | TaskCommand::Ensure(command) => command.state_dir.is_some(),
-        TaskCommand::Update(command) => command.state_dir.is_some(),
-        TaskCommand::Reset(command) => command.state_dir.is_some(),
+        TaskCommand::Ready(command) => command.state_dir.as_deref(),
+        TaskCommand::Next(command) => command.state_dir.as_deref(),
+        TaskCommand::NextLawful(command) => command.state_dir.as_deref(),
+        TaskCommand::NextDisplayId(command) => command.state_dir.as_deref(),
+        TaskCommand::Create(command) | TaskCommand::Ensure(command) => command.state_dir.as_deref(),
+        TaskCommand::Update(command) => command.state_dir.as_deref(),
+        TaskCommand::Reset(command) => command.state_dir.as_deref(),
         TaskCommand::Note(command) => match &command.command {
-            super::TaskNoteCommand::Append(command) => command.state_dir.is_some(),
+            super::TaskNoteCommand::Append(command) => command.state_dir.as_deref(),
         },
-        TaskCommand::Block(command) => command.state_dir.is_some(),
-        TaskCommand::Verify(command) => command.state_dir.is_some(),
+        TaskCommand::Block(command) => command.state_dir.as_deref(),
+        TaskCommand::Verify(command) => command.state_dir.as_deref(),
         TaskCommand::Attempt(command) => match &command.command {
-            super::TaskAttemptCommand::Dispatch(command) => command.state_dir.is_some(),
-            super::TaskAttemptCommand::Status(command) => command.state_dir.is_some(),
-            super::TaskAttemptCommand::Collect(command) => command.state_dir.is_some(),
-            super::TaskAttemptCommand::Consolidate(command) => command.state_dir.is_some(),
-            super::TaskAttemptCommand::Record(command) => command.state_dir.is_some(),
-            super::TaskAttemptCommand::Transition(command) => command.state_dir.is_some(),
-            super::TaskAttemptCommand::Summary(command) => command.state_dir.is_some(),
+            super::TaskAttemptCommand::Dispatch(command) => command.state_dir.as_deref(),
+            super::TaskAttemptCommand::Status(command) => command.state_dir.as_deref(),
+            super::TaskAttemptCommand::Collect(command) => command.state_dir.as_deref(),
+            super::TaskAttemptCommand::Consolidate(command) => command.state_dir.as_deref(),
+            super::TaskAttemptCommand::Record(command) => command.state_dir.as_deref(),
+            super::TaskAttemptCommand::Transition(command) => command.state_dir.as_deref(),
+            super::TaskAttemptCommand::Summary(command) => command.state_dir.as_deref(),
         },
         TaskCommand::Stage(command) => match &command.command {
-            super::TaskStageCommand::Status(command) => command.state_dir.is_some(),
+            super::TaskStageCommand::Status(command) => command.state_dir.as_deref(),
         },
-        TaskCommand::OwnedStatus(command) => command.state_dir.is_some(),
-        TaskCommand::Close(command) => command.state_dir.is_some(),
-        TaskCommand::PackFinalize(command) => command.state_dir.is_some(),
-        TaskCommand::Reconcile(command) => command.state_dir.is_some(),
-        TaskCommand::ReconcileClosedRuns(command) => command.state_dir.is_some(),
-        TaskCommand::PruneClosedEpics(command) => command.state_dir.is_some(),
-        TaskCommand::Split(command) => command.state_dir.is_some(),
-        TaskCommand::SpawnBlocker(command) => command.state_dir.is_some(),
+        TaskCommand::OwnedStatus(command) => command.state_dir.as_deref(),
+        TaskCommand::Close(command) => command.state_dir.as_deref(),
+        TaskCommand::PackFinalize(command) => command.state_dir.as_deref(),
+        TaskCommand::Reconcile(command) => command.state_dir.as_deref(),
+        TaskCommand::ReconcileClosedRuns(command) => command.state_dir.as_deref(),
+        TaskCommand::PruneClosedEpics(command) => command.state_dir.as_deref(),
+        TaskCommand::Split(command) => command.state_dir.as_deref(),
+        TaskCommand::SpawnBlocker(command) => command.state_dir.as_deref(),
         TaskCommand::Deps(command)
         | TaskCommand::ReverseDeps(command)
         | TaskCommand::Children(command)
-        | TaskCommand::Tree(command) => command.state_dir.is_some(),
-        TaskCommand::ReparentChildren(command) => command.state_dir.is_some(),
-        TaskCommand::DefectBatchRehome(command) => command.state_dir.is_some(),
+        | TaskCommand::Tree(command) => command.state_dir.as_deref(),
+        TaskCommand::ReparentChildren(command) => command.state_dir.as_deref(),
+        TaskCommand::DefectBatchRehome(command) => command.state_dir.as_deref(),
         TaskCommand::Blocked(command)
         | TaskCommand::ValidateGraph(command)
-        | TaskCommand::CriticalPath(command) => command.state_dir.is_some(),
+        | TaskCommand::CriticalPath(command) => command.state_dir.as_deref(),
         TaskCommand::Dep(command) => match &command.command {
-            super::TaskDependencyCommand::Add(command) => command.state_dir.is_some(),
-            super::TaskDependencyCommand::Ensure(command) => command.state_dir.is_some(),
-            super::TaskDependencyCommand::AddBulk(command) => command.state_dir.is_some(),
-            super::TaskDependencyCommand::Remove(command) => command.state_dir.is_some(),
+            super::TaskDependencyCommand::Add(command) => command.state_dir.as_deref(),
+            super::TaskDependencyCommand::Ensure(command) => command.state_dir.as_deref(),
+            super::TaskDependencyCommand::AddBulk(command) => command.state_dir.as_deref(),
+            super::TaskDependencyCommand::Remove(command) => command.state_dir.as_deref(),
         },
         TaskCommand::Handoff(command) => match &command.command {
-            super::TaskHandoffCommand::Accept(command) => command.state_dir.is_some(),
+            super::TaskHandoffCommand::Accept(command) => command.state_dir.as_deref(),
         },
         TaskCommand::Takeover(command) => match &command.command {
-            super::TaskTakeoverCommand::Status(command) => command.state_dir.is_some(),
+            super::TaskTakeoverCommand::Status(command) => command.state_dir.as_deref(),
         },
-        TaskCommand::Help(_) | TaskCommand::AdaptivePreview(_) => false,
+        TaskCommand::Help(_) | TaskCommand::AdaptivePreview(_) => None,
     }
 }
 
@@ -592,6 +597,7 @@ fn command_explicit_state_dir(command: &Option<Command>) -> Option<&std::path::P
         Some(Command::ProjectActivator(command)) => command.state_dir.as_deref(),
         Some(Command::Memory(command)) => command.state_dir.as_deref(),
         Some(Command::Status(command)) => command.state_dir.as_deref(),
+        Some(Command::Task(command)) => task_command_explicit_state_dir(command),
         Some(Command::State(command)) => state_command_explicit_state_dir(command),
         Some(Command::Doctor(command)) => command.state_dir.as_deref(),
         Some(Command::Diagnostics(command)) => diagnostics_command_explicit_state_dir(command),
@@ -641,6 +647,7 @@ fn raw_args_are_env_authoritative_state_surface(args: &[OsString]) -> bool {
         .filter(|arg| !arg.starts_with('-'));
     let command = positional.next();
     match command {
+        Some("task") => true,
         Some("agent") => matches!(
             positional.next(),
             Some("dispatch-next" | "select" | "status" | "host-bridge")
@@ -722,13 +729,13 @@ fn raw_args_explicit_state_dir(args: &[OsString]) -> Option<std::path::PathBuf> 
 #[cfg(test)]
 mod tests {
     use super::{
-        command_needs_project_root_state_dir, generic_service_client_command_metrics,
+        Cli, command_needs_project_root_state_dir, generic_service_client_command_metrics,
         normalize_runtime_state_dir_env_for_parse, prepare_runtime_state_dir,
         prepare_runtime_state_dir_for_parse, state_reset_operator_payload,
-        state_reset_plain_output, Cli,
+        state_reset_plain_output,
     };
-    use crate::temp_state::TempStateHarness;
     use crate::Command;
+    use crate::temp_state::TempStateHarness;
     use clap::Parser;
     use std::fs;
 
@@ -747,14 +754,18 @@ mod tests {
         );
         assert!(metrics.max_transport_context_flags <= 5);
         assert_eq!(metrics.workflows.len(), 10);
-        assert!(metrics
-            .workflows
-            .iter()
-            .all(|workflow| workflow.canonical_command_count <= workflow.legacy_command_count));
-        assert!(metrics
-            .workflows
-            .iter()
-            .all(|workflow| workflow.canonical_option_count < workflow.legacy_option_count));
+        assert!(
+            metrics
+                .workflows
+                .iter()
+                .all(|workflow| workflow.canonical_command_count <= workflow.legacy_command_count)
+        );
+        assert!(
+            metrics
+                .workflows
+                .iter()
+                .all(|workflow| workflow.canonical_option_count < workflow.legacy_option_count)
+        );
     }
 
     #[test]
@@ -1626,16 +1637,19 @@ mod tests {
         let cli = Cli::try_parse_from(["vida", "boot"]).expect("boot cli should parse");
 
         assert!(!command_needs_project_root_state_dir(&cli.command));
-        assert!(prepare_runtime_state_dir(&cli.command)
-            .expect("state dir preparation should succeed")
-            .is_none());
+        assert!(
+            prepare_runtime_state_dir(&cli.command)
+                .expect("state dir preparation should succeed")
+                .is_none()
+        );
         assert!(std::env::var_os("VIDA_STATE_DIR").is_none());
     }
 
     #[test]
-    fn prepare_runtime_state_dir_skips_project_root_for_explicit_task_state_dir() {
+    fn prepare_runtime_state_dir_uses_explicit_task_state_dir_without_project_root() {
         let _lock = ENV_LOCK.lock().expect("env lock should not be poisoned");
         let _env_guard = EnvVarGuard::unset("VIDA_STATE_DIR");
+        let explicit_state_dir = std::path::PathBuf::from("C:/tmp/isolated-state");
         let cli = Cli::try_parse_from([
             "vida",
             "task",
@@ -1647,9 +1661,14 @@ mod tests {
         .expect("task next-lawful cli should parse");
 
         assert!(!command_needs_project_root_state_dir(&cli.command));
-        assert!(prepare_runtime_state_dir(&cli.command)
+        let guard = prepare_runtime_state_dir(&cli.command)
             .expect("state dir preparation should succeed")
-            .is_none());
+            .expect("explicit task state-dir should bind runtime env");
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(explicit_state_dir)
+        );
+        drop(guard);
         assert!(std::env::var_os("VIDA_STATE_DIR").is_none());
     }
 }

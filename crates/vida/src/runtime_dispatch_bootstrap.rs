@@ -1,4 +1,4 @@
-use crate::{runtime_consumption_run_id, RuntimeConsumptionLaneSelection, StateStore};
+use crate::{RuntimeConsumptionLaneSelection, StateStore, runtime_consumption_run_id};
 
 pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
     store: &StateStore,
@@ -209,8 +209,8 @@ mod tests {
     use crate::{RuntimeConsumptionLaneSelection, StateStore};
 
     #[tokio::test]
-    async fn runtime_consumption_bootstrap_fails_closed_with_blocked_fallback_when_seed_derivation_fails(
-    ) {
+    async fn runtime_consumption_bootstrap_fails_closed_with_blocked_fallback_when_seed_derivation_fails()
+     {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -228,12 +228,50 @@ mod tests {
         std::fs::create_dir_all(&cwd).expect("create isolated cwd");
         let _cwd = crate::test_cli_support::guard_current_dir(&cwd);
         let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "seed-fail-parent",
+                title: "Ambiguous seed parent",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create ambiguous seed parent");
+        for task_id in ["seed-fail-task-a", "seed-fail-task-b"] {
+            store
+                .create_task(crate::state_store::CreateTaskRequest {
+                    task_id,
+                    title: "Ambiguous seed candidate",
+                    display_id: None,
+                    description: "",
+                    issue_type: "task",
+                    status: "open",
+                    priority: 1,
+                    parent_id: Some("seed-fail-parent"),
+                    labels: &[],
+                    execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "",
+                })
+                .await
+                .expect("create ambiguous seed task");
+        }
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
             selection_mode: "fixed".to_string(),
             fallback_role: "orchestrator".to_string(),
-            request: "implement".to_string(),
+            request: "implement seed-fail-task-a and seed-fail-task-b".to_string(),
             selected_role: "worker".to_string(),
             conversational_mode: None,
             single_task_only: false,
@@ -250,9 +288,11 @@ mod tests {
             build_runtime_consumption_run_graph_bootstrap(&store, &role_selection).await;
         assert_eq!(bootstrap["status"], "blocked");
         assert_eq!(bootstrap["handoff_ready"], false);
-        assert!(bootstrap["fallback_reason"]
-            .as_str()
-            .is_some_and(|value| value.contains("seed_failed")));
+        assert!(
+            bootstrap["fallback_reason"]
+                .as_str()
+                .is_some_and(|value| value.contains("seed_failed"))
+        );
 
         assert_eq!(bootstrap["latest_status"]["status"], "blocked");
         assert_eq!(bootstrap["latest_status"]["recovery_ready"], false);

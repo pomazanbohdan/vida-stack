@@ -1,13 +1,13 @@
 use ratatui::{
+    Frame,
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 use serde_json::json;
 use vida_contracts::{
-    operation_spec, operations, VidaClientKind, VidaCommandEnvelope, VidaIdempotencyKey,
-    VidaOperation, VidaProjectId, VidaProjectRef, VidaRequestId, VidaResponseStatus, VidaSessionId,
-    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION,
+    VIDA_COMMAND_PROTOCOL_VERSION, VIDA_CONTRACTS_SCHEMA_VERSION, VidaClientKind,
+    VidaCommandEnvelope, VidaIdempotencyKey, VidaOperation, VidaProjectId, VidaProjectRef,
+    VidaRequestId, VidaResponseStatus, VidaSessionId, operation_spec, operations,
 };
 
 use crate::vida_client::VidaClient;

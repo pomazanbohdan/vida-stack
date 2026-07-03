@@ -183,10 +183,12 @@ fn check_json_renders_blocked_and_pass_envelopes() {
     assert_eq!(pass_json["surface"], "docflow check");
     assert_eq!(pass_json["status"], "pass");
     assert_eq!(pass_json["row_count"], 0);
-    assert!(pass_json["rows"]
-        .as_array()
-        .expect("rows should be an array")
-        .is_empty());
+    assert!(
+        pass_json["rows"]
+            .as_array()
+            .expect("rows should be an array")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -222,10 +224,12 @@ fn check_default_and_json_bind_relative_paths_to_root() {
     assert_eq!(parsed["surface"], "docflow check");
     assert_eq!(parsed["status"], "blocked");
     assert_eq!(parsed["rows"][0]["path"], "docs/process/a.md");
-    assert!(parsed["rows"][0]["issues"]
-        .as_array()
-        .expect("issues should be an array")
-        .contains(&serde_json::Value::String("missing_footer".to_string())));
+    assert!(
+        parsed["rows"][0]["issues"]
+            .as_array()
+            .expect("issues should be an array")
+            .contains(&serde_json::Value::String("missing_footer".to_string()))
+    );
 
     fs::remove_dir_all(root).expect("root should be removed");
 }

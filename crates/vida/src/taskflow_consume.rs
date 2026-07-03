@@ -2,9 +2,9 @@ use std::process::ExitCode;
 use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
 
+use crate::BlockerCode;
 use crate::display_lane_label;
 use crate::runtime_consumption_surface::RuntimeConsumptionClosureAdmissionEvidence;
-use crate::BlockerCode;
 
 const CONSUME_FINAL_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -260,22 +260,18 @@ fn consume_final_toon_line(label: &str, value: &str) -> String {
 }
 
 fn consume_final_toon_bool(value: bool) -> &'static str {
-    if value {
-        "true"
-    } else {
-        "false"
-    }
+    if value { "true" } else { "false" }
 }
 
 fn consume_final_design_first_delegated_lanes(execution_plan: &serde_json::Value) -> String {
-    let required_lanes = execution_plan["orchestration_contract"]["delegation_policy"]
-        ["required_lanes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(display_lane_label)
-        .collect::<Vec<_>>();
+    let required_lanes =
+        execution_plan["orchestration_contract"]["delegation_policy"]["required_lanes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(display_lane_label)
+            .collect::<Vec<_>>();
     if !required_lanes.is_empty() {
         return required_lanes.join(", ");
     }
@@ -359,9 +355,9 @@ fn consume_final_toon_text(
                 &format!("spec-first bootstrap for `{feature_slug}`"),
             ));
         }
-        if let Some(command) = payload.role_selection.execution_plan["tracked_flow_bootstrap"]
-            ["bootstrap_command"]
-            .as_str()
+        if let Some(command) =
+            payload.role_selection.execution_plan["tracked_flow_bootstrap"]["bootstrap_command"]
+                .as_str()
         {
             lines.push(consume_final_toon_line(
                 "next_tracked_command",
@@ -373,9 +369,9 @@ fn consume_final_toon_text(
         if !required_lanes.is_empty() {
             lines.push(consume_final_toon_line("delegated_lanes", &required_lanes));
         }
-    } else if let Some(agent_type) = payload.taskflow_handoff_plan["activation_chain"]
-        ["implementer"]["activation_agent_type"]
-        .as_str()
+    } else if let Some(agent_type) =
+        payload.taskflow_handoff_plan["activation_chain"]["implementer"]["activation_agent_type"]
+            .as_str()
     {
         lines.push(consume_final_toon_line("implementer_carrier", agent_type));
     }
@@ -734,7 +730,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                                     status: "blocked".to_string(),
                                                     admitted: false,
                                                     blockers: vec![
-                                                        "unresolved_lane_selection".to_string()
+                                                        "unresolved_lane_selection".to_string(),
                                                     ],
                                                     proof_surfaces: vec![
                                                         "vida taskflow consume bundle check"
@@ -828,8 +824,8 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                                     .await
                                                 {
                                                     eprintln!(
-                                                "Failed to record blocked consume-final resume evidence: {error}"
-                                            );
+                                                        "Failed to record blocked consume-final resume evidence: {error}"
+                                                    );
                                                 }
                                             }
                                             if let Err(snapshot_error) =
@@ -1023,8 +1019,8 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     Ok(preview) => Some(preview),
                                     Err(error) => {
                                         eprintln!(
-                                        "Failed to build runtime dispatch packet preview: {error}"
-                                    );
+                                            "Failed to build runtime dispatch packet preview: {error}"
+                                        );
                                         return ExitCode::from(1);
                                     }
                                 }
@@ -1188,8 +1184,8 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 Ok(store) => store,
                                 Err(error) => {
                                     eprintln!(
-                                    "Failed to reopen authoritative state store before receipt persistence: {error}"
-                                );
+                                        "Failed to reopen authoritative state store before receipt persistence: {error}"
+                                    );
                                     return ExitCode::from(1);
                                 }
                             };
@@ -1432,8 +1428,8 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                             store.record_run_graph_dispatch_receipt(&receipt).await
                                         {
                                             eprintln!(
-                                            "Failed to record blocked run-graph dispatch receipt: {error}"
-                                        );
+                                                "Failed to record blocked run-graph dispatch receipt: {error}"
+                                            );
                                         }
                                     }
                                 }
@@ -1667,15 +1663,15 @@ fn decode_execution_preparation_artifacts(
         .and_then(serde_json::Value::as_str)
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
-    let legacy_evidence_ready =
-        super::json_bool(
-            run_graph_bootstrap.get("execution_preparation_evidence_ready"),
-            false,
-        ) || run_graph_bootstrap["evidence"]["execution_preparation"]["status"].as_str()
+    let legacy_evidence_ready = super::json_bool(
+        run_graph_bootstrap.get("execution_preparation_evidence_ready"),
+        false,
+    )
+        || run_graph_bootstrap["evidence"]["execution_preparation"]["status"].as_str()
             == Some("ready")
-            || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"]
-                .as_bool()
-                .unwrap_or(false);
+        || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"]
+            .as_bool()
+            .unwrap_or(false);
 
     let developer_handoff_packet = DeveloperHandoffPacketArtifact {
         path: nonempty_json_string(packet_json.and_then(|value| value.get("path"))).or_else(|| {
@@ -2217,13 +2213,13 @@ fn canonical_dispatch_target_from_latest_status(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
-        build_retrieval_policy_decision_gate, build_runtime_consumption_dispatch_receipt,
-        consume_final_command_usage, fail_fast_state_store_open_with_timeout,
-        normalize_runtime_consumption_statuses, parse_taskflow_consume_final_args,
-        should_record_blocked_dispatch_receipt, try_print_taskflow_consume_nested_help,
         ApprovalDelegationEvidenceGate, ConsumeFinalMode, ExecutionPreparationEvidenceGate,
-        RetrievalPolicyDecisionGate,
+        RetrievalPolicyDecisionGate, build_approval_delegation_evidence_gate,
+        build_execution_preparation_evidence_gate, build_retrieval_policy_decision_gate,
+        build_runtime_consumption_dispatch_receipt, consume_final_command_usage,
+        fail_fast_state_store_open_with_timeout, normalize_runtime_consumption_statuses,
+        parse_taskflow_consume_final_args, should_record_blocked_dispatch_receipt,
+        try_print_taskflow_consume_nested_help,
     };
     use std::time::Duration;
 
@@ -2426,8 +2422,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_consumption_dispatch_receipt_canonicalizes_specification_target_from_business_analyst_alias(
-    ) {
+    fn runtime_consumption_dispatch_receipt_canonicalizes_specification_target_from_business_analyst_alias()
+     {
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -2677,8 +2673,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_consumption_dispatch_receipt_canonicalizes_real_bootstrap_shape_with_spec_pack_route_task_class(
-    ) {
+    fn runtime_consumption_dispatch_receipt_canonicalizes_real_bootstrap_shape_with_spec_pack_route_task_class()
+     {
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -3195,8 +3191,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approval_delegation_gate_passes_when_latest_status_is_absent_for_fresh_consume_final_bootstrap(
-    ) {
+    async fn approval_delegation_gate_passes_when_latest_status_is_absent_for_fresh_consume_final_bootstrap()
+     {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -3427,19 +3423,23 @@ mod tests {
         let mut docflow_verdict = crate::RuntimeConsumptionDocflowVerdict {
             status: "blocked".to_string(),
             ready: false,
-            blockers: vec![crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::MissingProofVerdict,
-            )
-            .expect("missing proof verdict blocker should be canonical")],
+            blockers: vec![
+                crate::release1_contracts::blocker_code_value(
+                    crate::release1_contracts::BlockerCode::MissingProofVerdict,
+                )
+                .expect("missing proof verdict blocker should be canonical"),
+            ],
             proof_surfaces: vec![],
         };
         let mut closure_admission = crate::RuntimeConsumptionClosureAdmission {
             status: "blocked".to_string(),
             admitted: false,
-            blockers: vec![crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::MissingClosureProof,
-            )
-            .expect("missing closure proof blocker should be canonical")],
+            blockers: vec![
+                crate::release1_contracts::blocker_code_value(
+                    crate::release1_contracts::BlockerCode::MissingClosureProof,
+                )
+                .expect("missing closure proof blocker should be canonical"),
+            ],
             proof_surfaces: vec![],
             evidence_table: vec![],
         };
@@ -3660,9 +3660,11 @@ mod tests {
                 .expect("open store");
             let error =
                 super::validate_consume_final_explicit_task_id(&store, "missing-task-run").await;
-            assert!(error
-                .expect_err("missing explicit task id should fail")
-                .contains("refusing to create a stale run graph"));
+            assert!(
+                error
+                    .expect_err("missing explicit task id should fail")
+                    .contains("refusing to create a stale run graph")
+            );
             store.close().await;
         });
         let _ = std::fs::remove_dir_all(root);

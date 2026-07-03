@@ -2,18 +2,19 @@ use std::{env, path::PathBuf};
 
 use serde_json::json;
 use vida_contracts::{
-    mvp_operation_catalog, operation_input_schema, operations, VidaCommandEnvelope,
-    VidaCommandResponse, VidaProblem, VidaProblemSeverity, VidaProjectRef,
+    VidaCommandEnvelope, VidaCommandResponse, VidaProblem, VidaProblemSeverity, VidaProjectRef,
+    mvp_operation_catalog, operation_input_schema, operations,
 };
 use vida_runtime_local::engine::local_runtime_capabilities;
 use vida_runtime_local::jobs::{
-    host_bridge_request_job_status_payload, job_status_payload, plan_host_bridge_request_job,
-    plan_outbox_job_from_redb, unavailable_job_status, HostBridgeRequestJobSnapshot, RetryPolicy,
+    HostBridgeRequestJobSnapshot, RetryPolicy, host_bridge_request_job_status_payload,
+    job_status_payload, plan_host_bridge_request_job, plan_outbox_job_from_redb,
+    unavailable_job_status,
 };
 
 use crate::{
     command_pipeline::VidaCommandPipeline,
-    vida_client::{pass_response, problem_response, unsupported_operation_response, VidaClient},
+    vida_client::{VidaClient, pass_response, problem_response, unsupported_operation_response},
 };
 
 #[derive(Debug, Clone)]

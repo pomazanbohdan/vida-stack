@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::project_activator_surface::{
+    HOST_CLI_PLACEHOLDER, HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE, PI_AGENT_PROJECTION_RENDER_MODE,
     host_cli_system_enabled, host_cli_system_execution_class, host_cli_system_materialization_mode,
     host_cli_system_runtime_root, host_cli_system_runtime_surface, normalize_host_cli_system,
-    resolve_host_cli_template_source, HOST_CLI_PLACEHOLDER, HOST_CLI_TEMPLATE_CATALOG_RENDER_MODE,
-    PI_AGENT_PROJECTION_RENDER_MODE,
+    resolve_host_cli_template_source,
 };
 
 fn pi_projection_path(

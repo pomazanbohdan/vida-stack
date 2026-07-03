@@ -1,11 +1,11 @@
 use crate::vida_client::{
-    pass_response, problem_response, unsupported_operation_response, VidaClient,
+    VidaClient, pass_response, problem_response, unsupported_operation_response,
 };
 use serde_json::json;
 use vida_contracts::{
-    mvp_operation_catalog, operation_input_schema, operations, VidaCommandEnvelope,
-    VidaCommandResponse, VidaEvent, VidaEventCursor, VidaProblem, VidaProblemSeverity,
-    VidaProjectId, VidaProjectRef, VidaRequestId, VidaSessionId,
+    VidaCommandEnvelope, VidaCommandResponse, VidaEvent, VidaEventCursor, VidaProblem,
+    VidaProblemSeverity, VidaProjectId, VidaProjectRef, VidaRequestId, VidaSessionId,
+    mvp_operation_catalog, operation_input_schema, operations,
 };
 
 #[derive(Debug, Clone)]
@@ -809,7 +809,7 @@ fn wizard_stale_revision_problem(
             code: "wizard_revision_mismatch".to_string(),
             scope: Some("expected_revision".to_string()),
             next_actions: vec![
-                "Reload the wizard session and retry with the latest revision.".to_string()
+                "Reload the wizard session and retry with the latest revision.".to_string(),
             ],
         }],
         remediation: vec!["Call vida.wizard.session.get before updating or diffing.".to_string()],
@@ -1034,7 +1034,7 @@ fn project_not_found_response(
             code: "project_not_registered".to_string(),
             scope: Some(registry_entry_id.to_string()),
             next_actions: vec![
-                "Use a registry_entry_id from vida.project.registry.list.".to_string()
+                "Use a registry_entry_id from vida.project.registry.list.".to_string(),
             ],
         }],
         remediation: vec!["Call vida.project.registry.list and retry.".to_string()],

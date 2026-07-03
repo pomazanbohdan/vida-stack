@@ -260,6 +260,7 @@ async fn reconcile_epics_from_descendant_progress(
     dry_run: bool,
 ) -> Result<TaskEpicReconcileReceipt, StateStoreError> {
     let tasks = store.all_tasks().await?;
+    let progress_precompute = TaskProgressPrecompute::new(&tasks);
     let mut closed_epics = Vec::new();
     let mut blocked_epics = Vec::new();
     let mut inspected_epic_count = 0usize;
@@ -282,16 +283,19 @@ async fn reconcile_epics_from_descendant_progress(
             continue;
         }
 
-        let progress =
-            task_progress_summary_for_basis(&tasks, &epic.id, EPIC_RECONCILE_PROGRESS_BASIS)?;
+        let progress = task_progress_summary_for_basis_with_precompute(
+            &tasks,
+            &progress_precompute,
+            &epic.id,
+            EPIC_RECONCILE_PROGRESS_BASIS,
+        )?;
 
-        let children = tasks
-            .iter()
-            .filter(|task| {
-                StateStore::parent_id_for_task(task).as_deref() == Some(epic.id.as_str())
-            })
-            .collect::<Vec<_>>();
-        let child_count = children.len();
+        let child_indexes = progress_precompute
+            .child_indexes_by_parent
+            .get(epic.id.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let child_count = child_indexes.len();
         if child_count == 0 {
             blocked_epics.push(TaskEpicReconcileBlockedRow {
                 epic_id: epic.id,
@@ -307,17 +311,19 @@ async fn reconcile_epics_from_descendant_progress(
             continue;
         }
 
-        let open_child_count = children
+        let open_child_count = child_indexes
             .iter()
-            .filter(|child| child.status == "open")
+            .filter(|&&child_index| tasks[child_index].status.as_str() == "open")
             .count();
-        let in_progress_child_count = children
+        let in_progress_child_count = child_indexes
             .iter()
-            .filter(|child| child.status == "in_progress")
+            .filter(|&&child_index| tasks[child_index].status.as_str() == "in_progress")
             .count();
-        let all_children_closed = children
+        let all_children_closed = child_indexes
             .iter()
-            .all(|child| StateStore::task_status_is_closed_like(&child.status));
+            .all(|&child_index| {
+                StateStore::task_status_is_closed_like(&tasks[child_index].status)
+            });
         if !progress.closure_candidate {
             let reason = if !all_children_closed {
                 "active_descendants_remaining".to_string()
@@ -3058,36 +3064,21 @@ fn task_next_lawful_projection_name() -> &'static str {
     "task-next-lawful-latest"
 }
 
-fn safe_task_projection_component(value: &str) -> String {
-    let mut safe = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    safe.truncate(160);
-    if safe.is_empty() {
-        "unknown".to_string()
-    } else {
-        safe
-    }
-}
-
 fn task_show_projection_name(task_id: &str) -> String {
     format!(
         "task-show-{}-latest",
-        safe_task_projection_component(task_id)
+        crate::operator_projection_cache::sanitize_projection_component(task_id, "unknown", 160)
     )
 }
 
 fn task_ready_projection_name(scope_task_id: Option<&str>) -> String {
     format!(
         "task-ready-scope-{}-latest",
-        safe_task_projection_component(scope_task_id.unwrap_or("default"))
+        crate::operator_projection_cache::sanitize_projection_component(
+            scope_task_id.unwrap_or("default"),
+            "unknown",
+            160,
+        )
     )
 }
 
@@ -3257,7 +3248,6 @@ fn print_task_update_closed_task_mutation_blocked(
         &format!("vida task update {} --status in_progress", quoted_task_id),
     );
 }
-
 
 fn normalize_task_json_contract_arrays(summary_json: &mut serde_json::Value) -> Result<(), String> {
     let Some(summary) = summary_json.as_object_mut() else {
@@ -3926,6 +3916,7 @@ fn task_epic_progress_summary(
             .then_with(|| left.status.cmp(&right.status))
             .then_with(|| left.id.cmp(&right.id))
     });
+    let progress_precompute = TaskProgressPrecompute::new(rows);
 
     let mut open_count = 0usize;
     let mut in_progress_count = 0usize;
@@ -3944,7 +3935,12 @@ fn task_epic_progress_summary(
             _ => {}
         }
 
-        let progress = task_progress_summary_for_basis(rows, &epic.id, basis)?;
+        let progress = task_progress_summary_for_basis_with_precompute(
+            rows,
+            &progress_precompute,
+            &epic.id,
+            basis,
+        )?;
         total_descendant_count += progress.descendant_count;
         total_open_descendant_count += progress.open_count;
         total_in_progress_descendant_count += progress.in_progress_count;
@@ -3996,19 +3992,56 @@ fn task_progress_basis_arg(value: &str) -> Result<&'static str, String> {
     Ok(parse_task_progress_basis(value)?.as_str())
 }
 
+struct TaskProgressPrecompute {
+    core_rows: Vec<TaskProgressRow>,
+    row_index_by_id: BTreeMap<String, usize>,
+    child_indexes_by_parent: BTreeMap<String, Vec<usize>>,
+}
+
+impl TaskProgressPrecompute {
+    fn new(rows: &[state_store::TaskRecord]) -> Self {
+        let mut core_rows = Vec::with_capacity(rows.len());
+        let mut row_index_by_id = BTreeMap::new();
+        let mut child_indexes_by_parent = BTreeMap::<String, Vec<usize>>::new();
+
+        for (index, task) in rows.iter().enumerate() {
+            core_rows.push(task_progress_row_from_record(task));
+            row_index_by_id.insert(task.id.clone(), index);
+            if let Some(parent_id) = StateStore::parent_id_for_task(task) {
+                child_indexes_by_parent
+                    .entry(parent_id)
+                    .or_default()
+                    .push(index);
+            }
+        }
+
+        Self {
+            core_rows,
+            row_index_by_id,
+            child_indexes_by_parent,
+        }
+    }
+}
+
 fn task_progress_summary_for_basis(
     rows: &[state_store::TaskRecord],
     task_id: &str,
     basis: &str,
 ) -> Result<state_store::TaskProgressSummary, state_store::StateStoreError> {
+    let precompute = TaskProgressPrecompute::new(rows);
+    task_progress_summary_for_basis_with_precompute(rows, &precompute, task_id, basis)
+}
+
+fn task_progress_summary_for_basis_with_precompute(
+    rows: &[state_store::TaskRecord],
+    precompute: &TaskProgressPrecompute,
+    task_id: &str,
+    basis: &str,
+) -> Result<state_store::TaskProgressSummary, state_store::StateStoreError> {
     let progress_basis = parse_task_progress_basis(basis)
         .map_err(|reason| state_store::StateStoreError::InvalidTaskRecord { reason })?;
-    let core_rows = rows
-        .iter()
-        .map(task_progress_row_from_record)
-        .collect::<Vec<_>>();
     let core_summary = core_task_progress_summary_from_rows(
-        &core_rows,
+        &precompute.core_rows,
         task_id,
         progress_basis,
         crate::launcher_task_commands::shell_quote,
@@ -4017,7 +4050,7 @@ fn task_progress_summary_for_basis(
     .map_err(|_| state_store::StateStoreError::MissingTask {
         task_id: task_id.to_string(),
     })?;
-    task_progress_summary_from_core(rows, core_summary)
+    task_progress_summary_from_core(rows, precompute, core_summary)
 }
 
 async fn task_stage_ensemble_operator_summary(
@@ -4178,11 +4211,13 @@ fn task_progress_row_from_record(task: &state_store::TaskRecord) -> TaskProgress
 
 fn task_progress_summary_from_core(
     rows: &[state_store::TaskRecord],
+    precompute: &TaskProgressPrecompute,
     core: CoreTaskProgressSummary,
 ) -> Result<state_store::TaskProgressSummary, state_store::StateStoreError> {
-    let root_task = rows
-        .iter()
-        .find(|task| task.id == core.root_task.id)
+    let root_task = precompute
+        .row_index_by_id
+        .get(&core.root_task.id)
+        .and_then(|index| rows.get(*index))
         .cloned()
         .ok_or_else(|| state_store::StateStoreError::MissingTask {
             task_id: core.root_task.id.clone(),
@@ -7731,7 +7766,15 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                 }
             }
             let labels = parse_label_values(&command.labels);
-            let source_repo = project_root.display().to_string();
+            let source_project_root =
+                crate::taskflow_task_bridge::infer_project_root_from_native_state_root_shape(
+                    &state_dir,
+                )
+                .or_else(|| {
+                    crate::taskflow_task_bridge::infer_project_root_from_state_root(&state_dir)
+                })
+                .unwrap_or_else(|| project_root.clone());
+            let source_repo = source_project_root.display().to_string();
 
             // Multi-session admission check (rule #3)
             // Check if another session holds an active exclusive claim on the same work scope
@@ -10826,7 +10869,6 @@ async fn task_attempt_dispatch_records(
     Ok((attempts, stage_policy))
 }
 
-
 fn task_attempt_policy_attempt_id(task_id: &str, stage_id: &str, attempt_id: &str) -> String {
     format!(
         "{}--{}--{}",
@@ -10837,22 +10879,7 @@ fn task_attempt_policy_attempt_id(task_id: &str, stage_id: &str, attempt_id: &st
 }
 
 fn task_attempt_record_component(value: &str) -> String {
-    let normalized = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    let normalized = normalized.trim_matches('-');
-    if normalized.is_empty() {
-        "attempt".to_string()
-    } else {
-        normalized.to_string()
-    }
+    taskflow_host_bridge::artifact_scope::normalized_record_component(value, "attempt")
 }
 
 async fn run_task_attempt(command: TaskAttemptArgs) -> ExitCode {
@@ -14839,12 +14866,13 @@ mod tests {
         persist_task_handoff_accept_receipt, reconcile_epics_from_descendant_progress,
         render_validator_packet_text, runtime_binding_has_active_exception_takeover,
         runtime_binding_open_delegated_cycle_next_action, runtime_recovery_blocks_task_next_lawful,
-        select_task_next_lawful_binding, task_browser_proof_planner_metadata,
-        task_close_automation_is_blocked, task_close_automation_receipt,
-        task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
-        task_close_epic_progress_summary, task_close_feedback_blocker_summary,
-        task_close_host_agent_telemetry, task_close_ignored_dirty_files_for_explicit_commit,
-        task_close_result_payload, task_close_uses_isolated_state_dir, task_continuation_candidate,
+        select_task_next_lawful_binding, task_attempt_policy_attempt_id,
+        task_browser_proof_planner_metadata, task_close_automation_is_blocked,
+        task_close_automation_receipt, task_close_commit_allowlist_next_actions,
+        task_close_commit_file_strings, task_close_epic_progress_summary,
+        task_close_feedback_blocker_summary, task_close_host_agent_telemetry,
+        task_close_ignored_dirty_files_for_explicit_commit, task_close_result_payload,
+        task_close_uses_isolated_state_dir, task_continuation_candidate,
         task_create_planner_metadata_arg, task_create_semantics_mismatch,
         task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
         task_evidence_proof_planner_metadata, task_exception_takeover_metadata_path,
@@ -14870,6 +14898,14 @@ mod tests {
         append_task_browser_proof_note, task_browser_proof_target, TaskBrowserProofArtifact,
         TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION, TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
     };
+
+    #[test]
+    fn task_attempt_policy_attempt_id_uses_shared_record_components() {
+        assert_eq!(
+            task_attempt_policy_attempt_id("task:1", "stage one", "!!!"),
+            "task-1--stage-one--attempt"
+        );
+    }
 
     #[test]
     fn validator_packet_limits_diff_hunks_and_lines() {
@@ -15837,10 +15873,16 @@ mod tests {
                 "run_id": run_id,
                 "dispatch_target": "implementer",
                 "source_exception_path_receipt_id": "takeover-receipt",
+                "reason_class": "test_exception_takeover",
+                "active_bounded_unit": "task-takeover-status-scope",
                 "owned_write_scope": [
-                    " crates/vida/src/task_surface.rs ",
-                    ""
-                ]
+                    " crates/vida/src/task_surface.rs "
+                ],
+                "why_delegated_or_rerouted_path_is_not_currently_lawful": "test delegated path blocked",
+                "why_local_write_is_the_smallest_safe_bounded_workaround": "test bounded write scope",
+                "return_to_normal_posture_condition": "test verification completes",
+                "verification_plan": ["test"],
+                "recorded_at": "2026-05-13T00:00:00Z"
             })
             .to_string(),
         )
@@ -16016,7 +16058,14 @@ mod tests {
                     "run_id": run_id,
                     "dispatch_target": "implementer",
                     "source_exception_path_receipt_id": "takeover-receipt",
-                    "owned_write_scope": ["crates/vida/src/task_surface.rs"]
+                    "reason_class": "test_exception_takeover",
+                    "active_bounded_unit": "task-takeover-active-scope",
+                    "owned_write_scope": ["crates/vida/src/task_surface.rs"],
+                    "why_delegated_or_rerouted_path_is_not_currently_lawful": "test delegated path blocked",
+                    "why_local_write_is_the_smallest_safe_bounded_workaround": "test bounded write scope",
+                    "return_to_normal_posture_condition": "test verification completes",
+                    "verification_plan": ["test"],
+                    "recorded_at": "2026-05-13T00:00:00Z"
                 })
                 .to_string(),
             )
@@ -16120,7 +16169,14 @@ mod tests {
                     "run_id": run_id,
                     "dispatch_target": "implementer",
                     "source_exception_path_receipt_id": "takeover-receipt",
-                    "owned_write_scope": ["crates/vida/src/task_surface.rs"]
+                    "reason_class": "test_exception_takeover",
+                    "active_bounded_unit": "task-takeover-completed-lane",
+                    "owned_write_scope": ["crates/vida/src/task_surface.rs"],
+                    "why_delegated_or_rerouted_path_is_not_currently_lawful": "test delegated path blocked",
+                    "why_local_write_is_the_smallest_safe_bounded_workaround": "test bounded write scope",
+                    "return_to_normal_posture_condition": "test verification completes",
+                    "verification_plan": ["test"],
+                    "recorded_at": "2026-05-13T00:00:00Z"
                 })
                 .to_string(),
             )
@@ -18928,6 +18984,7 @@ mod tests {
         );
         assert!(receipt.blocker_codes.is_empty());
     }
+
     #[test]
     fn task_next_lawful_blocks_runtime_derived_taskflow_active_conflict() {
         let mut runtime_task = owned_task_record("runtime-task", vec![]);

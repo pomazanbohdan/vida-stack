@@ -488,10 +488,12 @@ mod tests {
         assert!(projection["project_foreign_blockers"].is_array());
         assert!(projection["global_blockers"].is_array());
         assert!(projection["claim_conflicts"].is_array());
-        assert!(projection["global_blockers"]
-            .as_array()
-            .expect("global blockers")
-            .is_empty());
+        assert!(
+            projection["global_blockers"]
+                .as_array()
+                .expect("global blockers")
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -525,15 +527,19 @@ mod tests {
             .await
             .expect("projection");
 
-        assert!(projection["global_blockers"]
-            .as_array()
-            .expect("global blockers")
-            .is_empty());
-        assert!(projection["runtime_owner_evidence"]["live_other_sessions"]
-            .as_array()
-            .expect("live other sessions")
-            .iter()
-            .any(|session| session["session_id"] == "foreign-live-session"));
+        assert!(
+            projection["global_blockers"]
+                .as_array()
+                .expect("global blockers")
+                .is_empty()
+        );
+        assert!(
+            projection["runtime_owner_evidence"]["live_other_sessions"]
+                .as_array()
+                .expect("live other sessions")
+                .iter()
+                .any(|session| session["session_id"] == "foreign-live-session")
+        );
         assert_eq!(
             projection["runtime_owner_evidence"]["mutation_gate"],
             "current_session_allowed"
@@ -557,20 +563,26 @@ mod tests {
             .await
             .expect("projection");
 
-        assert!(projection["auto_claimed_active_tasks"]
-            .as_array()
-            .expect("auto claimed")
-            .iter()
-            .any(|claim| claim["task_id"] == "active-ownerless"));
-        assert!(projection["current_session_task_claims"]
-            .as_array()
-            .expect("current claims")
-            .iter()
-            .any(|claim| claim["task_id"] == "active-ownerless"));
-        assert!(projection["active_task_claim_blockers"]
-            .as_array()
-            .expect("claim blockers")
-            .is_empty());
+        assert!(
+            projection["auto_claimed_active_tasks"]
+                .as_array()
+                .expect("auto claimed")
+                .iter()
+                .any(|claim| claim["task_id"] == "active-ownerless")
+        );
+        assert!(
+            projection["current_session_task_claims"]
+                .as_array()
+                .expect("current claims")
+                .iter()
+                .any(|claim| claim["task_id"] == "active-ownerless")
+        );
+        assert!(
+            projection["active_task_claim_blockers"]
+                .as_array()
+                .expect("claim blockers")
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -640,18 +652,22 @@ mod tests {
             .await
             .expect("projection");
 
-        assert!(projection["auto_claimed_active_tasks"]
-            .as_array()
-            .expect("auto claimed")
-            .is_empty());
-        assert!(projection["active_task_claim_blockers"]
-            .as_array()
-            .expect("claim blockers")
-            .iter()
-            .any(|blocker| {
-                blocker["task_id"] == "active-foreign"
-                    && blocker["blocker_code"] == "active_task_claimed_by_foreign_session"
-            }));
+        assert!(
+            projection["auto_claimed_active_tasks"]
+                .as_array()
+                .expect("auto claimed")
+                .is_empty()
+        );
+        assert!(
+            projection["active_task_claim_blockers"]
+                .as_array()
+                .expect("claim blockers")
+                .iter()
+                .any(|blocker| {
+                    blocker["task_id"] == "active-foreign"
+                        && blocker["blocker_code"] == "active_task_claimed_by_foreign_session"
+                })
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -682,19 +698,27 @@ mod tests {
         let current_claims = projection["current_session_task_claims"]
             .as_array()
             .expect("current claims");
-        assert!(current_claims
-            .iter()
-            .any(|claim| claim["task_id"] == "active-first"));
-        assert!(current_claims
-            .iter()
-            .any(|claim| claim["task_id"] == "active-second"));
-        assert!(current_claims
-            .iter()
-            .all(|claim| claim["lease_mode"] == "observe"));
-        assert!(projection["active_task_claim_blockers"]
-            .as_array()
-            .expect("claim blockers")
-            .is_empty());
+        assert!(
+            current_claims
+                .iter()
+                .any(|claim| claim["task_id"] == "active-first")
+        );
+        assert!(
+            current_claims
+                .iter()
+                .any(|claim| claim["task_id"] == "active-second")
+        );
+        assert!(
+            current_claims
+                .iter()
+                .all(|claim| claim["lease_mode"] == "observe")
+        );
+        assert!(
+            projection["active_task_claim_blockers"]
+                .as_array()
+                .expect("claim blockers")
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -757,14 +781,18 @@ mod tests {
             .await
             .expect("projection");
 
-        assert!(projection["claim_conflicts"]
-            .as_array()
-            .expect("claim conflicts")
-            .is_empty());
-        assert!(projection["project_foreign_runs"]
-            .as_array()
-            .expect("foreign runs")
-            .is_empty());
+        assert!(
+            projection["claim_conflicts"]
+                .as_array()
+                .expect("claim conflicts")
+                .is_empty()
+        );
+        assert!(
+            projection["project_foreign_runs"]
+                .as_array()
+                .expect("foreign runs")
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -803,19 +831,25 @@ mod tests {
             .await
             .expect("projection");
 
-        assert!(projection["claim_conflicts"]
-            .as_array()
-            .expect("claim conflicts")
-            .is_empty());
-        assert!(projection["project_foreign_runs"]
-            .as_array()
-            .expect("foreign runs")
-            .is_empty());
-        assert!(projection["inactive_task_claims"]
-            .as_array()
-            .expect("inactive task claims")
-            .iter()
-            .any(|claim| claim["claim_id"] == "claim-closed-task"));
+        assert!(
+            projection["claim_conflicts"]
+                .as_array()
+                .expect("claim conflicts")
+                .is_empty()
+        );
+        assert!(
+            projection["project_foreign_runs"]
+                .as_array()
+                .expect("foreign runs")
+                .is_empty()
+        );
+        assert!(
+            projection["inactive_task_claims"]
+                .as_array()
+                .expect("inactive task claims")
+                .iter()
+                .any(|claim| claim["claim_id"] == "claim-closed-task")
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

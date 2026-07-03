@@ -1066,10 +1066,12 @@ mod tests {
         ) else {
             let agent_catalog = super::overlay_host_runtime_agent_catalog(&config);
             assert!(
-                agent_catalog.iter().all(|row| row["host_runtime_developer_instructions"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .is_empty()),
+                agent_catalog
+                    .iter()
+                    .all(|row| row["host_runtime_developer_instructions"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .is_empty()),
                 "platform without configured override should not inherit another platform bootstrap"
             );
             return;

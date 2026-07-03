@@ -1,9 +1,9 @@
 use super::{
-    canonical_compatibility_class_str, canonical_release1_contract_type_str,
-    canonical_release1_schema_version_str, unix_timestamp_nanos, CompatibilityClass,
-    EffectiveBundleReceiptSummary, Release1ContractType, Release1SchemaVersion,
-    StateSpineManifestContract, StateStore, StateStoreError, SurrealStoreTarget, SurrealValue,
-    DEFAULT_STATE_DIR,
+    CompatibilityClass, DEFAULT_STATE_DIR, EffectiveBundleReceiptSummary, Release1ContractType,
+    Release1SchemaVersion, StateSpineManifestContract, StateStore, StateStoreError,
+    SurrealStoreTarget, SurrealValue, canonical_compatibility_class_str,
+    canonical_release1_contract_type_str, canonical_release1_schema_version_str,
+    unix_timestamp_nanos,
 };
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]

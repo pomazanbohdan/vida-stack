@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use fs2::FileExt;
 
-use crate::{state_store, state_store::StateStore, StatusArgs};
+use crate::{StatusArgs, state_store, state_store::StateStore};
 
-use crate::status_surface_json_report::{build_status_json_report, StatusJsonReportInputs};
+use crate::status_surface_json_report::{StatusJsonReportInputs, build_status_json_report};
 use crate::status_surface_operator_contracts::{
-    build_status_operator_contracts, StatusOperatorContractInputs,
+    StatusOperatorContractInputs, build_status_operator_contracts,
 };
-use crate::status_surface_text_report::{emit_status_text_report, StatusTextReportInputs};
+use crate::status_surface_text_report::{StatusTextReportInputs, emit_status_text_report};
 use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
 const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
@@ -1324,8 +1324,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 }
                             }
                         };
-                    let mut operator_contracts =
-                        match build_status_operator_contracts(StatusOperatorContractInputs {
+                    let mut operator_contracts = match build_status_operator_contracts(
+                        StatusOperatorContractInputs {
                             boot_compatibility: boot_compatibility.as_ref(),
                             migration_state: migration_state.as_ref(),
                             protocol_binding: &protocol_binding,
@@ -1360,32 +1360,42 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             root_session_write_guard_status: root_session_write_guard["status"]
                                 .as_str()
                                 .unwrap_or(""),
-                            root_local_write_allowed: root_session_write_guard
-                                ["root_local_write_allowed"]
-                                .as_bool()
-                                .unwrap_or(false),
+                            root_local_write_allowed:
+                                root_session_write_guard["root_local_write_allowed"]
+                                    .as_bool()
+                                    .unwrap_or(false),
                             root_local_write_allowed_for_only_these_paths:
-                                &root_session_write_guard
-                                    ["root_local_write_allowed_for_only_these_paths"],
+                                &root_session_write_guard["root_local_write_allowed_for_only_these_paths"],
                             activation_view_only_dispatch_blocker_active: root_session_write_guard
                                 ["activation_view_only_dispatch_blocker_active"]
                                 .as_bool()
                                 .unwrap_or(false),
-                            blocking_dispatch_blocker_code: root_session_write_guard
-                                ["blocking_dispatch_blocker_code"]
-                                .as_str(),
+                            blocking_dispatch_blocker_code:
+                                root_session_write_guard["blocking_dispatch_blocker_code"].as_str(),
                             operator_session_projection: &operator_session_projection,
-                        }) {
-                            Ok(value) => value,
-                            Err(error) => {
-                                eprintln!("Failed to render status json: {error}");
-                                return ExitCode::from(1);
-                            }
-                        };
+                        },
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            eprintln!("Failed to render status json: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
                     if active_exception_takeover {
                         reclassify_retrieval_release_operator_contract_blockers(
                             &mut operator_contracts,
                         );
+                    }
+                    if operator_contracts["blocker_codes"]
+                        .as_array()
+                        .is_some_and(|rows| !rows.is_empty())
+                        && operator_contracts["next_actions"]
+                            .as_array()
+                            .is_none_or(Vec::is_empty)
+                    {
+                        operator_contracts["next_actions"] = serde_json::json!([
+                            "Run `vida doctor` to inspect the blocked status evidence, then repair or refresh the named runtime projection before continuing."
+                        ]);
                     }
                     let blocker_codes = operator_contracts["blocker_codes"]
                         .as_array()
@@ -1660,6 +1670,13 @@ async fn read_fresh_runtime_validated_status_json_projection(
         .await
     {
         Some(cached) => CachedStatusProjectionRefresh::Hit(cached),
+        None if sessionless_status_summary_projection_safe_without_runtime_refresh(
+            summary_only,
+            &cached,
+        ) =>
+        {
+            CachedStatusProjectionRefresh::Hit(cached)
+        }
         None => CachedStatusProjectionRefresh::RefreshFailed,
     }
 }
@@ -1681,8 +1698,29 @@ async fn read_state_fresh_runtime_validated_status_json_projection(
         .await
     {
         Some(cached) => CachedStatusProjectionRefresh::Hit(cached),
+        None if sessionless_status_summary_projection_safe_without_runtime_refresh(
+            summary_only,
+            &cached,
+        ) =>
+        {
+            CachedStatusProjectionRefresh::Hit(cached)
+        }
         None => CachedStatusProjectionRefresh::RefreshFailed,
     }
+}
+
+fn sessionless_status_summary_projection_safe_without_runtime_refresh(
+    summary_only: bool,
+    cached: &str,
+) -> bool {
+    summary_only
+        && serde_json::from_str::<serde_json::Value>(cached)
+            .ok()
+            .is_some_and(|payload| {
+                sessionless_operator_status_summary_projection_admissible(&payload)
+                    && cached_status_projection_has_required_shape(true, &payload)
+                    && !payload_has_closed_task_active_run_projection_mismatch(&payload)
+            })
 }
 
 async fn runtime_validate_and_refresh_cached_status_projection(
@@ -2182,8 +2220,9 @@ fn refresh_cached_project_activation_projection(
     refresh_cached_projection_status_from_blockers(payload)?;
     for path in [&["shared_fields"][..], &["operator_contracts"][..]] {
         let pointer = format!("/{}", path.join("/"));
-        let target = payload.pointer_mut(&pointer)?;
-        refresh_cached_projection_status_from_blockers(target)?;
+        if let Some(target) = payload.pointer_mut(&pointer) {
+            refresh_cached_projection_status_from_blockers(target)?;
+        }
     }
 
     Some(())
@@ -2790,6 +2829,15 @@ fn cached_status_projection_admissible(
     serde_json::from_str::<serde_json::Value>(cached)
         .ok()
         .is_some_and(|payload| {
+            if summary_only
+                && cached_projection_session(&payload).session_id.is_none()
+                && cached_projection_session(&payload)
+                    .worktree_environment_id
+                    .is_none()
+                && sessionless_operator_status_summary_projection_admissible(&payload)
+            {
+                return true;
+            }
             let Some((current_session_id, current_worktree_environment_id)) =
                 current_projection_session_values(state_dir)
             else {
@@ -2809,13 +2857,6 @@ fn cached_status_projection_admissible(
                 session: cached_projection_session(&payload),
                 cache: cached_projection_cache_contract(&payload),
             };
-            if summary_only
-                && projection.session.session_id.is_none()
-                && projection.session.worktree_environment_id.is_none()
-                && sessionless_operator_status_summary_projection_admissible(&payload)
-            {
-                return true;
-            }
             taskflow_authority::projection_cache::cached_status_projection_admissible(
                 summary_only,
                 &projection,
@@ -3012,6 +3053,12 @@ fn reclassify_retrieval_release_operator_contract_blockers(payload: &mut serde_j
             crate::contract_profile_adapter::BlockerCode::IncompleteReleaseAdmissionOperatorEvidence,
         ),
     ];
+    let reclassified_next_actions = [
+        crate::status_surface_signals::missing_retrieval_trust_source_operator_evidence_next_action(),
+        crate::status_surface_signals::missing_retrieval_trust_signal_operator_evidence_next_action(),
+        crate::status_surface_signals::missing_retrieval_trust_operator_evidence_next_action(),
+        "Regenerate consume-final evidence so canonical risk/register, closure/readiness, and operator-contract fields are complete.".to_string(),
+    ];
     let Some(blockers) = payload["blocker_codes"].as_array_mut() else {
         return;
     };
@@ -3021,7 +3068,17 @@ fn reclassify_retrieval_release_operator_contract_blockers(payload: &mut serde_j
     });
     let blockers_empty = blockers.is_empty();
     if let Some(actions) = payload["next_actions"].as_array_mut() {
-        actions.clear();
+        if blockers_empty {
+            actions.clear();
+        } else {
+            actions.retain(|action| {
+                action.as_str().is_none_or(|action| {
+                    !reclassified_next_actions
+                        .iter()
+                        .any(|reclassified| reclassified == action)
+                })
+            });
+        }
     }
     payload["status"] = serde_json::Value::String(if blockers_empty {
         "pass".to_string()
@@ -3073,7 +3130,7 @@ mod tests {
         run_graph_latest_snapshot_inconsistent_next_action,
     };
     use crate::status_surface_write_guard::root_session_write_guard_summary_from_snapshot_path;
-    use crate::{blocker_code_str, state_store, BlockerCode};
+    use crate::{BlockerCode, blocker_code_str, state_store};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -3662,8 +3719,14 @@ mod tests {
                 "run_id": "run-1",
                 "dispatch_target": "test_author",
                 "source_exception_path_receipt_id": "exception-1",
+                "reason_class": "test_exception_takeover",
                 "active_bounded_unit": "architecture-refactor-lane-supersede-status-root-write-mismatch-defect:test_author",
-                "owned_write_scope": ["crates/vida/src"]
+                "owned_write_scope": ["crates/vida/src"],
+                "why_delegated_or_rerouted_path_is_not_currently_lawful": "test delegated path blocked",
+                "why_local_write_is_the_smallest_safe_bounded_workaround": "test bounded write scope",
+                "return_to_normal_posture_condition": "test verification completes",
+                "verification_plan": ["test"],
+                "recorded_at": "2026-05-13T00:00:00Z"
             })
             .to_string(),
         )
@@ -3938,13 +4001,14 @@ mod tests {
             false
         );
         assert!(payload["host_agents"].get("recent_events").is_none());
-        assert!(payload["host_agents"]
-            .get("latest_feedback_event")
-            .is_none());
+        assert!(
+            payload["host_agents"]
+                .get("latest_feedback_event")
+                .is_none()
+        );
         assert!(payload["host_agents"]["budget"].get("by_task_id").is_none());
         assert_eq!(
-            payload["operator_session_projection"]["runtime_owner_evidence"]["stale_sessions"]
-                ["count"],
+            payload["operator_session_projection"]["runtime_owner_evidence"]["stale_sessions"]["count"],
             2
         );
     }
@@ -4343,7 +4407,7 @@ mod tests {
                 .run_id,
             "run-live-status"
         );
-        drop(store);
+        store.close().await;
 
         let cached = serde_json::json!({
             "surface": "vida status",
@@ -4389,8 +4453,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn status_stale_projection_overlay_loads_recovery_for_exception_takeover_fallback_without_status(
-    ) {
+    async fn status_stale_projection_overlay_loads_recovery_for_exception_takeover_fallback_without_status()
+     {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
         unsafe {
@@ -4429,7 +4493,7 @@ mod tests {
             "coach",
             "exception-cache-no-status",
         );
-        drop(store);
+        store.close().await;
 
         unsafe {
             std::env::set_var("VIDA_SESSION_ID", "status-cache-takeover-no-status");
@@ -4562,7 +4626,7 @@ mod tests {
             })
             .await
             .expect("acquire orthogonal current-session claim");
-        drop(store);
+        store.close().await;
 
         let cached = serde_json::json!({
             "surface": "vida status",
@@ -4819,7 +4883,7 @@ mod tests {
             })
             .await
             .expect("record foreign continuation binding");
-        drop(store);
+        store.close().await;
 
         unsafe {
             std::env::set_var("VIDA_SESSION_ID", "current-status-overlay-session");
@@ -5627,8 +5691,8 @@ host_environment:
     }
 
     #[test]
-    fn latest_run_graph_dispatch_receipt_checkpoint_leakage_has_explicit_next_action_and_contracts_remain_valid(
-    ) {
+    fn latest_run_graph_dispatch_receipt_checkpoint_leakage_has_explicit_next_action_and_contracts_remain_valid()
+     {
         let next_action =
             run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action().to_string();
         assert!(next_action.contains("checkpoint evidence"));

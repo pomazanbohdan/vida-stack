@@ -149,9 +149,11 @@ mod tests {
                     "--json".to_string()
                 ]
             );
-            assert!(resolution
-                .deprecation_notice
-                .contains(LEGACY_ROOT_ALIAS_RECEIPT_CODE));
+            assert!(
+                resolution
+                    .deprecation_notice
+                    .contains(LEGACY_ROOT_ALIAS_RECEIPT_CODE)
+            );
             assert!(resolution.deprecation_notice.contains(spec.alias));
             assert!(resolution.deprecation_notice.contains(&format!(
                 "vida {} {}",

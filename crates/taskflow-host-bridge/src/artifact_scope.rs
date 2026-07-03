@@ -59,7 +59,7 @@ pub fn attach_host_bridge_implementation_artifact(
     })
 }
 
-pub fn host_bridge_record_component(value: &str) -> String {
+pub fn normalized_record_component(value: &str, fallback: &str) -> String {
     let normalized = value
         .chars()
         .map(|character| {
@@ -72,10 +72,14 @@ pub fn host_bridge_record_component(value: &str) -> String {
         .collect::<String>();
     let normalized = normalized.trim_matches('-');
     if normalized.is_empty() {
-        "host-bridge".to_string()
+        fallback.to_string()
     } else {
         normalized.to_string()
     }
+}
+
+pub fn host_bridge_record_component(value: &str) -> String {
+    normalized_record_component(value, "host-bridge")
 }
 
 pub fn normalized_host_bridge_attempt_id(run_id: &str, value: Option<&str>) -> String {
@@ -387,6 +391,7 @@ mod tests {
             "run-1-impl-review"
         );
         assert_eq!(host_bridge_record_component("!!!"), "host-bridge");
+        assert_eq!(normalized_record_component("!!!", "attempt"), "attempt");
     }
 
     #[test]

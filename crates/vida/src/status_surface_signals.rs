@@ -154,9 +154,11 @@ mod tests {
     fn string_runtime_status_signals_use_default_human_commands() {
         let actions = blocked_run_graph_status_next_actions(Some("run-1"), Some("task-1"), true);
         assert!(actions.iter().all(|action| !action.contains("--json")));
-        assert!(actions
-            .iter()
-            .any(|action| action.contains("vida lane retire run-1")));
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.contains("vida lane retire run-1"))
+        );
 
         let missing = runtime_binding_task_missing_next_action(Some("run-2"), "task-2");
         assert!(missing.contains("vida taskflow recovery status run-2"));

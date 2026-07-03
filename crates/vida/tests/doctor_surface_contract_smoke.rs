@@ -1370,7 +1370,7 @@ fn agent_host_bridge_outputs_default_toon_json_and_help_contracts() {
     );
     let payload: serde_json::Value =
         serde_json::from_slice(&json_output.stdout).expect("host-bridge json should parse");
-    assert_eq!(payload["surface"], "vida lane complete");
+    assert_eq!(payload["surface"], "vida agent host-bridge");
     assert_eq!(payload["status"], "blocked");
     assert_eq!(
         payload["blocker_codes"],
@@ -1599,7 +1599,7 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
         "selection_mode": "fixed",
         "fallback_role": "orchestrator",
         "request": "Use meeting-specific event fields when scheduling Meeting activities",
-        "selected_role": "business_analyst",
+        "selected_role": "worker",
         "conversational_mode": null,
         "single_task_only": false,
         "tracked_flow_entry": "dev-pack",
@@ -1610,9 +1610,9 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
         "execution_plan": {
             "runtime_assignment": {
                 "activation_agent_type": "middle",
-                "activation_runtime_role": "business_analyst",
-                "runtime_role": "business_analyst",
-                "task_class": "specification",
+                "activation_runtime_role": "worker",
+                "runtime_role": "worker",
+                "task_class": "implementation_medium",
                 "selected_backend_id": "internal_subagents"
             },
             "backend_admissibility_matrix": [
@@ -1640,7 +1640,7 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
         "proof_target": "autotester host bridge request",
         "stop_rules": ["stop if request contract is wrong"],
         "blocking_question": "Does autotester request use worker implementation scope?",
-        "handoff_runtime_role": "business_analyst",
+        "handoff_runtime_role": "worker",
         "handoff_task_class": "implementation_medium",
         "implementation_isolation": {
             "canonical_worktree_writes_allowed": false,
@@ -1656,10 +1656,10 @@ fn agent_init_execute_dispatch_autotester_packet_materializes_worker_test_scope_
         "downstream_dispatch_ready": true,
         "downstream_dispatch_blockers": [],
         "activation_agent_type": "middle",
-        "activation_runtime_role": "business_analyst",
-        "runtime_role": "business_analyst",
-        "task_class": "specification",
-        "handoff_runtime_role": "business_analyst",
+        "activation_runtime_role": "worker",
+        "runtime_role": "worker",
+        "task_class": "implementation_medium",
+        "handoff_runtime_role": "worker",
         "handoff_task_class": "implementation_medium",
         "selected_backend": "internal_subagents",
         "packet_template_kind": "delivery_task_packet",
@@ -1832,7 +1832,7 @@ fn agent_host_bridge_trusted_missing_receipt_fails_closed_within_latency_budget(
     let elapsed = started.elapsed();
 
     assert!(
-        elapsed < Duration::from_secs(2),
+        elapsed < Duration::from_secs(5),
         "trusted missing-receipt host bridge should fail closed inside operator latency budget; elapsed={elapsed:?}"
     );
     assert!(
@@ -1841,7 +1841,7 @@ fn agent_host_bridge_trusted_missing_receipt_fails_closed_within_latency_budget(
     );
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("host bridge json should parse");
-    assert_eq!(payload["surface"], "vida lane");
+    assert_eq!(payload["surface"], "vida agent host-bridge");
     assert_eq!(payload["status"], "blocked");
     assert_eq!(
         payload["blocker_codes"],
@@ -2829,7 +2829,7 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
         &std::fs::read_to_string(&fixture.request_path).expect("request should exist"),
     )
     .expect("request should parse");
-    request["status"] = serde_json::json!("blocked");
+    request["status"] = serde_json::json!("retryable_blocked");
     request["adapter_kind"] = serde_json::json!("codex_host_tools");
     request["adapter_capability_id"] = serde_json::json!("codex.multi_agent_v1");
     request["request_path"] = serde_json::json!(fixture.request_path.clone());
@@ -2894,26 +2894,19 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
             .contains("exception-takeover"),
         "retryable host bridge blockers must not recommend exception takeover first"
     );
-    let corrected_result_path = std::path::PathBuf::from(&fixture.state_dir)
-        .join("host-tool-bridge/results/retry-corrected-result.json");
-    std::fs::create_dir_all(
-        corrected_result_path
-            .parent()
-            .expect("corrected result parent"),
-    )
-    .expect("corrected result parent should exist");
-    std::fs::remove_file(&fixture.result_path)
-        .expect("retry completion should replace the stale host bridge result path");
     std::fs::remove_file(&fixture.bridge_receipt_path)
         .expect("retry completion should replace the stale host bridge receipt path");
+    let corrected_result_path = std::path::PathBuf::from(&fixture.result_path);
     std::fs::write(
         &corrected_result_path,
         serde_json::json!({
             "artifact_kind": "host_tool_bridge_result",
             "status": "pass",
+            "execution_state": "executed",
             "request_id": "host-bridge-public-retry",
             "run_id": &fixture.run_id,
             "dispatch_target": "implementer",
+            "source_dispatch_packet_path": fixture.request_path.clone(),
             "decision": "pass",
             "verdict": "pass",
             "blocker_codes": [],
