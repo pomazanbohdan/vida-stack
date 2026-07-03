@@ -1246,7 +1246,7 @@ pub(crate) fn taskflow_leaf_active_tasks(
             let active_bounded_task = active_task_ids.contains(task_id);
             let active_step_parent = active_step_parent_ids.contains(task_id)
                 && crate::state_store::work_item_is_active_bounded_unit_candidate(&task.issue_type)
-                && !crate::state_store::StateStore::task_status_is_closed_like(&task.status);
+                && taskflow_core::task_status_is_open_like(&task.status);
             (active_bounded_task || active_step_parent)
                 && !active_parent_ids.contains(task.id.as_str())
         })
@@ -2495,6 +2495,29 @@ mod tests {
             "runtime-defect-orchestrator-init-ignores-step"
         );
         assert_eq!(taskflow_candidates[0]["status"], "open");
+    }
+
+    #[test]
+    fn taskflow_active_candidates_do_not_lift_execution_step_to_blocked_parent() {
+        for blocked_status in ["paused", "blocked"] {
+            let parent = task_record(
+                "runtime-defect-orchestrator-init-ignores-step",
+                blocked_status,
+            );
+            let mut active_step = task_with_parent(
+                "step-active-selector-regression",
+                "in_progress",
+                "runtime-defect-orchestrator-init-ignores-step",
+            );
+            active_step.issue_type = "step".to_string();
+
+            let taskflow_candidates = taskflow_active_candidates_from_tasks(&[parent, active_step]);
+
+            assert!(
+                taskflow_candidates.is_empty(),
+                "{blocked_status} parent must not become active via an in-progress step"
+            );
+        }
     }
 
     #[test]
