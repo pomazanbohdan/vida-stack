@@ -5402,14 +5402,7 @@ fn task_bulk_nested_string_list_field(
 }
 
 fn task_bulk_normalize_string_list(values: Vec<String>) -> Vec<String> {
-    let mut normalized = values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    normalized.sort();
-    normalized.dedup();
-    normalized
+    crate::runtime_assignment_policy::canonical_sorted_nonempty_strings(values)
 }
 
 fn task_bulk_merge_string_lists(left: Vec<String>, right: Vec<String>) -> Vec<String> {

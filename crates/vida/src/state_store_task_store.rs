@@ -1442,14 +1442,7 @@ impl StateStore {
     }
 
     fn normalize_planner_metadata_list(values: Vec<String>) -> Vec<String> {
-        let mut normalized = values
-            .into_iter()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>();
-        normalized.sort();
-        normalized.dedup();
-        normalized
+        crate::runtime_assignment_policy::canonical_sorted_nonempty_strings(values)
     }
 
     fn normalize_planner_metadata_text(value: Option<String>) -> Option<String> {
@@ -2902,13 +2895,9 @@ impl StateStore {
         )?;
 
         let now = unix_timestamp_nanos().to_string();
-        let mut normalized_labels = labels
-            .iter()
-            .map(|label| label.trim().to_string())
-            .filter(|label| !label.is_empty())
-            .collect::<Vec<_>>();
-        normalized_labels.sort();
-        normalized_labels.dedup();
+        let normalized_labels = crate::runtime_assignment_policy::canonical_sorted_nonempty_strings(
+            labels.iter().cloned(),
+        );
 
         let mut dependencies = Vec::new();
         if let Some(parent_id) = normalized_parent_id.clone() {
@@ -3225,11 +3214,9 @@ impl StateStore {
                 Self::parent_id_for_task(&base_task_for_update) != Self::parent_id_for_task(&task);
         }
         if let Some(set_labels) = set_labels {
-            task.labels = set_labels
-                .iter()
-                .map(|label| label.trim().to_string())
-                .filter(|label| !label.is_empty())
-                .collect::<Vec<_>>();
+            task.labels = crate::runtime_assignment_policy::canonical_sorted_nonempty_strings(
+                set_labels.iter().cloned(),
+            );
             metadata_update_requested = true;
         }
         for label in add_labels {

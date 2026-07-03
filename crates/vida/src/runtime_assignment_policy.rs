@@ -282,7 +282,9 @@ pub(crate) fn agent_init_explicit_role_selection(
     })
 }
 
-fn sorted_unique_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
+pub(crate) fn canonical_sorted_nonempty_strings(
+    values: impl IntoIterator<Item = String>,
+) -> Vec<String> {
     let mut values = values
         .into_iter()
         .map(|value| value.trim().to_string())
@@ -291,6 +293,10 @@ fn sorted_unique_strings(values: impl IntoIterator<Item = String>) -> Vec<String
     values.sort();
     values.dedup();
     values
+}
+
+fn sorted_unique_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    canonical_sorted_nonempty_strings(values)
 }
 
 fn dev_team_role_runtime_role(
@@ -603,6 +609,19 @@ mod tests {
             infer_runtime_task_class(&selection, true),
             TASK_CLASS_VERIFICATION
         );
+    }
+
+    #[test]
+    fn canonical_sorted_nonempty_strings_trims_dedups_and_preserves_case() {
+        let values = canonical_sorted_nonempty_strings(vec![
+            " worker ".to_string(),
+            "".to_string(),
+            "Analyst".to_string(),
+            "worker".to_string(),
+            "worker".to_string(),
+        ]);
+
+        assert_eq!(values, vec!["Analyst".to_string(), "worker".to_string()]);
     }
 
     #[test]

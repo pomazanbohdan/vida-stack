@@ -3132,14 +3132,7 @@ fn canonicalize_supplied_host_bridge_blocker_codes<I>(codes: I) -> Vec<String>
 where
     I: IntoIterator<Item = String>,
 {
-    let mut codes = codes
-        .into_iter()
-        .map(|code| code.trim().to_string())
-        .filter(|code| !code.is_empty())
-        .collect::<Vec<_>>();
-    codes.sort();
-    codes.dedup();
-    codes
+    crate::runtime_assignment_policy::canonical_sorted_nonempty_strings(codes)
 }
 
 fn host_bridge_completion_result_value_is_blocked(value: &str) -> bool {

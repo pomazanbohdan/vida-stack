@@ -516,15 +516,9 @@ fn build_input_contract(
 }
 
 fn push_input_refs(refs: &mut Vec<String>, cli_refs: &[String]) {
-    refs.extend(
-        cli_refs
-            .iter()
-            .map(|reference| reference.trim())
-            .filter(|reference| !reference.is_empty())
-            .map(ToString::to_string),
+    *refs = crate::runtime_assignment_policy::canonical_sorted_nonempty_strings(
+        refs.iter().cloned().chain(cli_refs.iter().cloned()),
     );
-    refs.sort();
-    refs.dedup();
 }
 
 fn input_reference_evidence(
@@ -1829,14 +1823,7 @@ fn existing_parent_id(task: &TaskRecord) -> Option<&str> {
 }
 
 fn normalized_labels(labels: &[String]) -> Vec<String> {
-    let mut normalized = labels
-        .iter()
-        .map(|label| label.trim().to_string())
-        .filter(|label| !label.is_empty())
-        .collect::<Vec<_>>();
-    normalized.sort();
-    normalized.dedup();
-    normalized
+    crate::runtime_assignment_policy::canonical_sorted_nonempty_strings(labels.iter().cloned())
 }
 
 fn draft_cycles(draft: &TaskPlanGraphDraft) -> Vec<String> {
