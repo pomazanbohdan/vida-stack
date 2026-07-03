@@ -64,6 +64,7 @@ const TASK_VERIFY_AFTER_HELP: &str = "Examples:\n  vida task verify <task-id> --
 const TASK_VALIDATOR_PACKET_ABOUT: &str =
     "render a compact pre-commit validator packet for one task";
 const TASK_VALIDATOR_PACKET_AFTER_HELP: &str = "Examples:\n  vida task validator-packet <task-id>\n  vida task validator-packet <task-id> --proof \"cargo check -p vida --tests\" --json\n\nOutput:\n  Default output is a copyable validator packet with active task context, owned files, diffstat, bounded hunks, proof commands, prior validator blockers, and the expected PASS/BLOCKED schema.\n  Use --json for machine-readable packet fields.";
+const TASK_OWNED_STATUS_AFTER_HELP: &str = "Examples:\n  git status --short\n  vida task owned-status --from-dirty --with-active-step\n  vida task owned-status --from-dirty --with-active-step --json\n  vida task owned-status <task-id> --from-dirty --json\n  vida task owned-status <task-id> --file crates/vida/src/task_surface.rs --json\n\nDirty attribution:\n  --from-dirty reads git status and compares dirty files with planner_metadata.owned_paths or --file overrides.\n  --with-active-step adds active_step, active_parent_task, and active_epic so operators can see which bounded TaskFlow unit owns the dirty paths.\n  JSON output includes owned_paths, matched_files, unmatched_files, confidence, and next_actions.";
 const TASK_PRUNE_CLOSED_EPICS_ABOUT: &str =
     "archive and prune closed epic task rows without touching runtime receipts";
 const TASK_PRUNE_CLOSED_EPICS_LONG_ABOUT: &str = "Archive and prune only TaskFlow task rows for closed epic/container subtrees.\n\nThe command previews by default. Use --apply to write a JSONL archive of pruned task rows and then delete only those task rows plus their owned task_dependency rows. Runtime receipts, run-graph state, lane state, and non-task runtime state are never removed by this surface.";
@@ -1737,7 +1738,10 @@ pub(crate) enum TaskCommand {
     Attempt(TaskAttemptArgs),
     #[command(about = "inspect per-stage task execution status over the task attempt ledger")]
     Stage(TaskStageArgs),
-    #[command(about = "inspect dirty git files against one task's owned paths")]
+    #[command(
+        about = "inspect dirty git files against TaskFlow owned paths",
+        after_help = TASK_OWNED_STATUS_AFTER_HELP
+    )]
     OwnedStatus(TaskOwnedStatusArgs),
     #[command(about = "record delegated agent handoff receipts for a task")]
     Handoff(TaskHandoffArgs),
@@ -2361,14 +2365,26 @@ pub(crate) struct TaskNoteAppendArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskOwnedStatusArgs {
-    #[arg(help = "Task id whose owned paths should be checked against git status")]
-    pub(crate) task_id: String,
+    #[arg(help = "Optional task id whose owned paths should be checked against git status")]
+    pub(crate) task_id: Option<String>,
 
     #[arg(
         long = "file",
         help = "Explicit owned path override. Repeat for multiple files or directories."
     )]
     pub(crate) files: Vec<PathBuf>,
+
+    #[arg(
+        long = "from-dirty",
+        help = "Read dirty files from git status before attributing them to owned paths"
+    )]
+    pub(crate) from_dirty: bool,
+
+    #[arg(
+        long = "with-active-step",
+        help = "Include active_step, active_parent_task, and active_epic attribution in the result"
+    )]
+    pub(crate) with_active_step: bool,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
@@ -4895,9 +4911,13 @@ mod tests {
         let owned_error = Cli::try_parse_from(["vida", "task", "owned-status", "--help"])
             .expect_err("help should render clap display error");
         let owned_help = owned_error.to_string();
-        assert!(owned_help.contains("<TASK_ID>"));
+        assert!(owned_help.contains("[TASK_ID]"));
+        assert!(owned_help.contains("--from-dirty"));
+        assert!(owned_help.contains("--with-active-step"));
         assert!(owned_help.contains("--file"));
         assert!(owned_help.contains("--json"));
+        assert!(owned_help.contains("git status --short"));
+        assert!(owned_help.contains("vida task owned-status --from-dirty --with-active-step"));
 
         let close_error = Cli::try_parse_from(["vida", "task", "close", "--help"])
             .expect_err("help should render clap display error");

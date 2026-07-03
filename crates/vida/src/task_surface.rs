@@ -8318,12 +8318,29 @@ struct TaskOwnedStatusReceipt {
     blocker_codes: Vec<String>,
     next_actions: Vec<String>,
     task_id: String,
+    repo_root: String,
+    active_step: Option<TaskOwnedStatusUnit>,
+    active_parent_task: Option<TaskOwnedStatusUnit>,
+    active_epic: Option<TaskOwnedStatusUnit>,
     ownership_source: String,
     owned_paths: Vec<String>,
     dirty_files: Vec<String>,
     owned_files: Vec<String>,
     unowned_files: Vec<String>,
+    unowned_paths: Vec<String>,
+    matched_files: Vec<String>,
+    unmatched_files: Vec<String>,
     stageable_files: Vec<String>,
+    confidence: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskOwnedStatusUnit {
+    task_id: String,
+    title: String,
+    status: String,
+    issue_type: String,
+    owned_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -8840,6 +8857,10 @@ fn task_owned_status_receipt(
     metadata_owned_paths: Vec<String>,
     override_files: Vec<String>,
     dirty_files: Vec<String>,
+    repo_root: String,
+    active_step: Option<TaskOwnedStatusUnit>,
+    active_parent_task: Option<TaskOwnedStatusUnit>,
+    active_epic: Option<TaskOwnedStatusUnit>,
 ) -> TaskOwnedStatusReceipt {
     let override_files = taskflow_core::task::close::canonical_owned_paths(override_files);
     let metadata_owned_paths =
@@ -8863,12 +8884,20 @@ fn task_owned_status_receipt(
                 "Add planner_metadata.owned_paths to the task or rerun with repeated `--file <path>` overrides.".to_string(),
             ],
             task_id: task_id.to_string(),
+            repo_root,
+            active_step,
+            active_parent_task,
+            active_epic,
             ownership_source,
             owned_paths,
             dirty_files,
             owned_files: Vec::new(),
             unowned_files: Vec::new(),
+            unowned_paths: Vec::new(),
+            matched_files: Vec::new(),
+            unmatched_files: Vec::new(),
             stageable_files: Vec::new(),
+            confidence: "none".to_string(),
         };
     }
 
@@ -8883,6 +8912,13 @@ fn task_owned_status_receipt(
     }
     let stageable_files = owned_files.clone();
     let blocked = !unowned_files.is_empty();
+    let confidence = if blocked {
+        "mixed"
+    } else if dirty_files.is_empty() {
+        "clean"
+    } else {
+        "high"
+    };
 
     TaskOwnedStatusReceipt {
         status: if blocked { "blocked" } else { "pass" }.to_string(),
@@ -8901,13 +8937,138 @@ fn task_owned_status_receipt(
             vec!["Stage only `stageable_files` before committing this task.".to_string()]
         },
         task_id: task_id.to_string(),
+        repo_root,
+        active_step,
+        active_parent_task,
+        active_epic,
         ownership_source,
         owned_paths,
         dirty_files,
-        owned_files,
-        unowned_files,
+        owned_files: owned_files.clone(),
+        unowned_files: unowned_files.clone(),
+        unowned_paths: unowned_files.clone(),
+        matched_files: owned_files.clone(),
+        unmatched_files: unowned_files,
         stageable_files,
+        confidence: confidence.to_string(),
     }
+}
+
+fn task_owned_status_unit(task: &state_store::TaskRecord) -> TaskOwnedStatusUnit {
+    TaskOwnedStatusUnit {
+        task_id: task.id.clone(),
+        title: task.title.clone(),
+        status: task.status.clone(),
+        issue_type: task.issue_type.clone(),
+        owned_paths: task.planner_metadata.owned_paths.clone(),
+    }
+}
+
+fn task_record_by_id<'a>(
+    rows: &'a [state_store::TaskRecord],
+    task_id: &str,
+) -> Option<&'a state_store::TaskRecord> {
+    rows.iter().find(|task| task.id == task_id)
+}
+
+fn task_ancestor_with_issue_type<'a>(
+    rows: &'a [state_store::TaskRecord],
+    task: &'a state_store::TaskRecord,
+    issue_type: &str,
+) -> Option<&'a state_store::TaskRecord> {
+    let mut current = task;
+    while let Some(parent_id) = task_parent_id(current) {
+        let Some(parent) = task_record_by_id(rows, &parent_id) else {
+            return None;
+        };
+        if parent.issue_type == issue_type {
+            return Some(parent);
+        }
+        current = parent;
+    }
+    None
+}
+
+fn task_is_descendant_of(
+    rows: &[state_store::TaskRecord],
+    task: &state_store::TaskRecord,
+    ancestor_id: &str,
+) -> bool {
+    let mut current = task;
+    while let Some(parent_id) = task_parent_id(current) {
+        if parent_id == ancestor_id {
+            return true;
+        }
+        let Some(parent) = task_record_by_id(rows, &parent_id) else {
+            return false;
+        };
+        current = parent;
+    }
+    false
+}
+
+fn active_step_for_owned_status<'a>(
+    rows: &'a [state_store::TaskRecord],
+    selected_task_id: Option<&str>,
+) -> Option<&'a state_store::TaskRecord> {
+    rows.iter().find(|task| {
+        task.issue_type == "step"
+            && task.status == "in_progress"
+            && selected_task_id
+                .map(|selected| task_is_descendant_of(rows, task, selected))
+                .unwrap_or(true)
+    })
+}
+
+fn task_owned_status_context(
+    rows: &[state_store::TaskRecord],
+    selected_task: &state_store::TaskRecord,
+    include_active_step: bool,
+) -> (
+    Option<TaskOwnedStatusUnit>,
+    Option<TaskOwnedStatusUnit>,
+    Option<TaskOwnedStatusUnit>,
+) {
+    if !include_active_step {
+        return (None, None, None);
+    }
+    let active_step = active_step_for_owned_status(rows, Some(&selected_task.id));
+    let parent_task = active_step
+        .and_then(|step| task_parent_id(step))
+        .and_then(|parent_id| task_record_by_id(rows, &parent_id))
+        .unwrap_or(selected_task);
+    let active_epic = task_ancestor_with_issue_type(rows, parent_task, "epic");
+    (
+        active_step.map(task_owned_status_unit),
+        Some(task_owned_status_unit(parent_task)),
+        active_epic.map(task_owned_status_unit),
+    )
+}
+
+fn select_task_for_owned_status(
+    rows: &[state_store::TaskRecord],
+    requested_task_id: Option<&str>,
+    with_active_step: bool,
+) -> Result<state_store::TaskRecord, state_store::StateStoreError> {
+    if let Some(task_id) = requested_task_id {
+        return resolve_task_from_rows(rows, task_id);
+    }
+    if with_active_step {
+        if let Some(step) = active_step_for_owned_status(rows, None) {
+            if let Some(parent_id) = task_parent_id(step) {
+                if let Some(parent) = task_record_by_id(rows, &parent_id) {
+                    return Ok(parent.clone());
+                }
+            }
+            return Ok(step.clone());
+        }
+    }
+    rows.iter()
+        .find(|task| task.status == "in_progress" && task.issue_type != "step")
+        .cloned()
+        .ok_or_else(|| state_store::StateStoreError::MissingTask {
+            task_id: "active owned-status task".to_string(),
+        })
 }
 
 fn task_handoff_timestamp() -> String {
@@ -10178,11 +10339,7 @@ fn task_next_lawful_receipt(
 }
 
 fn dirty_paths_for_repo(repo_root: &std::path::Path) -> Result<Vec<String>, String> {
-    let output = std::process::Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(repo_root)
-        .output()
-        .map_err(|error| error.to_string())?;
+    let output = git_status_output_for_repo(repo_root)?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
@@ -10191,6 +10348,54 @@ fn dirty_paths_for_repo(repo_root: &std::path::Path) -> Result<Vec<String>, Stri
         .lines()
         .filter_map(porcelain_status_path)
         .collect::<Vec<_>>())
+}
+
+fn dirty_repo_root_for_current_process() -> std::path::PathBuf {
+    let cwd_root = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| nearest_git_worktree_root(&cwd));
+    let exe_root = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().and_then(nearest_git_worktree_root));
+    if let Some(root) = cwd_root.as_ref() {
+        if dirty_paths_for_repo(root).is_ok_and(|paths| !paths.is_empty()) {
+            return root.clone();
+        }
+    }
+    if let Some(root) = exe_root.as_ref() {
+        if dirty_paths_for_repo(root).is_ok_and(|paths| !paths.is_empty()) {
+            return root.clone();
+        }
+    }
+    cwd_root
+        .or(exe_root)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+fn nearest_git_worktree_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    start
+        .ancestors()
+        .find(|candidate| candidate.join(".git").exists())
+        .map(std::path::Path::to_path_buf)
+}
+
+fn git_status_output_for_repo(repo_root: &std::path::Path) -> Result<std::process::Output, String> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(repo_root)
+        .output();
+    match output {
+        Ok(output) => Ok(output),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && cfg!(windows) => {
+            std::process::Command::new("C:\\Program Files\\Git\\cmd\\git.exe")
+                .args(["status", "--porcelain"])
+                .current_dir(repo_root)
+                .output()
+                .map_err(|fallback_error| fallback_error.to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn git_text_for_repo(repo_root: &std::path::Path, args: &[&str]) -> Result<String, String> {
@@ -12025,11 +12230,39 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
-            let repo_root = project_root_for_task_state(&state_dir)
-                .or_else(|| std::env::current_dir().ok())
-                .unwrap_or_else(|| std::path::PathBuf::from("."));
-            match task_show_authoritative_first(state_dir, &command.task_id).await {
-                Ok((task, _metadata)) => {
+            let repo_root = if command.from_dirty {
+                dirty_repo_root_for_current_process()
+            } else {
+                project_root_for_task_state(&state_dir)
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+            };
+            match load_task_snapshot_rows_authoritative_first(&state_dir).await {
+                Ok((rows, _metadata)) => {
+                    let task = match select_task_for_owned_status(
+                        &rows,
+                        command.task_id.as_deref(),
+                        command.with_active_step,
+                    ) {
+                        Ok(task) => task,
+                        Err(error) => {
+                            let receipt = serde_json::json!({
+                                "status": "blocked",
+                                "blocker_codes": ["missing_task_context"],
+                                "next_actions": ["Pass `<task-id>` or rerun with `--with-active-step` while a TaskFlow step is in_progress."],
+                                "task_id": command.task_id.clone().unwrap_or_else(|| "unresolved".to_string()),
+                                "error": error.to_string(),
+                            });
+                            if command.json {
+                                crate::print_json_pretty(&receipt);
+                            } else {
+                                eprintln!("Failed to inspect task owned status: {error}");
+                            }
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let (active_step, active_parent_task, active_epic) =
+                        task_owned_status_context(&rows, &task, command.with_active_step);
                     let dirty_files = match dirty_paths_for_repo(&repo_root) {
                         Ok(paths) => paths,
                         Err(error) => {
@@ -12039,13 +12272,21 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 next_actions: vec![
                                     "Run the command from a git worktree or resolve git status errors before staging.".to_string(),
                                 ],
-                                task_id: command.task_id.clone(),
+                                task_id: task.id.clone(),
+                                repo_root: repo_root.display().to_string(),
+                                active_step,
+                                active_parent_task,
+                                active_epic,
                                 ownership_source: "unresolved".to_string(),
                                 owned_paths: Vec::new(),
                                 dirty_files: Vec::new(),
                                 owned_files: Vec::new(),
                                 unowned_files: Vec::new(),
+                                unowned_paths: Vec::new(),
+                                matched_files: Vec::new(),
+                                unmatched_files: Vec::new(),
                                 stageable_files: Vec::new(),
+                                confidence: "none".to_string(),
                             };
                             if command.json {
                                 let mut value = serde_json::to_value(&receipt)
@@ -12067,6 +12308,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             .map(|path| path.display().to_string())
                             .collect(),
                         dirty_files,
+                        repo_root.display().to_string(),
+                        active_step,
+                        active_parent_task,
+                        active_epic,
                     );
                     if command.json {
                         crate::print_json_pretty(
@@ -17409,16 +17654,27 @@ mod tests {
                 "crates/vida/src/task_surface.rs".to_string(),
                 "README.md".to_string(),
             ],
+            ".".to_string(),
+            None,
+            None,
+            None,
         );
 
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.ownership_source, "planner_metadata.owned_paths");
         assert_eq!(receipt.owned_files, vec!["crates/vida/src/task_surface.rs"]);
         assert_eq!(
+            receipt.matched_files,
+            vec!["crates/vida/src/task_surface.rs"]
+        );
+        assert_eq!(
             receipt.stageable_files,
             vec!["crates/vida/src/task_surface.rs"]
         );
         assert_eq!(receipt.unowned_files, vec!["README.md"]);
+        assert_eq!(receipt.unmatched_files, vec!["README.md"]);
+        assert_eq!(receipt.unowned_paths, vec!["README.md"]);
+        assert_eq!(receipt.confidence, "mixed");
         assert_eq!(receipt.blocker_codes, vec!["dirty_ownership_ambiguous"]);
     }
 
@@ -17473,6 +17729,10 @@ mod tests {
             Vec::new(),
             Vec::new(),
             vec!["crates/vida/src/task_surface.rs".to_string()],
+            ".".to_string(),
+            None,
+            None,
+            None,
         );
 
         assert_eq!(receipt.status, "blocked");

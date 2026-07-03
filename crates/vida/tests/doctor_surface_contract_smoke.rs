@@ -158,6 +158,20 @@ fn assert_failure(output: &std::process::Output, context: &str) {
     );
 }
 
+fn run_git(project_root: &str, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(project_root)
+        .output()
+        .expect("git command should run");
+    assert!(
+        output.status.success(),
+        "git {args:?} should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER: &str =
     "unsupported_architecture_reserved_workflow_boundary";
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str = "clear unsupported/architecture-reserved workflow boundary state in run-graph policy/context before operator handoff.";
@@ -1411,6 +1425,141 @@ fn task_steps_outputs_default_toon_json_and_filters() {
         row["owned_paths"],
         serde_json::json!(["crates/vida/src/task_surface.rs"])
     );
+}
+
+#[test]
+fn owned_status_from_dirty_with_active_step_maps_taskflow_owners() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_git(&project_root, &["init"]);
+    run_git(
+        &project_root,
+        &["config", "user.email", "vida@example.invalid"],
+    );
+    run_git(&project_root, &["config", "user.name", "VIDA Test"]);
+    std::fs::write(format!("{project_root}/.gitignore"), ".vida/\n").expect("write gitignore");
+    std::fs::create_dir_all(format!("{project_root}/crates/vida/src"))
+        .expect("create source fixture dir");
+    std::fs::write(
+        format!("{project_root}/crates/vida/src/task_surface.rs"),
+        "old\n",
+    )
+    .expect("write owned fixture");
+    std::fs::write(format!("{project_root}/README.md"), "old\n").expect("write readme fixture");
+    run_git(
+        &project_root,
+        &[
+            "add",
+            ".gitignore",
+            "AGENTS.md",
+            "vida.config.yaml",
+            "crates",
+            "README.md",
+        ],
+    );
+    run_git(&project_root, &["commit", "-m", "baseline"]);
+    std::fs::write(
+        format!("{project_root}/crates/vida/src/task_surface.rs"),
+        "new\n",
+    )
+    .expect("modify owned fixture");
+    std::fs::write(format!("{project_root}/README.md"), "new\n").expect("modify unowned fixture");
+
+    create_session_triage_task(
+        &state_dir,
+        "owned-status-epic",
+        "Owned status epic",
+        "epic",
+        "open",
+        "0",
+        None,
+    );
+    let parent = vida()
+        .args([
+            "task",
+            "create",
+            "owned-status-parent",
+            "Owned status parent",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            "owned-status-epic",
+            "--owned-path",
+            "crates/vida/src/task_surface.rs",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("owned-status parent create should run");
+    assert_success(&parent, "owned-status parent create");
+    let step = vida()
+        .args([
+            "task",
+            "create",
+            "owned-status-step",
+            "Owned status step",
+            "--type",
+            "step",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            "owned-status-parent",
+            "--owned-path",
+            "crates/vida/src/task_surface.rs",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("owned-status step create should run");
+    assert_success(&step, "owned-status step create");
+
+    let output = vida()
+        .args([
+            "task",
+            "owned-status",
+            "--from-dirty",
+            "--with-active-step",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .current_dir(&project_root)
+        .output()
+        .expect("owned-status dirty attribution should run");
+    assert_failure(
+        &output,
+        "owned-status dirty attribution with unmatched file",
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("owned-status json should parse");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(payload["task_id"], "owned-status-parent");
+    assert_eq!(payload["active_step"]["task_id"], "owned-status-step");
+    assert_eq!(
+        payload["active_parent_task"]["task_id"],
+        "owned-status-parent"
+    );
+    assert_eq!(payload["active_epic"]["task_id"], "owned-status-epic");
+    assert_eq!(
+        payload["owned_paths"],
+        serde_json::json!(["crates/vida/src/task_surface.rs"])
+    );
+    assert_eq!(
+        payload["matched_files"],
+        serde_json::json!(["crates/vida/src/task_surface.rs"])
+    );
+    assert_eq!(payload["unmatched_files"], serde_json::json!(["README.md"]));
+    assert_eq!(payload["unowned_paths"], serde_json::json!(["README.md"]));
+    assert_eq!(payload["confidence"], "mixed");
+    assert!(payload["next_actions"]
+        .as_array()
+        .expect("next_actions should be array")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .is_some_and(|text| text.contains("unrelated dirty files"))));
 }
 
 #[test]
