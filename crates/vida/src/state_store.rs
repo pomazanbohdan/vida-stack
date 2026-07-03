@@ -601,7 +601,13 @@ impl StateStore {
                     ))
                     .await;
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    return Err(state_reset_archive_rename_failure(
+                        root,
+                        archive_path,
+                        &error,
+                    ));
+                }
             }
         }
 
@@ -626,6 +632,43 @@ fn state_reset_archive_rename_error_is_retryable(error: &io::Error) -> bool {
     ) || StateStore::message_is_lock_contention(&error.to_string())
 }
 
+fn state_reset_archive_rename_failure(
+    root: &Path,
+    archive_path: &Path,
+    error: &io::Error,
+) -> StateStoreError {
+    let suspect_paths = state_reset_archive_suspect_paths(root);
+    let suspect_detail = if suspect_paths.is_empty() {
+        "no known datastore lock/WAL/SST suspect paths were present".to_string()
+    } else {
+        format!("suspect existing paths: {}", suspect_paths.join(", "))
+    };
+    StateStoreError::InvalidStateReset {
+        reason: format!(
+            "`vida state reset` could not archive state root `{}` to `{}`; io_kind={:?}; io_error={}; {}; backup_first=true; silent_delete_allowed=false",
+            root.display(),
+            archive_path.display(),
+            error.kind(),
+            error,
+            suspect_detail
+        ),
+    }
+}
+
+fn state_reset_archive_suspect_paths(root: &Path) -> Vec<String> {
+    [
+        ".vida-authoritative-open.guard",
+        "LOCK",
+        "wal",
+        "sstables",
+        "vlog",
+    ]
+    .iter()
+    .map(|component| root.join(component))
+    .filter(|path| path.exists())
+    .map(|path| path.display().to_string())
+    .collect()
+}
 fn write_state_reset_recovery_receipt(
     summary: &StateResetSummary,
 ) -> Result<PathBuf, StateStoreError> {
@@ -842,6 +885,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn state_reset_archive_failure_names_permission_cause_and_suspect_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-reset-archive-error-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+        fs::create_dir_all(root.join("wal")).expect("create wal dir");
+        fs::create_dir_all(root.join("sstables")).expect("create sstables dir");
+        fs::write(root.join(".vida-authoritative-open.guard"), "").expect("write guard");
+        fs::write(root.join("LOCK"), "").expect("write lock marker");
+        let archive_path = root.with_extension("archive");
+        let error = io::Error::new(io::ErrorKind::PermissionDenied, "Access is denied");
+
+        let message = state_reset_archive_rename_failure(&root, &archive_path, &error).to_string();
+
+        assert!(message.contains(root.to_string_lossy().as_ref()));
+        assert!(message.contains(archive_path.to_string_lossy().as_ref()));
+        assert!(message.contains("io_kind=PermissionDenied"));
+        assert!(message.contains("Access is denied"));
+        assert!(message.contains(".vida-authoritative-open.guard"));
+        assert!(message.contains("LOCK"));
+        assert!(message.contains("wal"));
+        assert!(message.contains("sstables"));
+        assert!(message.contains("backup_first=true"));
+        assert!(message.contains("silent_delete_allowed=false"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
     #[tokio::test]
     async fn state_reset_archives_recently_dropped_datastore_without_manual_settle() {
         let nanos = SystemTime::now()
