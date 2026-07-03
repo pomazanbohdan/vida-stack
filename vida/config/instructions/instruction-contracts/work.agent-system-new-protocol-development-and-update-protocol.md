@@ -1,8 +1,6 @@
 # Agent-System New-Protocol Development And Update Protocol
 
-Purpose: define the canonical framework protocol for creating new agent-system protocols and updating existing ones as layered, green-closure artifacts rather than as ad hoc command descriptions.
-
-This file is the canonical protocol for authoring new agent-system protocols and updating existing agent-system protocols.
+Purpose: define the canonical framework protocol for creating/updating agent-system protocols as layered, green-closure artifacts rather than ad hoc command descriptions.
 
 ## Scope
 
@@ -67,22 +65,7 @@ Normalization rule:
 
 Every protocol-relevant requirement must be classifiable into at least one of:
 
-1. `identity`
-2. `scope`
-3. `trigger`
-4. `input`
-5. `output`
-6. `flow`
-7. `gate`
-8. `blocker`
-9. `evidence`
-10. `ownership`
-11. `interaction`
-12. `verification`
-13. `approval`
-14. `recovery`
-15. `activation`
-16. `validation`
+`identity`, `scope`, `trigger`, `input`, `output`, `flow`, `gate`, `blocker`, `evidence`, `ownership`, `interaction`, `verification`, `approval`, `recovery`, `activation`, `validation`.
 
 Coverage rule:
 
@@ -444,13 +427,7 @@ This protocol itself uses one canonical authoring-state model.
 
 Allowed states:
 
-1. `NOT_STARTED`
-2. `LAYER_IN_PROGRESS`
-3. `WAITING_USER_INPUT`
-4. `LAYER_COVERED`
-5. `BLOCKED`
-6. `PROTOCOL_GREEN_PARTIAL`
-7. `PROTOCOL_GREEN_FULL`
+`NOT_STARTED`, `LAYER_IN_PROGRESS`, `WAITING_USER_INPUT`, `LAYER_COVERED`, `BLOCKED`, `PROTOCOL_GREEN_PARTIAL`, `PROTOCOL_GREEN_FULL`.
 
 State rules:
 
@@ -884,13 +861,7 @@ Packet rule:
 
 Each authoring or update pass should maintain a compact requirement inventory with at least:
 
-1. `requirement_id`
-2. `source`
-3. `normalized_requirement`
-4. `coverage_class`
-5. `earliest_owner_layer`
-6. `current_status`
-7. `conflict_note`
+`requirement_id`, `source`, `normalized_requirement`, `coverage_class`, `earliest_owner_layer`, `current_status`, `conflict_note`.
 
 Requirement inventory rule:
 
@@ -902,15 +873,7 @@ Requirement inventory rule:
 
 Each layer should detail requirements under at least the following headings when applicable:
 
-1. `Purpose`
-2. `Inputs`
-3. `Outputs`
-4. `Guards`
-5. `Blockers`
-6. `Evidence`
-7. `User interaction`
-8. `Handoff`
-9. `Closure`
+`Purpose`, `Inputs`, `Outputs`, `Guards`, `Blockers`, `Evidence`, `User interaction`, `Handoff`, `Closure`.
 
 Rules:
 
@@ -955,22 +918,7 @@ Fail-closed rule:
 
 Each major authoring or update pass should be able to produce a compact closure receipt with at least:
 
-1. `mode`
-2. `update_class`
-3. `target_closure_layer`
-4. `highest_green_layer`
-5. `current_state`
-6. `current_verdict`
-7. `active_blockers`
-8. `owner_resolution`
-9. `index_wired`
-10. `activation_wired`
-11. `validation_passed`
-12. `requirements_mapped`
-13. `requirements_unmapped`
-14. `optimization_class`
-15. `owner_authority_preserved`
-16. `compact_surface_only`
+`mode`, `update_class`, `target_closure_layer`, `highest_green_layer`, `current_state`, `current_verdict`, `active_blockers`, `owner_resolution`, `index_wired`, `activation_wired`, `validation_passed`, `requirements_mapped`, `requirements_unmapped`, `optimization_class`, `owner_authority_preserved`, `compact_surface_only`.
 
 Receipt rule:
 
@@ -1005,17 +953,7 @@ Rollout rule:
 
 When this protocol is assessed against itself, the pass should also be able to emit a compact self-assessment receipt with at least:
 
-1. `assessed_protocol`
-2. `update_class`
-3. `earliest_reopened_layer`
-4. `highest_green_layer`
-5. `current_state`
-6. `current_verdict`
-7. `ideal_state_claim`
-8. `active_blockers`
-9. `residual_gaps`
-10. `autonomy_proven`
-11. `acceptance_law_satisfied`
+`assessed_protocol`, `update_class`, `earliest_reopened_layer`, `highest_green_layer`, `current_state`, `current_verdict`, `ideal_state_claim`, `active_blockers`, `residual_gaps`, `autonomy_proven`, `acceptance_law_satisfied`.
 
 Self-assessment receipt rule:
 
@@ -1027,13 +965,7 @@ Self-assessment receipt rule:
 
 When a command surface is determinized, the pass should also emit a compact determinization receipt with at least:
 
-1. `command_surface`
-2. `responsibility_inventory`
-3. `existing_protocol_owners`
-4. `new_protocol_candidates`
-5. `shared_entrypoint_retained`
-6. `hidden_law_removed`
-7. `requirements_reproduced`
+`command_surface`, `responsibility_inventory`, `existing_protocol_owners`, `new_protocol_candidates`, `shared_entrypoint_retained`, `hidden_law_removed`, `requirements_reproduced`.
 
 Determinization rule:
 
@@ -1045,16 +977,7 @@ Determinization rule:
 
 When one protocol is fully absorbed by a stronger canonical owner, the pass should also emit a compact absorption receipt with at least:
 
-1. `stronger_owner`
-2. `weaker_owner`
-3. `coverage_proven`
-4. `material_requirements_preserved`
-5. `duplicate_law_removed`
-6. `pointer_only_retained`
-7. `artifact_deleted`
-8. `index_rewired`
-9. `activation_rewired`
-10. `unmapped_requirements_after_absorption`
+`stronger_owner`, `weaker_owner`, `coverage_proven`, `material_requirements_preserved`, `duplicate_law_removed`, `pointer_only_retained`, `artifact_deleted`, `index_rewired`, `activation_rewired`, `unmapped_requirements_after_absorption`.
 
 Absorption receipt rule:
 
@@ -1109,12 +1032,7 @@ Even when the protocol is green, bounded residual gaps should be recorded explic
 
 Minimum residual-gap fields:
 
-1. `gap_id`
-2. `layer`
-3. `gap_summary`
-4. `current_effect`
-5. `blocking_status`
-6. `next_action`
+`gap_id`, `layer`, `gap_summary`, `current_effect`, `blocking_status`, `next_action`.
 
 Residual-gap rule:
 
@@ -1410,12 +1328,7 @@ When this protocol creates or materially changes a canonical protocol-bearing ar
 
 ## Related
 
-1. `instruction-contracts/core.agent-system-protocol`
-2. `instruction-contracts/work.documentation-operation-protocol`
-3. `system-maps/protocol.index`
-4. `docs/product/spec/instruction-artifact-model.md`
-5. `command-instructions/routing.command-layer-protocol`
-6. `references/protocol.agent-system-new-protocol-artifact-templates`
+`instruction-contracts/core.agent-system-protocol`, `instruction-contracts/work.documentation-operation-protocol`, `system-maps/protocol.index`, `docs/product/spec/instruction-artifact-model.md`, `command-instructions/routing.command-layer-protocol`, `references/protocol.agent-system-new-protocol-artifact-templates`.
    - non-canonical companion reference for packet and receipt shapes only
 
 -----
@@ -1427,5 +1340,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md
 created_at: '2026-03-11T07:38:29+02:00'
-updated_at: '2026-03-14T17:15:00+02:00'
+updated_at: 2026-07-03T13:18:00+03:00
 changelog_ref: work.agent-system-new-protocol-development-and-update-protocol.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: enum-registry-compaction+protected-atom-validation
+protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md
+protocol_compression_audit_at: 2026-07-03T13:18:00+03:00
+protocol_compression_before_tokens: 12276
+protocol_compression_after_tokens: 12224
+protocol_compression_content_sha256: 0c33b99f3af70b952c4d775e83f58069bfb72b51d7cfec994e0d7ec83fc682f4

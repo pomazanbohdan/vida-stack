@@ -1,36 +1,14 @@
 # Step Thinking Protocol — Unified Step-Scoped Thinking Algorithms
 
-Purpose: keep the canonical full algorithm specifications for one active step of orchestrator reasoning.
+Purpose: canonical algorithms for one orchestrator-reasoning step.
 
-Shared rules:
-
-1. The canonical algorithm owners in this file are the embedded section anchors below.
-2. Boot/read activation is owned by `instruction-contracts/bridge.instruction-activation-protocol` and `agent-definitions/entry.orchestrator-entry`.
-3. Web/internet validation is owned by `runtime-instructions/work.web-validation-protocol`.
-4. User-facing reporting must not expose intermediate chain-of-thought; `Thinking mode` remains a reporting label only.
-5. When a user-facing report is required, the agent must still expose a concise external reasoning summary covering the dominant evidence, decision path, or blocker without revealing hidden intermediate reasoning traces.
-6. This protocol governs reasoning inside one active step only; cross-step continuity, invariant carry-forward, and session context preservation belong to `instruction-contracts/overlay.session-context-continuity-protocol`.
-7. PR-CoT, MAR, 5-SOL, and META must preserve impact analysis covering:
-   - affected scope,
-   - contract impact,
-   - operational impact,
-   - follow-up,
-   - residual risks.
-8. Named algorithms below are canonical flow templates built from reusable reasoning blocks; META may assemble the smallest lawful block flow instead of executing whole named algorithms by default.
-9. Use compact-triggered execution by default:
-   - start with the minimum lawful structure needed for the current step,
-   - expand evidence, packets, categories, or rubrics only when conflict, uncertainty, preservation risk, or admissibility pressure requires it,
-   - prefer compact receipts over narrative restatement unless escalation, closure proof, or user request requires expansion.
+Shared rules: embedded section anchors below are canonical algorithm owners; boot/read activation is owned by `instruction-contracts/bridge.instruction-activation-protocol` and `agent-definitions/entry.orchestrator-entry`; web/internet validation is owned by `runtime-instructions/work.web-validation-protocol`; user-facing reporting must not expose intermediate chain-of-thought and `Thinking mode` is only a reporting label; required user-facing reports must expose concise external reasoning summary covering dominant evidence, decision path, or blocker; this protocol governs one active reasoning step only, while cross-step continuity, invariant carry-forward, and session context preservation belong to `instruction-contracts/overlay.session-context-continuity-protocol`; PR-CoT, MAR, 5-SOL, and META must preserve impact analysis for affected scope, contract impact, operational impact, follow-up, and residual risks; named algorithms are canonical flow templates over reusable reasoning blocks; META may assemble the smallest lawful block flow instead of executing whole named algorithms by default; compact-triggered execution is default, expanding evidence/packets/categories/rubrics only for conflict, uncertainty, preservation risk, or admissibility pressure and preferring compact receipts unless escalation, closure proof, or user request requires expansion.
 
 ## Embedded Algorithms (Canonical Sections)
 
 ## Section: algorithm-selector
 
 # Algorithm Selector
-
-> Unified router for selecting the active thinking algorithm.
-
----
 
 ## Selection
 
@@ -86,32 +64,20 @@ factors[5]{factor,weight,1,3,5}:
 
 ## Scoring Contract
 
-```yaml
-SCORING_LAYERS:
-  selector_score:
-    purpose: "Routing only; never reuse as a quality or confidence score"
-    scale: "11-55"
-    priority: "stakes and reversibility outrank raw structural complexity"
-
-  algorithm_raw_score:
-    PR-CoT: "Issue + severity assessment"
-    MAR: "1-10 weighted rubric score"
-    5-SOL: "1-5 category scoring per option plus weighted option percent"
-    META: "0-100 weighted confidence over active block families"
-
-  handoff_rule:
-    - "Every algorithm must export its gate result and a normalized signal"
-    - "Admissibility gates override any raw numeric score"
+```toon
+scoring_layers[4]{layer,contract}:
+  selector_score,Routing only; never reuse as quality/confidence; scale 11-55; stakes and reversibility outrank raw structural complexity
+  algorithm_raw_score,PR-CoT=issue+severity; MAR=1-10 weighted rubric; 5-SOL=1-5 category scoring plus weighted option percent; META=0-100 weighted confidence over active block families
+  handoff_rule,Every algorithm exports gate result and normalized signal
+  admissibility,Admissibility gates override any raw numeric score
 ```
 
-```yaml
-RISK_ESCALATORS:
-  purpose: "Raise routing class when governance risk exceeds apparent implementation complexity"
-  rules:
-    - "If protocol conflict, execution gate mismatch, or fail-closed policy ambiguity is present, route to META regardless of raw selector score"
-    - "If the task mutates framework-owned behavior or canonical routing rules, route to META regardless of raw selector score"
-    - "If tracked writer execution encounters no eligible analysis lane, no eligible verifier, or no eligible coach and a policy decision is needed, route to META"
-    - "If the task is mostly local implementation with no governance/policy ambiguity, keep the score-selected route"
+```toon
+risk_escalators[4]{condition,route}:
+  protocol conflict / execution gate mismatch / fail-closed policy ambiguity,META regardless of raw selector score
+  framework-owned behavior or canonical routing mutation,META regardless of raw selector score
+  tracked writer lacks eligible analysis lane/verifier/coach and policy decision is needed,META
+  mostly local implementation with no governance or policy ambiguity,score-selected route
 ```
 
 ```yaml
@@ -2382,9 +2348,7 @@ WHEN_TO_USE_TMK:
   source: "TMK (arXiv:2602.03900) — +65.8% on planning tasks"
 ```
 
----
-
-*20 curated from 39 original (arXiv:2402.03620) + TMK structured scaffolds*
+*20 curated from 39 original (arXiv:2402.03620) + TMK scaffolds*
 
 -----
 artifact_path: config/instructions/instruction-contracts/overlay.step-thinking.protocol
@@ -2395,5 +2359,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-11T12:32:57+02:00'
+updated_at: 2026-07-03T13:30:00+03:00
 changelog_ref: overlay.step-thinking-protocol.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: coarse-to-fine-wrapper-compaction+scoring-table-normalization+algorithm-body-preserve-exact
+protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md
+protocol_compression_audit_at: 2026-07-03T13:30:00+03:00
+protocol_compression_before_tokens: 19324
+protocol_compression_after_tokens: 19320
+protocol_compression_content_sha256: 7b73a5623ee2542e827b5bdce30cb5a61e1284d955f2ed771fce176649eb167d

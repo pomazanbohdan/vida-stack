@@ -6,26 +6,16 @@ Purpose: define the canonical agent instruction for working with VIDA documentat
 
 This protocol applies when an agent:
 
-1. reads or updates canonical markdown documentation,
+1. reads/updates canonical markdown documentation,
 2. changes footer metadata or sidecar changelog state,
-3. needs a low-call operational path for documentation work,
-4. must keep documentation law aligned before or during implementation work.
+3. needs a low-call documentation path,
+4. must align documentation law before or during implementation work.
 
-This protocol is limited to the currently documentation-green layers:
-
-1. `Layer 1: Canonical Schema`
-2. `Layer 2: Canonical Inventory`
-3. `Layer 3: Canonical Validation`
-4. `Layer 4: Canonical Mutation`
-5. `Layer 5: Canonical Relations`
-6. `Layer 6: Canonical Operator`
-7. `Layer 7: Canonical Runtime Readiness`
+Current green scope: `Layer 1: Canonical Schema`, `Layer 2: Canonical Inventory`, `Layer 3: Canonical Validation`, `Layer 4: Canonical Mutation`, `Layer 5: Canonical Relations`, `Layer 6: Canonical Operator`, `Layer 7: Canonical Runtime Readiness`.
 
 It must not assume that later layers are closed.
 
-If the task is not one bounded documentation operation but a project-wide migration of another project's documentation system toward Layer 7 closure, escalate to:
-
-1. `instruction-contracts/work.documentation-layer7-migration-protocol`
+If the task is a project-wide migration of another project's documentation system toward Layer 7 closure, escalate to `instruction-contracts/work.documentation-layer7-migration-protocol`.
 
 ## Documentation-First Rule
 
@@ -35,14 +25,9 @@ If the task is not one bounded documentation operation but a project-wide migrat
 
 ## Documentation Standard Precedence Rule
 
-When writing or reshaping documentation artifacts, use the highest-authority formatting and structure rule that applies.
+When writing or reshaping documentation artifacts, use the highest-authority formatting/structure rule that applies.
 
-Precedence order:
-
-1. an active skill-specific artifact standard when the current task explicitly uses a skill and that skill defines the format of the artifact being written,
-2. an explicit project-owned documentation standard for that artifact family when such a standard is already documented,
-3. promoted product-law requirements for canonical documentation and instruction artifacts,
-4. the bounded default formatting and mutation behavior provided by `vida docflow`.
+Precedence: active skill-specific artifact standard for the explicit skill/artifact -> explicit project-owned artifact-family standard -> promoted product-law requirements for canonical documentation/instruction artifacts -> bounded `vida docflow` default formatting/mutation behavior.
 
 Rules:
 
@@ -51,9 +36,7 @@ Rules:
 3. If a project standard and a skill-specific format conflict materially, use the higher-precedence skill format for the artifact body and preserve canonical metadata/footer/sidecar law around it.
 4. If no higher-precedence artifact standard exists, use the canonical `DocFlow` documentation path.
 
-Example rule:
-
-1. if a future business-analysis skill defines the canonical `PBI` document shape, use that `PBI` structure for the body of the document while still preserving the canonical metadata, changelog, and validation requirements from this protocol.
+Example: if a future business-analysis skill defines canonical `PBI` shape, use that body structure while preserving this protocol's metadata, changelog, and validation requirements.
 
 ## One-Touch Activation Rule
 
@@ -64,14 +47,7 @@ Example rule:
 
 ## Allowed Foundations
 
-Use only the following canonical foundations:
-
-1. `docs/product/spec/project-documentation-law.md`
-2. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-3. `system-maps/framework.map`
-4. `AGENTS.md`
-5. `AGENTS.sidecar.md`
-6. `vida docflow`
+Allowed canonical foundations: `docs/product/spec/project-documentation-law.md`, `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`, `system-maps/framework.map`, `AGENTS.md`, `AGENTS.sidecar.md`, `vida docflow`.
 
 Evidence rule:
 
@@ -91,29 +67,9 @@ When working on documentation, the agent must operate in this order:
 
 ## Low-Call Operator Path
 
-Default documentation orientation path:
+Default orientation path: `vida docflow overview --profile active-canon` -> `vida docflow layer-status --layer <N>` for one-layer work -> `vida docflow doctor --layer <N>` for bounded layer audit -> targeted reads of changed canonical docs -> `vida docflow proofcheck --layer <N>` for one-layer closure or `vida docflow proofcheck --profile active-canon-strict` for cross-layer closure -> targeted deep reads only when proof reports a blocker.
 
-1. `vida docflow overview --profile active-canon`
-2. `vida docflow layer-status --layer <N>` when the work is bounded to one canonical layer
-3. `vida docflow doctor --layer <N>` when a bounded layer audit is needed
-4. targeted reads of the canonical documents being changed
-5. `vida docflow proofcheck --layer <N>` for bounded one-layer closure or `vida docflow proofcheck --profile active-canon-strict` for cross-layer closure
-6. targeted deep reads only when the proof surface reports a blocker
-
-Use richer history or status views only when needed:
-
-1. `changelog`
-2. `task-summary`
-3. `summary`
-4. `deps`
-5. `deps-map`
-6. `artifact-impact`
-7. `task-impact`
-8. `activation-check`
-9. `protocol-coverage-check`
-10. `readiness-check`
-11. `readiness-write`
-12. `report-check`
+Use richer views only when needed: `changelog`, `task-summary`, `summary`, `deps`, `deps-map`, `artifact-impact`, `task-impact`, `activation-check`, `protocol-coverage-check`, `readiness-check`, `readiness-write`, `report-check`.
 
 ## Lawful Mutation Path
 
@@ -156,10 +112,7 @@ Thematic consolidation rule:
 Protocol reuse and promotion rule:
 
 1. Before creating a new canonical protocol, instruction contract, runtime instruction, or framework map, first search the existing canonical protocol/index/map surfaces for an already-owned home of the topic.
-2. The minimum lookup path is:
-   - `system-maps/protocol.index`
-   - `system-maps/framework.map`
-   - targeted search across `vida/config/instructions/**` for the active topic
+2. Minimum lookup path: `system-maps/protocol.index` -> `system-maps/framework.map` -> targeted search across `vida/config/instructions/**` for the active topic.
 3. Create a new protocol-bearing artifact only when the topic is clearly a separate domain with its own bounded trigger, owner, and responsibility set.
 4. "I want to say this more strongly" is not enough reason to create a new protocol if an existing canonical owner already covers the same topic.
 5. When a new protocol is justified, move the related rule body into that new canonical home rather than leaving the same law half-owned across several older artifacts.
@@ -169,17 +122,7 @@ Protocol reuse and promotion rule:
 
 ## Validation Rule
 
-Before closure of documentation work:
-
-1. run `check` on the changed scope or changed files,
-2. run `activation-check` when the change touches a canonical protocol, protocol index row, lane-entry routing, or activation wiring,
-3. run `protocol-coverage-check --profile active-canon` when the change touches canonical protocol inventory, protocol index rows, or protocol-bearing instruction artifacts,
-4. run `readiness-check --profile active-canon` when the change touches readiness law, projection parity, canonical bundles, compatibility classes, or boot-gate surfaces,
-5. run `doctor --profile active-canon-strict` when the change affects canonical docs or maps,
-6. prefer `proofcheck --layer <N>` when the changed scope is tightly bounded to one canonical layer,
-7. prefer `proofcheck --profile active-canon-strict` when the changed scope spans multiple active-canon layers,
-8. treat validation failure as blocking,
-9. keep success output quiet and failure output explicit.
+Before closure of documentation work: run `check` on changed scope/files; run `activation-check` when touching a canonical protocol, protocol index row, lane-entry routing, or activation wiring; run `protocol-coverage-check --profile active-canon` when touching canonical protocol inventory, protocol index rows, or protocol-bearing instruction artifacts; run `readiness-check --profile active-canon` when touching readiness law, projection parity, canonical bundles, compatibility classes, or boot-gate surfaces; run `doctor --profile active-canon-strict` when touching canonical docs/maps; prefer `proofcheck --layer <N>` for one-layer scope; prefer `proofcheck --profile active-canon-strict` for multi-layer active-canon scope; treat validation failure as blocking; keep success output quiet and failure output explicit.
 
 ## Map Registration Rule
 
@@ -223,10 +166,7 @@ When documentation work or documentation-layer validation reveals a bounded defe
 
 ## Forbidden Dependencies
 
-This protocol must not depend on:
-
-1. runtime-owned latest resolution,
-2. ad hoc filesystem assumptions outside current canonical docs and DocFlow policy.
+This protocol MUST NOT depend on runtime-owned latest resolution or ad hoc filesystem assumptions outside current canonical docs and DocFlow policy.
 
 ## Forbidden Behaviors
 
@@ -273,5 +213,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md
 created_at: '2026-03-10T04:10:00+02:00'
-updated_at: 2026-03-14T12:41:58.833200134Z
+updated_at: 2026-07-03T12:12:00+03:00
 changelog_ref: work.documentation-operation-protocol.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: rfc2119-rewrite+list-compaction+protected-command-validation
+protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md
+protocol_compression_audit_at: 2026-07-03T12:12:00+03:00
+protocol_compression_before_tokens: 3163
+protocol_compression_after_tokens: 3113
+protocol_compression_content_sha256: 4841269cb4f8e6dae59cf4ba6b598a377b5d4741cff4dc59841d6e705551ff91

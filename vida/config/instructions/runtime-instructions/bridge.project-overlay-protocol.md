@@ -18,23 +18,18 @@ No-overlay execution rule:
 
 ## Canonical Root File
 
-Root overlay file:
-
-1. `vida.config.yaml`
-
-Ownership:
-
-1. file location is project root,
-2. schema and activation semantics are framework-owned,
-3. actual values inside the file are project-owned.
-
-Framework template:
-
-1. framework-owned starter template lives at `docs/framework/templates/vida.config.yaml.template`,
-2. template is canonical for scaffold/default structure,
-3. instantiated root `vida.config.yaml` remains project-owned data.
-4. project docs referenced from `project_bootstrap` remain project-owned runbooks; framework runtime law must stay in `AGENTS.md`, `vida/config/instructions/**`, and active TaskFlow runtime-family surfaces, not be synchronized into project docs by drift.
-5. framework-owned document lifecycle/freshness metadata belongs in `runtime-instructions/work.document-lifecycle-protocol` and `.vida/state/doc-lifecycle.json`, not inside project-owned docs.
+| Surface | Contract |
+| --- | --- |
+| root overlay file | `vida.config.yaml` |
+| location | project root |
+| schema and activation semantics | framework-owned |
+| actual values | project-owned |
+| framework template | `docs/framework/templates/vida.config.yaml.template` |
+| template role | canonical scaffold/default structure |
+| instantiated root file | project-owned data |
+| `project_bootstrap` docs | project-owned runbooks |
+| framework runtime law | stays in `AGENTS.md`, `vida/config/instructions/**`, and active TaskFlow runtime-family surfaces; do not synchronize it into project docs by drift |
+| lifecycle/freshness metadata | owned by `runtime-instructions/work.document-lifecycle-protocol` and `.vida/state/doc-lifecycle.json`, not project-owned docs |
 
 ## Language Policy
 
@@ -70,142 +65,30 @@ Schema validation gate:
 
 ## First Supported Bundle
 
-Initial supported overlay domain:
+Initial supported overlay domain: `protocol_activation.agent_system`.
 
-1. `protocol_activation.agent_system`
-
-If `true`, VIDA must activate:
-
-1. `instruction-contracts/core.agent-system-protocol`
-2. runtime helper: `vida taskflow system`
+If `true`, VIDA must activate `instruction-contracts/core.agent-system-protocol` and runtime helper `vida taskflow system`.
 
 ## Minimum Schema Surface
 
-Current required top-level sections:
+Required top-level sections: `project`, `protocol_activation`, and `agent_system` when `protocol_activation.agent_system=true`.
 
-1. `project`
-2. `protocol_activation`
-3. `agent_system` when `protocol_activation.agent_system=true`
+Optional top-level sections: `language_policy`, `pack_router_keywords`, `project_bootstrap`, `framework_self_diagnosis`, `autonomous_execution`, `agent_extensions`.
 
-Optional top-level sections:
-
-1. `language_policy`
-2. `pack_router_keywords`
-3. `project_bootstrap`
-4. `framework_self_diagnosis`
-5. `autonomous_execution`
-6. `agent_extensions`
-
-Supported `language_policy` keys:
-
-1. `user_communication`
-2. `reasoning`
-3. `documentation`
-4. `todo_protocol`
-
-Supported `pack_router_keywords` keys:
-
-1. `research`
-2. `spec`
-3. `pool`
-4. `pool_strong`
-5. `pool_dependency`
-6. `dev`
-7. `bug`
-8. `reflect`
-9. `reflect_strong`
-
-Supported `project_bootstrap` keys:
-
-1. `enabled`
-2. `docs_root`
-3. `process_root`
-4. `research_root`
-5. `readme_doc`
-6. `architecture_doc`
-7. `decisions_doc`
-8. `environments_doc`
-9. `project_operations_doc`
-10. `agent_system_doc`
-11. `allow_scaffold_missing`
-12. `require_launch_confirmation`
-
-Supported `agent_extensions` keys:
-
-1. `enabled`
-2. `map_doc`
-3. `registries`
-4. `enabled_framework_roles`
-5. `enabled_standard_flow_sets`
-6. `enabled_project_roles`
-7. `enabled_project_skills`
-8. `enabled_shared_skills`
-9. `enabled_project_profiles`
-10. `enabled_project_flows`
-11. `default_flow_set`
-12. `validation`
-13. `role_selection`
-
-Supported `agent_extensions.registries` keys:
-
-1. `roles`
-2. `skills`
-3. `profiles`
-4. `flows`
-
-Supported `agent_extensions.validation` keys:
-
-1. `require_registry_files`
-2. `require_unique_ids`
-3. `require_framework_role_compatibility`
-4. `require_skill_role_compatibility`
-5. `require_profile_resolution`
-6. `require_flow_resolution`
-7. `fail_closed_on_validation_error`
-
-Supported `agent_extensions.role_selection` keys:
-
-1. `mode`
-2. `fallback_role`
-3. `conversation_modes`
-
-Supported `agent_extensions.role_selection.conversation_modes.<mode_id>` keys:
-
-1. `enabled`
-2. `role`
-3. `single_task_only`
-4. `tracked_flow_entry`
-5. `allow_freeform_chat`
-
-Supported `host_environment` keys:
-
-1. `cli_system`
-2. `codex`
-
-Supported `host_environment.codex` keys:
-
-1. `agents`
-
-Supported `host_environment.codex.agents.<agent_id>` keys:
-
-1. `tier`
-2. `rate`
-3. `reasoning_band`
-4. `model`
-5. `model_reasoning_effort`
-6. `sandbox_mode`
-7. `default_runtime_role`
-8. `runtime_roles`
-9. `task_classes`
-
-Supported `autonomous_execution` keys:
-
-1. `next_task_boundary_analysis`
-2. `next_task_boundary_report`
-3. `next_task_boundary_report_gating`
-4. `dependent_coverage_autoupdate`
-5. `continue_after_reports`
-6. `validation_report_required_before_implementation`
+| Schema path | Supported keys |
+| --- | --- |
+| `language_policy` | `user_communication`, `reasoning`, `documentation`, `todo_protocol` |
+| `pack_router_keywords` | `research`, `spec`, `pool`, `pool_strong`, `pool_dependency`, `dev`, `bug`, `reflect`, `reflect_strong` |
+| `project_bootstrap` | `enabled`, `docs_root`, `process_root`, `research_root`, `readme_doc`, `architecture_doc`, `decisions_doc`, `environments_doc`, `project_operations_doc`, `agent_system_doc`, `allow_scaffold_missing`, `require_launch_confirmation` |
+| `agent_extensions` | `enabled`, `map_doc`, `registries`, `enabled_framework_roles`, `enabled_standard_flow_sets`, `enabled_project_roles`, `enabled_project_skills`, `enabled_shared_skills`, `enabled_project_profiles`, `enabled_project_flows`, `default_flow_set`, `validation`, `role_selection` |
+| `agent_extensions.registries` | `roles`, `skills`, `profiles`, `flows` |
+| `agent_extensions.validation` | `require_registry_files`, `require_unique_ids`, `require_framework_role_compatibility`, `require_skill_role_compatibility`, `require_profile_resolution`, `require_flow_resolution`, `fail_closed_on_validation_error` |
+| `agent_extensions.role_selection` | `mode`, `fallback_role`, `conversation_modes` |
+| `agent_extensions.role_selection.conversation_modes.<mode_id>` | `enabled`, `role`, `single_task_only`, `tracked_flow_entry`, `allow_freeform_chat` |
+| `host_environment` | `cli_system`, `codex` |
+| `host_environment.codex` | `agents` |
+| `host_environment.codex.agents.<agent_id>` | `tier`, `rate`, `reasoning_band`, `model`, `model_reasoning_effort`, `sandbox_mode`, `default_runtime_role`, `runtime_roles`, `task_classes` |
+| `autonomous_execution` | `next_task_boundary_analysis`, `next_task_boundary_report`, `next_task_boundary_report_gating`, `dependent_coverage_autoupdate`, `continue_after_reports`, `validation_report_required_before_implementation` |
 
 Autonomous execution overlay rule:
 
@@ -219,69 +102,11 @@ Autonomous execution overlay rule:
 8. `validation_report_required_before_implementation=true` inserts a mandatory validation-report gate before each implementation slice or implementation-bearing task.
 9. Spec-ready transition into downstream implementation flow and post-validation continuation remain runtime-defined execution-entry behaviors, not supported project overlay keys.
 
-Current supported `agent_system` keys:
-
-1. `init_on_boot`
-2. `mode`
-3. `state_owner`
-4. `max_parallel_agents`
-5. `workers`
-6. `routing`
-7. `scoring`
-
-Supported worker-level keys:
-
-1. `enabled`
-2. `worker_backend_class`
-3. `detect_command`
-4. `role`
-5. `orchestration_tier`
-6. `cost_priority`
-7. `max_runtime_seconds`
-8. `min_output_bytes`
-9. `models_hint`
-10. `default_model`
-11. `profiles`
-12. `default_profile`
-13. `capability_band`
-14. `write_scope`
-15. `billing_tier`
-16. `budget_cost_units`
-17. `speed_tier`
-18. `quality_tier`
-19. `specialties`
-20. `dispatch`
-21. `binary_path`
-
-Supported worker-level `dispatch` keys:
-
-1. `command`
-2. `pre_static_args`
-3. `subcommand`
-4. `static_args`
-5. `write_static_args`
-6. `models_cache_path`
-7. `workdir_flag`
-8. `model_flag`
-9. `output_mode`
-10. `output_flag`
-11. `prompt_mode`
-12. `prompt_flag`
-13. `web_search_mode`
-14. `web_search_flag`
-15. `web_probe_static_args`
-16. `web_probe_prompt`
-17. `web_probe_expect_substring`
-18. `web_probe_timeout_seconds`
-19. `env`
-20. `probe_static_args`
-21. `probe_prompt`
-22. `probe_expect_substring`
-23. `probe_timeout_seconds`
-24. `startup_timeout_seconds`
-25. `no_output_timeout_seconds`
-26. `progress_idle_timeout_seconds`
-27. `max_runtime_extension_seconds`
+| Agent-system schema path | Supported keys |
+| --- | --- |
+| `agent_system` | `init_on_boot`, `mode`, `state_owner`, `max_parallel_agents`, `workers`, `routing`, `scoring` |
+| worker-level | `enabled`, `worker_backend_class`, `detect_command`, `role`, `orchestration_tier`, `cost_priority`, `max_runtime_seconds`, `min_output_bytes`, `models_hint`, `default_model`, `profiles`, `default_profile`, `capability_band`, `write_scope`, `billing_tier`, `budget_cost_units`, `speed_tier`, `quality_tier`, `specialties`, `dispatch`, `binary_path` |
+| worker-level `dispatch` | `command`, `pre_static_args`, `subcommand`, `static_args`, `write_static_args`, `models_cache_path`, `workdir_flag`, `model_flag`, `output_mode`, `output_flag`, `prompt_mode`, `prompt_flag`, `web_search_mode`, `web_search_flag`, `web_probe_static_args`, `web_probe_prompt`, `web_probe_expect_substring`, `web_probe_timeout_seconds`, `env`, `probe_static_args`, `probe_prompt`, `probe_expect_substring`, `probe_timeout_seconds`, `startup_timeout_seconds`, `no_output_timeout_seconds`, `progress_idle_timeout_seconds`, `max_runtime_extension_seconds` |
 
 Project agent-extension overlay rule:
 
@@ -298,14 +123,7 @@ Project agent-extension overlay rule:
    - no project extension weakens framework safety boundaries.
 6. `vida taskflow config validate` is the bounded runtime proof surface for the current overlay-level validation of `agent_extensions`.
 
-Supported `agent_system.scoring` keys:
-
-1. `consecutive_failure_limit`
-2. `promotion_score`
-3. `demotion_score`
-4. `probation_success_runs`
-5. `probation_task_runs`
-6. `retirement_failure_limit`
+Supported `agent_system.scoring` keys: `consecutive_failure_limit`, `promotion_score`, `demotion_score`, `probation_success_runs`, `probation_task_runs`, `retirement_failure_limit`.
 
 Repeated-scalar encoding:
 
@@ -313,67 +131,9 @@ Repeated-scalar encoding:
 2. prefer YAML lists in new overlays and framework templates,
 3. runtime helpers must accept both formats for backward compatibility.
 
-Common repeated-scalar examples:
+Common repeated-scalar examples: worker `profiles`, worker `models_hint`, worker `capability_band`, worker `specialties`, route `workers`, route `fanout_workers`, worker `dispatch.static_args`, worker `dispatch.pre_static_args`, `framework_self_diagnosis.session_reflection_criteria`.
 
-1. worker `profiles`
-2. worker `models_hint`
-3. worker `capability_band`
-4. worker `specialties`
-5. route `workers`
-6. route `fanout_workers`
-7. worker `dispatch.static_args`
-8. worker `dispatch.pre_static_args`
-9. `framework_self_diagnosis.session_reflection_criteria`
-
-Supported routing-level keys:
-
-1. `workers`
-2. `models`
-3. `profiles`
-4. `analysis_required`
-5. `analysis_route_task_class`
-6. `analysis_fanout_workers`
-7. `analysis_fanout_min_results`
-8. `analysis_merge_policy`
-9. `analysis_external_first_required`
-10. `analysis_receipt_required`
-11. `analysis_zero_budget_required`
-12. `analysis_default_in_boot`
-13. `coach_required`
-14. `coach_route_task_class`
-15. `write_scope`
-16. `verification_gate`
-17. `max_runtime_seconds`
-18. `min_output_bytes`
-19. `fanout_workers`
-20. `fanout_min_results`
-21. `merge_policy`
-22. `dispatch_required`
-23. `external_first_required`
-24. `web_search_required`
-25. `local_execution_allowed`
-26. `local_execution_preferred`
-27. `cli_dispatch_required_if_delegating`
-28. `direct_internal_bypass_forbidden`
-29. `bridge_fallback_worker`
-30. `internal_escalation_trigger`
-31. `allowed_internal_reasons`
-32. `verification_route_task_class`
-33. `independent_verification_required`
-34. `graph_strategy`
-35. `deterministic_first`
-36. `budget_policy`
-37. `max_budget_units`
-38. `max_rounds`
-39. `max_stalls`
-40. `max_resets`
-41. `max_cli_worker_calls`
-42. `max_coach_passes`
-43. `max_verification_passes`
-44. `max_fallback_hops`
-45. `max_total_runtime_seconds`
-46. `problem_party_required`
-47. `problem_party_task_class`
+Supported routing-level keys: `workers`, `models`, `profiles`, `analysis_required`, `analysis_route_task_class`, `analysis_fanout_workers`, `analysis_fanout_min_results`, `analysis_merge_policy`, `analysis_external_first_required`, `analysis_receipt_required`, `analysis_zero_budget_required`, `analysis_default_in_boot`, `coach_required`, `coach_route_task_class`, `write_scope`, `verification_gate`, `max_runtime_seconds`, `min_output_bytes`, `fanout_workers`, `fanout_min_results`, `merge_policy`, `dispatch_required`, `external_first_required`, `web_search_required`, `local_execution_allowed`, `local_execution_preferred`, `cli_dispatch_required_if_delegating`, `direct_internal_bypass_forbidden`, `bridge_fallback_worker`, `internal_escalation_trigger`, `allowed_internal_reasons`, `verification_route_task_class`, `independent_verification_required`, `graph_strategy`, `deterministic_first`, `budget_policy`, `max_budget_units`, `max_rounds`, `max_stalls`, `max_resets`, `max_cli_worker_calls`, `max_coach_passes`, `max_verification_passes`, `max_fallback_hops`, `max_total_runtime_seconds`, `problem_party_required`, `problem_party_task_class`.
 
 Derived route-receipt note:
 
@@ -435,13 +195,9 @@ Overlay may not configure:
 
 ## Runtime Files
 
-Current runtime artifacts for overlay activation:
+Current runtime artifacts for overlay activation: `.vida/state/worker-init.json`, `.vida/state/worker-scorecards.json`, `.vida/state/worker-strategy.json`.
 
-1. `.vida/state/worker-init.json`
-2. `.vida/state/worker-scorecards.json`
-3. `.vida/state/worker-strategy.json`
-
-These are runtime state files, not canonical project configuration.
+These files are runtime state, not canonical project configuration.
 
 ## Verification
 
@@ -470,5 +226,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-13T23:20:00+02:00'
+updated_at: 2026-07-03T12:05:00+03:00
 changelog_ref: bridge.project-overlay-protocol.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: table-normalization+rfc2119-cleanup+protected-atom-validation
+protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md
+protocol_compression_audit_at: 2026-07-03T12:05:00+03:00
+protocol_compression_before_tokens: 3659
+protocol_compression_after_tokens: 3410
+protocol_compression_content_sha256: 29b40d6e19f59543e07e4493467c8caf6407206f20ae28d53ea11d6a39eb7fa9

@@ -1,18 +1,12 @@
 # Protocol Index (Single Source Map)
 
-Purpose: one entry point for canonical protocol discovery and protocol-domain routing.
+Purpose: protocol discovery/routing entrypoint.
 
-Registry boundary:
-
-1. this file is a canonical discovery registry, not a second owner-layer taxonomy,
-2. row text must stay thin enough to route readers toward the correct owner, capsule, or companion map,
-3. when domain classification is needed, route to `framework.protocol-domains-map.md`,
-4. when owner-layer placement is needed, route to `framework.protocol-layers-map.md`,
-5. when routine runtime/startup consumption is already covered by an approved compact capsule or startup bundle, route there first and open the heavier owner artifact only on demand.
+Registry boundary: discovery registry, not owner-layer taxonomy; row text routes to owner/capsule/companion map; domain classification routes to `framework.protocol-domains-map.md`; owner-layer placement routes to `framework.protocol-layers-map.md`; routine runtime/startup uses compact capsule/startup bundle first and opens heavier owner artifact on demand.
 
 ## Canonical Sources
 
-| Domain | Canonical Source | Secondary/Reference |
+| Domain | Canonical | Secondary |
 |---|---|---|
 | Framework topology map | `system-maps/framework.map` | `system-maps/protocol.index` |
 | Framework core protocol cluster map | `system-maps/framework.core-protocols-map` | `system-maps/framework.index`, `system-maps/framework.map`, `system-maps/protocol.index` |
@@ -135,23 +129,11 @@ Registry boundary:
 
 ## Governance / Scope Routing
 
-1. Required gates, approval behavior, publication/contribution rules, and lifecycle policies are owned by `system-maps/governance.map`.
-2. Framework topology and scope boundaries are owned by `system-maps/framework.index` and `system-maps/framework.map`.
-3. Concrete runtime command paths are owned by runtime-family maps and their runtime homes, not by this registry.
-4. Domain-family explanations that start to look like owner law belong in `system-maps/framework.protocol-domains-map`, not in expanded row prose here.
-5. Routine read posture should remain `capsule first, owner on demand`; this index must not re-expand compact-routing wins by becoming a broad-read surrogate.
+Governance/scope owners: gates, approval, publication/contribution, lifecycle -> `system-maps/governance.map`; topology/scope -> `system-maps/framework.index` and `system-maps/framework.map`; runtime command paths -> runtime-family maps/homes, not this registry; domain-family owner-law explanations -> `system-maps/framework.protocol-domains-map`; routine reads remain `capsule first, owner on demand`.
 
 ## Maintenance Rule
 
-When a protocol changes:
-
-1. Update the canonical file first.
-2. Update linked references in the same change.
-3. Keep this index synchronized.
-4. If a `vida/config/instructions/**` file is referenced as a canonical, mandatory, or full operational guide anywhere else in active canon, it must appear in this index before the change is considered complete.
-5. If an active instruction artifact is intentionally excluded from this index, the excluding protocol must state that it is non-canonical reference material.
-6. Use `vida docflow protocol-coverage-check --profile active-canon` as the bounded operational proof that canonical protocol-bearing artifacts remain indexed and activation-covered after changes.
-7. Do not solve discoverability debt by copying owner-law detail into row prose; add or tighten the appropriate companion map, capsule, or startup bundle instead.
+When a protocol changes: update the canonical file first; update linked refs in the same change; keep this index synchronized; ensure any `vida/config/instructions/**` file referenced as canonical/mandatory/full operational guide elsewhere in active canon appears here before completion; require an excluding protocol to state when an active instruction artifact is intentionally non-canonical reference material; use `vida docflow protocol-coverage-check --profile active-canon` as proof that canonical protocol-bearing artifacts remain indexed and activation-covered; solve discoverability debt by tightening companion map/capsule/startup bundle, not by copying owner-law detail into row prose.
 
 -----
 artifact_path: config/system-maps/protocol.index
@@ -162,5 +144,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps/protocol.index.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-13T23:20:00+02:00'
+updated_at: 2026-07-03T13:08:00+03:00
 changelog_ref: protocol.index.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: registry-prose-compaction+protected-reference-validation
+protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/system-maps/protocol.index.md
+protocol_compression_audit_at: 2026-07-03T13:08:00+03:00
+protocol_compression_before_tokens: 7202
+protocol_compression_after_tokens: 7200
+protocol_compression_content_sha256: cd7adbcc0249d02a48e6b3b232b27c452aaada49c575a8c1eb91299cf2691080

@@ -2,49 +2,25 @@
 
 Purpose: define the canonical framework topology, layer model, artifact taxonomy, and promotion/projection rules for the active framework instruction-home.
 
-This file answers five topology questions:
-
-1. where each major directory belongs,
-2. which artifact class each document/config family represents,
-3. what is active canon vs transitional vs historical,
-4. how `0.2.0` and `1.0` relate to one shared runtime-spec spine,
-5. how artifacts move from plan -> spec -> executable law.
+This file answers five topology questions: major-directory ownership; artifact class by document/config family; active canon vs transitional vs historical state; how `0.2.0` and `1.0` share one runtime-spec spine; how artifacts move from plan -> spec -> executable law.
 
 ## 1. Catalog Map
 
 Top-level repository layout:
 
-1. `AGENTS.md`
-   - bootstrap router and cross-lane invariants,
-   - framework-owned,
-   - active canon.
-   - protocol-view-friendly framework copy lives at `system-maps/bootstrap.router-guide` without replacing the stronger root carrier.
-2. `vida/config/instructions/`
-   - active framework instruction canon in flat latest-revision Markdown form plus executable projections,
-   - canonical home for agent instructions, command instructions, runtime instructions, diagnostic instructions, and system maps.
-3. `docs/product/spec/`
-   - promoted stable product prose canon.
-4. `vida/config/`
-   - executable product law and runtime-readable projections.
-5. `Git history and active artifact sidecars`
-   - project-owned provenance index for deleted framework-formation plan/research inputs,
-   - not active framework law.
-6. TaskFlow runtime-family implementation surfaces
-   - transitional implementation/runtime substrate,
-   - current execution substrate for the active pre-Release-1 line.
-7. DocFlow runtime-family implementation surfaces
-   - bounded documentation/operator/readiness implementation surfaces,
-   - still part of the unified VIDA framework runtime family.
-8. additional runtime families may exist or be added later,
-   - each must remain both independently understandable and discoverable through the unified VIDA framework map layer.
-9. `docs/project-memory/`
-   - Git-resident source tree for project-memory artifacts.
-10. `docs/process/`
-   - project operational runbooks when present,
-   - including project-owned development/build/install/run-condition records such as `docs/process/vida1-development-conditions.md`, kept current through `runtime-instructions/work.development-evidence-sync-protocol`.
-11. `projects/`
-   - extracted or quarantined secondary project bundles preserved locally during repository cleanup or staged separation,
-   - not part of the default active project-doc bootstrap path.
+| Surface | Role |
+| --- | --- |
+| `AGENTS.md` | framework-owned active-canon bootstrap router and cross-lane invariants; protocol-view-friendly copy lives at `system-maps/bootstrap.router-guide` without replacing the stronger root carrier |
+| `vida/config/instructions/` | active framework instruction canon in flat latest-revision Markdown plus executable projections; home for agent, command, runtime, diagnostic, and system-map instructions |
+| `docs/product/spec/` | promoted stable product prose canon |
+| `vida/config/` | executable product law and runtime-readable projections |
+| `Git history and active artifact sidecars` | project-owned provenance index for deleted framework-formation plan/research inputs; not active framework law |
+| TaskFlow runtime-family implementation surfaces | transitional implementation/runtime substrate; current execution substrate for the active pre-Release-1 line |
+| DocFlow runtime-family implementation surfaces | bounded documentation/operator/readiness implementation surfaces inside unified VIDA framework runtime family |
+| additional runtime families | may exist later; each must remain independently understandable and discoverable through unified VIDA framework map layer |
+| `docs/project-memory/` | Git-resident source tree for project-memory artifacts |
+| `docs/process/` | project operational runbooks; includes project-owned run/build/install/run-condition records such as `docs/process/vida1-development-conditions.md`, kept current through `runtime-instructions/work.development-evidence-sync-protocol` |
+| `projects/` | extracted/quarantined secondary project bundles preserved locally during cleanup or staged separation; not default active project-doc bootstrap path |
 
 Rule:
 
@@ -52,12 +28,7 @@ Rule:
 2. no artifact should exist in two active homes with equal authority,
 3. if the same concept appears in multiple places, exactly one location must be canonical and the others must be projections, pointers, or evidence.
 
-Authoring/projection split rule:
-
-1. kebab-case instruction families under `vida/config/instructions/` are the canonical Markdown authoring homes,
-2. snake_case instruction families under the same root are machine-readable projection homes used for compiled/runtime consumption,
-3. paired names such as `agent-definitions` / `agent_definitions`, `instruction-contracts` / `instruction_contracts`, and `prompt-templates` / `prompt_templates` are therefore not dual owners,
-4. any routing surface that points to a snake_case family must make clear that it is routing to a projection or executable form rather than to the primary law owner.
+Authoring/projection split rule: kebab-case instruction families under `vida/config/instructions/` are canonical Markdown authoring homes; snake_case families under the same root are machine-readable projections for compiled/runtime consumption; paired names such as `agent-definitions` / `agent_definitions`, `instruction-contracts` / `instruction_contracts`, and `prompt-templates` / `prompt_templates` are not dual owners; routing to snake_case must state projection/executable form, not primary law owner.
 
 Bootstrap routing rule:
 
@@ -140,61 +111,26 @@ Map trigger rule:
 
 VIDA uses one normalized documentation/runtime stack:
 
-1. `Bootstrap Layer`
-   - `AGENTS.md`
-   - `system-maps/bootstrap.router-guide`
-   - `agent-definitions/entry.orchestrator-entry`
-   - `agent-definitions/entry.worker-entry`
-   - `instruction-contracts/role.worker-thinking`
-2. `Instruction Artifact Layer`
-   - `vida/config/instructions/**`
-   - active latest-revision Markdown canon plus adjacent changelogs and projections
-3. `Framework Map / Index Layer`
-   - `system-maps/framework.index`
-   - this file
-   - `system-maps/framework.protocol-domains-map`
-   - `system-maps/protocol.index`
-   - `system-maps/governance.map`
-   - thin indexes/pointers only
-4. `Product Spec Layer`
-   - `docs/product/spec/**`
-   - stable promoted product law
-5. `Executable Law Layer`
-   - `vida/config/**`
-   - machine-readable law consumed by runtime
-6. `Implementation Layer`
-   - TaskFlow runtime-family implementation surfaces
-   - current transitional implementation
-   - future `vida 1.0` implementation must be a Rust workspace with reusable crates, not only one CLI-bound binary crate
+| Layer | Surfaces | Role |
+| --- | --- | --- |
+| `Bootstrap Layer` | `AGENTS.md`, `system-maps/bootstrap.router-guide`, `agent-definitions/entry.orchestrator-entry`, `agent-definitions/entry.worker-entry`, `instruction-contracts/role.worker-thinking` | bootstrap and lane entry |
+| `Instruction Artifact Layer` | `vida/config/instructions/**` | active latest-revision Markdown canon plus adjacent changelogs and projections |
+| `Framework Map / Index Layer` | `system-maps/framework.index`, this file, `system-maps/framework.protocol-domains-map`, `system-maps/protocol.index`, `system-maps/governance.map` | thin indexes/pointers only |
+| `Product Spec Layer` | `docs/product/spec/**` | stable promoted product law |
+| `Executable Law Layer` | `vida/config/**` | machine-readable law consumed by runtime |
+| `Implementation Layer` | TaskFlow runtime-family implementation surfaces | current transitional implementation; future `vida 1.0` must be a Rust workspace with reusable crates, not only one CLI-bound binary crate |
 ## 3. Canonical Artifact Taxonomy
 
-Canonical artifact classes:
-
-1. `plan`
-   - strategic or execution-program artifact,
-   - historical formation artifact after promotion,
-   - lineage preserved in `Git history and active artifact sidecars`
-2. `runtime_spec`
-   - human-readable runtime law/specification that may be shared across implementations,
-   - active home: `docs/product/spec/**` with executable projections in `vida/config/**`
-3. `instruction_artifact`
-   - human-readable or projected agent-facing/runtime-facing instruction artifact,
-   - active home: `vida/config/instructions/**`
-4. `product_spec`
-   - stable promoted product prose canon,
-   - active home: `docs/product/spec/**`
-6. `executable_law`
-   - machine-readable runtime projection/config,
-   - active home: `vida/config/**`
-7. `implementation`
-   - concrete runtime code,
-   - active home: TaskFlow and DocFlow runtime-family implementation surfaces today
-8. `history_evidence`
-   - non-canonical source trail carried by Git history and sidecar changelogs,
-   - no separate active directory is required for this class in the clean architecture.
-9. `pointer`
-   - short document whose job is to redirect readers to the canonical source,
-   - allowed in non-canonical map/index locations only when it clearly names the canonical target.
+| Class | Meaning / home |
+| --- | --- |
+| `plan` | strategic/execution-program artifact; historical formation artifact after promotion; lineage preserved in `Git history and active artifact sidecars` |
+| `runtime_spec` | human-readable runtime law/spec shared across implementations; active home `docs/product/spec/**` with executable projections in `vida/config/**` |
+| `instruction_artifact` | human-readable or projected agent/runtime-facing instruction artifact; active home `vida/config/instructions/**` |
+| `product_spec` | stable promoted product prose canon; active home `docs/product/spec/**` |
+| `executable_law` | machine-readable runtime projection/config; active home `vida/config/**` |
+| `implementation` | concrete runtime code; active home is TaskFlow and DocFlow runtime-family implementation surfaces today |
+| `history_evidence` | non-canonical source trail carried by Git history and sidecar changelogs; no separate active directory required |
+| `pointer` | short redirect to canonical source; allowed in non-canonical map/index locations only when it names the canonical target |
 
 Hard rule:
 
@@ -414,5 +350,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps/framework.map.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-13T23:20:00+02:00'
+updated_at: 2026-07-03T12:40:00+03:00
 changelog_ref: framework.map.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: table-normalization+semantic-atom-coverage+map-compaction
+protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/system-maps/framework.map.md
+protocol_compression_audit_at: 2026-07-03T12:40:00+03:00
+protocol_compression_before_tokens: 4208
+protocol_compression_after_tokens: 4199
+protocol_compression_content_sha256: e0dcb4464c9afcb6931964b2ec4adc65b3b58c3fd44cebe813b28ca0df810156

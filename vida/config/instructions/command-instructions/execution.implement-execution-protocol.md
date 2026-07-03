@@ -1,14 +1,8 @@
 # Implement Execution Protocol (IEP)
 
-Purpose: define one canonical development execution flow after `/vida-form-task` launch approval.
+Purpose: execution after `/vida-form-task` launch approval.
 
-Scope:
-
-1. Command mode: `/vida-implement`.
-2. Applies to autonomous development execution for a ready task pool in the DB-backed task runtime.
-3. Uses one canonical command (`/vida-implement`) and forbids historical split aliases as runtime path.
-4. When the user explicitly wants the agent to keep following a settled plan/spec/task pool to completion, activate `instruction-contracts/overlay.autonomous-execution-protocol` as the trigger/stop doctrine layered on top of this protocol.
-5. When queue selection or reprioritization is ambiguous, activate `runtime-instructions/work.execution-priority-protocol` before selecting the next writer task.
+Scope: `/vida-implement`; autonomous development execution for a ready DB-backed task pool; one canonical command with historical split aliases forbidden as runtime path. If the user wants continued execution over a settled plan/spec/task pool, activate `instruction-contracts/overlay.autonomous-execution-protocol`. If queue selection or reprioritization is ambiguous, activate `runtime-instructions/work.execution-priority-protocol` before selecting the next writer task.
 
 ## Core Contract
 
@@ -28,40 +22,26 @@ Scope:
 2.1. When the work originated from mixed research/release/user-negotiation inputs, a normalized `spec_intake` artifact must already have routed that work into SCP or ICP before launch.
 2.2. `draft_execution_spec` is a pre-launch review artifact only; it does not authorize `/vida-implement` by itself and must be absorbed by the canonical form-task launch path before writer execution.
 2.3. A launch-approved bounded `delivery_task_card` from `command-instructions/planning.form-task-protocol` is mandatory launch context, not optional planning residue.
-2.4. The active `delivery_task_card` must expose at minimum:
-   - `goal`
-   - `non_goals`
-   - `scope_in`
-   - `scope_out`
-   - `owned_paths` or `owned_areas`
-   - `acceptance_checks`
-   - `validation_commands`
-   - `definition_of_done`
-   - `stop_rules`
-   - `handoff_target`
+2.4. The active `delivery_task_card` must expose at minimum: `goal`, `non_goals`, `scope_in`, `scope_out`, `owned_paths` or `owned_areas`, `acceptance_checks`, `validation_commands`, `definition_of_done`, `stop_rules`, `handoff_target`.
 2.5. If execution is entering one leaf task from a larger milestone, the active execution slice must also identify the current `execution_block` or equivalent bounded writer packet.
 3. Research evidence relevant to scope.
 4. External API reality evidence (when integration exists).
 5. Decision log (`docs/decisions.md`) and feature checklist entries.
 6. `runtime-instructions/work.web-validation-protocol` for external assumptions during execution.
 7. Hydrated context capsule for active task (`.vida/logs/context-capsules/<task_id>.json`).
-8. Route-level control limits when declared by the active route or overlay:
-   - `budget_policy`
-   - `max_budget_units`
-   - `max_total_runtime_seconds`
-   - `max_coach_passes`
-   - `max_verification_passes`
-   - any explicit `max_rounds|max_stalls|max_resets` runtime-derived receipt.
+8. Route-level control limits when declared by the active route or overlay: `budget_policy`, `max_budget_units`, `max_total_runtime_seconds`, `max_coach_passes`, `max_verification_passes`, and any explicit `max_rounds|max_stalls|max_resets` runtime-derived receipt.
 
 ## Command Layer Mapping
 
 For `/vida-implement`, IEP layers map to CLP as follows:
 
-1. `CL1 Intake` -> `IEP-0 Launch Intake` + `IEP-1 Context Hydration`
-2. `CL2 Reality And Inputs` -> `IEP-1.5 Pool Graph Analysis` + `IEP-2 Queue Intake` + `IEP-3 Skills Routing` + `IEP-4 Preflight`
-3. `CL3 Contract And Decisions` -> `IEP-4.5 Change-Impact Gate`
-4. `CL4 Materialization` -> `IEP-5 Implement Loop`
-5. `CL5 Gates And Handoff` -> `IEP-6 Verify And Review` + `IEP-7 Close And Continue` + `IEP-8 Pool Completion`
+| CLP layer | IEP gates |
+| --- | --- |
+| `CL1 Intake` | `IEP-0 Launch Intake` + `IEP-1 Context Hydration` |
+| `CL2 Reality And Inputs` | `IEP-1.5 Pool Graph Analysis` + `IEP-2 Queue Intake` + `IEP-3 Skills Routing` + `IEP-4 Preflight` |
+| `CL3 Contract And Decisions` | `IEP-4.5 Change-Impact Gate` |
+| `CL4 Materialization` | `IEP-5 Implement Loop` |
+| `CL5 Gates And Handoff` | `IEP-6 Verify And Review` + `IEP-7 Close And Continue` + `IEP-8 Pool Completion` |
 
 Canonical layer source: `command-instructions/routing.command-layer-protocol`
 
@@ -89,12 +69,7 @@ Canonical layer source: `command-instructions/routing.command-layer-protocol`
    - run dynamic skill selection for current task scope.
 6. `IEP-4 Preflight`
    - baseline checks, dependency readiness, risk scan.
-   - derive the active effective route control limits from route metadata and overlay:
-     - `max_rounds`
-     - `max_stalls`
-     - `max_resets`
-     - `max_budget_units`
-     - `max_total_runtime_seconds`
+   - derive active effective route control limits from route metadata/overlay: `max_rounds`, `max_stalls`, `max_resets`, `max_budget_units`, `max_total_runtime_seconds`,
    - initialize or refresh run-graph control counters before entering writer work.
 7. `IEP-4.2 Execution Authorization Gate`
    - confirm route receipt, analysis lane, analysis receipt (when required), `issue_contract` readiness when the task is issue-driven, non-empty `issue_contract.proven_scope`, symptom-level evidence for any multi-symptom issue, author lane, verifier lane (or explicit `no_eligible_verifier`), and writer ownership before deep local implementation prep.
@@ -105,12 +80,7 @@ Canonical layer source: `command-instructions/routing.command-layer-protocol`
    - if local mutation is proposed under active worker mode, require route authorization or lawful escalation receipt.
    - if the gate is not satisfied: `BLOCKED (BLK_EXECUTION_AUTH_MISSING)`.
 8. `IEP-4.3 Runtime Control Gate`
-   - before each writer pass, compare run-graph counters and route limits for:
-     - `round_count`
-     - `stall_count`
-     - `reset_count`
-     - `budget_units_consumed`
-     - `runtime_seconds_consumed`
+   - before each writer pass, compare run-graph counters and route limits for `round_count`, `stall_count`, `reset_count`, `budget_units_consumed`, `runtime_seconds_consumed`,
    - treat two consecutive no-progress passes, repeated rereads without narrower hypothesis, or repeated validation failures without new state delta as a `stall`.
    - when a control limit is hit, stop the current writer loop and route to replan, escalation, or fresh-start recovery rather than silently continuing.
    - if the gate is not satisfied: `BLOCKED (BLK_RUNTIME_CONTROL_EXHAUSTED)`.
@@ -197,12 +167,7 @@ Hard law:
 
 ## Change-Impact Gate
 
-Drift triggers:
-
-1. acceptance criteria changed during execution,
-2. new dependency discovered that changes task order/scope,
-3. decision update invalidates current implementation assumptions,
-4. active task no longer matches approved spec.
+Drift triggers: acceptance criteria changed during execution, new dependency changes task order/scope, decision update invalidates implementation assumptions, or active task no longer matches approved spec.
 
 On trigger:
 
@@ -246,26 +211,11 @@ On trigger:
 
 ## Blocker Codes
 
-1. `BLK_LAUNCH_NOT_CONFIRMED`
-2. `BLK_SPEC_CONTEXT_MISSING`
-3. `BLK_AC_MISSING`
-4. `BLK_API_REALITY_MISSING`
-5. `BLK_VERIFY_FAILED`
-6. `BLK_ENVIRONMENT_UNREADY`
-7. `BLK_CHANGE_IMPACT_PENDING`
-8. `BLK_CONTEXT_NOT_HYDRATED`
-9. `BLK_POOL_GRAPH_MISSING`
-10. `BLK_EXECUTION_AUTH_MISSING`
-11. `BLK_DELIVERY_TASK_CARD_MISSING`
-12. `BLK_RUNTIME_CONTROL_EXHAUSTED`
-13. `BLK_REVIEW_POOL_PENDING`
+`BLK_LAUNCH_NOT_CONFIRMED`, `BLK_SPEC_CONTEXT_MISSING`, `BLK_AC_MISSING`, `BLK_API_REALITY_MISSING`, `BLK_VERIFY_FAILED`, `BLK_ENVIRONMENT_UNREADY`, `BLK_CHANGE_IMPACT_PENDING`, `BLK_CONTEXT_NOT_HYDRATED`, `BLK_POOL_GRAPH_MISSING`, `BLK_EXECUTION_AUTH_MISSING`, `BLK_DELIVERY_TASK_CARD_MISSING`, `BLK_RUNTIME_CONTROL_EXHAUSTED`, `BLK_REVIEW_POOL_PENDING`.
 
 ## Exit States
 
-1. `SUCCESS`: task pool completed and verified.
-2. `BLOCKED`: execution cannot proceed due to unresolved blocker.
-3. `PARTIAL`: safe checkpoint saved, can resume.
-4. `STOP`: hard safety stop or unresolved critical contradiction.
+`SUCCESS`: task pool completed and verified. `BLOCKED`: unresolved blocker. `PARTIAL`: safe checkpoint saved and resumable. `STOP`: hard safety stop or unresolved critical contradiction.
 
 ## Logging Requirements
 
@@ -274,22 +224,11 @@ On trigger:
 3. Before reporting completion to user, ensure TaskFlow sync is visible.
 4. Keep `vida taskflow task` as the only task-state source of truth.
 5. Emit Telemetry V1 events with minimum fields: `trace_id`, `task_id`, `block_id`, `action`, `duration_ms`, `result`, `success`.
-6. At each resumable boundary, checkpoint at minimum:
-   - `delivery_task_id`
-   - `execution_block_id`
-   - current `definition_of_done` progress signal
-   - run-graph control counters
-   - next `review_pool` or verification target
-   - `resume_hint`
+6. At each resumable boundary, checkpoint at minimum `delivery_task_id`, `execution_block_id`, current `definition_of_done` progress signal, run-graph control counters, next `review_pool` or verification target, and `resume_hint`.
 
 ## Output Schema
 
-1. `Current Task`: id + short description.
-2. `Completed In Iteration`: task id + changes + verification result.
-3. `Open Blockers`: blocker code + required action.
-4. `Next Task`: next ready id + short description.
-5. `Pool Status`: done / remaining / blocked counts.
-6. `Control Status`: rounds / stalls / resets / budget summary.
+`Current Task`: id + short description. `Completed In Iteration`: task id + changes + verification result. `Open Blockers`: blocker code + required action. `Next Task`: next ready id + short description. `Pool Status`: done / remaining / blocked counts. `Control Status`: rounds / stalls / resets / budget summary.
 
 -----
 artifact_path: config/command-instructions/implement-execution.protocol
@@ -300,5 +239,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/command-instructions/execution.implement-execution-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-13T12:39:11+02:00'
+updated_at: 2026-07-03T13:00:00+03:00
 changelog_ref: execution.implement-execution-protocol.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: table-normalization+registry-compaction+gate-preserve-exact
+protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/command-instructions/execution.implement-execution-protocol.md
+protocol_compression_audit_at: 2026-07-03T13:00:00+03:00
+protocol_compression_before_tokens: 4283
+protocol_compression_after_tokens: 4282
+protocol_compression_content_sha256: be0a8c904bd6a57f860959e16057061bc6d33a1e7db4dff7b87a96f414d3674d

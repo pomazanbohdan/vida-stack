@@ -6,12 +6,7 @@ Purpose: define how VIDA activates instruction files and protocol surfaces durin
 
 Instructions must be activated by phase and trigger, not by bulk reading.
 
-Each instruction surface must belong to exactly one of:
-
-1. `always_on`
-2. `lane_entry`
-3. `triggered_domain`
-4. `closure_reflection`
+Each instruction surface must belong to exactly one of `always_on`, `lane_entry`, `triggered_domain`, `closure_reflection`.
 
 If a file does not have a clear activation class, the instruction layer is underspecified and should be refactored.
 
@@ -19,108 +14,43 @@ If a file does not have a clear activation class, the instruction layer is under
 
 ### 1. Bootstrap Layer
 
-Activated always.
+Activated always. Canonical owner: `AGENTS.md`.
 
-Canonical owner:
+| Allowed | Forbidden |
+| --- | --- |
+| identity and lane resolution | full orchestrator operating doctrine |
+| compact global invariants | worker-runtime details |
+| instruction precedence | domain-specific protocol bodies |
+| conflict rule | long trigger lists that belong to lane-entry or domain protocols |
+| pointer map to lane-entry files |  |
 
-1. `AGENTS.md`
-
-Allowed responsibilities:
-
-1. identity and lane resolution,
-2. a compact set of global invariants,
-3. instruction precedence,
-4. conflict rule,
-5. pointer map to lane-entry files.
-
-Forbidden responsibilities:
-
-1. full orchestrator operating doctrine,
-2. worker-runtime details,
-3. domain-specific protocol bodies,
-4. long trigger lists that belong to lane-entry or domain protocols.
-
-Rule:
-
-1. `AGENTS.md` should stay inspectable after compact and should not become a second full orchestrator manual.
+Rule: `AGENTS.md` should stay inspectable after compact and should not become a second full orchestrator manual.
 
 ### 2. Lane-Entry Layer
 
 Activated immediately after bootstrap according to lane resolution.
 
-Canonical owners:
+Canonical owners: `agent-definitions/entry.orchestrator-entry`, `agent-definitions/entry.worker-entry`, `instruction-contracts/role.worker-thinking`, `instruction-contracts/overlay.session-context-continuity-protocol` in orchestrator lane.
 
-1. `agent-definitions/entry.orchestrator-entry`
-2. `agent-definitions/entry.worker-entry`
-3. `instruction-contracts/role.worker-thinking`
-4. `instruction-contracts/overlay.session-context-continuity-protocol` in orchestrator lane
+Allowed responsibilities: boot path, request-intent gate, tracked-flow boundary, boot-profile selection, next required protocol reads by trigger.
 
-Allowed responsibilities:
-
-1. boot path,
-2. request-intent gate,
-3. tracked-flow boundary,
-4. boot-profile selection,
-5. next required protocol reads by trigger.
-
-Forbidden responsibilities:
-
-1. duplicating global invariants from `AGENTS.md`,
-2. owning detailed domain policy that already has a canonical protocol,
-3. embedding large runtime-law sections when a dedicated protocol/helper exists.
+Forbidden responsibilities: duplicating global invariants from `AGENTS.md`, owning detailed domain policy that already has a canonical protocol, embedding large runtime-law sections when a dedicated protocol/helper exists.
 
 ### 3. Triggered Domain Layer
 
 Activated only when the task route, risk, or artifact flow requires it.
 
-Canonical examples:
+Canonical examples: `runtime-instructions/work.taskflow-protocol`, `runtime-instructions/runtime.task-state-telemetry-protocol`, `runtime-instructions/work.web-validation-protocol`, `runtime-instructions/bridge.issue-contract-protocol`, `runtime-instructions/work.spec-intake-protocol`, `runtime-instructions/work.spec-delta-protocol`, `command-instructions/execution.implement-execution-protocol`, `instruction-contracts/core.agent-system-protocol`, `runtime-instructions/work.problem-party-protocol`, `instruction-contracts/overlay.autonomous-execution-protocol`, `runtime-instructions/work.execution-priority-protocol`, `instruction-contracts/work.documentation-operation-protocol`, `instruction-contracts/work.documentation-layer7-migration-protocol`, `runtime-instructions/lane.agent-handoff-context-protocol`, `runtime-instructions/recovery.checkpoint-replay-recovery-protocol`, `runtime-instructions/work.verification-lane-protocol`, `agent-definitions/role.role-profile-contract`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol`, `runtime-instructions/work.verification-merge-protocol`, `runtime-instructions/runtime.direct-runtime-consumption-protocol`, `instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol`, `instruction-contracts/meta.protocol-naming-grammar-protocol`, `instruction-contracts/meta.core-protocol-standard-protocol`, `runtime-instructions/core.run-graph-protocol`, `instruction-contracts/core.skill-activation-protocol`, `instruction-contracts/core.packet-decomposition-protocol`, `instruction-contracts/core.agent-prompt-stack-protocol`.
 
-1. `runtime-instructions/work.taskflow-protocol`
-2. `runtime-instructions/runtime.task-state-telemetry-protocol`
-3. `runtime-instructions/work.web-validation-protocol`
-4. `runtime-instructions/bridge.issue-contract-protocol`
-5. `runtime-instructions/work.spec-intake-protocol`
-6. `runtime-instructions/work.spec-delta-protocol`
-7. `command-instructions/execution.implement-execution-protocol`
-8. `instruction-contracts/core.agent-system-protocol`
-9. `runtime-instructions/work.problem-party-protocol`
-10. `instruction-contracts/overlay.autonomous-execution-protocol`
-11. `runtime-instructions/work.execution-priority-protocol`
-12. `instruction-contracts/work.documentation-operation-protocol`
-13. `instruction-contracts/work.documentation-layer7-migration-protocol`
-14. `runtime-instructions/lane.agent-handoff-context-protocol`
-15. `runtime-instructions/recovery.checkpoint-replay-recovery-protocol`
-16. `runtime-instructions/work.verification-lane-protocol`
-17. `agent-definitions/role.role-profile-contract`
-18. `runtime-instructions/runtime.runtime-kernel-bundle-protocol`
-19. `runtime-instructions/work.verification-merge-protocol`
-20. `runtime-instructions/runtime.direct-runtime-consumption-protocol`
-21. `instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol`
-22. `instruction-contracts/meta.protocol-naming-grammar-protocol`
-23. `instruction-contracts/meta.core-protocol-standard-protocol`
-24. `runtime-instructions/core.run-graph-protocol`
-25. `instruction-contracts/core.skill-activation-protocol`
-26. `instruction-contracts/core.packet-decomposition-protocol`
-27. `instruction-contracts/core.agent-prompt-stack-protocol`
-
-Rule:
-
-1. Domain protocols should be loaded because a route or gate requires them, not because they exist.
+Rule: load domain protocols because a route or gate requires them, not because they exist.
 
 ### 4. Closure / Reflection Layer
 
 Activated only near checkpoint, handoff, finish, or framework-diagnosis reflection.
 
-Canonical examples:
+Canonical examples: `runtime-instructions/work.task-state-reconciliation-protocol`, `diagnostic-instructions/analysis.silent-framework-diagnosis-protocol`, `diagnostic-instructions/analysis.framework-self-analysis-protocol`, `runtime-instructions/work.human-approval-protocol`.
 
-1. `runtime-instructions/work.task-state-reconciliation-protocol`
-2. `diagnostic-instructions/analysis.silent-framework-diagnosis-protocol`
-3. `diagnostic-instructions/analysis.framework-self-analysis-protocol`
-4. `runtime-instructions/work.human-approval-protocol`
-
-Rule:
-
-1. Closure/reflection protocols must not be treated as default boot reads unless the active mode explicitly requires them.
+Rule: closure/reflection protocols must not be default boot reads unless active mode explicitly requires them.
 
 ## Activation Matrix
 
@@ -188,82 +118,21 @@ The following canonical protocol-bearing artifacts are explicitly covered by thi
 
 ### Triggered-domain coverage
 
-1. `agent-backends/role.backend-lifecycle-protocol`
-2. `agent-definitions/model.agent-definitions-contract`
-3. `command-instructions/execution.bug-fix-protocol`
-4. `command-instructions/routing.command-layer-protocol`
-5. `command-instructions/routing.use-case-packs-protocol`
-6. `command-instructions/planning.form-task-protocol`
-7. `command-instructions/execution.project-bootstrap-protocol`
-8. `diagnostic-instructions/escalation.debug-escalation-protocol`
-9. `diagnostic-instructions/evaluation.library-evaluation-protocol`
-10. `diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract`
-11. `diagnostic-instructions/analysis.protocol-self-diagnosis-protocol`
-12. `diagnostic-instructions/analysis.protocol-consistency-audit-protocol`
-13. `diagnostic-instructions/analysis.self-reflection-protocol`
-14. `instruction-contracts/core.orchestration-protocol`
-15. `instruction-contracts/core.skill-activation-protocol`
-16. `instruction-contracts/core.packet-decomposition-protocol`
-17. `instruction-contracts/core.agent-prompt-stack-protocol`
-18. `instruction-contracts/overlay.step-thinking-protocol`
-19. `instruction-contracts/overlay.session-context-continuity-protocol`
-20. `instruction-contracts/lane.worker-dispatch-protocol`
-21. `runtime-instructions/model.boot-packet-protocol`
-22. `runtime-instructions/core.capability-registry-protocol`
-23. `runtime-instructions/core.context-governance-protocol`
-24. `runtime-instructions/work.document-lifecycle-protocol`
-25. `runtime-instructions/runtime.export-protocol`
-26. `runtime-instructions/runtime.framework-memory-protocol`
-27. `runtime-instructions/bridge.project-overlay-protocol`
-28. `runtime-instructions/core.run-graph-protocol`
-29. `runtime-instructions/work.spec-contract-protocol`
-30. `runtime-instructions/work.spec-freshness-protocol`
-31. `runtime-instructions/bridge.spec-sync-protocol`
-32. `runtime-instructions/bridge.task-approval-loop-protocol`
-33. `runtime-instructions/observability.trace-grading-protocol`
-34. `runtime-instructions/lane.agent-handoff-context-protocol`
-35. `runtime-instructions/recovery.checkpoint-replay-recovery-protocol`
-36. `runtime-instructions/work.verification-lane-protocol`
-37. `agent-definitions/role.role-profile-contract`
-38. `runtime-instructions/work.project-agent-extension-protocol`
-39. `runtime-instructions/work.agent-lane-selection-protocol`
-40. `runtime-instructions/work.host-cli-agent-setup-protocol`
-41. `runtime-instructions/runtime.runtime-kernel-bundle-protocol`
-42. `runtime-instructions/work.verification-merge-protocol`
-43. `runtime-instructions/runtime.direct-runtime-consumption-protocol`
-44. `runtime-instructions/work.development-evidence-sync-protocol`
-45. `runtime-instructions/work.pack-handoff-protocol`
-46. `runtime-instructions/work.pack-completion-gate-protocol`
-47. `instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol`
-48. `instruction-contracts/meta.protocol-naming-grammar-protocol`
-49. `instruction-contracts/meta.core-protocol-standard-protocol`
-50. `runtime-instructions/work.execution-health-check-protocol`
-51. `runtime-instructions/work.command-execution-discipline-protocol`
-52. `runtime-instructions/work.change-impact-reconciliation-protocol`
+`agent-backends/role.backend-lifecycle-protocol`, `agent-definitions/model.agent-definitions-contract`, `command-instructions/execution.bug-fix-protocol`, `command-instructions/routing.command-layer-protocol`, `command-instructions/routing.use-case-packs-protocol`, `command-instructions/planning.form-task-protocol`, `command-instructions/execution.project-bootstrap-protocol`, `diagnostic-instructions/escalation.debug-escalation-protocol`, `diagnostic-instructions/evaluation.library-evaluation-protocol`, `diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract`, `diagnostic-instructions/analysis.protocol-self-diagnosis-protocol`, `diagnostic-instructions/analysis.protocol-consistency-audit-protocol`, `diagnostic-instructions/analysis.self-reflection-protocol`, `instruction-contracts/core.orchestration-protocol`, `instruction-contracts/core.skill-activation-protocol`, `instruction-contracts/core.packet-decomposition-protocol`, `instruction-contracts/core.agent-prompt-stack-protocol`, `instruction-contracts/overlay.step-thinking-protocol`, `instruction-contracts/overlay.session-context-continuity-protocol`, `instruction-contracts/lane.worker-dispatch-protocol`, `runtime-instructions/model.boot-packet-protocol`, `runtime-instructions/core.capability-registry-protocol`, `runtime-instructions/core.context-governance-protocol`, `runtime-instructions/work.document-lifecycle-protocol`, `runtime-instructions/runtime.export-protocol`, `runtime-instructions/runtime.framework-memory-protocol`, `runtime-instructions/bridge.project-overlay-protocol`, `runtime-instructions/core.run-graph-protocol`, `runtime-instructions/work.spec-contract-protocol`, `runtime-instructions/work.spec-freshness-protocol`, `runtime-instructions/bridge.spec-sync-protocol`, `runtime-instructions/bridge.task-approval-loop-protocol`, `runtime-instructions/observability.trace-grading-protocol`, `runtime-instructions/lane.agent-handoff-context-protocol`, `runtime-instructions/recovery.checkpoint-replay-recovery-protocol`, `runtime-instructions/work.verification-lane-protocol`, `agent-definitions/role.role-profile-contract`, `runtime-instructions/work.project-agent-extension-protocol`, `runtime-instructions/work.agent-lane-selection-protocol`, `runtime-instructions/work.host-cli-agent-setup-protocol`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol`, `runtime-instructions/work.verification-merge-protocol`, `runtime-instructions/runtime.direct-runtime-consumption-protocol`, `runtime-instructions/work.development-evidence-sync-protocol`, `runtime-instructions/work.pack-handoff-protocol`, `runtime-instructions/work.pack-completion-gate-protocol`, `instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol`, `instruction-contracts/meta.protocol-naming-grammar-protocol`, `instruction-contracts/meta.core-protocol-standard-protocol`, `runtime-instructions/work.execution-health-check-protocol`, `runtime-instructions/work.command-execution-discipline-protocol`, `runtime-instructions/work.change-impact-reconciliation-protocol`.
 
 Coverage rule:
 
-1. these artifacts are canonical protocol-bearing surfaces even when they are not named in the shorter activation examples above,
-2. each of them must remain representable by this protocol's activation classes and trigger matrix,
-3. `protocol-coverage-check` may treat absence of one of these artifacts from this law or from the protocol index as blocking drift.
+1. These artifacts are canonical protocol-bearing surfaces even when unnamed in shorter activation examples.
+2. Each must remain representable by this protocol's activation classes and trigger matrix.
+3. `protocol-coverage-check` may treat absence from this law or the protocol index as blocking drift.
 
 ## Decomposition Guidance
 
 Use this protocol to decide whether an instruction file should be decomposed.
 
-Decompose when at least one is true:
+Decompose when the file mixes bootstrap and domain-runtime policy, duplicates rules with an existing canonical owner, lacks one clear activation phase, has a title/scope mismatch, or contains both trigger selection and deep domain law.
 
-1. the file mixes bootstrap and domain-runtime policy,
-2. the file duplicates rules whose canonical owner already exists elsewhere,
-3. the file cannot be activated by one clear phase,
-4. the file title no longer matches its actual responsibilities,
-5. the file contains both trigger selection and deep domain law.
-
-Do not decompose when all are true:
-
-1. one owner phase is clear,
-2. the file is still inspectable in one bounded read,
-3. splitting it would only create pointer noise.
+Do not decompose when one owner phase is clear, the file remains inspectable in one bounded read, and splitting would only create pointer noise.
 
 ## Naming Guidance
 
@@ -294,13 +163,7 @@ When introducing a new instruction surface:
 
 Instructions are strongest when bound to runtime surfaces.
 
-Preferred order:
-
-1. helper or gate,
-2. receipt or state artifact,
-3. tests,
-4. protocol prose,
-5. upper-layer pointer text.
+Preferred order: helper/gate -> receipt/state artifact -> tests -> protocol prose -> upper-layer pointer text.
 
 Rule:
 
@@ -325,5 +188,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md
 created_at: '2026-03-08T02:15:22+02:00'
-updated_at: '2026-03-13T07:44:24+02:00'
+updated_at: 2026-07-03T12:30:00+03:00
 changelog_ref: bridge.instruction-activation-protocol.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: table-normalization+registry-compaction+protected-artifact-validation
+protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md
+protocol_compression_audit_at: 2026-07-03T12:30:00+03:00
+protocol_compression_before_tokens: 3796
+protocol_compression_after_tokens: 3671
+protocol_compression_content_sha256: 85423440cf4fd7e2e8f04fed91254a6a9e15aa0c733bc7fe1577568e0c648612

@@ -2,41 +2,17 @@
 
 Purpose: define the canonical follow-through mode for executing a settled VIDA plan/spec/task pool to completion with minimal re-planning overhead while preserving TaskFlow, routing, verification, and fail-closed behavior.
 
-Scope:
-
-1. activates only after the task is already in tracked execution,
-2. applies when the user intent is "continue until done", "follow the plan", "implement all remaining work", or equivalent,
-3. reuses existing execution law from `runtime-instructions/work.taskflow-protocol`, `runtime-instructions/runtime.task-state-telemetry-protocol`, `command-instructions/execution.implement-execution-protocol`, and `instruction-contracts/core.agent-system-protocol` rather than replacing them,
-4. owns the default next-task boundary analysis/report behavior unless `runtime-instructions/bridge.task-approval-loop-protocol` inserts an explicit approval gate.
+Scope: activates only after tracked execution exists; applies to "continue until done", "follow the plan", "implement all remaining work", or equivalent; reuses `runtime-instructions/work.taskflow-protocol`, `runtime-instructions/runtime.task-state-telemetry-protocol`, `command-instructions/execution.implement-execution-protocol`, and `instruction-contracts/core.agent-system-protocol`; owns default next-task boundary analysis/report unless `runtime-instructions/bridge.task-approval-loop-protocol` inserts an approval gate.
 
 ## Core Contract
 
-Autonomous execution mode means:
+Autonomous execution mode means settled plan/spec scope, continuous selection of the next lawful ready task/block without chat confirmation at every small step, and completion of remaining lawful steps inside the active bounded task before any intermediate summary pause.
 
-1. plan/spec scope is already settled enough for continued execution,
-2. the orchestrator should keep selecting the next lawful ready task/block without waiting for chat confirmation at every small step,
-3. execution continues until one of:
-   - pool completion,
-   - explicit blocker,
-   - material scope/risk/ownership change,
-   - user interruption or reprioritization.
-4. within an active bounded task, the orchestrator should finish the remaining lawful steps to true task closure rather than stopping at an intermediate summary point.
+Stop horizon: pool completion, explicit blocker, material scope/risk/ownership change, user interruption, or user reprioritization.
 
-It does not mean:
+It does not mean silent scope expansion, skipping TaskFlow lifecycle, bypassing route/verification gates, inventing missing specs/laws, or leaving law-bearing behavior only in code when a nearby canonical spec/protocol should be updated.
 
-1. silent scope expansion,
-2. skipping TaskFlow lifecycle,
-3. bypassing route/verification gates,
-4. inventing missing specs or laws,
-5. leaving law-bearing behavior implemented only in code when a nearby canonical spec/protocol should be updated.
-
-Default boundary behavior:
-
-1. After a complex task or material slice closes, the orchestrator must analyze the next lawful task boundary before entering the next task.
-2. That boundary analysis must read the nearest governing specs/protocols, inspect the local code/runtime context that controls the next slice, and produce a brief implementation-plan report outside TaskFlow gating.
-3. The boundary report is informative by default, not an approval gate.
-4. If the boundary analysis discovers stale dependent specs/tasks or missing executable coverage, the orchestrator must update existing artifacts first or create the missing coverage before continuing.
-5. Only an explicit approval-loop contract or another lawful stop condition may turn that boundary into a wait state.
+Default boundary behavior: after a complex task or material slice closes, analyze the next lawful task boundary before entering the next task; read nearest governing specs/protocols, inspect controlling code/runtime context, and produce a brief implementation-plan report outside TaskFlow gating. The report is informational unless an explicit approval-loop contract or lawful stop condition makes it a wait state. If analysis finds stale dependent specs/tasks or missing executable coverage, update existing artifacts or create missing coverage before continuing.
 
 Execution-entry validation rule:
 
@@ -45,18 +21,13 @@ Execution-entry validation rule:
 3. Spec-ready transition into downstream implementation flow and post-validation continuation are runtime-defined execution-entry behaviors, not live project overlay toggles.
 4. Project overlay must not advertise additional execution-entry toggles unless runtime compilation and continuation surfaces consume them directly.
 
-User-prompt minimization rule:
+User-prompt and non-pause rule:
 
-1. When AEP is active, do not stop to ask the user for micro-decisions that are already answered by plan/spec/task contracts, TaskFlow state, or canonical priority rules.
-2. Ask the user again only when a stop condition is hit, a required approval contract is genuinely missing, or the user interrupts/reprioritizes explicitly.
-3. "I have a plausible next step" is not a reason to ask; if the next step is lawful, execute it.
-
-Non-pause rule:
-
-1. A successful bounded step, green validation result, or emitted progress report must not be treated as a natural pause point.
-2. Reports are progress markers only; they do not transfer control back to the user unless a separate stop condition is active.
-3. "This slice is done" means "select the next lawful ready slice now", not "wait for another prompt".
-4. Autonomous mode must not insert chat waits merely because the current bounded step reached local closure.
+1. When AEP is active, do not ask for micro-decisions already answered by plan/spec/task contracts, TaskFlow state, or canonical priority rules.
+2. Ask again only on stop condition, genuinely missing approval contract, explicit interruption, or reprioritization.
+3. A successful bounded step, green validation result, or progress report is not a natural pause point.
+4. Reports are progress markers only; they transfer control back to the user only when a separate stop condition is active.
+5. "This slice is done" means select the next lawful ready slice now.
 
 Worker-first continuity rule:
 
@@ -85,21 +56,9 @@ If any item is false:
 
 ## Canonical Next-Task Sources
 
-At least one source must define the next lawful work:
+At least one next-work source must exist: active DB-backed ready queue, TaskFlow next block chain (`next_step`), canonical plan wave/task ordering, approved form-task or issue-contract launch output, or active pool dependency graph under `command-instructions/execution.implement-execution-protocol`.
 
-1. active DB-backed ready queue,
-2. TaskFlow next block chain (`next_step`),
-3. canonical plan wave/task ordering,
-4. approved form-task or issue-contract launch output,
-5. active pool dependency graph under `command-instructions/execution.implement-execution-protocol`.
-
-Precedence:
-
-1. blocker/verification receipts,
-2. active TaskFlow block / next block,
-3. `vida taskflow task ready` + dependency state,
-4. canonical implementation plan ordering,
-5. chat-level instruction.
+Precedence: blocker/verification receipts -> active TaskFlow block / next block -> `vida taskflow task ready` + dependency state -> canonical implementation plan ordering -> chat-level instruction.
 
 Fallback helper:
 
@@ -113,24 +72,7 @@ Clean-session route visibility rule:
 
 ## Operating Loop
 
-When AEP is enabled, run this loop:
-
-1. hydrate task context and verify current route/gates,
-2. apply `runtime-instructions/work.execution-priority-protocol` when choosing between multiple lawful next tasks or when reprioritization pressure exists,
-3. select the next lawful ready task/block from canonical sources,
-4. if the current task just completed or a complex slice just closed, run next-task boundary analysis before entering the next task:
-   - study nearby governing specs/protocols,
-   - inspect the controlling code/runtime context for the next slice,
-   - prepare a brief implementation-plan report outside TaskFlow gating,
-   - refresh dependent spec/task coverage before continuation when the analysis finds drift or missing ownership,
-5. pre-register upcoming blocks if the next slice is non-trivial,
-6. execute the current block,
-7. record evidence/artifacts/risks,
-8. run required verify/review gates,
-9. if the block is complete, advance automatically to the next lawful block/task,
-10. if the task completes, move to the next ready task in the same pool/plan,
-11. stop only on explicit blocker, gate failure, pool completion, or user redirect.
-12. when implementation entry is validation-gated by overlay, emit the validation report before implementation and resume only after that gate is satisfied.
+When AEP is enabled: hydrate task context and route/gates; apply `runtime-instructions/work.execution-priority-protocol` for multiple lawful tasks or reprioritization pressure; select next lawful ready task/block from canonical sources; run task-boundary analysis after task completion or complex-slice closure; pre-register non-trivial upcoming blocks; execute current block; record evidence/artifacts/risks; run verify/review gates; advance automatically after block completion; move to next ready same-pool/plan task after task completion; stop only on explicit blocker, gate failure, pool completion, or user redirect. When implementation entry is validation-gated by overlay, emit validation report before implementation and resume only after that gate is satisfied.
 
 Execution-block boundary rule:
 
@@ -141,16 +83,7 @@ Execution-block boundary rule:
 3. do not reinterpret "one execution_block closed" as "the current task is done" merely because a local report is available,
 4. if no clean next block can be shaped inside the still-open parent task, fail closed with an explicit blocker or escalation receipt rather than yielding a closure-style answer.
 
-Normal success-path algorithm:
-
-1. pick the current lawful ready slice from canonical sources,
-2. execute it to a real technical result rather than stopping at analysis only,
-3. if the step changed proven development conditions, update the canonical project development-conditions artifact before treating the step as closed,
-4. if the step changed framework law, routing, triggers, or canonical protocol behavior, update the relevant framework-owned protocol/map in the same bounded cycle,
-5. run bounded validation for the changed scope,
-6. if validation fails, fix the scope and rerun validation rather than pausing for a redundant user prompt,
-7. if validation succeeds, emit only a concise progress marker if reporting is active,
-8. immediately select the next lawful ready slice and continue unless a separate stop condition applies.
+Normal success path: pick lawful ready slice from canonical sources; execute to a real technical result, not analysis-only; update canonical project development-conditions artifact when proven conditions changed; update relevant framework-owned protocol/map in the same bounded cycle when framework law/routing/triggers/canonical behavior changed; run bounded validation; on failure fix and rerun validation; on success emit only a concise progress marker when reporting is active; immediately select the next lawful ready slice unless a separate stop condition applies.
 
 ## Stop Conditions
 
@@ -200,17 +133,15 @@ Autonomous follow-through must stop and return control to routing/slicing when a
 
 Reporting continuity rule:
 
-1. progress reports are informational, not execution barriers,
-2. after reporting, continue directly into the next lawful task/block unless a separate stop condition is active,
-3. if reporting repeatedly interrupts lawful continuation, treat it as protocol drift and correct the protocol/runtime surface.
-4. next-task boundary analysis/report is mandatory by default for complex task transitions even when it is non-gating.
-5. exception: when next-task boundary approval is active, present the next task report only once per task boundary and wait there, not after ordinary intra-task reports.
-6. if next-task boundary approval is inactive, keep the boundary report non-gating and continue automatically after it.
-7. if an overlay disables user-facing boundary reporting, the internal boundary analysis still remains mandatory.
-8. do not confuse "report emitted" with "task complete"; if the active bounded task still has lawful remaining steps, continue until those steps are done or a real stop condition appears.
-9. do not confuse "task complete" with "epic complete"; if another lawful ready task exists in the same authorized pool, continue automatically into it.
-10. do not confuse "execution_block complete" with "delivery_task complete"; block closure must first return through the parent task's `definition_of_done` before any task-boundary or session-boundary messaging is lawful.
-11. do not treat "rework packet already dispatched" as a safe pause boundary; if the rework lane is in flight, reporting remains non-blocking only.
+1. progress reports are informational, not execution barriers.
+2. After reporting, continue into the next lawful task/block unless a separate stop condition is active.
+3. If reporting repeatedly interrupts lawful continuation, treat it as protocol drift and correct the protocol/runtime surface.
+4. Next-task boundary analysis/report is mandatory by default for complex task transitions even when non-gating.
+5. If next-task boundary approval is active, present the next-task report once per task boundary and wait there, not after ordinary intra-task reports.
+6. If next-task boundary approval is inactive, keep the boundary report non-gating and continue automatically.
+7. If overlay disables user-facing boundary reporting, internal boundary analysis remains mandatory.
+8. Do not confuse "report emitted" with "task complete", "task complete" with "epic complete", or "execution_block complete" with "delivery_task complete"; block closure must first return through parent `definition_of_done`.
+9. Do not treat "rework packet already dispatched" as a safe pause boundary; if the rework lane is in flight, reporting remains non-blocking only.
 
 ## Relationship To Existing Protocols
 
@@ -247,5 +178,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-13T12:39:11+02:00'
+updated_at: 2026-07-03T12:20:00+03:00
 changelog_ref: overlay.autonomous-execution-protocol.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: semantic-atom-coverage+rfc2119-rewrite+duplicate-rule-merge
+protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md
+protocol_compression_audit_at: 2026-07-03T12:20:00+03:00
+protocol_compression_before_tokens: 3583
+protocol_compression_after_tokens: 3265
+protocol_compression_content_sha256: 37a93c0cdf2ad1ef5797fc9adb8a6a147c71a85662f3b9c51309980581031f8b
