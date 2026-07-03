@@ -173,11 +173,11 @@ pub(crate) fn dev_team_sequence(activation_bundle: &serde_json::Value) -> Vec<De
                 role_label: dispatch_target,
                 runtime_role,
                 task_class,
-                packet_template_kind: json_string_field(route, "packet_template_kind"),
-                closure_class: json_string_field(route, "closure_class"),
-                stage: json_string_field(route, "stage"),
-                completion_blocker: json_string_field(route, "completion_blocker"),
-                inclusion_rule: json_string_field(route, "inclusion_rule"),
+                packet_template_kind: crate::json_trimmed_string_field(route, "packet_template_kind"),
+                closure_class: crate::json_trimmed_string_field(route, "closure_class"),
+                stage: crate::json_trimmed_string_field(route, "stage"),
+                completion_blocker: crate::json_trimmed_string_field(route, "completion_blocker"),
+                inclusion_rule: crate::json_trimmed_string_field(route, "inclusion_rule"),
                 requires_task: true,
                 requires_user_approval: false,
                 approval_policy: serde_json::Value::Null,
@@ -431,11 +431,11 @@ fn dev_team_sequence_from_readiness_with_default(
                 role_label: role_id.to_string(),
                 runtime_role,
                 task_class,
-                packet_template_kind: json_string_field(role, "packet_template_kind"),
-                closure_class: json_string_field(role, "closure_class"),
-                stage: json_string_field(role, "stage"),
-                completion_blocker: json_string_field(role, "completion_blocker"),
-                inclusion_rule: json_string_field(role, "inclusion_rule"),
+                packet_template_kind: crate::json_trimmed_string_field(role, "packet_template_kind"),
+                closure_class: crate::json_trimmed_string_field(role, "closure_class"),
+                stage: crate::json_trimmed_string_field(role, "stage"),
+                completion_blocker: crate::json_trimmed_string_field(role, "completion_blocker"),
+                inclusion_rule: crate::json_trimmed_string_field(role, "inclusion_rule"),
                 requires_task: role_id != "release_closure" && role_id != "terminal_closure",
                 requires_user_approval: false,
                 approval_policy: serde_json::Value::Null,
@@ -526,16 +526,8 @@ fn policy_field_from_step_or_role(
     role: &serde_json::Value,
     key: &str,
 ) -> Option<String> {
-    json_string_field(step, key).or_else(|| json_string_field(role, key))
-}
-
-fn json_string_field(value: &serde_json::Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    crate::json_trimmed_string_field(step, key)
+        .or_else(|| crate::json_trimmed_string_field(role, key))
 }
 
 fn flow_matches_work_item_type(flow: &serde_json::Value, work_item_type: &str) -> bool {
@@ -673,5 +665,49 @@ mod tests {
         assert_eq!(sequence[3].role_label, "architect");
         assert_eq!(sequence[3].runtime_role, "solution_architect");
         assert_eq!(sequence[3].task_class, "architecture");
+    }
+
+    #[test]
+    fn dev_team_sequence_uses_shared_trimmed_json_string_fields() {
+        let readiness = serde_json::json!({
+            "default_flow_id": "runtime_defect_remediation",
+            "roles": [
+                {
+                    "role_id": "coder",
+                    "runtime_role": "worker",
+                    "task_classes": ["implementation"],
+                    "packet_template_kind": " delivery_task_packet ",
+                    "closure_class": "   "
+                }
+            ],
+            "flows": [
+                {
+                    "flow_id": "runtime_defect_remediation",
+                    "enabled": true,
+                    "work_item_bindings": ["runtime_defect"],
+                    "steps": [
+                        {
+                            "role_id": "coder",
+                            "task_class": "implementation",
+                            "stage": " implement ",
+                            "completion_blocker": "   ",
+                            "inclusion_rule": 7
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let sequence = dev_team_sequence_from_readiness(&readiness, Some("runtime_defect"));
+
+        assert_eq!(sequence.len(), 1);
+        assert_eq!(
+            sequence[0].packet_template_kind.as_deref(),
+            Some("delivery_task_packet")
+        );
+        assert_eq!(sequence[0].stage.as_deref(), Some("implement"));
+        assert_eq!(sequence[0].closure_class, None);
+        assert_eq!(sequence[0].completion_blocker, None);
+        assert_eq!(sequence[0].inclusion_rule, None);
     }
 }

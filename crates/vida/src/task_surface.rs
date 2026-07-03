@@ -3258,19 +3258,6 @@ fn print_task_update_closed_task_mutation_blocked(
     );
 }
 
-fn canonical_json_string_array_entries(value: &serde_json::Value) -> Option<Vec<String>> {
-    let rows = value.as_array()?;
-    let mut entries = Vec::with_capacity(rows.len());
-    for row in rows {
-        let entry = row.as_str()?;
-        let trimmed = entry.trim();
-        if trimmed.is_empty() || trimmed != entry {
-            return None;
-        }
-        entries.push(trimmed.to_string());
-    }
-    Some(entries)
-}
 
 fn normalize_task_json_contract_arrays(summary_json: &mut serde_json::Value) -> Result<(), String> {
     let Some(summary) = summary_json.as_object_mut() else {
@@ -10790,7 +10777,7 @@ async fn task_attempt_dispatch_records(
                     )),
                     task_id: command.task_id.clone(),
                     stage_id: command.stage_id.clone(),
-                    backend: json_string_field(
+                    backend: json_trimmed_string_field_any(
                         assignment,
                         &[
                             "selected_dispatch_backend_id",
@@ -10801,7 +10788,7 @@ async fn task_attempt_dispatch_records(
                         ],
                     )
                     .unwrap_or_else(|| "unknown_backend".to_string()),
-                    model_profile: json_string_field(
+                    model_profile: json_trimmed_string_field_any(
                         assignment,
                         &[
                             "selected_model_profile_id",
@@ -10810,17 +10797,17 @@ async fn task_attempt_dispatch_records(
                         ],
                     )
                     .unwrap_or_else(|| "unknown_model_profile".to_string()),
-                    isolation: json_string_field(assignment, &["isolation"])
+                    isolation: json_trimmed_string_field_any(assignment, &["isolation"])
                         .unwrap_or_else(|| "readonly".to_string()),
                     freshness: None,
                     status: "submitted".to_string(),
                     artifact_refs: Vec::new(),
                     consolidation_receipt_id: None,
-                    selected_model_profile_readiness_status: json_string_field(
+                    selected_model_profile_readiness_status: json_trimmed_string_field_any(
                         assignment,
                         &["selected_model_profile_readiness_status"],
                     ),
-                    budget_posture: json_string_field(
+                    budget_posture: json_trimmed_string_field_any(
                         assignment,
                         &["budget_verdict", "budget_policy"],
                     ),
@@ -10828,7 +10815,7 @@ async fn task_attempt_dispatch_records(
                         .as_str()
                         .map(str::to_string)
                         .or_else(|| Some("configured".to_string())),
-                    write_scope_classification: json_string_field(
+                    write_scope_classification: json_trimmed_string_field_any(
                         assignment,
                         &["selected_write_scope", "write_scope"],
                     ),
@@ -10839,15 +10826,6 @@ async fn task_attempt_dispatch_records(
     Ok((attempts, stage_policy))
 }
 
-fn json_string_field(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        value[*key]
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    })
-}
 
 fn task_attempt_policy_attempt_id(task_id: &str, stage_id: &str, attempt_id: &str) -> String {
     format!(

@@ -7746,19 +7746,6 @@ fn packet_nonempty_string(value: Option<&serde_json::Value>) -> bool {
         .is_some_and(|value| !value.is_empty())
 }
 
-fn packet_nonempty_string_array(packet: &serde_json::Value, key: &str) -> bool {
-    packet
-        .get(key)
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|rows| {
-            !rows.is_empty()
-                && rows.iter().all(|row| {
-                    row.as_str()
-                        .map(str::trim)
-                        .is_some_and(|value| !value.is_empty())
-                })
-        })
-}
 
 fn packet_string_array_is_runtime_consumption_fallback(
     packet: &serde_json::Value,
@@ -7777,7 +7764,7 @@ fn packet_string_array_is_runtime_consumption_fallback(
 }
 
 fn packet_has_concrete_owned_paths(packet: &serde_json::Value) -> bool {
-    packet_nonempty_string_array(packet, "owned_paths")
+    json_nonempty_string_array_field(packet, "owned_paths")
         && !packet_string_array_is_runtime_consumption_fallback(packet, "owned_paths")
 }
 
@@ -7895,8 +7882,8 @@ pub(crate) fn runtime_dispatch_packet_has_top_level_task_scope_mirror(
 }
 
 fn packet_has_owned_or_read_only_paths(packet: &serde_json::Value) -> bool {
-    packet_nonempty_string_array(packet, "owned_paths")
-        || packet_nonempty_string_array(packet, "read_only_paths")
+    json_nonempty_string_array_field(packet, "owned_paths")
+        || json_nonempty_string_array_field(packet, "read_only_paths")
 }
 
 fn packet_requires_owned_write_scope(
@@ -8108,7 +8095,7 @@ pub(crate) fn apply_owned_paths_if_missing(
     packet: &mut serde_json::Value,
     owned_paths: &[String],
 ) -> bool {
-    if packet_nonempty_string_array(packet, "owned_paths")
+    if json_nonempty_string_array_field(packet, "owned_paths")
         && !packet_string_array_is_runtime_consumption_fallback(packet, "owned_paths")
     {
         return false;
@@ -8413,7 +8400,7 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
             if !packet_nonempty_string(active_packet.get("goal")) {
                 missing.push("goal");
             }
-            if !packet_nonempty_string_array(active_packet, "scope_in") {
+            if !json_nonempty_string_array_field(active_packet, "scope_in") {
                 missing.push("scope_in");
             }
             if packet_requires_owned_write_scope(packet_template_kind, active_packet) {
@@ -8423,7 +8410,7 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
             } else if !packet_has_owned_or_read_only_paths(active_packet) {
                 missing.push("owned_paths|read_only_paths");
             }
-            if !packet_nonempty_string_array(active_packet, "definition_of_done") {
+            if !json_nonempty_string_array_field(active_packet, "definition_of_done") {
                 missing.push("definition_of_done");
             }
             if !packet_nonempty_string(active_packet.get("verification_command")) {
@@ -8432,7 +8419,7 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
             if !packet_nonempty_string(active_packet.get("proof_target")) {
                 missing.push("proof_target");
             }
-            if !packet_nonempty_string_array(active_packet, "stop_rules") {
+            if !json_nonempty_string_array_field(active_packet, "stop_rules") {
                 missing.push("stop_rules");
             }
             if !packet_nonempty_string(active_packet.get("blocking_question")) {
@@ -8448,7 +8435,7 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
             if !packet_has_owned_or_read_only_paths(active_packet) {
                 missing.push("owned_paths|read_only_paths");
             }
-            if !packet_nonempty_string_array(active_packet, "definition_of_done") {
+            if !json_nonempty_string_array_field(active_packet, "definition_of_done") {
                 missing.push("definition_of_done");
             }
             if !packet_nonempty_string(active_packet.get("proof_target")) {
@@ -8483,10 +8470,10 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
             if !packet_nonempty_string(active_packet.get("decision_needed")) {
                 missing.push("decision_needed");
             }
-            if !packet_nonempty_string_array(active_packet, "options") {
+            if !json_nonempty_string_array_field(active_packet, "options") {
                 missing.push("options");
             }
-            if !packet_nonempty_string_array(active_packet, "constraints") {
+            if !json_nonempty_string_array_field(active_packet, "constraints") {
                 missing.push("constraints");
             }
             if !packet_nonempty_string(active_packet.get("blocking_question")) {

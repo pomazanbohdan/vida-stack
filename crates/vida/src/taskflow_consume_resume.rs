@@ -1,3 +1,4 @@
+use crate::{canonical_json_string_array_entries, json_nonempty_string_array_field};
 use crate::runtime_dispatch_state::load_project_overlay_yaml_for_root;
 use crate::taskflow_run_graph::{
     state_with_active_exception_dispatch_replay, validate_run_graph_resume_gate,
@@ -2335,7 +2336,7 @@ fn raw_dispatch_packet_missing_required_owned_paths_error(
         return None;
     }
     let active_packet = packet_template_child(packet, packet_template_kind)?;
-    if packet_nonempty_string_array(active_packet, "owned_paths") {
+    if json_nonempty_string_array_field(active_packet, "owned_paths") {
         return None;
     }
     derive_required_delivery_owned_paths(packet).map(|_| {
@@ -3531,23 +3532,10 @@ fn ready_downstream_dispatch_packet_path_from_recovery_projection(
     Ok(Some(packet_path.to_string()))
 }
 
-fn packet_nonempty_string_array(packet: &serde_json::Value, key: &str) -> bool {
-    packet
-        .get(key)
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|rows| {
-            !rows.is_empty()
-                && rows.iter().all(|row| {
-                    row.as_str()
-                        .map(str::trim)
-                        .is_some_and(|value| !value.is_empty())
-                })
-        })
-}
 
 fn packet_has_owned_or_read_only_paths(packet: &serde_json::Value) -> bool {
-    packet_nonempty_string_array(packet, "owned_paths")
-        || packet_nonempty_string_array(packet, "read_only_paths")
+    json_nonempty_string_array_field(packet, "owned_paths")
+        || json_nonempty_string_array_field(packet, "read_only_paths")
 }
 
 fn packet_dispatch_target(packet: &serde_json::Value) -> Option<&str> {
@@ -3865,7 +3853,7 @@ fn normalize_runtime_dispatch_packet(packet: &mut serde_json::Value) -> bool {
     if active_packet.is_null() {
         return normalized;
     }
-    let missing_owned_paths = !packet_nonempty_string_array(active_packet, "owned_paths");
+    let missing_owned_paths = !json_nonempty_string_array_field(active_packet, "owned_paths");
     let missing_scope_paths = !packet_has_owned_or_read_only_paths(active_packet);
     let derived_required_delivery_owned_paths = missing_owned_paths
         .then(|| derive_required_delivery_owned_paths(packet))
@@ -5191,7 +5179,7 @@ async fn resume_inputs_from_downstream_packet(
     let downstream_dispatch_blockers = packet
         .get("downstream_dispatch_blockers")
         .map(|value| {
-            canonical_resume_string_array_entries(value).ok_or_else(|| {
+            canonical_json_string_array_entries(value).ok_or_else(|| {
                 "Persisted downstream dispatch packet has noncanonical downstream_dispatch_blockers"
                     .to_string()
             })
@@ -7183,19 +7171,6 @@ fn canonical_resume_lane_status(status: &str) -> Option<super::LaneStatus> {
     }
 }
 
-fn canonical_resume_string_array_entries(value: &serde_json::Value) -> Option<Vec<String>> {
-    let rows = value.as_array()?;
-    let mut entries = Vec::with_capacity(rows.len());
-    for row in rows {
-        let entry = row.as_str()?;
-        let trimmed = entry.trim();
-        if trimmed.is_empty() || trimmed != entry {
-            return None;
-        }
-        entries.push(trimmed.to_string());
-    }
-    Some(entries)
-}
 
 fn resume_packet_ready_blocker_parity_error(
     downstream_dispatch_status: Option<&str>,
@@ -8908,13 +8883,15 @@ pub(crate) async fn run_taskflow_consume_advance_command(
 
 #[cfg(test)]
 mod tests {
+    use crate::canonical_json_string_array_entries;
+
     use super::{
         active_exception_takeover_resume_blocker_error,
         blocked_external_dispatch_artifact_mismatched_as_internal_activation,
         build_failure_control_evidence,
         cached_deferred_handoff_projection_matches_dispatch_init_cache,
         canonical_resume_dispatch_status, canonical_resume_lane_status,
-        canonical_resume_string_array_entries, completed_task_close_reconcile_resume_target,
+        completed_task_close_reconcile_resume_target,
         consume_advance_success_payload, consume_continue_blocking_step_with_timeout,
         consume_continue_dispatch_handoff_timeout, consume_continue_handoff_with_timeout,
         consume_continue_should_defer_agent_handoff, consume_continue_state_access_blocker_payload,
@@ -12010,13 +11987,13 @@ agent_system:
     }
 
     #[test]
-    fn canonical_resume_string_array_entries_fail_closed_for_whitespace_only_entries() {
+    fn canonical_json_string_array_entries_fail_closed_for_whitespace_only_entries() {
         assert_eq!(
-            canonical_resume_string_array_entries(&serde_json::json!(["pending_lane_evidence"])),
+            canonical_json_string_array_entries(&serde_json::json!(["pending_lane_evidence"])),
             Some(vec!["pending_lane_evidence".to_string()])
         );
         assert_eq!(
-            canonical_resume_string_array_entries(&serde_json::json!(["   "])),
+            canonical_json_string_array_entries(&serde_json::json!(["   "])),
             None
         );
     }

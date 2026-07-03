@@ -4259,7 +4259,7 @@ fn compiled_run_graph_control_from_bundle(
     })
 }
 
-fn json_string_field(value: &serde_json::Value, key: &str) -> Option<String> {
+fn json_raw_string_field(value: &serde_json::Value, key: &str) -> Option<String> {
     value.get(key)?.as_str().map(ToOwned::to_owned)
 }
 
@@ -6627,7 +6627,7 @@ fn implementation_analysis_gate(
     let coach_required = json_bool_field(implementation, "coach_required").unwrap_or(false);
     let next_node = Some(writer_node);
     let policy_gate = if coach_required {
-        json_string_field(implementation, "verification_gate")
+        json_raw_string_field(implementation, "verification_gate")
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "not_required".to_string())
     } else {
@@ -6640,8 +6640,8 @@ fn implementation_analysis_gate(
 }
 
 fn implementation_writer_node(implementation: &serde_json::Value) -> String {
-    json_string_field(implementation, "writer_route_task_class")
-        .or_else(|| json_string_field(implementation, "implementer_route_task_class"))
+    json_raw_string_field(implementation, "writer_route_task_class")
+        .or_else(|| json_raw_string_field(implementation, "implementer_route_task_class"))
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "writer".to_string())
 }
@@ -6650,14 +6650,14 @@ fn implementation_verification_gate(
     implementation: &serde_json::Value,
     verification: &serde_json::Value,
 ) -> (Option<String>, String) {
-    let verification_route = json_string_field(implementation, "verification_route_task_class")
+    let verification_route = json_raw_string_field(implementation, "verification_route_task_class")
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "verification".to_string());
     let next_node = json_bool_field(implementation, "independent_verification_required")
         .unwrap_or(false)
         .then_some(verification_route);
     let policy_gate = if next_node.is_some() {
-        json_string_field(verification, "verification_gate")
+        json_raw_string_field(verification, "verification_gate")
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "verification_summary".to_string())
     } else {
@@ -6672,7 +6672,7 @@ fn implementation_writer_handoff(
 ) -> (String, Option<String>, String, DispatchTargetFormat, bool) {
     let coach_required = json_bool_field(implementation, "coach_required").unwrap_or(false);
     if coach_required {
-        let coach_node = json_string_field(implementation, "coach_route_task_class")
+        let coach_node = json_raw_string_field(implementation, "coach_route_task_class")
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "coach".to_string());
         let (next_node, policy_gate) =
@@ -6689,13 +6689,13 @@ fn implementation_writer_handoff(
     let verification_required =
         json_bool_field(implementation, "independent_verification_required").unwrap_or(false);
     if verification_required {
-        let verification_node = json_string_field(implementation, "verification_route_task_class")
+        let verification_node = json_raw_string_field(implementation, "verification_route_task_class")
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "verification".to_string());
         return (
             verification_node,
             None,
-            json_string_field(verification, "verification_gate")
+            json_raw_string_field(verification, "verification_gate")
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "verification_summary".to_string()),
             DispatchTargetFormat::Lane,
@@ -9157,11 +9157,11 @@ fn seeded_run_graph_state_from_role_selection(
         .next()
         .filter(|value| !value.is_empty())
         .or_else(|| {
-            json_string_field(route, "analysis_route_task_class").filter(|value| !value.is_empty())
+            json_raw_string_field(route, "analysis_route_task_class").filter(|value| !value.is_empty())
         })
         .unwrap_or_else(|| selection.selected_role.clone())
     } else {
-        json_string_field(route, "analysis_route_task_class")
+        json_raw_string_field(route, "analysis_route_task_class")
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| selection.selected_role.clone())
     };
@@ -9173,7 +9173,7 @@ fn seeded_run_graph_state_from_role_selection(
             } else {
                 lane_node.as_str()
             },
-            json_string_field(route, "activation_agent_type").as_deref(),
+            json_raw_string_field(route, "activation_agent_type").as_deref(),
             None,
         )
         .unwrap_or_else(|| "unknown".to_string());
@@ -9793,7 +9793,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
             );
         }
 
-        let analysis_node = json_string_field(&implementation, "analysis_route_task_class")
+        let analysis_node = json_raw_string_field(&implementation, "analysis_route_task_class")
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "analysis".to_string());
         let direct_writer_entry = compiled_control.first_execution_lane.clone();
@@ -9815,7 +9815,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
                     &existing,
                     active_entry.clone(),
                     if coach_required {
-                        json_string_field(&implementation, "coach_route_task_class")
+                        json_raw_string_field(&implementation, "coach_route_task_class")
                             .filter(|value| !value.is_empty())
                             .or(next_node)
                     } else {
@@ -9902,7 +9902,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
                 &existing,
                 writer_node.clone(),
                 if coach_required {
-                    json_string_field(&implementation, "coach_route_task_class")
+                    json_raw_string_field(&implementation, "coach_route_task_class")
                         .filter(|value| !value.is_empty())
                         .or(next_node)
                 } else {
@@ -9988,7 +9988,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
             );
         }
 
-        let verification_node = json_string_field(&implementation, "verification_route_task_class")
+        let verification_node = json_raw_string_field(&implementation, "verification_route_task_class")
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "verification".to_string());
         if existing.next_node.as_deref() == Some("review_ensemble") && existing.status == "ready" {
@@ -10040,7 +10040,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
                 None,
                 format!("{verification_node}_lane"),
                 format!("{verification_node}_active"),
-                json_string_field(&verification, "verification_gate")
+                json_raw_string_field(&verification, "verification_gate")
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| existing.policy_gate.clone()),
                 "execution_cursor".to_string(),
@@ -10051,7 +10051,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
     }
 
     if existing.task_class == "implementation" && existing.route_task_class == "implementation" {
-        let verification_node = json_string_field(&implementation, "verification_route_task_class")
+        let verification_node = json_raw_string_field(&implementation, "verification_route_task_class")
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "verification".to_string());
         if existing.active_node != verification_node {
@@ -10060,7 +10060,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
             match implementation_verification_outcome(existing.status.as_str()) {
                 ImplementationVerificationOutcome::ReworkReady => {
                     let analysis_node =
-                        json_string_field(&implementation, "analysis_route_task_class")
+                        json_raw_string_field(&implementation, "analysis_route_task_class")
                             .filter(|value| !value.is_empty())
                             .unwrap_or_else(|| "analysis".to_string());
                     if existing.next_node.as_deref() != Some(analysis_node.as_str()) {

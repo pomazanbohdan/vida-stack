@@ -253,6 +253,59 @@ pub(crate) fn csv_json_string_list(value: Option<&serde_json::Value>) -> Vec<Str
     }
 }
 
+pub(crate) fn json_trimmed_string_field(
+    value: &serde_json::Value,
+    key: &str,
+) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+pub(crate) fn json_trimmed_string_field_any(
+    value: &serde_json::Value,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter()
+        .find_map(|key| json_trimmed_string_field(value, key))
+}
+
+pub(crate) fn json_nonempty_string_array_field(
+    value: &serde_json::Value,
+    key: &str,
+) -> bool {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|rows| {
+            !rows.is_empty()
+                && rows.iter().all(|row| {
+                    row.as_str()
+                        .map(str::trim)
+                        .is_some_and(|value| !value.is_empty())
+                })
+        })
+}
+
+pub(crate) fn canonical_json_string_array_entries(
+    value: &serde_json::Value,
+) -> Option<Vec<String>> {
+    let rows = value.as_array()?;
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        let entry = row.as_str()?;
+        let trimmed = entry.trim();
+        if trimmed.is_empty() || trimmed != entry {
+            return None;
+        }
+        entries.push(trimmed.to_string());
+    }
+    Some(entries)
+}
+
 pub(crate) fn yaml_lookup<'a>(
     value: &'a serde_yaml::Value,
     path: &[&str],
@@ -318,7 +371,10 @@ pub(crate) fn yaml_string_list(value: Option<&serde_yaml::Value>) -> Vec<String>
 
 #[cfg(test)]
 mod tests {
-    use super::project_overlay_config;
+    use super::{
+        canonical_json_string_array_entries, json_nonempty_string_array_field,
+        json_trimmed_string_field, json_trimmed_string_field_any, project_overlay_config,
+    };
 
     #[test]
     fn typed_overlay_config_preserves_legacy_agent_extension_shapes() {
@@ -423,5 +479,83 @@ agent_extensions:
         assert!(config.enabled_project_roles.is_empty());
         assert_eq!(config.registries.roles, None);
         assert!(!config.validation.require_registry_files);
+    }
+
+    #[test]
+    fn json_string_field_helper_returns_trimmed_nonempty_string() {
+        let value = serde_json::json!({ "route": " developer " });
+
+        assert_eq!(
+            json_trimmed_string_field(&value, "route").as_deref(),
+            Some("developer")
+        );
+    }
+
+    #[test]
+    fn json_string_field_helper_rejects_missing_non_string_and_blank() {
+        let value = serde_json::json!({
+            "blank": "   ",
+            "number": 7,
+            "null": null
+        });
+
+        assert_eq!(json_trimmed_string_field(&value, "missing"), None);
+        assert_eq!(json_trimmed_string_field(&value, "blank"), None);
+        assert_eq!(json_trimmed_string_field(&value, "number"), None);
+        assert_eq!(json_trimmed_string_field(&value, "null"), None);
+    }
+
+    #[test]
+    fn json_string_field_any_helper_uses_first_nonempty_matching_key() {
+        let value = serde_json::json!({
+            "selected_backend_id": "   ",
+            "selected_backend": " internal_subagents "
+        });
+
+        assert_eq!(
+            json_trimmed_string_field_any(
+                &value,
+                &["selected_backend_id", "selected_backend"]
+            )
+            .as_deref(),
+            Some("internal_subagents")
+        );
+    }
+
+    #[test]
+    fn json_nonempty_string_array_field_accepts_packet_nonempty_string_array() {
+        let packet = serde_json::json!({
+            "owned_paths": ["crates/vida/src/main.rs", " docs/process "]
+        });
+
+        assert!(json_nonempty_string_array_field(&packet, "owned_paths"));
+    }
+
+    #[test]
+    fn json_nonempty_string_array_field_rejects_packet_nonempty_string_array_gaps() {
+        for packet in [
+            serde_json::json!({}),
+            serde_json::json!({ "owned_paths": [] }),
+            serde_json::json!({ "owned_paths": ["   "] }),
+            serde_json::json!({ "owned_paths": ["ok", 7] }),
+        ] {
+            assert!(!json_nonempty_string_array_field(&packet, "owned_paths"));
+        }
+    }
+
+    #[test]
+    fn canonical_json_string_array_entries_rejects_blank_or_trimmed_entries() {
+        assert_eq!(
+            canonical_json_string_array_entries(&serde_json::json!(["pending"])),
+            Some(vec!["pending".to_string()])
+        );
+        assert_eq!(
+            canonical_json_string_array_entries(&serde_json::json!([" pending "])),
+            None
+        );
+        assert_eq!(
+            canonical_json_string_array_entries(&serde_json::json!(["   "])),
+            None
+        );
     }
 }
