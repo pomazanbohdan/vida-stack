@@ -2137,6 +2137,9 @@ fn cached_orchestrator_init_payload_has_top_level_continuation_fields(cached: &s
         .ok()
         .is_some_and(|payload| {
             payload.get("active_bounded_unit").is_some()
+                && payload.get("active_step").is_some()
+                && payload.get("active_parent_task").is_some()
+                && payload.get("active_epic").is_some()
                 && payload.get("why_this_unit").is_some()
                 && payload
                     .get("sequential_vs_parallel_posture")
@@ -3123,6 +3126,20 @@ mod tests {
                             }
                         }
                     }
+                })
+                .to_string()
+            )
+        );
+        assert!(
+            !cached_orchestrator_init_payload_has_top_level_continuation_fields(
+                &json!({
+                    "surface": "vida orchestrator-init",
+                    "status": "ready_enough_for_normal_work",
+                    "active_bounded_unit": {
+                        "task_id": "active-task"
+                    },
+                    "why_this_unit": "Active task is authoritative.",
+                    "sequential_vs_parallel_posture": "sequential_only_taskflow_active"
                 })
                 .to_string()
             )
