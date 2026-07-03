@@ -42,29 +42,31 @@ Companion rule:
     - bootstrap carrier and project activator model
 14. [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md)
     - DocFlow and documentation operator-command map
-15. [typed-transition-state-store-extraction-contract.md](typed-transition-state-store-extraction-contract.md)
+15. [protocol-authoring-and-token-economy-law.md](protocol-authoring-and-token-economy-law.md)
+    - protocol authoring, compression, validation, and token-budget law
+16. [typed-transition-state-store-extraction-contract.md](typed-transition-state-store-extraction-contract.md)
     - typed transition/state-store extraction design contract for the active shared extraction epic
-16. [ldrk-baseline/execution-preparation.md](ldrk-baseline/execution-preparation.md)
+17. [ldrk-baseline/execution-preparation.md](ldrk-baseline/execution-preparation.md)
     - LDRK `ldr-001` baseline inventory execution-preparation packet
-17. [ldrk-baseline/drift-map.md](ldrk-baseline/drift-map.md)
+18. [ldrk-baseline/drift-map.md](ldrk-baseline/drift-map.md)
     - generated LDRK `ldr-001` runtime mutation, classifier, and host-bridge drift baseline
-18. [ldrk-baseline/deletion-candidates.md](ldrk-baseline/deletion-candidates.md)
+19. [ldrk-baseline/deletion-candidates.md](ldrk-baseline/deletion-candidates.md)
     - generated LDRK `ldr-001` command, classifier, and direct-mutation deletion candidate baseline
-19. [ldrk-operation-catalog/operation-cli-map.json](ldrk-operation-catalog/operation-cli-map.json)
+20. [ldrk-operation-catalog/operation-cli-map.json](ldrk-operation-catalog/operation-cli-map.json)
     - generated LDRK `ldr-003` canonical operation-to-CLI map
-20. [ldrk-operation-catalog/before-after-command-tree.md](ldrk-operation-catalog/before-after-command-tree.md)
+21. [ldrk-operation-catalog/before-after-command-tree.md](ldrk-operation-catalog/before-after-command-tree.md)
     - generated LDRK `ldr-003` current-to-target command tree
-21. [ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md](ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md)
+22. [ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md](ldrk-operation-catalog/top-ten-operator-workflow-walkthrough.md)
     - generated LDRK `ldr-003` top-ten operator workflow walkthrough
-22. [local-durable-runtime-kernel-architecture-and-migration-law.md](local-durable-runtime-kernel-architecture-and-migration-law.md)
+23. [local-durable-runtime-kernel-architecture-and-migration-law.md](local-durable-runtime-kernel-architecture-and-migration-law.md)
     - accepted LDRK `ldr-004` architecture and migration law
-23. [../decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md](../decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md)
+24. [../decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md](../decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md)
     - accepted LDRK `ldr-004` architecture decision record
-24. [tower-based-canonical-command-pipeline-phase-design.md](tower-based-canonical-command-pipeline-phase-design.md)
+25. [tower-based-canonical-command-pipeline-phase-design.md](tower-based-canonical-command-pipeline-phase-design.md)
     - proposed LDRK `ldr-040` Tower-based canonical command pipeline phase design
-25. [multi-agent-stage-ensemble-contract.md](multi-agent-stage-ensemble-contract.md)
+26. [multi-agent-stage-ensemble-contract.md](multi-agent-stage-ensemble-contract.md)
     - multi-agent stage attempt ledger and consolidation contract
-26. [runworkflow-aggregate-hierarchical-statig-machin-design.md](runworkflow-aggregate-hierarchical-statig-machin-design.md)
+27. [runworkflow-aggregate-hierarchical-statig-machin-design.md](runworkflow-aggregate-hierarchical-statig-machin-design.md)
     - proposed LDRK `ldr-020` RunWorkflow aggregate and hierarchical Statig machine design packet
 
 ## Detailed Catalog Companions
@@ -80,7 +82,7 @@ Companion rule:
 
 ## Routing Pointers
 
-1. Documentation ownership, naming, and inventory questions route to [project-documentation-law.md](project-documentation-law.md), [project-document-naming-law.md](project-document-naming-law.md), [canonical-documentation-and-inventory-layer-matrix.md](canonical-documentation-and-inventory-layer-matrix.md), and [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md).
+1. Documentation ownership, naming, inventory, protocol-authoring, and token-economy questions route to [project-documentation-law.md](project-documentation-law.md), [project-document-naming-law.md](project-document-naming-law.md), [protocol-authoring-and-token-economy-law.md](protocol-authoring-and-token-economy-law.md), [canonical-documentation-and-inventory-layer-matrix.md](canonical-documentation-and-inventory-layer-matrix.md), and [docs/process/documentation-tooling-map.md](../../process/documentation-tooling-map.md).
 2. Runtime readiness, runtime layering, and operator-surface questions route to [canonical-runtime-readiness-law.md](canonical-runtime-readiness-law.md), [canonical-runtime-layer-matrix.md](canonical-runtime-layer-matrix.md), and the active runtime contract/profile specs.
 3. Role, carrier, skill, profile, lane, and flow questions route to [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md) and [docs/process/agent-extensions/index.md](../../process/agent-extensions/index.md).
 4. Detailed artifact lookup routes to [current-spec-catalog.md](current-spec-catalog.md).
@@ -113,5 +115,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-10T10:20:00+02:00'
-updated_at: 2026-06-25T00:00:00+03:00
+updated_at: 2026-07-03T06:54:50.9171019Z
 changelog_ref: current-spec-map.changelog.jsonl

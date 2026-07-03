@@ -56,6 +56,8 @@ This map does not cover extracted secondary bundles by default.
      - project-owned protocol for repository advisory audits, self-contained implementation plans, executor review, reconciliation, and publication safety
 20. `docs/process/project-artifact-cleanup-protocol.md`
      - project-owned protocol for safe repository, project-adjacent, and filesystem artifact cleanup produced by `vida-stack` work
+21. `docs/product/spec/protocol-authoring-and-token-economy-law.md`
+     - product-spec law for protocol/instruction authoring, token-budget gates, and bootstrap-visible compression validation
 
 ## Activation Triggers
 
@@ -111,6 +113,8 @@ Do not use this map as the default route for extracted bundles unless the task e
      - continue to `docs/process/repository-advisory-planning-protocol.md`
 18. Repository cleanup, project-adjacent temp cleanup, root filesystem artifact cleanup, or recurring cleanup automation:
      - continue to `docs/process/project-artifact-cleanup-protocol.md`
+19. Protocol authoring, instruction compression, token-budget gates, or bootstrap-visible documentation registration:
+     - continue to `docs/product/spec/protocol-authoring-and-token-economy-law.md`
 
 ## Boundary Rule
 
@@ -127,5 +131,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/project-root-map.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: 2026-07-01T00:00:00+03:00
+updated_at: 2026-07-03T06:54:50.9705656Z
 changelog_ref: project-root-map.changelog.jsonl

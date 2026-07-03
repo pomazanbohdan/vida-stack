@@ -7,7 +7,7 @@ Purpose: make current VIDA product law discoverable through bootstrap-tracked ma
 1. [spec/index.md](spec/index.md) is the local product/spec entrypoint.
 2. [spec/current-spec-map.md](spec/current-spec-map.md) is the short product/spec routing map.
 3. [spec/current-spec-catalog.md](spec/current-spec-catalog.md) is the detailed current product/spec artifact catalog.
-4. [research](research) contains product research sources until promoted into current spec canon.
+4. [research/index.md](research/index.md) contains product research sources until promoted into current spec canon.
 5. [../project-root-map.md](../project-root-map.md) is the active project documentation root map.
 6. [../../README.md](../../README.md) is the only repository README narrative surface.
 
@@ -21,19 +21,21 @@ Purpose: make current VIDA product law discoverable through bootstrap-tracked ma
 6. [spec/canonical-documentation-and-inventory-layer-matrix.md](spec/canonical-documentation-and-inventory-layer-matrix.md)
 7. [spec/canonical-runtime-layer-matrix.md](spec/canonical-runtime-layer-matrix.md)
 8. [spec/canonical-runtime-readiness-law.md](spec/canonical-runtime-readiness-law.md)
+9. [spec/protocol-authoring-and-token-economy-law.md](spec/protocol-authoring-and-token-economy-law.md)
 
 ## Product Entry Routes
 
 1. Product/spec orientation: [spec/index.md](spec/index.md)
 2. Product/spec routing: [spec/current-spec-map.md](spec/current-spec-map.md)
 3. Full active artifact lookup: [spec/current-spec-catalog.md](spec/current-spec-catalog.md)
-4. Product research lookup: [research](research)
+4. Product research lookup: [research/index.md](research/index.md)
 5. Process/tooling route from the product side: [../process/documentation-tooling-map.md](../process/documentation-tooling-map.md)
 6. Runtime layer route: [spec/canonical-runtime-layer-matrix.md](spec/canonical-runtime-layer-matrix.md)
 7. Documentation/inventory route: [spec/canonical-documentation-and-inventory-layer-matrix.md](spec/canonical-documentation-and-inventory-layer-matrix.md)
-8. Runtime dependency decisions: [decisions/ldr-002-redb-operational-journal-adr.md](decisions/ldr-002-redb-operational-journal-adr.md)
-9. Runtime architecture decisions: [decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md](decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md)
-10. External runtime adapter decisions: [decisions/ldr-061-restate-adapter-mapping-adr.md](decisions/ldr-061-restate-adapter-mapping-adr.md)
+8. Protocol authoring and token economy route: [spec/protocol-authoring-and-token-economy-law.md](spec/protocol-authoring-and-token-economy-law.md)
+9. Runtime dependency decisions: [decisions/ldr-002-redb-operational-journal-adr.md](decisions/ldr-002-redb-operational-journal-adr.md)
+10. Runtime architecture decisions: [decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md](decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md)
+11. External runtime adapter decisions: [decisions/ldr-061-restate-adapter-mapping-adr.md](decisions/ldr-061-restate-adapter-mapping-adr.md)
 
 ## Repository Project Split
 
@@ -60,5 +62,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/index.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-06-13T00:00:00+03:00
+updated_at: 2026-07-03T07:22:56.7713579Z
 changelog_ref: index.changelog.jsonl

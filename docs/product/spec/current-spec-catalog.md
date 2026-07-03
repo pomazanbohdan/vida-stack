@@ -62,6 +62,9 @@ Companion rule:
     Config families: `docs/product/spec/**`, `docs/process/**`, `docs/product/research/**`, `docs/project-memory/**`, lane-root naming, reserved filename handling, and bounded rename-wave law for project-owned documentation
 11. [feature-design-and-adr-model.md](feature-design-and-adr-model.md)
     Config families: structured feature/change design artifacts, linked ADR split, framework design-template routing, and bounded proof/rollout authoring for project and framework changes
+12. [protocol-authoring-and-token-economy-law.md](protocol-authoring-and-token-economy-law.md)
+    Config families: protocol and instruction authoring, block-level compression, quality-versus-size algorithm routing, protected-atom validation, token-budget gates, and bootstrap-visible registration for `docs/product/spec/**`, `docs/process/**`, and `AGENTS.sidecar.md`
+    Registered path: `docs/product/spec/protocol-authoring-and-token-economy-law.md`
 
 ### Runtime And Agent Control
 
@@ -347,5 +350,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-catalog.md
 created_at: 2026-06-12T00:00:00+03:00
-updated_at: 2026-06-13T00:00:00+03:00
+updated_at: 2026-07-03T06:54:50.9354403Z
 changelog_ref: current-spec-catalog.changelog.jsonl

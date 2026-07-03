@@ -47,6 +47,8 @@ Purpose: provide the project-level agent instruction overlay for the repository 
     - `vida taskflow help`
 16. Project ZOMBIE-D test-writing protocol:
     - `docs/process/zombie-d-test-writing-protocol.md`
+17. Protocol authoring and token economy law:
+    - `docs/product/spec/protocol-authoring-and-token-economy-law.md`
 ## Bootstrap Read Path
 
 1. After `AGENTS.md`, read this sidecar immediately.
@@ -103,6 +105,8 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 26. For codebase structure, symbol lookup, implementation discovery, callers/callees, impact analysis, graph/schema inspection, complexity/hot-path queries, and architecture-decision recall, use `codebase-memory-mcp` first when it is available. Start with `list_projects`, then `index_status` for the exact indexed project name such as `C-project-vida-stack-crates`; if the index is ready, use `search_graph` for discovery, `query_graph` for graph/call/complexity queries, `get_code_snippet` only after graph lookup, `detect_changes` for indexed diff impact, `get_graph_schema` when query labels/properties are unclear, and `manage_adr` for durable architecture decisions.
 27. Keep `lean-ctx` as the fallback and live-truth verifier for file reads, shell commands, compressed build/test output, raw working-tree inspection, Markdown/docs that are outside the code graph, uncommitted edits, stale indexes, generated paths, or missing symbols. If `codebase-memory-mcp` is unavailable, stale, truncated, or returns a snippet inconsistent with the filesystem, state the fallback explicitly and verify with `lean-ctx`.
 28. This path set is mandatory bootstrap context, not an optional later lookup.
+29. For protocol authoring, instruction compression, token-budget gates, quality-versus-size block routing, or bootstrap-visible protocol registration, continue early to:
+   - `docs/product/spec/protocol-authoring-and-token-economy-law.md`
 
 Project-routing rule:
 
@@ -269,5 +273,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-07-01T21:45:00+03:00
+updated_at: 2026-07-03T06:54:51.0040348Z
 changelog_ref: AGENTS.sidecar.changelog.jsonl

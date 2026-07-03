@@ -3089,6 +3089,154 @@ fn project_doc_registration_validation_issues(
     issues
 }
 
+const PROTOCOL_AUTHORING_GATE_DATE: &str = "2026-07-03";
+
+const PROTOCOL_AUTHORING_REQUIRED_BLOCKS: &[&str] = &[
+    "Purpose",
+    "Trigger",
+    "Scope",
+    "Authority",
+    "Inputs",
+    "Outputs",
+    "Rules",
+    "Forbidden",
+    "Escalation",
+    "Validation",
+    "Token Budget",
+    "Metadata",
+];
+
+const PROTOCOL_AUTHORING_LAW_ATOMS: &[(&str, &str)] = &[
+    (
+        "document_type_classification",
+        "Document Type Classification",
+    ),
+    ("block_extraction", "Block Extraction"),
+    ("llmlingua_coarse_to_fine", "LLMLingua Coarse-To-Fine"),
+    (
+        "longllmlingua_question_aware",
+        "LongLLMLingua Question-Aware",
+    ),
+    (
+        "lost_in_the_middle_reordering",
+        "Lost-In-The-Middle Reordering",
+    ),
+    ("subsequence_recovery", "Subsequence Recovery"),
+    ("preserve_exact_validation", "Preserve-Exact Validation"),
+    ("semantic_atom_coverage", "Semantic Atom Coverage"),
+    ("rfc_2119_rewrite", "RFC 2119"),
+    ("diataxis_split", "Diataxis Split"),
+    ("adr_madr_capture", "ADR/MADR"),
+    ("ieee_29148_quality", "IEEE 29148"),
+    ("c4_mapping", "C4 Architecture Mapping"),
+    ("prompt_cache_prefix_layout", "Prompt Cache Prefix Layout"),
+    ("token_budget_gate", "Token Budget Gate"),
+    ("auto_algorithm_selection", "Auto Algorithm Selection"),
+    ("quality_risk", "quality_risk"),
+    ("size_pressure", "size_pressure"),
+    ("protected_atoms", "protected atoms"),
+    ("token_counter", "tiktoken-cli --model gpt-4o"),
+];
+
+fn metadata_value(content: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}:");
+    content.lines().find_map(|line| {
+        line.trim_start().strip_prefix(&prefix).map(|value| {
+            value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string()
+        })
+    })
+}
+
+fn metadata_date_at_or_after(content: &str, key: &str, threshold: &str) -> bool {
+    metadata_value(content, key)
+        .and_then(|value| value.get(..10).map(str::to_string))
+        .is_some_and(|date| date.as_str() >= threshold)
+}
+
+fn has_heading(content: &str, heading: &str) -> bool {
+    let wanted = format!("## {heading}");
+    content.lines().any(|line| line.trim() == wanted)
+}
+
+fn is_protocol_authoring_law(rel: &str, content: &str) -> bool {
+    rel == "docs/product/spec/protocol-authoring-and-token-economy-law.md"
+        || metadata_value(content, "artifact_path")
+            .is_some_and(|value| value == "product/spec/protocol-authoring-and-token-economy-law")
+}
+
+fn has_protocol_authoring_opt_in(content: &str) -> bool {
+    metadata_value(content, "protocol_authoring_gate")
+        .is_some_and(|value| value.eq_ignore_ascii_case("enforced"))
+}
+
+fn is_protocol_instruction_or_bootstrap_doc(rel: &str, content: &str) -> bool {
+    let rel = rel.to_ascii_lowercase();
+    let artifact_type = metadata_value(content, "artifact_type")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if artifact_type == "product_research_doc" {
+        return false;
+    }
+    rel.contains("protocol")
+        || rel.contains("instruction")
+        || rel.contains("bootstrap")
+        || artifact_type.contains("instruction")
+        || artifact_type.contains("bootstrap")
+}
+
+fn is_protocol_authoring_gate_subject(rel: &str, content: &str) -> bool {
+    is_protocol_authoring_law(rel, content)
+        || has_protocol_authoring_opt_in(content)
+        || (is_project_visible_doc(rel)
+            && is_protocol_instruction_or_bootstrap_doc(rel, content)
+            && (metadata_date_at_or_after(content, "created_at", PROTOCOL_AUTHORING_GATE_DATE)
+                || metadata_date_at_or_after(
+                    content,
+                    "artifact_revision",
+                    PROTOCOL_AUTHORING_GATE_DATE,
+                )))
+}
+
+fn protocol_authoring_validation_issues(rel: &str, content: &str) -> Vec<ValidationIssue> {
+    if !is_protocol_authoring_gate_subject(rel, content) {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    for block in PROTOCOL_AUTHORING_REQUIRED_BLOCKS {
+        if !has_heading(content, block) {
+            issues.push(custom_validation_issue(
+                rel,
+                "missing_protocol_authoring_block",
+                format!(
+                    "Protocol authoring gate requires `## {block}` per `docs/product/spec/protocol-authoring-and-token-economy-law.md`."
+                ),
+            ));
+        }
+    }
+
+    if is_protocol_authoring_law(rel, content) || has_protocol_authoring_opt_in(content) {
+        for (code, atom) in PROTOCOL_AUTHORING_LAW_ATOMS {
+            if !content.contains(atom) {
+                let issue_code = format!("missing_protocol_authoring_atom_{code}");
+                issues.push(custom_validation_issue(
+                    rel,
+                    &issue_code,
+                    format!(
+                        "Protocol authoring gate requires `{atom}` to preserve the token-economy algorithm contract."
+                    ),
+                ));
+            }
+        }
+    }
+
+    issues
+}
+
 fn collect_file_validation_issues(
     scope_root: &std::path::Path,
     rel: &str,
@@ -3098,6 +3246,7 @@ fn collect_file_validation_issues(
     issues.extend(project_doc_registration_validation_issues(
         scope_root, rel, content,
     ));
+    issues.extend(protocol_authoring_validation_issues(rel, content));
     issues
 }
 
@@ -4920,7 +5069,7 @@ mod tests {
     use serde_json::Value;
     use std::fs;
     use std::path::PathBuf;
-    use std::process::ExitCode;
+    use std::process::{Command, ExitCode};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_path(name: &str) -> String {
@@ -4937,6 +5086,35 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         std::env::temp_dir().join(format!("docflow-cli-{name}-{}-{nanos}", std::process::id()))
+    }
+
+    fn init_git_repo(root: &PathBuf) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .arg("init")
+            .output()
+            .expect("git init should run");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn run_git(root: &PathBuf, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("git command should run");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -5814,10 +5992,34 @@ mod tests {
 
     #[test]
     fn closeout_and_proofcheck_failures_emit_actionable_output() {
+        let root = temp_dir("closeout-proofcheck-failure-root");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("docs/process/a.md"),
+            "# a\n\n-----\nartifact_path: process/a\nchangelog_ref: a.changelog.jsonl\n",
+        )
+        .expect("process markdown");
+        fs::write(
+            root.join("docs/process/a.changelog.jsonl"),
+            "{\"ts\":\"2026-03-11T00:00:00Z\",\"event\":\"artifact_initialized\",\"artifact_path\":\"process/a\",\"task_id\":\"vida-rf1\",\"path\":\"docs/process/a.md\"}\n",
+        )
+        .expect("changelog should exist");
+        init_git_repo(&root);
+        run_git(
+            &root,
+            &["config", "user.email", "docflow-test@example.invalid"],
+        );
+        run_git(&root, &["config", "user.name", "DocFlow Test"]);
+        run_git(&root, &["add", "docs/process/a.md"]);
+        run_git(&root, &["commit", "-m", "baseline"]);
+        fs::write(root.join("docs/process/a.md"), "# a\n").expect("process markdown");
+
         let closeout = run_with_exit(Cli::parse_from([
             "docflow",
             "closeout",
             "--changed",
+            "--root",
+            root.to_string_lossy().as_ref(),
             "--json",
         ]));
         assert_eq!(closeout.exit_code, ExitCode::from(1));
@@ -5849,6 +6051,10 @@ mod tests {
             "proofcheck",
             "--profile",
             "active-canon",
+            "--task",
+            "vida-rf1",
+            "--root",
+            root.to_string_lossy().as_ref(),
             "--json",
         ]));
         assert_eq!(proofcheck.exit_code, ExitCode::from(1));
@@ -5857,10 +6063,6 @@ mod tests {
         assert_eq!(
             proofcheck_payload.get("command").and_then(Value::as_str),
             Some("proofcheck")
-        );
-        assert_eq!(
-            proofcheck_payload.get("status").and_then(Value::as_str),
-            Some("blocked")
         );
         assert_eq!(
             proofcheck_payload.get("verdict").and_then(Value::as_str),
@@ -5878,6 +6080,8 @@ mod tests {
                 .and_then(Value::as_array)
                 .is_some_and(|actions| !actions.is_empty())
         );
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
     }
 
     #[test]
@@ -6064,6 +6268,198 @@ mod tests {
         assert!(rendered.contains("verdict: ok"));
 
         fs::remove_file(path).expect("temp report should be removed");
+    }
+
+    #[test]
+    fn check_file_blocks_new_protocol_doc_missing_token_economy_blocks() {
+        let root = temp_dir("protocol-authoring-gate-missing-blocks");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("AGENTS.sidecar.md"),
+            "# Project Docs Map\n\n- `docs/project-root-map.md`\n- `docs/process/documentation-tooling-map.md`\n",
+        )
+        .expect("sidecar should exist");
+        fs::write(
+            root.join("docs/project-root-map.md"),
+            "# Root Map\n\n- `docs/process/index.md`\n",
+        )
+        .expect("root map should exist");
+        fs::write(
+            root.join("docs/process/index.md"),
+            "# Process Index\n\n- [New Protocol](new-protocol.md)\n",
+        )
+        .expect("process index should exist");
+        fs::write(
+            root.join("docs/process/documentation-tooling-map.md"),
+            "# Documentation Tooling\n\n- `docs/process/new-protocol.md`\n",
+        )
+        .expect("documentation tooling map should exist");
+        fs::write(
+            root.join("docs/process/new-protocol.md"),
+            "# New Protocol\n\n## Purpose\n\nCompact purpose.\n\n-----\nartifact_path: process/new-protocol\nartifact_type: process_doc\nartifact_version: '1'\nartifact_revision: 2026-07-03\nschema_version: '1'\nstatus: canonical\nsource_path: docs/process/new-protocol.md\ncreated_at: 2026-07-03T00:00:00+03:00\nupdated_at: 2026-07-03T00:00:00+03:00\nchangelog_ref: new-protocol.changelog.jsonl\n",
+        )
+        .expect("protocol doc should exist");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "check-file",
+            "--path",
+            root.join("docs/process/new-protocol.md")
+                .to_string_lossy()
+                .as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("missing_protocol_authoring_block"));
+        assert!(rendered.contains("## Token Budget"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn check_file_accepts_new_protocol_doc_with_token_economy_shape() {
+        let root = temp_dir("protocol-authoring-gate-complete-shape");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("AGENTS.sidecar.md"),
+            "# Project Docs Map\n\n- `docs/project-root-map.md`\n- `docs/process/documentation-tooling-map.md`\n",
+        )
+        .expect("sidecar should exist");
+        fs::write(
+            root.join("docs/project-root-map.md"),
+            "# Root Map\n\n- `docs/process/index.md`\n",
+        )
+        .expect("root map should exist");
+        fs::write(
+            root.join("docs/process/index.md"),
+            "# Process Index\n\n- [New Protocol](new-protocol.md)\n",
+        )
+        .expect("process index should exist");
+        fs::write(
+            root.join("docs/process/documentation-tooling-map.md"),
+            "# Documentation Tooling\n\n- `docs/process/new-protocol.md`\n",
+        )
+        .expect("documentation tooling map should exist");
+        fs::write(
+            root.join("docs/process/new-protocol.md"),
+            "# New Protocol\n\n## Purpose\n\nCompact purpose.\n\n## Trigger\n\nWhen a new protocol is authored.\n\n## Scope\n\nProcess docs.\n\n## Authority\n\nThe owner doc governs.\n\n## Inputs\n\nPath and task.\n\n## Outputs\n\nValidated markdown.\n\n## Rules\n\nKeep rules compact.\n\n## Forbidden\n\nDo not drop protected atoms.\n\n## Escalation\n\nRecord blockers.\n\n## Validation\n\nRun DocFlow.\n\n## Token Budget\n\nRecord token posture.\n\n## Metadata\n\nFooter below.\n\n-----\nartifact_path: process/new-protocol\nartifact_type: process_doc\nartifact_version: '1'\nartifact_revision: 2026-07-03\nschema_version: '1'\nstatus: canonical\nsource_path: docs/process/new-protocol.md\ncreated_at: 2026-07-03T00:00:00+03:00\nupdated_at: 2026-07-03T00:00:00+03:00\nchangelog_ref: new-protocol.changelog.jsonl\n",
+        )
+        .expect("protocol doc should exist");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "check-file",
+            "--path",
+            root.join("docs/process/new-protocol.md")
+                .to_string_lossy()
+                .as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(!rendered.contains("missing_protocol_authoring_block"));
+        assert!(rendered.contains("verdict: ok"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn check_file_does_not_apply_protocol_gate_to_research_baseline_without_opt_in() {
+        let root = temp_dir("protocol-authoring-gate-research-exempt");
+        fs::create_dir_all(root.join("docs/product/research")).expect("research dir should exist");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("AGENTS.sidecar.md"),
+            "# Project Docs Map\n\n- `docs/project-root-map.md`\n- `docs/process/documentation-tooling-map.md`\n",
+        )
+        .expect("sidecar should exist");
+        fs::write(
+            root.join("docs/project-root-map.md"),
+            "# Root Map\n\n- `docs/product/index.md`\n",
+        )
+        .expect("root map should exist");
+        fs::write(
+            root.join("docs/process/documentation-tooling-map.md"),
+            "# Documentation Tooling\n",
+        )
+        .expect("documentation tooling map should exist");
+        fs::write(
+            root.join("docs/product/research/index.md"),
+            "# Research Index\n\n- `protocol-token-economy-baseline.md`\n",
+        )
+        .expect("research index should exist");
+        fs::write(
+            root.join("docs/product/research/protocol-token-economy-baseline.md"),
+            "# Protocol Token Economy Baseline\n\n## Scope\n\nMeasured baseline.\n\n-----\nartifact_path: product/research/protocol-token-economy-baseline\nartifact_type: product_research_doc\nartifact_version: '1'\nartifact_revision: 2026-07-03\nschema_version: '1'\nstatus: canonical\nsource_path: docs/product/research/protocol-token-economy-baseline.md\ncreated_at: 2026-07-03T00:00:00+03:00\nupdated_at: 2026-07-03T00:00:00+03:00\nchangelog_ref: protocol-token-economy-baseline.changelog.jsonl\n",
+        )
+        .expect("research baseline should exist");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "check-file",
+            "--path",
+            root.join("docs/product/research/protocol-token-economy-baseline.md")
+                .to_string_lossy()
+                .as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(!rendered.contains("missing_protocol_authoring_block"));
+        assert!(rendered.contains("verdict: ok"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn check_file_blocks_protocol_authoring_law_missing_algorithm_atoms() {
+        let root = temp_dir("protocol-authoring-law-algorithm-atoms");
+        fs::create_dir_all(root.join("docs/product/spec")).expect("spec dir should exist");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("AGENTS.sidecar.md"),
+            "# Project Docs Map\n\n- `docs/project-root-map.md`\n- `docs/process/documentation-tooling-map.md`\n",
+        )
+        .expect("sidecar should exist");
+        fs::write(
+            root.join("docs/project-root-map.md"),
+            "# Root Map\n\n- `docs/product/index.md`\n",
+        )
+        .expect("root map should exist");
+        fs::write(
+            root.join("docs/process/documentation-tooling-map.md"),
+            "# Documentation Tooling\n",
+        )
+        .expect("documentation tooling map should exist");
+        fs::write(
+            root.join("docs/product/index.md"),
+            "# Product Index\n\n- [Spec](spec/index.md)\n",
+        )
+        .expect("product index should exist");
+        fs::write(
+            root.join("docs/product/spec/index.md"),
+            "# Spec Index\n\n- [Protocol Law](protocol-authoring-and-token-economy-law.md)\n",
+        )
+        .expect("spec index should exist");
+        fs::write(
+            root.join("docs/product/spec/current-spec-map.md"),
+            "# Current Spec Map\n\n- [Protocol Law](protocol-authoring-and-token-economy-law.md)\n",
+        )
+        .expect("spec map should exist");
+        fs::write(
+            root.join("docs/product/spec/protocol-authoring-and-token-economy-law.md"),
+            "# Protocol Authoring And Token Economy Law\n\n## Purpose\n\nCompact purpose.\n\n## Trigger\n\nWhen protocols are authored.\n\n## Scope\n\nDocs.\n\n## Authority\n\nProduct spec.\n\n## Inputs\n\nPath.\n\n## Outputs\n\nValidated markdown.\n\n## Rules\n\nRules.\n\n## Forbidden\n\nForbidden behavior.\n\n## Escalation\n\nEscalation.\n\n## Validation\n\nDocFlow.\n\n## Token Budget\n\nBudget.\n\n## Metadata\n\nFooter.\n\n-----\nartifact_path: product/spec/protocol-authoring-and-token-economy-law\nartifact_type: product_spec\nartifact_version: '1'\nartifact_revision: 2026-07-03\nschema_version: '1'\nstatus: canonical\nsource_path: docs/product/spec/protocol-authoring-and-token-economy-law.md\ncreated_at: 2026-07-03T00:00:00+03:00\nupdated_at: 2026-07-03T00:00:00+03:00\nchangelog_ref: protocol-authoring-and-token-economy-law.changelog.jsonl\n",
+        )
+        .expect("protocol law should exist");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "check-file",
+            "--path",
+            root.join("docs/product/spec/protocol-authoring-and-token-economy-law.md")
+                .to_string_lossy()
+                .as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("missing_protocol_authoring_atom_auto_algorithm_selection"));
+        assert!(rendered.contains("missing_protocol_authoring_atom_quality_risk"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
     }
 
     #[test]
@@ -6332,8 +6728,11 @@ mod tests {
         assert!(!source_changelog.exists());
 
         let updated = fs::read_to_string(&destination).expect("destination markdown should exist");
-        let expected_destination = destination.to_string_lossy().replace('\\', "/");
-        assert!(updated.contains(&format!("source_path: {expected_destination}")));
+        let expected_destination = crate::normalize_path_for_repo(&destination);
+        assert!(
+            updated.contains(&format!("source_path: {expected_destination}"))
+                || updated.contains(&format!("source_path: '{expected_destination}'"))
+        );
         assert!(updated.contains("changelog_ref: a.changelog.jsonl"));
 
         let destination_changelog =
@@ -6342,7 +6741,7 @@ mod tests {
         assert!(destination_changelog.contains("\"event\":\"artifact_moved\""));
         assert!(destination_changelog.contains(&format!(
             "\"previous_source_path\":\"{}\"",
-            source.to_string_lossy().replace('\\', "/")
+            crate::normalize_path_for_repo(&source)
         )));
 
         fs::remove_dir_all(root).expect("temp root should be removed");

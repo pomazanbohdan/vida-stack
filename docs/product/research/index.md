@@ -29,6 +29,7 @@ Current state:
    - `docs/product/research/embedded-runtime-bootstrap-and-projection-research.md`
    - `docs/product/research/execution-preparation-and-developer-handoff-survey.md`
    - `docs/product/research/vida-service-tui-wizard-architecture-research.md`
+   - `docs/product/research/protocol-token-economy-baseline.md`
 3. research in this lane may inform active product specs without becoming product law automatically.
 
 -----
@@ -40,5 +41,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/research/index.md
 created_at: '2026-06-13T00:00:00+03:00'
-updated_at: 2026-06-13T00:00:00+03:00
+updated_at: 2026-07-03T07:22:56.7601256Z
 changelog_ref: index.changelog.jsonl

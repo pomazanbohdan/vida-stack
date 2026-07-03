@@ -25,6 +25,8 @@ This map covers project-facing documentation tooling for the active `vida-stack`
    - framework-owned reusable starting shape for one bounded feature/change design
 6. `vida/config/docflow/docsys_policy.yaml`
    - canonical DocFlow scan-ignore/profile policy consumed by the active Rust DocFlow runtime
+7. `docs/product/spec/protocol-authoring-and-token-economy-law.md`
+   - product-spec owner for protocol authoring, block-level token reduction, algorithm selection, and validation gates
 
 ## Read / Status Commands
 
@@ -79,7 +81,7 @@ These relation keys are project-neutral ownership and impact metadata. They appl
 3. `check-file --path <file>`
 4. `report-check --path <file>`
 5. `activation-check --root <dir> [files...]`
-6. `protocol-coverage-check --profile active-canon [--format toon|jsonl]`
+6. `protocol-coverage-check --profile active-canon [files...]`
 7. `readiness-check --profile active-canon [--format toon|jsonl]`
 8. `readiness-write --profile active-canon [--canonical]`
 9. `proofcheck --profile active-canon-strict [files...] [--layer <N>] [--format toon|jsonl]`
@@ -98,6 +100,7 @@ Read this map when:
 4. a bounded feature/change design document or linked ADR is being authored, updated, or reviewed.
 5. project-local skill or runtime-development environment documentation is being created or updated.
 6. the task promotes a protocol-only or runtime-backed agent skill learning document into the project process lane.
+7. the task writes or compresses protocol, instruction, bootstrap-visible, or token-heavy process documentation.
 
 ## Operational Rule
 
@@ -126,6 +129,8 @@ Read this map when:
 21. when a documentation change creates or reroutes a canonical project-visible document surface, update the owning map/index and, when bootstrap-visible topology changed, update `docs/project-root-map.md` and `AGENTS.sidecar.md` in the same bounded change.
 22. when a session creates or updates project-local skills, validate the skill folder and update the owning process map or runtime-development environment runbook in the same bounded batch.
 23. when a session creates or updates a skill-learning runtime protocol, register it in `docs/process/index.md`, `docs/project-root-map.md`, and `AGENTS.sidecar.md`, and preserve links to the original research or implementation references that motivated the protocol.
+24. when a session creates or compresses a protocol/instruction document, apply `docs/product/spec/protocol-authoring-and-token-economy-law.md`, record the token-budget posture, and update bootstrap-visible maps when the artifact can affect initialization or agent instruction loading.
+25. source DocFlow validation enforces the protocol-authoring gate for the canonical law itself, opt-in artifacts with `protocol_authoring_gate: enforced`, and protocol/instruction/bootstrap docs created or revised on or after 2026-07-03; installed runtime enforcement depends on the normal release/install path.
 
 ## Boundary Rule
 
@@ -142,5 +147,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/documentation-tooling-map.md
 created_at: '2026-03-10T09:45:00+02:00'
-updated_at: 2026-06-05T05:42:51.8222315Z
+updated_at: 2026-07-03T07:22:56.7731399Z
 changelog_ref: documentation-tooling-map.changelog.jsonl
