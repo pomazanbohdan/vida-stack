@@ -10283,6 +10283,7 @@ mod tests {
         let scope_validation =
             crate::runtime_dispatch_packets::implementation_artifact_scope_validation(
                 &["crates/vida/src/agent_dispatch_surface.rs".to_string()],
+                &[],
                 &serde_json::Value::Array(taskflow_artifacts.artifacts),
                 crate::runtime_dispatch_packets::ImplementationArtifactAuthority {
                     task_id: run_id,

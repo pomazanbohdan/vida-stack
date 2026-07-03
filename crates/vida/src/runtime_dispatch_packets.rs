@@ -3,6 +3,7 @@ use crate::runtime_contract_vocab::{
     TASK_CLASS_ARCHITECTURE, TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION,
     TASK_CLASS_VERIFICATION,
 };
+use std::path::PathBuf;
 
 pub(crate) const RUNTIME_CONSUMPTION_FALLBACK_OWNED_PATH: &str =
     ".vida/data/state/runtime-consumption";
@@ -322,11 +323,16 @@ pub(crate) struct ImplementationArtifactAuthority<'a> {
 
 pub(crate) fn implementation_artifact_scope_validation(
     owned_paths: &[String],
+    proof_artifact_paths: &[String],
     artifacts: &serde_json::Value,
     authority: ImplementationArtifactAuthority<'_>,
 ) -> serde_json::Value {
     const IMPLEMENTATION_STAGE_ID: &str = "implementation";
     let normalized_owned_paths = owned_paths
+        .iter()
+        .filter_map(|path| normalize_scope_path_for_compare(path))
+        .collect::<Vec<_>>();
+    let normalized_proof_artifact_paths = proof_artifact_paths
         .iter()
         .filter_map(|path| normalize_scope_path_for_compare(path))
         .collect::<Vec<_>>();
@@ -342,6 +348,7 @@ pub(crate) fn implementation_artifact_scope_validation(
             "status": "blocked",
             "blocker_codes": ["implementation_artifact_contract_invalid"],
             "owned_paths": normalized_owned_paths,
+            "proof_artifact_paths": normalized_proof_artifact_paths,
             "reported_changed_files": [],
             "out_of_scope_paths": []
         });
@@ -406,12 +413,34 @@ pub(crate) fn implementation_artifact_scope_validation(
 
     reported_changed_files.sort();
     reported_changed_files.dedup();
+    let mut normalized_changed_paths = Vec::new();
     for changed_file in &reported_changed_files {
         match normalize_scope_path_for_compare(changed_file) {
-            Some(path) if path_is_in_owned_scope(&path, &normalized_owned_paths) => {}
-            Some(path) => out_of_scope_paths.push(path),
+            Some(path) => normalized_changed_paths.push(PathBuf::from(path)),
             None => out_of_scope_paths.push(changed_file.clone()),
         }
+    }
+    let normalized_owned_path_bufs = normalized_owned_paths
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let normalized_proof_path_bufs = normalized_proof_artifact_paths
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if !normalized_changed_paths.is_empty() {
+        let scope_decision =
+            taskflow_host_bridge::validate_implementation_artifact_scope_with_proof_paths(
+                &normalized_changed_paths,
+                &normalized_owned_path_bufs,
+                &normalized_proof_path_bufs,
+            );
+        out_of_scope_paths.extend(
+            scope_decision
+                .out_of_scope_paths
+                .into_iter()
+                .map(|path| path.to_string_lossy().replace('\\', "/")),
+        );
     }
     out_of_scope_paths.sort();
     out_of_scope_paths.dedup();
@@ -438,6 +467,7 @@ pub(crate) fn implementation_artifact_scope_validation(
         "status": if blocker_codes.is_empty() { "pass" } else { "blocked" },
         "blocker_codes": blocker_codes,
         "owned_paths": normalized_owned_paths,
+        "proof_artifact_paths": normalized_proof_artifact_paths,
         "reported_changed_files": reported_changed_files,
         "out_of_scope_paths": out_of_scope_paths
     })
@@ -742,12 +772,6 @@ fn normalize_scope_path_for_compare(path: &str) -> Option<String> {
         return None;
     }
     Some(normalized)
-}
-
-fn path_is_in_owned_scope(path: &str, owned_paths: &[String]) -> bool {
-    owned_paths
-        .iter()
-        .any(|owned_path| path == owned_path || path.starts_with(&format!("{owned_path}/")))
 }
 
 #[cfg(test)]
@@ -1089,6 +1113,7 @@ mod tests {
     fn implementation_artifact_validation_accepts_current_receipt_backed_implementation_artifact() {
         let validation = implementation_artifact_scope_validation(
             &["crates/vida/src/lib.rs".to_string()],
+            &[],
             &serde_json::json!([implementation_artifact(
                 "task-1",
                 "implementation",
@@ -1110,6 +1135,7 @@ mod tests {
         ] {
             let validation = implementation_artifact_scope_validation(
                 &["crates/vida/src/lib.rs".to_string()],
+                &[],
                 &serde_json::json!([artifact]),
                 implementation_authority(),
             );
@@ -1134,6 +1160,7 @@ mod tests {
             .remove("consolidation_receipt_id");
         let validation = implementation_artifact_scope_validation(
             &["crates/vida/src/lib.rs".to_string()],
+            &[],
             &serde_json::json!([artifact]),
             implementation_authority(),
         );

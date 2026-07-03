@@ -4080,8 +4080,13 @@ fn host_bridge_implementation_scope_validation(
 ) -> serde_json::Value {
     let isolation = request.get("implementation_isolation");
     let isolation_is_valid = isolation.is_some_and(|value| value.is_object());
+    let proof_artifact_paths = taskflow_host_bridge::host_bridge_request_proof_artifact_paths(request)
+        .into_iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
     let mut validation = crate::runtime_dispatch_packets::implementation_artifact_scope_validation(
         authoritative_owned_paths,
+        &proof_artifact_paths,
         artifacts,
         authority,
     );
@@ -16137,6 +16142,254 @@ mod tests {
         .expect("host bridge result should be json");
         assert_eq!(bridge_result["status"], "pass");
         assert_eq!(bridge_result["scope_validation"]["status"], "pass");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_complete_host_bridge_accepts_attempt_scope_with_proof_artifacts() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-host-bridge-proof-artifact-scope-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-host-bridge-proof-artifact-scope";
+        let task = store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge proof artifact scope",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["src/lib/features/list_view/data".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+
+        let changed_files = serde_json::json!([
+            "src/lib/features/list_view/data/record_chatter_repository.dart",
+            "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+            "src/test/features/list_view/data/record_chatter_repository_test.dart",
+            "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+        ]);
+        let proof_artifact_paths = serde_json::json!([
+            "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+            "src/test/features/list_view/data/record_chatter_repository_test.dart",
+            "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+        ]);
+        let artifact_path = root.join("attempt-artifacts/proof-artifact-scope.json");
+        std::fs::create_dir_all(artifact_path.parent().expect("artifact parent"))
+            .expect("create artifact parent");
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "artifact_kind": "patch_proposal",
+                "changed_files": changed_files
+            })
+            .to_string(),
+        )
+        .expect("write proof-scoped artifact");
+        store
+            .record_task_attempt(crate::state_store::RecordTaskAttemptRequest {
+                attempt_id: Some("attempt-proof-artifact-scope".to_string()),
+                task_id: run_id.to_string(),
+                stage_id: "implementation".to_string(),
+                backend: "internal_subagents".to_string(),
+                model_profile: "middle".to_string(),
+                isolation: "patch_proposal".to_string(),
+                freshness: None,
+                status: "accepted".to_string(),
+                artifact_refs: vec![artifact_path.display().to_string()],
+                consolidation_receipt_id: Some(
+                    "attempt-proof-artifact-scope-consolidation-receipt".to_string(),
+                ),
+                selected_model_profile_readiness_status: None,
+                budget_posture: None,
+                cap_posture: None,
+                write_scope_classification: None,
+            })
+            .await
+            .expect("record accepted attempt");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "implementation",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = "developer".to_string();
+        status.next_node = Some("developer".to_string());
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "developer_blocked".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "dispatch.developer".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let packet_path =
+            root.join("runtime-consumption/downstream-dispatch-packets/run-proof-scope.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": "developer",
+                "activation_runtime_role": "worker",
+                "packet_template_kind": "delivery_task_packet",
+                "owned_paths": ["src/lib/features/list_view/data"],
+                "proof_artifact_paths": proof_artifact_paths,
+                "delivery_task_packet": {
+                    "goal": "Complete host bridge lane evidence.",
+                    "scope_in": ["dispatch_target:developer"],
+                    "handoff_task_class": "implementation",
+                    "handoff_runtime_role": "worker",
+                    "owned_paths": ["src/lib/features/list_view/data"],
+                    "proof_artifact_paths": proof_artifact_paths,
+                    "definition_of_done": ["proof tests are attached"],
+                    "verification_command": "flutter test src/test/features/list_view",
+                    "proof_target": "host bridge completion receipt",
+                    "stop_rules": ["stop if bridge evidence is missing"],
+                    "blocking_question": "none"
+                },
+                "downstream_dispatch_target": "coach",
+                "downstream_dispatch_active_target": "developer",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["pending_implementation_evidence"],
+                "downstream_dispatch_status": "blocked",
+                "downstream_lane_status": "lane_blocked"
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+
+        let request_path = root.join("host-tool-bridge/requests/run-proof-scope.json");
+        let result_path = root.join("host-tool-bridge/results/run-proof-scope.json");
+        let bridge_receipt_path = root.join("host-tool-bridge/receipts/run-proof-scope.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "run-proof-scope",
+                "run_id": run_id,
+                "task_id": run_id,
+                "dispatch_target": "developer",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "carrier_id": "middle",
+                "execution_boundary": "parent_host_session",
+                "dispatch_transport": "host_tool_bridge",
+                "proof_artifact_paths": proof_artifact_paths,
+                "implementation_isolation": {
+                    "schema_version": "implementation-isolation-v1",
+                    "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                    "owned_paths": ["src/lib/features/list_view/data"],
+                    "proof_artifact_paths": proof_artifact_paths
+                },
+                "implementation_artifacts": [{
+                    "artifact_kind": "patch_proposal",
+                    "attempt_id": "attempt-proof-artifact-scope",
+                    "task_id": run_id,
+                    "stage_id": "implementation",
+                    "freshness": task.updated_at,
+                    "receipt_backed": true,
+                    "consolidation_receipt_id": "attempt-proof-artifact-scope-consolidation-receipt",
+                    "changed_files": changed_files
+                }],
+                "result_path": result_path.display().to_string(),
+                "receipt_path": bridge_receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/run-proof-scope-activation.json");
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation parent");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": bridge_receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "developer".to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+        receipt.downstream_dispatch_target = Some("coach".to_string());
+        receipt.downstream_dispatch_command = Some("vida agent-init".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["pending_implementation_evidence".to_string()];
+        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_active_target = Some("developer".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "complete".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "host-bridge-proof-artifact-scope".to_string(),
+                "--host-bridge-request".to_string(),
+                request_path.display().to_string(),
+                "--host-agent-id".to_string(),
+                "agent-1".to_string(),
+                "--host-bridge-summary".to_string(),
+                "internal agent completed".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+        let bridge_result: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&result_path).expect("read host bridge result"),
+        )
+        .expect("host bridge result should be json");
+        assert_eq!(bridge_result["status"], "pass");
+        assert_eq!(bridge_result["scope_validation"]["status"], "pass");
+        assert_eq!(
+            bridge_result["scope_validation"]["proof_artifact_paths"],
+            proof_artifact_paths
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
