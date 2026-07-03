@@ -1281,6 +1281,16 @@ fn status_and_orchestrator_init_help_describe_view_fields_and_json_options() {
 fn active_step_attribution_help_surfaces_are_discoverable() {
     let cases = [
         vida_test_support::CliOutputContractCase {
+            surface: "vida doctor",
+            args: &["doctor", "--help"],
+            required_stdout: &[
+                "active-task-attribution",
+                "Next command",
+                "vida doctor active-task-attribution --json",
+            ],
+            forbidden_stdout: &[],
+        },
+        vida_test_support::CliOutputContractCase {
             surface: "vida task steps",
             args: &["task", "steps", "--help"],
             required_stdout: &[
@@ -1306,6 +1316,189 @@ fn active_step_attribution_help_surfaces_are_discoverable() {
     vida_test_support::assert_cli_help_output_matrix(cases, |args| {
         vida().args(args).output().expect("help command should run")
     });
+}
+
+#[test]
+fn active_task_attribution_json_passes_without_contradiction() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_git(&project_root, &["init"]);
+    run_git(
+        &project_root,
+        &["config", "user.email", "vida@example.invalid"],
+    );
+    run_git(&project_root, &["config", "user.name", "VIDA Test"]);
+    std::fs::write(format!("{project_root}/.gitignore"), ".vida/\n").expect("write gitignore");
+    std::fs::create_dir_all(format!("{project_root}/crates/vida/src"))
+        .expect("create source fixture dir");
+    std::fs::write(
+        format!("{project_root}/crates/vida/src/doctor_surface.rs"),
+        "old\n",
+    )
+    .expect("write owned fixture");
+    run_git(&project_root, &["add", "."]);
+    run_git(&project_root, &["commit", "-m", "baseline"]);
+    std::fs::write(
+        format!("{project_root}/crates/vida/src/doctor_surface.rs"),
+        "new\n",
+    )
+    .expect("modify owned fixture");
+    create_session_triage_task(
+        &state_dir,
+        "active-task-attribution-epic",
+        "Active task attribution epic",
+        "epic",
+        "open",
+        "0",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        "active-task-attribution-parent",
+        "Active task attribution parent",
+        "task",
+        "in_progress",
+        "1",
+        Some("active-task-attribution-epic"),
+    );
+    let step = vida()
+        .args([
+            "task",
+            "create",
+            "active-task-attribution-step",
+            "Active task attribution step",
+            "--type",
+            "step",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            "active-task-attribution-parent",
+            "--owned-path",
+            "crates/vida/src/doctor_surface.rs",
+            "--owned-path",
+            "crates/vida/src/cli.rs",
+            "--owned-path",
+            "crates/vida/src/task_surface.rs",
+            "--owned-path",
+            "crates/vida/tests/doctor_surface_contract_smoke.rs",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("active attribution step create should run");
+    assert_success(&step, "active attribution step create");
+
+    let output = vida()
+        .args(["doctor", "active-task-attribution", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .current_dir(&project_root)
+        .output()
+        .expect("active attribution doctor should run");
+    assert_success(&output, "active attribution doctor pass");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("active attribution json should parse");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+    assert_eq!(
+        payload["active_step"]["task_id"],
+        "active-task-attribution-step"
+    );
+    assert_eq!(
+        payload["parent_task"]["task_id"],
+        "active-task-attribution-parent"
+    );
+    assert!(payload.get("orchestrator_projection").is_some());
+    assert_eq!(payload["dirty_summary"]["status"], "pass");
+    assert!(payload["next_actions"].is_array());
+}
+
+#[test]
+fn active_task_attribution_json_blocks_dirty_owner_contradiction() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_git(&project_root, &["init"]);
+    run_git(
+        &project_root,
+        &["config", "user.email", "vida@example.invalid"],
+    );
+    run_git(&project_root, &["config", "user.name", "VIDA Test"]);
+    std::fs::write(format!("{project_root}/.gitignore"), ".vida/\n").expect("write gitignore");
+    std::fs::create_dir_all(format!("{project_root}/crates/vida/src"))
+        .expect("create source fixture dir");
+    std::fs::write(
+        format!("{project_root}/crates/vida/src/doctor_surface.rs"),
+        "old\n",
+    )
+    .expect("write owned fixture");
+    std::fs::write(format!("{project_root}/README.md"), "old\n").expect("write readme fixture");
+    run_git(&project_root, &["add", "."]);
+    run_git(&project_root, &["commit", "-m", "baseline"]);
+    std::fs::write(
+        format!("{project_root}/crates/vida/src/doctor_surface.rs"),
+        "new\n",
+    )
+    .expect("modify owned fixture");
+    std::fs::write(format!("{project_root}/README.md"), "new\n").expect("modify unowned fixture");
+    create_session_triage_task(
+        &state_dir,
+        "active-task-attribution-dirty-epic",
+        "Active task attribution dirty epic",
+        "epic",
+        "open",
+        "0",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        "active-task-attribution-dirty-parent",
+        "Active task attribution dirty parent",
+        "task",
+        "in_progress",
+        "1",
+        Some("active-task-attribution-dirty-epic"),
+    );
+    let step = vida()
+        .args([
+            "task",
+            "create",
+            "active-task-attribution-dirty-step",
+            "Active task attribution dirty step",
+            "--type",
+            "step",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            "active-task-attribution-dirty-parent",
+            "--owned-path",
+            "crates/vida/src/doctor_surface.rs",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("active attribution dirty step create should run");
+    assert_success(&step, "active attribution dirty step create");
+
+    let output = vida()
+        .args(["doctor", "active-task-attribution", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .current_dir(&project_root)
+        .output()
+        .expect("active attribution dirty doctor should run");
+    assert_failure(&output, "active attribution dirty doctor blocked");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("active attribution json should parse");
+    assert_eq!(payload["status"], "blocked");
+    assert!(payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should be array")
+        .iter()
+        .any(|code| code == "dirty_ownership_ambiguous"));
+    assert_eq!(
+        payload["dirty_summary"]["unmatched_files"],
+        serde_json::json!(["README.md"])
+    );
+    assert_eq!(
+        payload["active_step"]["task_id"],
+        "active-task-attribution-dirty-step"
+    );
 }
 
 #[test]

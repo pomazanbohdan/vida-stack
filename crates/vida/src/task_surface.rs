@@ -8317,34 +8317,34 @@ struct TaskCloseGitAutomationReceipt {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-struct TaskOwnedStatusReceipt {
-    status: String,
-    blocker_codes: Vec<String>,
-    next_actions: Vec<String>,
-    task_id: String,
-    repo_root: String,
-    active_step: Option<TaskOwnedStatusUnit>,
-    active_parent_task: Option<TaskOwnedStatusUnit>,
-    active_epic: Option<TaskOwnedStatusUnit>,
-    ownership_source: String,
-    owned_paths: Vec<String>,
-    dirty_files: Vec<String>,
-    owned_files: Vec<String>,
-    unowned_files: Vec<String>,
-    unowned_paths: Vec<String>,
-    matched_files: Vec<String>,
-    unmatched_files: Vec<String>,
-    stageable_files: Vec<String>,
-    confidence: String,
+pub(crate) struct TaskOwnedStatusReceipt {
+    pub(crate) status: String,
+    pub(crate) blocker_codes: Vec<String>,
+    pub(crate) next_actions: Vec<String>,
+    pub(crate) task_id: String,
+    pub(crate) repo_root: String,
+    pub(crate) active_step: Option<TaskOwnedStatusUnit>,
+    pub(crate) active_parent_task: Option<TaskOwnedStatusUnit>,
+    pub(crate) active_epic: Option<TaskOwnedStatusUnit>,
+    pub(crate) ownership_source: String,
+    pub(crate) owned_paths: Vec<String>,
+    pub(crate) dirty_files: Vec<String>,
+    pub(crate) owned_files: Vec<String>,
+    pub(crate) unowned_files: Vec<String>,
+    pub(crate) unowned_paths: Vec<String>,
+    pub(crate) matched_files: Vec<String>,
+    pub(crate) unmatched_files: Vec<String>,
+    pub(crate) stageable_files: Vec<String>,
+    pub(crate) confidence: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-struct TaskOwnedStatusUnit {
-    task_id: String,
-    title: String,
-    status: String,
-    issue_type: String,
-    owned_paths: Vec<String>,
+pub(crate) struct TaskOwnedStatusUnit {
+    pub(crate) task_id: String,
+    pub(crate) title: String,
+    pub(crate) status: String,
+    pub(crate) issue_type: String,
+    pub(crate) owned_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -8875,7 +8875,7 @@ fn task_close_commit_file_strings(
     )
 }
 
-fn task_owned_status_receipt(
+pub(crate) fn task_owned_status_receipt(
     task_id: &str,
     metadata_owned_paths: Vec<String>,
     override_files: Vec<String>,
@@ -8977,7 +8977,7 @@ fn task_owned_status_receipt(
     }
 }
 
-fn task_owned_status_unit(task: &state_store::TaskRecord) -> TaskOwnedStatusUnit {
+pub(crate) fn task_owned_status_unit(task: &state_store::TaskRecord) -> TaskOwnedStatusUnit {
     TaskOwnedStatusUnit {
         task_id: task.id.clone(),
         title: task.title.clone(),
@@ -9115,7 +9115,7 @@ fn print_task_dirty_classify_receipt(
     }
 }
 
-fn task_record_by_id<'a>(
+pub(crate) fn task_record_by_id<'a>(
     rows: &'a [state_store::TaskRecord],
     task_id: &str,
 ) -> Option<&'a state_store::TaskRecord> {
@@ -9158,7 +9158,7 @@ fn task_is_descendant_of(
     false
 }
 
-fn active_step_for_owned_status<'a>(
+pub(crate) fn active_step_for_owned_status<'a>(
     rows: &'a [state_store::TaskRecord],
     selected_task_id: Option<&str>,
 ) -> Option<&'a state_store::TaskRecord> {
@@ -9171,7 +9171,7 @@ fn active_step_for_owned_status<'a>(
     })
 }
 
-fn task_owned_status_context(
+pub(crate) fn task_owned_status_context(
     rows: &[state_store::TaskRecord],
     selected_task: &state_store::TaskRecord,
     include_active_step: bool,
@@ -10489,7 +10489,7 @@ fn task_next_lawful_receipt(
     }
 }
 
-fn dirty_paths_for_repo(repo_root: &std::path::Path) -> Result<Vec<String>, String> {
+pub(crate) fn dirty_paths_for_repo(repo_root: &std::path::Path) -> Result<Vec<String>, String> {
     let output = git_status_output_for_repo(repo_root)?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
@@ -10501,7 +10501,7 @@ fn dirty_paths_for_repo(repo_root: &std::path::Path) -> Result<Vec<String>, Stri
         .collect::<Vec<_>>())
 }
 
-fn dirty_repo_root_for_current_process() -> std::path::PathBuf {
+pub(crate) fn dirty_repo_root_for_current_process() -> std::path::PathBuf {
     let cwd_root = std::env::current_dir()
         .ok()
         .and_then(|cwd| nearest_git_worktree_root(&cwd));

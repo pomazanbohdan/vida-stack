@@ -3,16 +3,16 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use crate::contract_profile_adapter::{
-    BlockerCode, CompatibilityBoundary, CompatibilityClass, blocker_code_str,
-    canonical_blocker_code_list, canonical_compatibility_class_str,
-    classify_compatibility_boundary, shared_operator_output_contract_parity_error,
+    blocker_code_str, canonical_blocker_code_list, canonical_compatibility_class_str,
+    classify_compatibility_boundary, shared_operator_output_contract_parity_error, BlockerCode,
+    CompatibilityBoundary, CompatibilityClass,
 };
 use crate::status_surface::{
-    StatusRunGraphArtifactSource, current_runtime_projection as build_current_runtime_projection,
-    first_non_empty_artifact_ref,
+    current_runtime_projection as build_current_runtime_projection, first_non_empty_artifact_ref,
+    StatusRunGraphArtifactSource,
 };
 use crate::status_surface_operator_contracts::{
-    LatestRunGraphArtifactRefsInputs, latest_run_graph_artifact_refs,
+    latest_run_graph_artifact_refs, LatestRunGraphArtifactRefsInputs,
 };
 
 fn migration_requires_action(migration_state: &str) -> bool {
@@ -276,10 +276,10 @@ fn trace_evidence_display(trace_evidence: &serde_json::Value) -> String {
     let dispatch_receipt = trace_evidence["root_trace"]["latest_run_graph_dispatch_receipt_id"]
         .as_str()
         .unwrap_or("none");
-    let runtime_consumption =
-        trace_evidence["root_trace"]["runtime_consumption_latest_snapshot_path"]
-            .as_str()
-            .unwrap_or("none");
+    let runtime_consumption = trace_evidence["root_trace"]
+        ["runtime_consumption_latest_snapshot_path"]
+        .as_str()
+        .unwrap_or("none");
     let protocol_binding = trace_evidence["root_trace"]["protocol_binding_latest_receipt_id"]
         .as_str()
         .unwrap_or("none");
@@ -676,6 +676,13 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     if doctor_active_task_attribution_help_requested(&args.topic) {
         print_doctor_active_task_attribution_help();
         return ExitCode::SUCCESS;
+    }
+    if args
+        .topic
+        .first()
+        .is_some_and(|name| name == "active-task-attribution")
+    {
+        return run_doctor_active_task_attribution(args).await;
     }
     if !args.topic.is_empty() {
         eprintln!("Unsupported doctor topic: {}", args.topic.join(" "));
@@ -1820,14 +1827,217 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
 }
 
 fn doctor_active_task_attribution_help_requested(topic: &[String]) -> bool {
-    matches!(topic, [name] if name == "active-task-attribution")
-        || matches!(topic, [name, help] if name == "active-task-attribution" && help == "--help")
+    matches!(topic, [name, help] if name == "active-task-attribution" && help == "--help")
 }
 
 fn print_doctor_active_task_attribution_help() {
     println!(
-        "vida doctor active-task-attribution\n  Checks active TaskFlow attribution surfaced by orchestrator-init.\n  active_step identifies the current in-progress execution step.\n  active_parent_task remains the bounded active_bounded_unit owner.\n  active_epic identifies the nearest program-container ancestor.\n  Inspect directly with: vida orchestrator-init --fields status,active_bounded_unit,active_step,active_parent_task,active_epic"
+        "vida doctor active-task-attribution\n  Checks active TaskFlow attribution surfaced by orchestrator-init.\n  Reports status, blocker_codes, active_step, parent_task, orchestrator_projection, dirty_summary, next_actions.\n  active_step identifies the current in-progress execution step.\n  active_parent_task remains the bounded active_bounded_unit owner.\n  active_epic identifies the nearest program-container ancestor.\n  Next command: vida doctor active-task-attribution --json\n  Inspect directly with: vida orchestrator-init --fields status,active_bounded_unit,active_step,active_parent_task,active_epic"
     );
+}
+
+async fn run_doctor_active_task_attribution(args: super::DoctorArgs) -> ExitCode {
+    let state_dir = args
+        .state_dir
+        .unwrap_or_else(super::state_store::default_state_dir);
+    let render = args.render;
+    let as_json = args.json || args.topic.iter().any(|topic| topic == "--json");
+    if crate::status_surface::state_store_lock_present(&state_dir) {
+        return crate::status_surface::emit_degraded_read_lock_surface(
+            "vida doctor active-task-attribution",
+            &state_dir,
+            render,
+            as_json,
+            "another VIDA process still holds the authoritative datastore lock",
+        );
+    }
+
+    let store = match super::StateStore::open_existing_read_only_with_strict_timeout(
+        state_dir.clone(),
+        DOCTOR_SURFACE_LOCK_TIMEOUT,
+    )
+    .await
+    {
+        Ok(store) => store,
+        Err(error) => {
+            if super::StateStore::error_is_lock_contention(&error) {
+                return crate::status_surface::emit_degraded_read_lock_surface(
+                    "vida doctor active-task-attribution",
+                    &state_dir,
+                    render,
+                    as_json,
+                    &error.to_string(),
+                );
+            }
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let rows = match crate::task_surface::load_task_snapshot_rows_with_retry(&state_dir).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("task snapshot: failed ({error})");
+            return ExitCode::from(1);
+        }
+    };
+    let projection = match build_current_runtime_projection(&store).await {
+        Ok(projection) => projection,
+        Err(error) => {
+            eprintln!("current runtime projection: failed ({error})");
+            return ExitCode::from(1);
+        }
+    };
+    let orchestrator_status = projection
+        .current_session_status
+        .as_ref()
+        .or(projection.status.as_ref());
+    let projected_task_id = orchestrator_status.map(|status| status.task_id.as_str());
+    let active_step = crate::task_surface::active_step_for_owned_status(&rows, projected_task_id);
+    let parent_task = active_step
+        .and_then(|step| task_parent_id_from_record(step))
+        .and_then(|parent_id| crate::task_surface::task_record_by_id(&rows, &parent_id))
+        .or_else(|| {
+            projected_task_id.and_then(|id| crate::task_surface::task_record_by_id(&rows, id))
+        });
+    let repo_root = crate::task_surface::dirty_repo_root_for_current_process();
+    let dirty_files = match crate::task_surface::dirty_paths_for_repo(&repo_root) {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("git dirty status: failed ({error})");
+            return ExitCode::from(1);
+        }
+    };
+    let (active_step_unit, parent_task_unit, active_epic_unit) = match parent_task {
+        Some(task) => crate::task_surface::task_owned_status_context(&rows, task, true),
+        None => (
+            active_step.map(crate::task_surface::task_owned_status_unit),
+            None,
+            None,
+        ),
+    };
+    let dirty_summary = parent_task.map(|task| {
+        let owned_paths = if task.planner_metadata.owned_paths.is_empty() {
+            active_step
+                .map(|step| step.planner_metadata.owned_paths.clone())
+                .unwrap_or_default()
+        } else {
+            task.planner_metadata.owned_paths.clone()
+        };
+        crate::task_surface::task_owned_status_receipt(
+            &task.id,
+            owned_paths,
+            Vec::new(),
+            dirty_files.clone(),
+            repo_root.display().to_string(),
+            active_step_unit.clone(),
+            parent_task_unit.clone(),
+            active_epic_unit.clone(),
+        )
+    });
+    let mut blocker_codes = Vec::new();
+    let mut next_actions = Vec::new();
+    if let (Some(step), Some(parent), Some(projected_id)) =
+        (active_step, parent_task, projected_task_id)
+    {
+        if parent.id != projected_id && step.id != projected_id {
+            blocker_codes.push("active_step_orchestrator_projection_mismatch".to_string());
+            next_actions.push(
+                "Rebind orchestrator active_bounded_unit to the active step parent task before continuing."
+                    .to_string(),
+            );
+        }
+    }
+    if active_step.is_some() && parent_task.is_none() {
+        blocker_codes.push("active_step_parent_task_missing".to_string());
+        next_actions.push(
+            "Repair the active step parent-child edge or close the stale active step.".to_string(),
+        );
+    }
+    if let Some(summary) = dirty_summary.as_ref() {
+        if summary.status == "blocked" {
+            blocker_codes.extend(summary.blocker_codes.clone());
+            next_actions.extend(summary.next_actions.clone());
+        }
+    }
+    blocker_codes.sort();
+    blocker_codes.dedup();
+    next_actions.sort();
+    next_actions.dedup();
+    if next_actions.is_empty() {
+        next_actions.push(
+            "Continue with the parent task; no active-step attribution contradiction detected."
+                .to_string(),
+        );
+    }
+    let status = if blocker_codes.is_empty() {
+        "pass"
+    } else {
+        "blocked"
+    };
+    let payload = serde_json::json!({
+        "surface": "vida doctor active-task-attribution",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "active_step": active_step_unit,
+        "parent_task": parent_task_unit,
+        "orchestrator_projection": orchestrator_status.map(|status| serde_json::json!({
+            "run_id": status.run_id,
+            "task_id": status.task_id,
+            "active_node": status.active_node,
+            "status": status.status,
+            "lifecycle_stage": status.lifecycle_stage,
+            "handoff_state": status.handoff_state,
+        })),
+        "dirty_summary": dirty_summary,
+        "next_actions": next_actions,
+    });
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        println!(
+            "status: {}",
+            payload["status"].as_str().unwrap_or("unknown")
+        );
+        println!(
+            "active_step: {}",
+            active_step_unit
+                .as_ref()
+                .map(|step| step.task_id.as_str())
+                .unwrap_or("none")
+        );
+        println!(
+            "parent_task: {}",
+            parent_task_unit
+                .as_ref()
+                .map(|task| task.task_id.as_str())
+                .unwrap_or("none")
+        );
+        println!("dirty_files: {}", dirty_files.len());
+        println!(
+            "blocker_codes: {}",
+            payload["blocker_codes"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or(0)
+        );
+        for action in payload["next_actions"].as_array().into_iter().flatten() {
+            if let Some(action) = action.as_str() {
+                println!("- {action}");
+            }
+        }
+    }
+    if status == "pass" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn task_parent_id_from_record(task: &crate::state_store::TaskRecord) -> Option<String> {
+    task.dependencies
+        .iter()
+        .find(|dependency| dependency.edge_type == "parent-child")
+        .map(|dependency| dependency.depends_on_id.clone())
 }
 
 fn doctor_json_projection_name(summary_only: bool) -> &'static str {
@@ -2395,10 +2605,11 @@ mod tests {
 
     #[test]
     fn doctor_operator_contracts_block_on_latest_run_graph_snapshot_inconsistent() {
-        let blocker_codes = vec![
-            crate::blocker_code_str(crate::BlockerCode::RunGraphLatestSnapshotInconsistent)
-                .to_string(),
-        ];
+        let blocker_codes =
+            vec![
+                crate::blocker_code_str(crate::BlockerCode::RunGraphLatestSnapshotInconsistent)
+                    .to_string(),
+            ];
         let next_actions = super::doctor_operator_next_actions(
             &blocker_codes,
             &crate::state_store::BootCompatibilitySummary {
@@ -2420,11 +2631,9 @@ mod tests {
             None,
         );
 
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("concrete run/task/packet"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("concrete run/task/packet")));
         assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
@@ -2476,12 +2685,10 @@ mod tests {
 
     #[test]
     fn doctor_operator_contracts_explain_latest_run_graph_checkpoint_leakage() {
-        let blocker_codes = vec![
-            crate::blocker_code_str(
-                crate::BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage,
-            )
-            .to_string(),
-        ];
+        let blocker_codes = vec![crate::blocker_code_str(
+            crate::BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage,
+        )
+        .to_string()];
         let next_actions = super::doctor_operator_next_actions(
             &blocker_codes,
             &crate::state_store::BootCompatibilitySummary {
@@ -2503,11 +2710,9 @@ mod tests {
             None,
         );
 
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("checkpoint evidence"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("checkpoint evidence")));
         assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
@@ -2555,27 +2760,21 @@ mod tests {
             None,
         );
 
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("vida taskflow protocol-binding check"))
-        );
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("vida taskflow consume bundle check"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow protocol-binding check")));
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow consume bundle check")));
         let no_target_recovery_action = next_actions
             .iter()
             .find(|action| action.contains("no validated run_id"))
             .expect("recovery readiness without target should produce no-target action");
         assert!(!no_target_recovery_action.contains("vida taskflow recovery latest"));
         assert!(!no_target_recovery_action.contains("vida taskflow consume continue"));
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("vida task reconcile-closed-runs --limit 25"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida task reconcile-closed-runs --limit 25")));
         assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
@@ -2631,11 +2830,9 @@ mod tests {
             None,
         );
 
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("vida taskflow recovery status run-doctor"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("vida taskflow recovery status run-doctor")));
         assert!(next_actions
             .iter()
             .any(|action| action.contains("vida taskflow consume continue --run-id run-doctor")));
@@ -2649,12 +2846,10 @@ mod tests {
         assert_eq!(evidence["status"], "no_target");
         assert_eq!(evidence["run_id"], serde_json::Value::Null);
         assert_eq!(evidence["task_id"], serde_json::Value::Null);
-        assert!(
-            evidence["reason"]
-                .as_str()
-                .expect("reason should be string")
-                .contains("no validated run_id")
-        );
+        assert!(evidence["reason"]
+            .as_str()
+            .expect("reason should be string")
+            .contains("no validated run_id"));
     }
 
     #[test]
