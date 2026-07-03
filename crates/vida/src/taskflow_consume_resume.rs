@@ -5089,7 +5089,7 @@ async fn resume_inputs_from_downstream_packet(
         "downstream dispatch packet",
     ) {
         Ok(()) => {}
-        Err(error)
+        Err(_error)
             if downstream_packet_candidate_has_receipt_backed_ready_evidence(
                 &packet,
                 packet_path,
@@ -5127,7 +5127,7 @@ async fn resume_inputs_from_downstream_packet(
     .await
     {
         Ok(()) => {}
-        Err(error)
+        Err(_error)
             if downstream_packet_candidate_has_receipt_backed_ready_evidence(
                 &packet,
                 packet_path,
@@ -7014,7 +7014,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
     }
     match validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet") {
         Ok(()) => {}
-        Err(error)
+        Err(_error)
             if downstream_packet_candidate_has_receipt_backed_ready_evidence(
                 &packet,
                 &packet_path,
@@ -7025,7 +7025,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
                 &packet_path,
                 &resolved_run_id,
                 &receipt,
-            ) || downstream_packet_identity_drift_is_ready_packet(&error, &packet) => {}
+            ) => {}
         Err(error) => return Err(error),
     }
     let resume = build_resume_inputs(receipt.clone(), packet_path, packet, role_selection);
@@ -8924,7 +8924,8 @@ mod tests {
         retry_backend_for_dispatch_receipt, runtime_consumption_resume_blocker_code,
         runtime_consumption_snapshot_has_failure_control_evidence,
         same_packet_internal_timeout_retry_ready, should_refresh_resumed_downstream_preview,
-        sync_run_graph_after_retry_artifact, validate_receipt_packet_pair,
+        downstream_packet_candidate_has_packet_ready_receipt, sync_run_graph_after_retry_artifact,
+        validate_receipt_packet_pair,
         validate_run_graph_resume_state, validate_run_graph_resume_state_for_downstream_packet,
         validate_run_graph_resume_state_strict, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
