@@ -4246,36 +4246,53 @@ dispatch:
         assert_eq!(args[0], "run");
     }
 
+    fn assert_configured_external_activation_rejects(
+        case_name: &str,
+        backend_id: &str,
+        backend_yaml: &str,
+        expected_error_token: &str,
+    ) {
+        let backend_entry: serde_yaml::Value =
+            serde_yaml::from_str(backend_yaml).expect("backend entry should parse");
+
+        let error = configured_external_activation_parts(
+            backend_id,
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        )
+        .expect_err(case_name);
+
+        assert!(
+            error.contains("unsafe"),
+            "{case_name}: expected unsafe marker in {error}"
+        );
+        assert!(
+            error.contains(expected_error_token),
+            "{case_name}: expected {expected_error_token:?} in {error}"
+        );
+    }
+
     #[test]
-    fn configured_external_activation_parts_rejects_command_mismatched_from_trust_metadata() {
-        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
-            r#"
+    fn configured_external_activation_parts_rejects_untrusted_command_tokens() {
+        for (case_name, backend_id, backend_yaml, expected_error_token) in [
+            (
+                "external CLI command must match backend trust metadata",
+                "external_fixture",
+                r#"
 subagent_backend_class: external_cli
 detect_command: trusted-carrier
 dispatch:
   command: python
   prompt_mode: positional
 "#,
-        )
-        .expect("backend entry should parse");
-
-        let error = configured_external_activation_parts(
-            "external_fixture",
-            &backend_entry,
-            Path::new("/tmp/project"),
-            "/tmp/project/.vida/dispatch.json",
-            None,
-        )
-        .expect_err("external CLI command must match backend trust metadata");
-
-        assert!(error.contains("unsafe"));
-        assert!(error.contains("python"));
-    }
-
-    #[test]
-    fn configured_external_activation_parts_rejects_raw_provider_when_adapter_is_trusted() {
-        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
-            r#"
+                "python",
+            ),
+            (
+                "raw provider command must not replace the trusted adapter command",
+                "pi_cli",
+                r#"
 subagent_backend_class: external_cli
 detect_command: vida-pi-agent
 provider_command: pi
@@ -4287,44 +4304,26 @@ readiness:
   adapter:
     command: vida-pi-agent
 "#,
-        )
-        .expect("backend entry should parse");
-
-        let error = configured_external_activation_parts(
-            "pi_cli",
-            &backend_entry,
-            Path::new("/tmp/project"),
-            "/tmp/project/.vida/dispatch.json",
-            None,
-        )
-        .expect_err("raw provider command must not replace the trusted adapter command");
-
-        assert!(error.contains("unsafe"));
-        assert!(error.contains("pi"));
-    }
-
-    #[test]
-    fn configured_external_activation_parts_rejects_path_like_command_token() {
-        let backend_entry: serde_yaml::Value = serde_yaml::from_str(
-            r#"
+                "pi",
+            ),
+            (
+                "path-like command should be rejected",
+                "external_fixture",
+                r#"
 dispatch:
   command: ./tools/configured-carrier
   prompt_mode: positional
 "#,
-        )
-        .expect("backend entry should parse");
-
-        let error = configured_external_activation_parts(
-            "external_fixture",
-            &backend_entry,
-            Path::new("/tmp/project"),
-            "/tmp/project/.vida/dispatch.json",
-            None,
-        )
-        .expect_err("path-like command should be rejected");
-
-        assert!(error.contains("unsafe"));
-        assert!(error.contains("./tools/configured-carrier"));
+                "./tools/configured-carrier",
+            ),
+        ] {
+            assert_configured_external_activation_rejects(
+                case_name,
+                backend_id,
+                backend_yaml,
+                expected_error_token,
+            );
+        }
     }
 
     #[test]
@@ -4353,7 +4352,9 @@ dispatch:
         assert_eq!(command, "configured-adapter");
         assert_eq!(args, vec!["--mode".to_string(), "rpc".to_string()]);
 
-        let path_like: serde_yaml::Value = serde_yaml::from_str(
+        assert_configured_external_activation_rejects(
+            "path-like configured adapter must remain rejected",
+            "external_fixture",
             r#"
 subagent_backend_class: external_cli
 detect_command: configured-adapter
@@ -4361,18 +4362,8 @@ dispatch:
   command: ./configured-adapter
   prompt_mode: stdin
 "#,
-        )
-        .expect("backend entry should parse");
-        let error = configured_external_activation_parts(
-            "external_fixture",
-            &path_like,
-            Path::new("/tmp/project"),
-            "/tmp/project/.vida/dispatch.json",
-            None,
-        )
-        .expect_err("path-like configured adapter must remain rejected");
-        assert!(error.contains("unsafe"));
-        assert!(error.contains("./configured-adapter"));
+            "./configured-adapter",
+        );
     }
 
     #[test]

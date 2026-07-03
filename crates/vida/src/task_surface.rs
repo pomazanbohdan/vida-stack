@@ -20633,16 +20633,36 @@ mod tests {
             .expect("project state directory should initialize");
         fs::write(project_root.join("vida.config.yaml"), "project: test\n")
             .expect("project marker should write");
-        let isolated_state_dir = harness.path().join("isolated-state");
+        let cwd = std::env::current_dir().expect("current dir should resolve");
+        let outside_base = cwd
+            .ancestors()
+            .find(|path| crate::looks_like_project_root(path))
+            .and_then(|project_root| project_root.parent())
+            .or_else(|| cwd.parent())
+            .expect("project parent should exist");
+        let outside_root = outside_base.join(
+            harness
+                .path()
+                .file_name()
+                .expect("temp harness should have a leaf name"),
+        );
+        let isolated_state_dir = outside_root.join("isolated-state");
+        fs::create_dir_all(&isolated_state_dir)
+            .expect("isolated state directory should initialize");
         let task_value = serde_json::json!({
             "id": "audit-p1-task-close-state-dir-feedback-isolation",
             "status": "closed",
         });
 
-        assert!(task_close_uses_isolated_state_dir(
-            &isolated_state_dir,
-            true
-        ));
+        let inferred_project_root =
+            crate::taskflow_task_bridge::infer_project_root_from_state_root(&isolated_state_dir);
+        assert!(
+            task_close_uses_isolated_state_dir(&isolated_state_dir, true),
+            "expected isolated explicit state dir; state_dir={}, cwd={:?}, inferred_project_root={:?}",
+            isolated_state_dir.display(),
+            std::env::current_dir().ok(),
+            inferred_project_root
+        );
         let telemetry = task_close_host_agent_telemetry(
             &isolated_state_dir,
             true,
@@ -20663,6 +20683,7 @@ mod tests {
             .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
             .exists());
         assert!(!project_root.join(crate::WORKER_STRATEGY_STATE).exists());
+        let _ = fs::remove_dir_all(outside_root);
     }
 
     #[test]
@@ -20785,8 +20806,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn task_close_feedback_records_advisory_for_historical_failure_state_evidence() {
+    fn task_close_feedback_project_telemetry(task_id: &str, reason: &str) -> serde_json::Value {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let project_root = harness.path();
         fs::write(project_root.join("vida.config.yaml"), "project: test\n")
@@ -20800,18 +20820,27 @@ mod tests {
         fs::create_dir_all(project_root.join(".vida/project"))
             .expect("project marker directory should initialize");
         let task_value = serde_json::json!({
-            "id": "runtime-task-close-feedback-literal-trigger-false-positive-worktree-todo",
+            "id": task_id,
             "status": "closed",
         });
-        let reason = "Closed after verification: implementation and tests passed. Evidence: prior close attempt output quoted blocker details: close_feedback_canonical_status_blocked/canonical_gate_blocked and failure-state wording.";
 
-        let telemetry = task_close_host_agent_telemetry(
+        task_close_host_agent_telemetry(
             &project_root.join(crate::state_store::default_state_dir()),
             false,
             Some(project_root),
             &task_value,
             reason,
             "vida task close",
+        )
+    }
+
+    #[test]
+    fn task_close_feedback_records_advisory_for_historical_failure_state_evidence() {
+        let reason = "Closed after verification: implementation and tests passed. Evidence: prior close attempt output quoted blocker details: close_feedback_canonical_status_blocked/canonical_gate_blocked and failure-state wording.";
+
+        let telemetry = task_close_feedback_project_telemetry(
+            "runtime-task-close-feedback-literal-trigger-false-positive-worktree-todo",
+            reason,
         );
 
         assert_eq!(telemetry["status"], "recorded");
@@ -20829,31 +20858,11 @@ mod tests {
 
     #[test]
     fn task_close_feedback_records_advisory_for_negated_blocker_baseline_context() {
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let project_root = harness.path();
-        fs::write(project_root.join("vida.config.yaml"), "project: test\n")
-            .expect("project marker should write");
-        fs::write(project_root.join("AGENTS.md"), "test project\n")
-            .expect("agents marker should write");
-        fs::create_dir_all(project_root.join(".vida/config"))
-            .expect("config marker directory should initialize");
-        fs::create_dir_all(project_root.join(".vida/db"))
-            .expect("db marker directory should initialize");
-        fs::create_dir_all(project_root.join(".vida/project"))
-            .expect("project marker directory should initialize");
-        let task_value = serde_json::json!({
-            "id": "task-close-feedback-negated-blocker-baseline",
-            "status": "closed",
-        });
         let reason = "PR #470 processed and merged. Evidence: gh pr view reports state MERGED, mergedAt 2026-06-23T22:25:19Z, mergeCommit 9b92c28b0ca7df81c4dfcd15dd77bac520dbf91a, head 2384afec2fcfb3ba089f121f93a5da005cfd10c1. Local merged-base proof before merge: git diff --check passed; cargo test -p vida --bin vida runtime_defect_design_backed_seed_uses_configured_first_step --locked -- --test-threads=1 passed. rustfmt --check on taskflow_run_graph.rs failed equally on origin/main baseline, so not a PR-specific blocker. vida task validate-graph passed after merge.";
 
-        let telemetry = task_close_host_agent_telemetry(
-            &project_root.join(crate::state_store::default_state_dir()),
-            false,
-            Some(project_root),
-            &task_value,
+        let telemetry = task_close_feedback_project_telemetry(
+            "task-close-feedback-negated-blocker-baseline",
             reason,
-            "vida task close",
         );
 
         assert_eq!(telemetry["status"], "recorded");
@@ -20871,31 +20880,11 @@ mod tests {
 
     #[test]
     fn task_close_feedback_records_proved_blocked_receipt_rejection_policy() {
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let project_root = harness.path();
-        fs::write(project_root.join("vida.config.yaml"), "project: test\n")
-            .expect("project marker should write");
-        fs::write(project_root.join("AGENTS.md"), "test project\n")
-            .expect("agents marker should write");
-        fs::create_dir_all(project_root.join(".vida/config"))
-            .expect("config marker directory should initialize");
-        fs::create_dir_all(project_root.join(".vida/db"))
-            .expect("db marker directory should initialize");
-        fs::create_dir_all(project_root.join(".vida/project"))
-            .expect("project marker directory should initialize");
-        let task_value = serde_json::json!({
-            "id": "task-close-feedback-blocked-receipt-policy",
-            "status": "closed",
-        });
         let reason = "Rejected materialization-only blocked task-ensure receipts before terminal closure and persisted final-snapshot resume paths. Proof: cargo test -p vida taskflow_consume_continue_rejects_materialization_only_receipt_before_final_snapshot_replay passed.";
 
-        let telemetry = task_close_host_agent_telemetry(
-            &project_root.join(crate::state_store::default_state_dir()),
-            false,
-            Some(project_root),
-            &task_value,
+        let telemetry = task_close_feedback_project_telemetry(
+            "task-close-feedback-blocked-receipt-policy",
             reason,
-            "vida task close",
         );
 
         assert_eq!(telemetry["status"], "recorded");
