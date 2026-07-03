@@ -18891,6 +18891,44 @@ mod tests {
     }
 
     #[test]
+    fn task_next_lawful_ignores_in_progress_parent_with_only_closed_child() {
+        let mut parent = owned_task_record("runtime-defect-action-economy-batch-surfaces", vec![]);
+        parent.title = "Action economy batch surfaces".to_string();
+        parent.issue_type = "defect".to_string();
+        let mut closed_child = owned_task_record("closed-docs-step", vec![]);
+        closed_child.status = "closed".to_string();
+        closed_child.issue_type = "step".to_string();
+        closed_child.dependencies = vec![crate::state_store::TaskDependencyRecord {
+            issue_id: closed_child.id.clone(),
+            depends_on_id: parent.id.clone(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-07-03T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }];
+        let mut ready_task = owned_task_record("parallel-session-ready-task", vec![]);
+        ready_task.status = "open".to_string();
+        let ready = vec![task_continuation_candidate(&ready_task, true)];
+
+        let receipt = task_next_lawful_receipt(&[parent, closed_child, ready_task], ready, None);
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(
+            receipt.active_bounded_unit["task_id"],
+            "parallel-session-ready-task"
+        );
+        assert_eq!(
+            receipt.why_this_unit,
+            "single ready TaskFlow candidate after close/release automation"
+        );
+        assert_ne!(
+            receipt.binding_source,
+            Some("taskflow_single_in_progress".to_string())
+        );
+        assert!(receipt.blocker_codes.is_empty());
+    }
+    #[test]
     fn task_next_lawful_blocks_runtime_derived_taskflow_active_conflict() {
         let mut runtime_task = owned_task_record("runtime-task", vec![]);
         runtime_task.status = "open".to_string();

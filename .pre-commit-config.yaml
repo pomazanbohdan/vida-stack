@@ -34,7 +34,7 @@ repos:
     hooks:
       - id: vida-script-check
         name: VIDA script/diff hygiene gate
-        entry: cmd.exe /d /s /c "scripts\vida-dev-gate.cmd -Mode script-check"
+        entry: '"C:\Windows\System32\cmd.exe" /d /s /c scripts\\vida-precommit-script-check.cmd'
         language: system
         pass_filenames: false
         always_run: true

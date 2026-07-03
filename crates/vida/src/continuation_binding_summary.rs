@@ -1169,12 +1169,24 @@ pub(crate) fn taskflow_leaf_active_tasks(
                 .map(|dependency| dependency.depends_on_id.as_str())
         })
         .collect::<std::collections::BTreeSet<_>>();
+    let parent_ids_with_children = tasks
+        .iter()
+        .flat_map(|task| {
+            task.dependencies
+                .iter()
+                .filter(|dependency| {
+                    dependency.edge_type == "parent-child" && dependency.issue_id == task.id
+                })
+                .map(|dependency| dependency.depends_on_id.as_str())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
 
     tasks
         .iter()
         .filter(|task| {
             active_task_ids.contains(task.id.as_str())
                 && !active_parent_ids.contains(task.id.as_str())
+                && !parent_ids_with_children.contains(task.id.as_str())
         })
         .collect()
 }
