@@ -1432,13 +1432,13 @@ fn append_host_agent_feedback(
 
 #[cfg(test)]
 mod tests {
-    use crate::HOST_AGENT_OBSERVABILITY_STATE;
-    use crate::WORKER_SCORECARDS_STATE;
-    use crate::WORKER_STRATEGY_STATE;
     use crate::read_json_file_if_present;
     use crate::run;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
+    use crate::HOST_AGENT_OBSERVABILITY_STATE;
+    use crate::WORKER_SCORECARDS_STATE;
+    use crate::WORKER_STRATEGY_STATE;
     use std::process::ExitCode;
 
     #[test]
@@ -1609,20 +1609,16 @@ mod tests {
 
         assert_eq!(blocked["status"], "blocked");
         assert_eq!(blocked["reason"], "selected_feedback_carrier_unavailable");
-        assert!(
-            blocked["available_host_agent_ids"]
-                .as_array()
-                .expect("available ids should render")
-                .iter()
-                .any(|value| value == "junior")
-        );
-        assert!(
-            blocked["attempted_candidates"]
-                .as_array()
-                .expect("attempted candidates should render")
-                .iter()
-                .any(|row| row["candidate"] == "internal_subagents")
-        );
+        assert!(blocked["available_host_agent_ids"]
+            .as_array()
+            .expect("available ids should render")
+            .iter()
+            .any(|value| value == "junior"));
+        assert!(blocked["attempted_candidates"]
+            .as_array()
+            .expect("attempted candidates should render")
+            .iter()
+            .any(|row| row["candidate"] == "internal_subagents"));
     }
 
     #[test]
@@ -1676,16 +1672,12 @@ mod tests {
         let ignored = inference["ignored_meta_language"]
             .as_array()
             .expect("ignored meta language should render");
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "continuation blockers remain separate")
-        );
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "continuation_blocked flag")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "continuation blockers remain separate"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "continuation_blocked flag"));
         assert!(ignored.iter().any(|phrase| phrase == "blocker details"));
     }
 
@@ -1718,11 +1710,9 @@ mod tests {
         let ignored = inference["ignored_meta_language"]
             .as_array()
             .expect("ignored meta language should render");
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "blocked validator evidence")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocked validator evidence"));
     }
 
     #[test]
@@ -1742,11 +1732,9 @@ mod tests {
         let ignored = inference["ignored_meta_language"]
             .as_array()
             .expect("ignored meta language should render");
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "explicit failed markers still fail")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "explicit failed markers still fail"));
     }
 
     #[test]
@@ -1782,11 +1770,9 @@ mod tests {
         let ignored = inference["ignored_meta_language"]
             .as_array()
             .expect("ignored meta language should render");
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "rejected alternatives")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "rejected alternatives"));
     }
 
     #[test]
@@ -1807,11 +1793,9 @@ mod tests {
             .as_array()
             .expect("ignored meta language should render");
         assert!(ignored.iter().any(|phrase| phrase == "records failure"));
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "concrete rejected patch wording")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "concrete rejected patch wording"));
     }
 
     #[test]
@@ -1832,16 +1816,12 @@ mod tests {
         let ignored = inference["ignored_meta_language"]
             .as_array()
             .expect("ignored meta language should render");
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "failure-case coverage")
-        );
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "rejected wording coverage")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "failure-case coverage"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "rejected wording coverage"));
     }
 
     #[test]
@@ -1858,16 +1838,12 @@ mod tests {
         let ignored = inference["ignored_meta_language"]
             .as_array()
             .expect("ignored meta language should render");
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "failed subprocess status")
-        );
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "failed subprocess status/stdout/stderr")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "failed subprocess status"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "failed subprocess status/stdout/stderr"));
     }
 
     #[test]
@@ -1880,22 +1856,18 @@ mod tests {
         assert_eq!(outcome, "success");
         assert_eq!(score, 88);
         assert_eq!(inference["failure_markers"], serde_json::json!([]));
-        assert!(
-            inference["success_markers"]
-                .as_array()
-                .expect("success markers should render")
-                .iter()
-                .any(|marker| marker == "proof commands passed")
-        );
-        assert!(
-            inference["ignored_meta_language"]
-                .as_array()
-                .expect("ignored meta language should render")
-                .iter()
-                .any(|phrase| phrase
-                    .as_str()
-                    .is_some_and(|value| value.contains("recovery_readiness_blocked")))
-        );
+        assert!(inference["success_markers"]
+            .as_array()
+            .expect("success markers should render")
+            .iter()
+            .any(|marker| marker == "proof commands passed"));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase
+                .as_str()
+                .is_some_and(|value| value.contains("recovery_readiness_blocked"))));
     }
 
     #[test]
@@ -1982,14 +1954,12 @@ mod tests {
         assert_eq!(outcome, "success");
         assert_eq!(score, 88);
         assert_eq!(inference["failure_markers"], serde_json::json!([]));
-        assert!(
-            inference["ignored_meta_language"]
-                .as_array()
-                .expect("ignored meta language should render")
-                .iter()
-                .any(|phrase| phrase.as_str().is_some_and(|value| value
-                    .contains("rejected materialization-only blocked task-ensure receipts")))
-        );
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase.as_str().is_some_and(|value| value
+                .contains("rejected materialization-only blocked task-ensure receipts"))));
     }
 
     #[test]
@@ -2086,21 +2056,15 @@ mod tests {
 
         assert_eq!(super::canonical_close_status_from_reason(reason), None);
         let ignored = super::ignored_canonical_close_meta_language(reason);
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "close feedback derivation")
-        );
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "blocked reason detection")
-        );
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "actionable blocked output")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "close feedback derivation"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocked reason detection"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "actionable blocked output"));
         assert!(ignored.iter().any(|phrase| phrase == "genuinely blocked"));
     }
 
@@ -2110,16 +2074,12 @@ mod tests {
 
         assert_eq!(super::canonical_close_status_from_reason(reason), None);
         let ignored = super::ignored_canonical_close_meta_language(reason);
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "blocked reason detection")
-        );
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "actionable blocked output")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocked reason detection"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "actionable blocked output"));
         assert!(ignored.iter().any(|phrase| phrase == "genuinely blocked"));
         assert!(ignored.iter().any(|phrase| phrase == "failure evidence"));
     }
@@ -2130,16 +2090,12 @@ mod tests {
 
         assert_eq!(super::canonical_close_status_from_reason(reason), None);
         let ignored = super::ignored_canonical_close_meta_language(reason);
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase.contains("latest_run_graph_status_blocked"))
-        );
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase.contains("diagnostic context"))
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase.contains("latest_run_graph_status_blocked")));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase.contains("diagnostic context")));
         assert!(ignored.iter().any(|phrase| {
             phrase.contains("installed vida task next --json returns blocked with recovery action")
         }));
@@ -2160,16 +2116,12 @@ mod tests {
         let ignored = inference["ignored_meta_language"]
             .as_array()
             .expect("ignored meta language should render");
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "fail closed with actionable blockers")
-        );
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "ready/blocked/progress/list/tree")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "fail closed with actionable blockers"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "ready/blocked/progress/list/tree"));
     }
 
     #[test]
@@ -2178,17 +2130,13 @@ mod tests {
 
         assert_eq!(super::canonical_close_status_from_reason(reason), None);
         let ignored = super::ignored_canonical_close_meta_language(reason);
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "blocker_code/blockers")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocker_code/blockers"));
         assert!(ignored.iter().any(|phrase| phrase == "blocker/rework"));
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "blocked verification lane")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocked verification lane"));
     }
 
     #[test]
@@ -2197,11 +2145,9 @@ mod tests {
 
         assert_eq!(super::canonical_close_status_from_reason(reason), None);
         let ignored = super::ignored_canonical_close_meta_language(reason);
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "verifier blocker closure regression fix")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "verifier blocker closure regression fix"));
     }
 
     #[test]
@@ -2217,15 +2163,13 @@ mod tests {
         assert_eq!(score, 88);
         assert_eq!(inference["outcome"], "success");
         assert_eq!(inference["failure_markers"], serde_json::json!([]));
-        assert!(
-            inference["ignored_meta_language"]
-                .as_array()
-                .expect("ignored meta language should render")
-                .iter()
-                .any(|phrase| phrase.as_str().is_some_and(
-                    |value| value.contains("previous task close output quoted blocker details")
-                ))
-        );
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase.as_str().is_some_and(
+                |value| value.contains("previous task close output quoted blocker details")
+            )));
     }
 
     #[test]
@@ -2311,15 +2255,13 @@ mod tests {
         assert_eq!(score, 82);
         assert_eq!(inference["outcome"], "success");
         assert_eq!(inference["failure_markers"], serde_json::json!([]));
-        assert!(
-            inference["ignored_meta_language"]
-                .as_array()
-                .expect("ignored meta language should render")
-                .iter()
-                .any(|phrase| phrase.as_str().is_some_and(|value| {
-                    value.contains("operator-contract missing_retrieval_trust_* blockers")
-                }))
-        );
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase.as_str().is_some_and(|value| {
+                value.contains("operator-contract missing_retrieval_trust_* blockers")
+            })));
     }
 
     #[test]
@@ -2328,11 +2270,9 @@ mod tests {
 
         assert_eq!(super::canonical_close_status_from_reason(reason), None);
         let ignored = super::ignored_canonical_close_meta_language(reason);
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "structured blocked json")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "structured blocked json"));
         assert!(ignored.iter().any(|phrase| phrase == "stderr-only exit"));
     }
 
@@ -2351,16 +2291,12 @@ mod tests {
         let ignored = inference["ignored_meta_language"]
             .as_array()
             .expect("ignored meta language should render");
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "spawn-blocker ordering")
-        );
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "blocked task projections")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "spawn-blocker ordering"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocked task projections"));
     }
 
     #[test]
@@ -2392,11 +2328,9 @@ mod tests {
             super::canonical_close_status_from_reason(reason),
             Some(("blocked", "blocked"))
         );
-        assert!(
-            !super::ignored_canonical_close_meta_language(reason)
-                .iter()
-                .any(|phrase| phrase.contains("still blocked pending operator approval"))
-        );
+        assert!(!super::ignored_canonical_close_meta_language(reason)
+            .iter()
+            .any(|phrase| phrase.contains("still blocked pending operator approval")));
     }
 
     #[test]
@@ -2420,11 +2354,9 @@ mod tests {
 
         assert_eq!(super::canonical_close_status_from_reason(reason), None);
         let ignored = super::ignored_canonical_close_meta_language(reason);
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "implemented verifier blocker summary gate with tests")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "implemented verifier blocker summary gate with tests"));
     }
 
     #[test]
@@ -2521,11 +2453,9 @@ mod tests {
             super::canonical_close_status_from_reason(reason),
             Some(("blocked", "blocked"))
         );
-        assert!(
-            !super::ignored_canonical_close_meta_language(reason)
-                .iter()
-                .any(|phrase| phrase.contains("blocker remains pending verifier evidence"))
-        );
+        assert!(!super::ignored_canonical_close_meta_language(reason)
+            .iter()
+            .any(|phrase| phrase.contains("blocker remains pending verifier evidence")));
     }
 
     #[test]
@@ -2538,12 +2468,10 @@ mod tests {
                 super::canonical_close_status_from_reason(reason),
                 Some(("blocked", "blocked"))
             );
-            assert!(
-                !super::ignored_canonical_close_meta_language(reason)
-                    .iter()
-                    .any(|phrase| phrase.contains("blocker_code")
-                        || phrase.contains("blocker code missing"))
-            );
+            assert!(!super::ignored_canonical_close_meta_language(reason)
+                .iter()
+                .any(|phrase| phrase.contains("blocker_code")
+                    || phrase.contains("blocker code missing")));
         }
     }
 
@@ -2579,21 +2507,15 @@ mod tests {
         let ignored = inference["ignored_meta_language"]
             .as_array()
             .expect("ignored meta language should render");
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "close feedback derivation")
-        );
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "blocked reason detection")
-        );
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase == "actionable blocked output")
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "close feedback derivation"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "blocked reason detection"));
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase == "actionable blocked output"));
         assert!(ignored.iter().any(|phrase| phrase == "genuinely blocked"));
     }
 
@@ -2621,13 +2543,11 @@ mod tests {
                 .as_str()
                 .is_some_and(|value| value.contains("diagnostic context"))
         }));
-        assert!(
-            ignored
-                .iter()
-                .any(|phrase| phrase.as_str().is_some_and(|value| value.contains(
-                    "installed vida task next --json returns blocked with recovery action"
-                )))
-        );
+        assert!(ignored
+            .iter()
+            .any(|phrase| phrase.as_str().is_some_and(|value| value.contains(
+                "installed vida task next --json returns blocked with recovery action"
+            ))));
     }
 
     #[test]
@@ -2643,15 +2563,13 @@ mod tests {
         assert_eq!(inference["outcome"], "success");
         assert_eq!(inference["failure_markers"], serde_json::json!([]));
         assert_eq!(inference["success_markers"], serde_json::json!([]));
-        assert!(
-            inference["ignored_meta_language"]
-                .as_array()
-                .expect("ignored meta language should render")
-                .iter()
-                .any(|phrase| phrase
-                    .as_str()
-                    .is_some_and(|value| value.contains("no blocker codes")))
-        );
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase
+                .as_str()
+                .is_some_and(|value| value.contains("no blocker codes"))));
     }
 
     #[test]
@@ -2667,15 +2585,13 @@ mod tests {
         assert_eq!(score, 88);
         assert_eq!(inference["outcome"], "success");
         assert_eq!(inference["failure_markers"], serde_json::json!([]));
-        assert!(
-            inference["ignored_meta_language"]
-                .as_array()
-                .expect("ignored meta language should render")
-                .iter()
-                .any(|phrase| phrase
-                    .as_str()
-                    .is_some_and(|value| value.contains("no remaining blocked condition exists")))
-        );
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase
+                .as_str()
+                .is_some_and(|value| value.contains("no remaining blocked condition exists"))));
     }
 
     #[test]
@@ -2701,15 +2617,13 @@ mod tests {
         assert_eq!(score, 88);
         assert_eq!(inference["outcome"], "success");
         assert_eq!(inference["failure_markers"], serde_json::json!([]));
-        assert!(
-            inference["ignored_meta_language"]
-                .as_array()
-                .expect("ignored meta language should render")
-                .iter()
-                .any(|phrase| phrase
-                    .as_str()
-                    .is_some_and(|value| value.contains("not a pr-specific blocker")))
-        );
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase
+                .as_str()
+                .is_some_and(|value| value.contains("not a pr-specific blocker"))));
     }
 
     #[test]
@@ -2724,15 +2638,13 @@ mod tests {
         assert_eq!(score, 88);
         assert_eq!(inference["outcome"], "success");
         assert_eq!(inference["failure_markers"], serde_json::json!([]));
-        assert!(
-            inference["ignored_meta_language"]
-                .as_array()
-                .expect("ignored meta language should render")
-                .iter()
-                .any(|phrase| phrase
-                    .as_str()
-                    .is_some_and(|value| value.contains("blocker list empty")))
-        );
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase
+                .as_str()
+                .is_some_and(|value| value.contains("blocker list empty"))));
     }
 
     #[test]
@@ -2746,20 +2658,16 @@ mod tests {
         assert_eq!(score, 88);
         assert_eq!(inference["outcome"], "success");
         assert_eq!(inference["failure_markers"], serde_json::json!([]));
-        assert!(
-            inference["success_markers"]
-                .as_array()
-                .expect("success markers should render")
-                .iter()
-                .any(|marker| marker == "proofs passed")
-        );
-        assert!(
-            inference["ignored_meta_language"]
-                .as_array()
-                .expect("ignored meta language should render")
-                .iter()
-                .any(|phrase| phrase == "failed/tampered parent adapter results")
-        );
+        assert!(inference["success_markers"]
+            .as_array()
+            .expect("success markers should render")
+            .iter()
+            .any(|marker| marker == "proofs passed"));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase == "failed/tampered parent adapter results"));
     }
 
     #[test]
@@ -2773,13 +2681,11 @@ mod tests {
         assert_eq!(score, 82);
         assert_eq!(inference["outcome"], "success");
         assert_eq!(inference["failure_markers"], serde_json::json!([]));
-        assert!(
-            inference["ignored_meta_language"]
-                .as_array()
-                .expect("ignored meta language should render")
-                .iter()
-                .any(|phrase| phrase == "contextual failed-result defect descriptions")
-        );
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase == "contextual failed-result defect descriptions"));
     }
 
     #[test]
@@ -2841,13 +2747,11 @@ mod tests {
             assert_eq!(outcome, "failure");
             assert_eq!(score, 35);
             assert_eq!(inference["outcome"], "failure");
-            assert!(
-                inference["failure_markers"]
-                    .as_array()
-                    .expect("failure markers should render")
-                    .iter()
-                    .any(|marker| marker == "blocked")
-            );
+            assert!(inference["failure_markers"]
+                .as_array()
+                .expect("failure markers should render")
+                .iter()
+                .any(|marker| marker == "blocked"));
         }
     }
 

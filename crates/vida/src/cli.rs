@@ -4406,7 +4406,12 @@ pub(crate) struct StatusArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct DoctorArgs {
-    #[arg(value_name = "TOPIC", hide = true, trailing_var_arg = true, allow_hyphen_values = true)]
+    #[arg(
+        value_name = "TOPIC",
+        hide = true,
+        trailing_var_arg = true,
+        allow_hyphen_values = true
+    )]
     pub(crate) topic: Vec<String>,
 
     #[arg(
@@ -5354,9 +5359,7 @@ mod tests {
         assert!(coder_help.contains("provider-check"));
         assert!(coder_help.contains("run"));
         assert!(coder_help.contains("Default output is compact TOON/plain"));
-        assert!(
-            coder_help.contains("Use --json only when a machine-readable payload is required.")
-        );
+        assert!(coder_help.contains("Use --json only when a machine-readable payload is required."));
         assert!(coder_help.contains("vida coder capabilities\n"));
         assert!(!coder_help.contains("vida coder capabilities --json"));
 
@@ -5531,10 +5534,8 @@ mod tests {
         let agent_init_help = agent_init_error.to_string();
         assert_help_has_no_blank_description_rows("agent-init", &agent_init_help);
         assert!(agent_init_help.contains("Optional request text"));
-        assert!(
-            agent_init_help
-                .contains("return receipt-backed execution or host-bridge handoff state")
-        );
+        assert!(agent_init_help
+            .contains("return receipt-backed execution or host-bridge handoff state"));
         assert!(agent_init_help.contains("Default blocked output is compact TOON/plain"));
         assert!(agent_init_help.contains(
             "Use --json only when a machine-readable payload or full blocked evidence is required"

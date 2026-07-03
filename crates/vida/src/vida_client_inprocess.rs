@@ -6,19 +6,18 @@ use std::{
 use serde_json::json;
 use taskflow_host_bridge::{read_host_bridge_request, HostBridgeRequestPath};
 use vida_contracts::{
-    VidaCommandEnvelope, VidaCommandResponse, VidaProblem, VidaProblemSeverity, VidaProjectRef,
-    mvp_operation_catalog, operation_input_schema, operations,
+    mvp_operation_catalog, operation_input_schema, operations, VidaCommandEnvelope,
+    VidaCommandResponse, VidaProblem, VidaProblemSeverity, VidaProjectRef,
 };
 use vida_runtime_local::engine::local_runtime_capabilities;
 use vida_runtime_local::jobs::{
-    HostBridgeRequestJobSnapshot, RetryPolicy, host_bridge_request_job_status_payload,
-    job_status_payload, plan_host_bridge_request_job, plan_outbox_job_from_redb,
-    unavailable_job_status,
+    host_bridge_request_job_status_payload, job_status_payload, plan_host_bridge_request_job,
+    plan_outbox_job_from_redb, unavailable_job_status, HostBridgeRequestJobSnapshot, RetryPolicy,
 };
 
 use crate::{
     command_pipeline::VidaCommandPipeline,
-    vida_client::{VidaClient, pass_response, problem_response, unsupported_operation_response},
+    vida_client::{pass_response, problem_response, unsupported_operation_response, VidaClient},
 };
 
 #[derive(Debug, Clone)]

@@ -1784,7 +1784,10 @@ fn task_create_in_progress_step_lifts_open_parent_into_orchestrator_active_unit(
         orchestrator["continuation_binding"]["active_bounded_unit"]["task_id"], task_id,
         "{orchestrator}"
     );
-    assert_eq!(orchestrator["active_step"]["task_id"], step_id, "{orchestrator}");
+    assert_eq!(
+        orchestrator["active_step"]["task_id"], step_id,
+        "{orchestrator}"
+    );
     assert_eq!(
         orchestrator["active_parent_task"]["task_id"], task_id,
         "{orchestrator}"
