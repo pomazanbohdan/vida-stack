@@ -1717,6 +1717,78 @@ fn task_create_step_under_closed_task_preserves_parent_and_idle_orchestrator() {
 }
 
 #[test]
+fn task_create_in_progress_step_lifts_open_parent_into_orchestrator_active_unit() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_and_assert_success(&["boot"], &state_dir);
+
+    let epic_id = unique_test_id("active-step-epic");
+    let task_id = unique_test_id("active-step-task");
+    let step_id = unique_test_id("active-step");
+
+    run_command_json(
+        &[
+            "task",
+            "create",
+            &epic_id,
+            "Active step epic",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--json",
+        ],
+        &state_dir,
+    );
+    run_command_json(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Active step parent task",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--parent-id",
+            &epic_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+    run_command_json(
+        &[
+            "task",
+            "create",
+            &step_id,
+            "Active execution step",
+            "--type",
+            "step",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            &task_id,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    let orchestrator = run_command_json(
+        &["orchestrator-init", "--state-dir", &state_dir, "--json"],
+        &state_dir,
+    );
+    assert_eq!(
+        orchestrator["continuation_binding"]["status"], "bound",
+        "active step must keep its parent visible as active bounded work: {orchestrator}"
+    );
+    assert_eq!(
+        orchestrator["continuation_binding"]["active_bounded_unit"]["task_id"], task_id,
+        "{orchestrator}"
+    );
+    assert_task_graph_valid_after(&state_dir, "active step under open task");
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
 fn taskflow_model_profile_readiness_cli_smoke_matches_config_census_embedding() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

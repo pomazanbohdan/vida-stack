@@ -1155,6 +1155,23 @@ pub(crate) fn taskflow_leaf_active_tasks(
         })
         .map(|task| task.id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
+    let active_step_parent_ids = tasks
+        .iter()
+        .filter(|task| {
+            taskflow_core::canonical_task_status(&task.status) == Some("in_progress")
+                && taskflow_core::issue_type_is_execution_step(
+                    &crate::state_store::canonical_work_item_issue_type(&task.issue_type),
+                )
+        })
+        .flat_map(|task| {
+            task.dependencies
+                .iter()
+                .filter(|dependency| {
+                    dependency.edge_type == "parent-child" && dependency.issue_id == task.id
+                })
+                .map(|dependency| dependency.depends_on_id.as_str())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
     let active_parent_ids = tasks
         .iter()
         .filter(|task| active_task_ids.contains(task.id.as_str()))
@@ -1184,9 +1201,14 @@ pub(crate) fn taskflow_leaf_active_tasks(
     tasks
         .iter()
         .filter(|task| {
-            active_task_ids.contains(task.id.as_str())
+            let task_id = task.id.as_str();
+            let active_bounded_task = active_task_ids.contains(task_id);
+            let active_step_parent = active_step_parent_ids.contains(task_id)
+                && crate::state_store::work_item_is_active_bounded_unit_candidate(&task.issue_type)
+                && !crate::state_store::StateStore::task_status_is_closed_like(&task.status);
+            (active_bounded_task || active_step_parent)
                 && !active_parent_ids.contains(task.id.as_str())
-                && !parent_ids_with_children.contains(task.id.as_str())
+                && (!parent_ids_with_children.contains(task.id.as_str()) || active_step_parent)
         })
         .collect()
 }
@@ -2410,6 +2432,42 @@ mod tests {
         );
         assert_eq!(summary["binding_source"], "taskflow_single_in_progress");
         assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn taskflow_active_candidates_lift_in_progress_execution_step_to_parent() {
+        let parent = task_record("runtime-defect-orchestrator-init-ignores-step", "open");
+        let mut active_step = task_with_parent(
+            "step-active-selector-regression",
+            "in_progress",
+            "runtime-defect-orchestrator-init-ignores-step",
+        );
+        active_step.issue_type = "step".to_string();
+
+        let taskflow_candidates = taskflow_active_candidates_from_tasks(&[parent, active_step]);
+
+        assert_eq!(taskflow_candidates.len(), 1);
+        assert_eq!(
+            taskflow_candidates[0]["task_id"],
+            "runtime-defect-orchestrator-init-ignores-step"
+        );
+        assert_eq!(taskflow_candidates[0]["status"], "open");
+    }
+
+    #[test]
+    fn taskflow_active_candidates_ignore_parent_with_only_closed_execution_step() {
+        let active_parent = task_record("runtime-defect-closed-step-parent", "in_progress");
+        let mut closed_step = task_with_parent(
+            "step-closed-regression",
+            "closed",
+            "runtime-defect-closed-step-parent",
+        );
+        closed_step.issue_type = "step".to_string();
+
+        let taskflow_candidates =
+            taskflow_active_candidates_from_tasks(&[active_parent, closed_step]);
+
+        assert!(taskflow_candidates.is_empty());
     }
 
     #[test]
