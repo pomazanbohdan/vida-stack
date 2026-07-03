@@ -64,7 +64,7 @@ const TASK_VERIFY_AFTER_HELP: &str = "Examples:\n  vida task verify <task-id> --
 const TASK_VALIDATOR_PACKET_ABOUT: &str =
     "render a compact pre-commit validator packet for one task";
 const TASK_VALIDATOR_PACKET_AFTER_HELP: &str = "Examples:\n  vida task validator-packet <task-id>\n  vida task validator-packet <task-id> --proof \"cargo check -p vida --tests\" --json\n\nOutput:\n  Default output is a copyable validator packet with active task context, owned files, diffstat, bounded hunks, proof commands, prior validator blockers, and the expected PASS/BLOCKED schema.\n  Use --json for machine-readable packet fields.";
-const TASK_OWNED_STATUS_AFTER_HELP: &str = "Examples:\n  git status --short\n  vida task owned-status --from-dirty --with-active-step\n  vida task owned-status --from-dirty --with-active-step --json\n  vida task owned-status <task-id> --from-dirty --json\n  vida task owned-status <task-id> --file crates/vida/src/task_surface.rs --json\n\nDirty attribution:\n  --from-dirty reads git status and compares dirty files with planner_metadata.owned_paths or --file overrides.\n  --with-active-step adds active_step, active_parent_task, and active_epic so operators can see which bounded TaskFlow unit owns the dirty paths.\n  JSON output includes owned_paths, matched_files, unmatched_files, confidence, and next_actions.";
+const TASK_OWNED_STATUS_AFTER_HELP: &str = "Examples:\n  git status --short\n  vida task owned-status --from-dirty --with-active-step\n  vida task owned-status --from-dirty --with-active-step --json\n  vida task owned-status <task-id> --from-dirty --json\n  vida task owned-status <task-id> --file crates/vida/src/task_surface.rs --json\n  vida task classify-dirty --json\n\nDirty attribution:\n  --from-dirty reads git status and compares dirty files with planner_metadata.owned_paths or --file overrides.\n  --with-active-step adds active_step, active_parent_task, and active_epic so operators can see which bounded TaskFlow unit owns the dirty paths.\n  The classify-dirty alias groups dirty files by likely task/epic and reports groups, task_id, epic_id, files, confidence, reasons, unclassified, and next_actions.\n  JSON output includes owned_paths, matched_files, unmatched_files, confidence, and next_actions.";
 const TASK_PRUNE_CLOSED_EPICS_ABOUT: &str =
     "archive and prune closed epic task rows without touching runtime receipts";
 const TASK_PRUNE_CLOSED_EPICS_LONG_ABOUT: &str = "Archive and prune only TaskFlow task rows for closed epic/container subtrees.\n\nThe command previews by default. Use --apply to write a JSONL archive of pruned task rows and then delete only those task rows plus their owned task_dependency rows. Runtime receipts, run-graph state, lane state, and non-task runtime state are never removed by this surface.";
@@ -1740,7 +1740,8 @@ pub(crate) enum TaskCommand {
     Stage(TaskStageArgs),
     #[command(
         about = "inspect dirty git files against TaskFlow owned paths",
-        after_help = TASK_OWNED_STATUS_AFTER_HELP
+        after_help = TASK_OWNED_STATUS_AFTER_HELP,
+        visible_alias = "classify-dirty"
     )]
     OwnedStatus(TaskOwnedStatusArgs),
     #[command(about = "record delegated agent handoff receipts for a task")]
@@ -1844,13 +1845,22 @@ pub(crate) struct TaskStepsArgs {
     )]
     pub(crate) since: String,
 
-    #[arg(long = "parent-id", help = "Only include execution steps under this parent task id")]
+    #[arg(
+        long = "parent-id",
+        help = "Only include execution steps under this parent task id"
+    )]
     pub(crate) parent_id: Option<String>,
 
-    #[arg(long = "status", help = "Only include execution steps with this status")]
+    #[arg(
+        long = "status",
+        help = "Only include execution steps with this status"
+    )]
     pub(crate) status: Option<String>,
 
-    #[arg(long = "with-parent", help = "Include parent title fields in step rows")]
+    #[arg(
+        long = "with-parent",
+        help = "Include parent title fields in step rows"
+    )]
     pub(crate) with_parent: bool,
 
     #[arg(
@@ -4918,6 +4928,13 @@ mod tests {
         assert!(owned_help.contains("--json"));
         assert!(owned_help.contains("git status --short"));
         assert!(owned_help.contains("vida task owned-status --from-dirty --with-active-step"));
+        let classify_error = Cli::try_parse_from(["vida", "task", "classify-dirty", "--help"])
+            .expect_err("help should render clap display error");
+        let classify_help = classify_error.to_string();
+        assert!(classify_help.contains("classify-dirty"));
+        assert!(classify_help.contains("--state-dir"));
+        assert!(classify_help.contains("--json"));
+        assert!(classify_help.contains("groups"));
 
         let close_error = Cli::try_parse_from(["vida", "task", "close", "--help"])
             .expect_err("help should render clap display error");

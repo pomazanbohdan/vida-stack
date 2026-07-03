@@ -4286,7 +4286,9 @@ fn parse_task_steps_since(value: &str) -> Result<std::time::Duration, String> {
     let amount = number
         .parse::<u64>()
         .map_err(|_| format!("unsupported --since value: {value}"))?;
-    Ok(std::time::Duration::from_secs(amount.saturating_mul(multiplier)))
+    Ok(std::time::Duration::from_secs(
+        amount.saturating_mul(multiplier),
+    ))
 }
 
 fn task_step_timestamp(value: &str) -> Option<i64> {
@@ -4304,10 +4306,7 @@ fn task_step_timestamp(value: &str) -> Option<i64> {
 
 fn task_step_recent_enough(task: &state_store::TaskRecord, cutoff: i64) -> bool {
     let created = task_step_timestamp(&task.created_at);
-    let closed = task
-        .closed_at
-        .as_deref()
-        .and_then(task_step_timestamp);
+    let closed = task.closed_at.as_deref().and_then(task_step_timestamp);
     created.into_iter().chain(closed).any(|ts| ts >= cutoff)
 }
 
@@ -4360,7 +4359,12 @@ fn task_step_rows(
             }
         })
         .collect::<Vec<_>>();
-    steps.sort_by(|left, right| right.created.cmp(&left.created).then_with(|| left.id.cmp(&right.id)));
+    steps.sort_by(|left, right| {
+        right
+            .created
+            .cmp(&left.created)
+            .then_with(|| left.id.cmp(&right.id))
+    });
     steps
 }
 
@@ -8344,6 +8348,25 @@ struct TaskOwnedStatusUnit {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+struct TaskDirtyClassifyReceipt {
+    status: String,
+    repo_root: String,
+    dirty_files: Vec<String>,
+    groups: Vec<TaskDirtyClassifyGroup>,
+    unclassified: Vec<String>,
+    next_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskDirtyClassifyGroup {
+    task_id: String,
+    epic_id: Option<String>,
+    files: Vec<String>,
+    confidence: String,
+    reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 struct TaskHandoffAcceptReceipt {
     status: String,
     task_id: String,
@@ -8961,6 +8984,134 @@ fn task_owned_status_unit(task: &state_store::TaskRecord) -> TaskOwnedStatusUnit
         status: task.status.clone(),
         issue_type: task.issue_type.clone(),
         owned_paths: task.planner_metadata.owned_paths.clone(),
+    }
+}
+
+fn task_dirty_classify_receipt(
+    rows: &[state_store::TaskRecord],
+    dirty_files: Vec<String>,
+    repo_root: String,
+) -> TaskDirtyClassifyReceipt {
+    let mut classified = BTreeSet::new();
+    let mut groups = Vec::new();
+    let mut candidates: Vec<&state_store::TaskRecord> = rows
+        .iter()
+        .filter(|task| task.closed_at.is_none())
+        .filter(|task| !task.planner_metadata.owned_paths.is_empty())
+        .collect();
+    candidates.sort_by(|left, right| {
+        task_dirty_candidate_rank(right)
+            .cmp(&task_dirty_candidate_rank(left))
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    for task in candidates {
+        let owned_paths = taskflow_core::task::close::canonical_owned_paths(
+            task.planner_metadata.owned_paths.clone(),
+        );
+        let files: Vec<String> = dirty_files
+            .iter()
+            .filter(|path| !classified.contains(*path))
+            .filter(|path| path_is_explicitly_owned(path, &owned_paths))
+            .cloned()
+            .collect();
+        if files.is_empty() {
+            continue;
+        }
+        for file in &files {
+            classified.insert(file.clone());
+        }
+        let epic_id = task_ancestor_with_issue_type(rows, task, "epic").map(|epic| epic.id.clone());
+        let mut reasons = vec!["dirty file matched planner_metadata.owned_paths".to_string()];
+        if task.status == "in_progress" {
+            reasons.push("task is in_progress".to_string());
+        } else {
+            reasons.push(format!("task status is {}", task.status));
+        }
+        if !task.planner_metadata.proof_targets.is_empty() {
+            reasons.push("task has known proof targets".to_string());
+        }
+        if epic_id.is_some() {
+            reasons.push("task resolves to parent epic".to_string());
+        }
+        let confidence = if task.status == "in_progress" {
+            "high"
+        } else if task.issue_type == "step" || !task.planner_metadata.proof_targets.is_empty() {
+            "medium"
+        } else {
+            "low"
+        };
+        groups.push(TaskDirtyClassifyGroup {
+            task_id: task.id.clone(),
+            epic_id,
+            files,
+            confidence: confidence.to_string(),
+            reasons,
+        });
+    }
+
+    let unclassified: Vec<String> = dirty_files
+        .iter()
+        .filter(|path| !classified.contains(*path))
+        .cloned()
+        .collect();
+    let next_actions = if dirty_files.is_empty() {
+        vec!["No dirty files detected in the current git worktree.".to_string()]
+    } else if unclassified.is_empty() {
+        vec!["Review groups, then stage only files for the selected bounded task.".to_string()]
+    } else {
+        vec![
+            "Review unclassified files before staging or create/update TaskFlow ownership metadata."
+                .to_string(),
+        ]
+    };
+    TaskDirtyClassifyReceipt {
+        status: "pass".to_string(),
+        repo_root,
+        dirty_files,
+        groups,
+        unclassified,
+        next_actions,
+    }
+}
+
+fn task_dirty_candidate_rank(task: &state_store::TaskRecord) -> u8 {
+    if task.status == "in_progress" && task.issue_type == "step" {
+        5
+    } else if task.status == "in_progress" {
+        4
+    } else if task.issue_type == "step" {
+        3
+    } else if !task.planner_metadata.proof_targets.is_empty() {
+        2
+    } else {
+        1
+    }
+}
+
+fn print_task_dirty_classify_receipt(
+    render: RenderMode,
+    receipt: &TaskDirtyClassifyReceipt,
+    as_json: bool,
+) {
+    if as_json {
+        crate::print_json_pretty(&serde_json::to_value(receipt).unwrap_or_else(|_| {
+            serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": ["classify_dirty_serialization_failed"],
+            })
+        }));
+        return;
+    }
+    let _ = render;
+    println!("status: {}", receipt.status);
+    println!("repo_root: {}", receipt.repo_root);
+    println!("dirty_files: {}", receipt.dirty_files.len());
+    println!("groups: {}", receipt.groups.len());
+    println!("unclassified: {}", receipt.unclassified.len());
+    for action in &receipt.next_actions {
+        println!("- {action}");
     }
 }
 
@@ -12136,6 +12287,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 | "adaptive-preview"
                 | "show"
                 | "validator-packet"
+                | "classify-dirty"
                 | "import"
                 | "create-bulk"
                 | "bulk-create"
@@ -12226,10 +12378,42 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             }
         }
         TaskCommand::OwnedStatus(command) => {
+            let invoked_as_classify_dirty = std::env::args().any(|arg| arg == "classify-dirty");
             let state_dir = command
                 .state_dir
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
+            if invoked_as_classify_dirty {
+                let repo_root = dirty_repo_root_for_current_process();
+                return match load_task_snapshot_rows_authoritative_first(&state_dir).await {
+                    Ok((rows, _metadata)) => match dirty_paths_for_repo(&repo_root) {
+                        Ok(dirty_files) => {
+                            let receipt = task_dirty_classify_receipt(
+                                &rows,
+                                dirty_files,
+                                repo_root.display().to_string(),
+                            );
+                            print_task_dirty_classify_receipt(
+                                command.render,
+                                &receipt,
+                                command.json,
+                            );
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to read dirty git status: {error}");
+                            ExitCode::from(1)
+                        }
+                    },
+                    Err(error) => emit_task_state_store_open_error(
+                        "vida task classify-dirty",
+                        &state_dir,
+                        command.render,
+                        command.json,
+                        &error,
+                    ),
+                };
+            }
             let repo_root = if command.from_dirty {
                 dirty_repo_root_for_current_process()
             } else {

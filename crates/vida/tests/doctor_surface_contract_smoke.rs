@@ -1387,7 +1387,9 @@ fn task_steps_outputs_default_toon_json_and_filters() {
     assert_success(&default_output, "task steps default");
     let default_stdout = String::from_utf8_lossy(&default_output.stdout);
     assert_not_json_output("vida task steps", &default_stdout);
-    assert!(default_stdout.contains("task_steps[2]{id,status,parent_id,parent_title,created,closed,close_reason,owned_paths}:"));
+    assert!(default_stdout.contains(
+        "task_steps[2]{id,status,parent_id,parent_title,created,closed,close_reason,owned_paths}:"
+    ));
     assert!(default_stdout.contains("task-steps-step-a"));
     assert!(default_stdout.contains("Task steps parent A"));
 
@@ -1418,7 +1420,9 @@ fn task_steps_outputs_default_toon_json_and_filters() {
     assert_eq!(row["status"], "in_progress");
     assert_eq!(row["parent_id"], "task-steps-parent-a");
     assert_eq!(row["parent_title"], "Task steps parent A");
-    assert!(row["created"].as_str().is_some_and(|value| !value.is_empty()));
+    assert!(row["created"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     assert!(row["closed"].is_null());
     assert!(row["close_reason"].is_null());
     assert_eq!(
@@ -1560,6 +1564,112 @@ fn owned_status_from_dirty_with_active_step_maps_taskflow_owners() {
         .any(|action| action
             .as_str()
             .is_some_and(|text| text.contains("unrelated dirty files"))));
+}
+
+#[test]
+fn classify_dirty_groups_owned_paths_and_reports_unclassified() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_git(&project_root, &["init"]);
+    run_git(
+        &project_root,
+        &["config", "user.email", "vida@example.invalid"],
+    );
+    run_git(&project_root, &["config", "user.name", "VIDA Test"]);
+    std::fs::write(format!("{project_root}/.gitignore"), ".vida/\n").expect("write gitignore");
+    std::fs::create_dir_all(format!("{project_root}/crates/vida/src"))
+        .expect("create source fixture dir");
+    std::fs::write(
+        format!("{project_root}/crates/vida/src/task_surface.rs"),
+        "old\n",
+    )
+    .expect("write owned fixture");
+    std::fs::write(format!("{project_root}/README.md"), "old\n").expect("write readme fixture");
+    run_git(
+        &project_root,
+        &[
+            "add",
+            ".gitignore",
+            "AGENTS.md",
+            "vida.config.yaml",
+            "crates",
+            "README.md",
+        ],
+    );
+    run_git(&project_root, &["commit", "-m", "baseline"]);
+    std::fs::write(
+        format!("{project_root}/crates/vida/src/task_surface.rs"),
+        "new\n",
+    )
+    .expect("modify owned fixture");
+    std::fs::write(format!("{project_root}/README.md"), "new\n")
+        .expect("modify unclassified fixture");
+
+    create_session_triage_task(
+        &state_dir,
+        "classify-dirty-epic",
+        "Classify dirty epic",
+        "epic",
+        "open",
+        "0",
+        None,
+    );
+    let task = vida()
+        .args([
+            "task",
+            "create",
+            "classify-dirty-task",
+            "Classify dirty task",
+            "--type",
+            "task",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            "classify-dirty-epic",
+            "--owned-path",
+            "crates/vida/src/task_surface.rs",
+            "--proof-target",
+            "cargo test classify_dirty",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("classify dirty task create should run");
+    assert_success(&task, "classify dirty task create");
+
+    let output = vida()
+        .args(["task", "classify-dirty", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .current_dir(&project_root)
+        .output()
+        .expect("classify-dirty json should run");
+    assert_success(&output, "classify-dirty json");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("classify-dirty json should parse");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["groups"][0]["task_id"], "classify-dirty-task");
+    assert_eq!(payload["groups"][0]["epic_id"], "classify-dirty-epic");
+    assert_eq!(
+        payload["groups"][0]["files"],
+        serde_json::json!(["crates/vida/src/task_surface.rs"])
+    );
+    assert_eq!(payload["groups"][0]["confidence"], "high");
+    assert!(payload["groups"][0]["reasons"]
+        .as_array()
+        .expect("reasons should be array")
+        .iter()
+        .any(|reason| reason
+            .as_str()
+            .is_some_and(|text| text.contains("proof targets"))));
+    assert_eq!(payload["unclassified"], serde_json::json!(["README.md"]));
+    assert!(payload["next_actions"]
+        .as_array()
+        .expect("next_actions should be array")
+        .iter()
+        .any(|action| action
+            .as_str()
+            .is_some_and(|text| text.contains("unclassified files"))));
 }
 
 #[test]
