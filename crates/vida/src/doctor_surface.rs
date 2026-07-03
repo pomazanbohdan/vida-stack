@@ -673,6 +673,14 @@ fn select_current_session_run_graph_dispatch_receipt<'a>(
 }
 
 pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
+    if doctor_active_task_attribution_help_requested(&args.topic) {
+        print_doctor_active_task_attribution_help();
+        return ExitCode::SUCCESS;
+    }
+    if !args.topic.is_empty() {
+        eprintln!("Unsupported doctor topic: {}", args.topic.join(" "));
+        return ExitCode::from(2);
+    }
     let state_dir = args
         .state_dir
         .unwrap_or_else(super::state_store::default_state_dir);
@@ -1809,6 +1817,17 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn doctor_active_task_attribution_help_requested(topic: &[String]) -> bool {
+    matches!(topic, [name] if name == "active-task-attribution")
+        || matches!(topic, [name, help] if name == "active-task-attribution" && help == "--help")
+}
+
+fn print_doctor_active_task_attribution_help() {
+    println!(
+        "vida doctor active-task-attribution\n  Checks active TaskFlow attribution surfaced by orchestrator-init.\n  active_step identifies the current in-progress execution step.\n  active_parent_task remains the bounded active_bounded_unit owner.\n  active_epic identifies the nearest program-container ancestor.\n  Inspect directly with: vida orchestrator-init --fields status,active_bounded_unit,active_step,active_parent_task,active_epic"
+    );
 }
 
 fn doctor_json_projection_name(summary_only: bool) -> &'static str {

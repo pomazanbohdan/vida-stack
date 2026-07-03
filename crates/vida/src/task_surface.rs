@@ -4192,6 +4192,12 @@ fn task_stage_ensemble_next_command(
     }
 }
 
+fn print_task_steps_help() {
+    println!(
+        "vida task steps\n  Execution steps are non-bounded child records under a task, subtask, or defect.\n  orchestrator-init keeps the parent as active_bounded_unit and exposes active_step, active_parent_task, and active_epic.\n  Inspect with: vida orchestrator-init --fields status,active_bounded_unit,active_step,active_parent_task,active_epic\n  Related: vida doctor active-task-attribution --help"
+    );
+}
+
 fn task_progress_row_from_record(task: &state_store::TaskRecord) -> TaskProgressRow {
     TaskProgressRow {
         id: task.id.clone(),
@@ -11694,6 +11700,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        TaskCommand::Steps(_) => {
+            print_task_steps_help();
+            ExitCode::SUCCESS
+        }
         TaskCommand::Import(command) => run_task_bulk_import(command).await,
         TaskCommand::ImportJsonl(command) => run_task_import_jsonl(command).await,
         TaskCommand::ReplaceJsonl(command) => run_task_replace_jsonl(command).await,

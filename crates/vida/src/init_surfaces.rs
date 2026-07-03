@@ -1971,6 +1971,9 @@ fn build_orchestrator_init_full_payload(
         "orchestrator_runtime_contract": orchestrator_runtime_contract,
         "continuation_binding": init_view["continuation_binding"],
         "active_bounded_unit": init_view["continuation_binding"]["active_bounded_unit"],
+        "active_step": init_view["continuation_binding"]["active_bounded_unit"]["active_step"],
+        "active_parent_task": init_view["continuation_binding"]["active_bounded_unit"]["active_parent_task"],
+        "active_epic": init_view["continuation_binding"]["active_bounded_unit"]["active_epic"],
         "next_actions": init_view["continuation_binding"]["next_actions"],
         "why_this_unit": init_view["continuation_binding"]["why_this_unit"],
         "sequential_vs_parallel_posture": init_view["continuation_binding"]["sequential_vs_parallel_posture"],
@@ -2009,6 +2012,9 @@ fn build_orchestrator_init_summary_payload(
         },
         "continuation_binding": init_view["continuation_binding"],
         "active_bounded_unit": init_view["continuation_binding"]["active_bounded_unit"],
+        "active_step": init_view["continuation_binding"]["active_bounded_unit"]["active_step"],
+        "active_parent_task": init_view["continuation_binding"]["active_bounded_unit"]["active_parent_task"],
+        "active_epic": init_view["continuation_binding"]["active_bounded_unit"]["active_epic"],
         "next_actions": init_view["continuation_binding"]["next_actions"],
         "why_this_unit": init_view["continuation_binding"]["why_this_unit"],
         "sequential_vs_parallel_posture": init_view["continuation_binding"]["sequential_vs_parallel_posture"],
@@ -3002,7 +3008,16 @@ mod tests {
                 "status": "bound",
                 "active_bounded_unit": {
                     "kind": "task_graph_task",
-                    "task_id": "active-task"
+                    "task_id": "active-task",
+                    "active_step": {
+                        "task_id": "active-step"
+                    },
+                    "active_parent_task": {
+                        "task_id": "active-task"
+                    },
+                    "active_epic": {
+                        "task_id": "active-epic"
+                    }
                 },
                 "why_this_unit": "Active task is authoritative.",
                 "sequential_vs_parallel_posture": "sequential_only_taskflow_active"
@@ -3017,6 +3032,9 @@ mod tests {
         );
 
         assert_eq!(payload["active_bounded_unit"]["task_id"], "active-task");
+        assert_eq!(payload["active_step"]["task_id"], "active-step");
+        assert_eq!(payload["active_parent_task"]["task_id"], "active-task");
+        assert_eq!(payload["active_epic"]["task_id"], "active-epic");
         assert_eq!(payload["why_this_unit"], "Active task is authoritative.");
         assert_eq!(
             payload["sequential_vs_parallel_posture"],

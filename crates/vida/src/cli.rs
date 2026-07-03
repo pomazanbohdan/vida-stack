@@ -7,6 +7,8 @@ const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
 const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready\n  vida task next\n  vida task show <task-id>\n  vida task progress <task-id>\n  vida task deps <task-id>\n  vida task tree <task-id>\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run\n  vida task split <task-id> --child child-a:\"First slice\" --child child-b:\"Second slice\" --reason \"oversized task\"\n  vida task spawn-blocker <task-id> <blocker-task-id> \"Blocker title\" --reason \"new dependency\"\n  vida task reparent-children <from-parent-id> <to-parent-id>\n  vida task defect-batch-rehome <from-parent-id> <to-parent-id> --pause-task-id <task-id> --start-task-id <task-id>\n  vida task critical-path\n  vida taskflow help parallelism\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n\nField/view/detail selection:\n  `vida task list` supports `--fields` and `--view compact|summary|full`.\n  `vida task show` supports `--view compact|summary|full`.\n  Task diagnostic surfaces that do not expose `--fields`, `--view`, or `--details` use fixed operator projections and document that scope in their help.\n\nLarge-batch transport:\n  Use `vida task import --file tasks.jsonl --dry-run` for many task creates instead of pasting oversized shell payloads.\n  Use JSONL/NDJSON files for large batches and `vida task dep add-bulk --edge-file edges.txt --dry-run` for many dependency edges.\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary` for the default operator summary; add `--json` only for machine-readable scheduling fields.\n  Missing execution semantics never imply safe parallel execution.";
+const TASK_STEPS_LONG_ABOUT: &str = "Explain execution-step records and active-step attribution.\n\nExecution steps are non-bounded child records under a task/subtask/defect. When a step is in_progress, orchestrator-init keeps the parent as active_bounded_unit and exposes active_step, active_parent_task, and active_epic for attribution.";
+const TASK_STEPS_AFTER_HELP: &str = "Examples:\n  vida task steps --help\n  vida orchestrator-init --fields status,active_bounded_unit,active_step,active_parent_task,active_epic\n  vida doctor active-task-attribution --help\n\nFields:\n  active_step          Current in-progress execution step, when one exists.\n  active_parent_task   Bounded task that owns the execution step.\n  active_epic          Nearest program-container ancestor for the active parent task.";
 
 const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
 
@@ -1645,6 +1647,12 @@ pub(crate) enum TaskCommand {
     #[command(about = "show TaskFlow-owned help topics and compatibility aliases")]
     Help(TaskHelpArgs),
     #[command(
+        about = "explain execution steps and active-step attribution fields",
+        long_about = TASK_STEPS_LONG_ABOUT,
+        after_help = TASK_STEPS_AFTER_HELP
+    )]
+    Steps(TaskStepsArgs),
+    #[command(
         about = TASK_IMPORT_ABOUT,
         long_about = TASK_IMPORT_LONG_ABOUT,
         after_help = TASK_IMPORT_AFTER_HELP,
@@ -1822,6 +1830,9 @@ pub(crate) enum TaskDependencyCommand {
 pub(crate) struct TaskHelpArgs {
     pub(crate) topic: Option<String>,
 }
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskStepsArgs {}
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskDependencyMutationCommandArgs {
@@ -4198,7 +4209,7 @@ pub(crate) struct InitArgs {
 
     #[arg(
         long = "full",
-        help = "Render the full init envelope; routine --json output defaults to compact summary"
+        help = "Render the full init envelope, including active-step attribution; routine --json output defaults to compact summary"
     )]
     pub(crate) full: bool,
 
@@ -4211,7 +4222,7 @@ pub(crate) struct InitArgs {
 
     #[arg(
         long = "fields",
-        help = "Comma-separated top-level init fields to include, for example status,active_bounded_unit,next_actions"
+        help = "Comma-separated top-level init fields to include, for example status,active_bounded_unit,active_step,active_parent_task,active_epic,next_actions"
     )]
     pub(crate) fields: Option<String>,
 
@@ -4395,6 +4406,9 @@ pub(crate) struct StatusArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct DoctorArgs {
+    #[arg(value_name = "TOPIC", hide = true, trailing_var_arg = true, allow_hyphen_values = true)]
+    pub(crate) topic: Vec<String>,
+
     #[arg(
         long = "state-dir",
         env = "VIDA_STATE_DIR",

@@ -1784,6 +1784,20 @@ fn task_create_in_progress_step_lifts_open_parent_into_orchestrator_active_unit(
         orchestrator["continuation_binding"]["active_bounded_unit"]["task_id"], task_id,
         "{orchestrator}"
     );
+    assert_eq!(orchestrator["active_step"]["task_id"], step_id, "{orchestrator}");
+    assert_eq!(
+        orchestrator["active_parent_task"]["task_id"], task_id,
+        "{orchestrator}"
+    );
+    assert_eq!(
+        orchestrator["active_epic"]["task_id"], epic_id,
+        "{orchestrator}"
+    );
+    assert_eq!(
+        orchestrator["continuation_binding"]["active_bounded_unit"]["active_step"]["task_id"],
+        step_id,
+        "{orchestrator}"
+    );
     assert_task_graph_valid_after(&state_dir, "active step under open task");
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }

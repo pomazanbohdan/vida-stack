@@ -1005,6 +1005,11 @@ pub(crate) fn taskflow_active_candidates_from_tasks(
     let priority_sequence = prioritized_epic_sequence();
     let first_open_priority_epic = first_open_priority_epic(tasks, priority_sequence);
     let task_ancestors = task_ancestor_ids_by_task(tasks);
+    let task_by_id = tasks
+        .iter()
+        .map(|task| (task.id.as_str(), task))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let active_step_by_parent_id = active_step_by_parent_task_id(tasks);
     taskflow_leaf_active_tasks(tasks)
         .into_iter()
         .map(|task| {
@@ -1032,6 +1037,24 @@ pub(crate) fn taskflow_active_candidates_from_tasks(
                     .iter()
                     .position(|candidate| *candidate == epic_id)
             });
+            let active_step_record = active_step_by_parent_id.get(task.id.as_str()).copied();
+            let active_parent_task = active_step_record
+                .map(|_| task_attribution_json(task))
+                .unwrap_or(serde_json::Value::Null);
+            let active_step = active_step_record
+                .map(task_attribution_json)
+                .unwrap_or(serde_json::Value::Null);
+            let active_epic = ancestor_task_ids
+                .iter()
+                .find_map(|ancestor_id| {
+                    task_by_id
+                        .get(ancestor_id.as_str())
+                        .filter(|ancestor| {
+                            crate::state_store::work_item_is_program_container(&ancestor.issue_type)
+                        })
+                        .map(|ancestor| task_attribution_json(ancestor))
+                })
+                .unwrap_or(serde_json::Value::Null);
             let priority_sequence_violation =
                 match (first_open_priority_epic_rank, candidate_priority_epic_rank) {
                     (Some(required), Some(candidate)) => candidate > required,
@@ -1053,9 +1076,22 @@ pub(crate) fn taskflow_active_candidates_from_tasks(
                 "required_priority_epic_id": first_open_priority_epic_id,
                 "required_priority_epic_rank": first_open_priority_epic_rank,
                 "priority_sequence_violation": priority_sequence_violation,
+                "active_step": active_step,
+                "active_parent_task": active_parent_task,
+                "active_epic": active_epic,
             })
         })
         .collect()
+}
+
+fn task_attribution_json(task: &crate::state_store::TaskRecord) -> serde_json::Value {
+    serde_json::json!({
+        "task_id": task.id.as_str(),
+        "display_id": task.display_id.as_deref(),
+        "status": task.status.as_str(),
+        "issue_type": task.issue_type.as_str(),
+        "title": task.title.as_str(),
+    })
 }
 
 fn prioritized_epic_sequence() -> &'static [&'static str] {
@@ -1077,6 +1113,23 @@ fn task_parent_ids(task: &crate::state_store::TaskRecord) -> Vec<String> {
         })
         .map(|dependency| dependency.depends_on_id.clone())
         .collect()
+}
+
+fn active_step_by_parent_task_id<'a>(
+    tasks: &'a [crate::state_store::TaskRecord],
+) -> std::collections::BTreeMap<String, &'a crate::state_store::TaskRecord> {
+    let mut active_steps = std::collections::BTreeMap::new();
+    for task in tasks.iter().filter(|task| {
+        taskflow_core::canonical_task_status(&task.status) == Some("in_progress")
+            && taskflow_core::issue_type_is_execution_step(
+                &crate::state_store::canonical_work_item_issue_type(&task.issue_type),
+            )
+    }) {
+        if let Some(parent_id) = task_parent_ids(task).into_iter().next() {
+            active_steps.entry(parent_id).or_insert(task);
+        }
+    }
+    active_steps
 }
 
 fn task_ancestor_ids_by_task(
@@ -1186,18 +1239,6 @@ pub(crate) fn taskflow_leaf_active_tasks(
                 .map(|dependency| dependency.depends_on_id.as_str())
         })
         .collect::<std::collections::BTreeSet<_>>();
-    let parent_ids_with_children = tasks
-        .iter()
-        .flat_map(|task| {
-            task.dependencies
-                .iter()
-                .filter(|dependency| {
-                    dependency.edge_type == "parent-child" && dependency.issue_id == task.id
-                })
-                .map(|dependency| dependency.depends_on_id.as_str())
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-
     tasks
         .iter()
         .filter(|task| {
@@ -1208,7 +1249,6 @@ pub(crate) fn taskflow_leaf_active_tasks(
                 && !crate::state_store::StateStore::task_status_is_closed_like(&task.status);
             (active_bounded_task || active_step_parent)
                 && !active_parent_ids.contains(task.id.as_str())
-                && (!parent_ids_with_children.contains(task.id.as_str()) || active_step_parent)
         })
         .collect()
 }
@@ -1307,6 +1347,9 @@ pub(crate) fn add_taskflow_active_work_truth(
                         "task_status": candidate.get("status").cloned().unwrap_or(serde_json::Value::Null),
                         "issue_type": candidate.get("issue_type").cloned().unwrap_or(serde_json::Value::Null),
                         "title": candidate.get("title").cloned().unwrap_or(serde_json::Value::Null),
+                        "active_step": candidate.get("active_step").cloned().unwrap_or(serde_json::Value::Null),
+                        "active_parent_task": candidate.get("active_parent_task").cloned().unwrap_or(serde_json::Value::Null),
+                        "active_epic": candidate.get("active_epic").cloned().unwrap_or(serde_json::Value::Null),
                     }),
                 );
                 object.insert(
@@ -2455,7 +2498,7 @@ mod tests {
     }
 
     #[test]
-    fn taskflow_active_candidates_ignore_parent_with_only_closed_execution_step() {
+    fn taskflow_active_candidates_keep_active_parent_with_only_closed_execution_step() {
         let active_parent = task_record("runtime-defect-closed-step-parent", "in_progress");
         let mut closed_step = task_with_parent(
             "step-closed-regression",
@@ -2467,7 +2510,12 @@ mod tests {
         let taskflow_candidates =
             taskflow_active_candidates_from_tasks(&[active_parent, closed_step]);
 
-        assert!(taskflow_candidates.is_empty());
+        assert_eq!(taskflow_candidates.len(), 1);
+        assert_eq!(
+            taskflow_candidates[0]["task_id"],
+            "runtime-defect-closed-step-parent"
+        );
+        assert!(taskflow_candidates[0]["active_step"].is_null());
     }
 
     #[test]

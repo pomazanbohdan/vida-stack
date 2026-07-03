@@ -1247,7 +1247,45 @@ fn status_and_orchestrator_init_help_describe_view_fields_and_json_options() {
         vida_test_support::CliOutputContractCase {
             surface: "vida orchestrator-init",
             args: &["orchestrator-init", "--help"],
-            required_stdout: &["--view", "--fields", "--json"],
+            required_stdout: &[
+                "--view",
+                "--fields",
+                "--json",
+                "active_step",
+                "active_parent_task",
+                "active_epic",
+            ],
+            forbidden_stdout: &[],
+        },
+    ];
+    vida_test_support::assert_cli_help_output_matrix(cases, |args| {
+        vida().args(args).output().expect("help command should run")
+    });
+}
+
+#[test]
+fn active_step_attribution_help_surfaces_are_discoverable() {
+    let cases = [
+        vida_test_support::CliOutputContractCase {
+            surface: "vida task steps",
+            args: &["task", "steps", "--help"],
+            required_stdout: &[
+                "active_step",
+                "active_parent_task",
+                "active_epic",
+                "orchestrator-init",
+            ],
+            forbidden_stdout: &[],
+        },
+        vida_test_support::CliOutputContractCase {
+            surface: "vida doctor active-task-attribution",
+            args: &["doctor", "active-task-attribution", "--help"],
+            required_stdout: &[
+                "active_step",
+                "active_parent_task",
+                "active_epic",
+                "orchestrator-init",
+            ],
             forbidden_stdout: &[],
         },
     ];

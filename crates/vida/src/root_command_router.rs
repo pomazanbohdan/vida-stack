@@ -361,12 +361,13 @@ fn task_command_explicit_state_dir(args: &TaskArgs) -> Option<&std::path::Path> 
         TaskCommand::Takeover(command) => match &command.command {
             super::TaskTakeoverCommand::Status(command) => command.state_dir.as_deref(),
         },
-        TaskCommand::Help(_) | TaskCommand::AdaptivePreview(_) => None,
+        TaskCommand::Help(_) | TaskCommand::Steps(_) | TaskCommand::AdaptivePreview(_) => None,
     }
 }
 
 fn task_command_needs_project_root(args: &TaskArgs) -> bool {
-    !matches!(args.command, TaskCommand::Help(_)) && !task_command_has_explicit_state_dir(args)
+    !matches!(args.command, TaskCommand::Help(_) | TaskCommand::Steps(_))
+        && !task_command_has_explicit_state_dir(args)
 }
 
 fn agent_command_needs_project_root(args: &AgentArgs) -> bool {
