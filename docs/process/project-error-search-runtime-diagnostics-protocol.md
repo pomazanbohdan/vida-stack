@@ -20,7 +20,8 @@ This document is mandatory bootstrap context when any active work involves:
 4. multi-session, worktree, or orchestrator ownership conflicts,
 5. provider/carrier/model/profile routing blockers,
 6. CI clusters, repeated failing tests, or more than two related defects,
-7. command timing or slow gate diagnostics that may hide a runtime defect.
+7. command timing or slow gate diagnostics that may hide a runtime defect,
+8. oversized command output, token-heavy JSON, or artifact payloads that make orchestration expensive or break completion surfaces.
 
 For routine startup, read the compact summary in `docs/process/project-orchestrator-startup-bundle.md`. Expand to this document when a runtime defect or multi-defect pool is active.
 
@@ -44,14 +45,15 @@ Every runtime defect analysis must preserve:
 
 1. exact command or user-visible action,
 2. exit code and timing,
-3. JSON `status`, `blocker_codes`, `next_actions`, and relevant selected fields,
-4. active bounded unit evidence,
-5. `why_this_unit`,
-6. sequential/parallel posture,
-7. root write guard and exception-takeover state when relevant,
-8. session/worktree/orchestrator owner evidence when available,
-9. dirty worktree summary,
-10. proof target that will demonstrate the fix.
+3. output economy evidence: default output byte/line estimate, model-visible truncation state, artifact refs for full logs, and whether a smaller selector existed,
+4. JSON `status`, `blocker_codes`, `next_actions`, and relevant selected fields,
+5. active bounded unit evidence,
+6. `why_this_unit`,
+7. sequential/parallel posture,
+8. root write guard and exception-takeover state when relevant,
+9. session/worktree/orchestrator owner evidence when available,
+10. dirty worktree summary,
+11. proof target that will demonstrate the fix.
 
 If any of those fields are unavailable, record them as missing evidence rather than inferring a clean pass.
 
@@ -74,6 +76,19 @@ For runtime continuation defects, inspect surfaces in this order unless the acti
 Derived cache, rendered projection, lane preview, advisory text, and operator summaries are evidence surfaces only. They do not override the authoritative state-store, receipt, proof, or explicit runtime law.
 
 When a session/environment self-diagnostic discovers a new reusable Error Search optimization, update this protocol in the same bounded batch. Current examples include preferring `vida task show <task-id> --json` over heavier lane/run-graph projections for timeout recovery metadata, and requiring log-backed execution for long proof gates that can exceed host-tool stdout retention.
+
+## Output Economy Diagnostic Rule
+
+Runtime diagnostics must evaluate command output economy alongside duration. A command is not adequate just because it exits quickly; it is also a defect when it emits more model-visible output than the operator needs to decide the next action.
+
+Adequate output criteria:
+
+1. default output is the smallest sufficient operator summary: status, blocker codes, next actions, and artifact refs;
+2. full JSON/log output is opt-in, artifact-backed, and reachable by an explicit full-output command or selector;
+3. large outputs must expose bounded selectors, field filters, head/tail/range views, or compact summaries before requiring raw reads;
+4. repeated need for raw reruns, client-side JSON unwrapping, or reading megabyte artifacts is `output_economy_defect` evidence;
+5. when two commands prove the same fact, prefer the one with fewer model-visible tokens and the same or stronger proof value;
+6. command output that exceeds host/tool retention, crashes compression, or blocks runtime completion is a hard runtime defect even if the underlying operation succeeded.
 
 ## Runtime-First Diagnostic Rule
 

@@ -8,8 +8,14 @@ if (-not (Test-Path -LiteralPath $windowsEnvScript -PathType Leaf)) {
 
 . $windowsEnvScript
 
-if ([string]::IsNullOrWhiteSpace($env:VIDA_MSVC_TEMP_DIR)) {
-    $env:VIDA_MSVC_TEMP_DIR = Join-Path $rootDir ".vida\build-temp\msvc"
+# Leave VIDA_MSVC_TEMP_DIR unset by default so vida-windows-env can pick an
+# external writable temp root. Repo-local temp roots create nested VIDA projects
+# and can make project-root discovery ambiguous during bootstrap-heavy tests.
+if ([string]::IsNullOrWhiteSpace($env:CARGO_TERM_COLOR)) {
+    $env:CARGO_TERM_COLOR = "never"
+}
+if ([string]::IsNullOrWhiteSpace($env:CARGO_TERM_PROGRESS_WHEN)) {
+    $env:CARGO_TERM_PROGRESS_WHEN = "never"
 }
 
 Import-VidaMsvcEnvironment

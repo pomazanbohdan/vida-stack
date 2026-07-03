@@ -11,15 +11,14 @@ use std::os::windows::process::ExitStatusExt;
 
 use crate::runtime_assignment_policy::DispatchContractLane;
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
-use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
+use crate::{RuntimeConsumptionLaneSelection, StateStore, yaml_lookup};
 use taskflow_host_bridge::{
-    default_host_bridge_required_result_fields,
+    DispatchReceiptBindingInput, HostBridgeRequest, default_host_bridge_required_result_fields,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
     host_bridge_completed_result_status_is_admissible,
     host_bridge_existing_request_status_is_admissible,
     host_bridge_result_verdict_contract_blockers, validate_dispatch_receipt_binding,
-    DispatchReceiptBindingInput, HostBridgeRequest,
 };
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String {
@@ -35,8 +34,8 @@ fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String 
 /// compatibility. Once a matrix exists, write-producing lanes fail closed if the
 /// backend row, lane mapping, or canonical lane key is missing.
 fn backend_is_admissible_for_dispatch_target(
-    backend_id: &str,
     execution_plan: &serde_json::Value,
+    backend_id: &str,
     dispatch_target: &str,
 ) -> bool {
     let policy_dispatch_target =
@@ -2792,6 +2791,133 @@ fn materialize_host_tool_bridge_request(
     Ok(request)
 }
 
+fn compact_json_object_fields(source: &serde_json::Value, fields: &[&str]) -> serde_json::Value {
+    let mut compact = serde_json::Map::new();
+    for field in fields {
+        if let Some(value) = source.get(*field) {
+            if !value.is_null() {
+                compact.insert((*field).to_string(), value.clone());
+            }
+        }
+    }
+    serde_json::Value::Object(compact)
+}
+
+fn compact_host_tool_bridge_request_for_dispatch_result(
+    request: &serde_json::Value,
+) -> serde_json::Value {
+    let mut compact = compact_json_object_fields(
+        request,
+        &[
+            "schema_version",
+            "status",
+            "request_id",
+            "run_id",
+            "task_id",
+            "dispatch_target",
+            "packet_path",
+            "runtime_role",
+            "task_class",
+            "backend_id",
+            "carrier_id",
+            "execution_boundary",
+            "dispatch_transport",
+            "receipt_mode",
+            "adapter_kind",
+            "adapter_capability_id",
+            "invocation_mode",
+            "request_path",
+            "result_path",
+            "receipt_path",
+        ],
+    );
+    let object = compact
+        .as_object_mut()
+        .expect("compact host bridge request should be an object");
+    object.insert("compact_projection".to_string(), serde_json::json!(true));
+    if let Some(count) = request
+        .get("owned_paths")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+    {
+        object.insert("owned_paths_count".to_string(), serde_json::json!(count));
+    }
+    if let Some(request_path) = request
+        .get("request_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            "full_request_artifact".to_string(),
+            serde_json::json!({
+                "kind": "host_tool_bridge_request",
+                "path": request_path,
+                "reason": "dispatch result stores compact projection; parent host adapter reads the full request artifact"
+            }),
+        );
+    }
+    compact
+}
+
+fn compact_role_selection_for_dispatch_result(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> serde_json::Value {
+    serde_json::json!({
+        "ok": role_selection.ok,
+        "activation_source": &role_selection.activation_source,
+        "selection_mode": &role_selection.selection_mode,
+        "request": &role_selection.request,
+        "selected_role": &role_selection.selected_role,
+        "single_task_only": role_selection.single_task_only,
+        "tracked_flow_entry": &role_selection.tracked_flow_entry,
+        "confidence": &role_selection.confidence,
+        "run_id": &receipt.run_id,
+        "dispatch_target": &receipt.dispatch_target,
+        "selected_backend": &receipt.selected_backend,
+        "activation_runtime_role": &receipt.activation_runtime_role,
+        "activation_agent_type": &receipt.activation_agent_type,
+    })
+}
+
+fn compact_pending_host_bridge_dispatch_result(
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    bridge_request: &serde_json::Value,
+) {
+    let mut omitted_fields = Vec::new();
+    for field in [
+        "selection",
+        "role_selection",
+        "dev_team_readiness",
+        "init",
+        "backend_truth",
+    ] {
+        if body.remove(field).is_some() {
+            omitted_fields.push(field);
+        }
+    }
+    body.insert(
+        "role_selection_summary".to_string(),
+        compact_role_selection_for_dispatch_result(role_selection, receipt),
+    );
+    if !omitted_fields.is_empty() {
+        body.insert(
+            "omitted_heavy_fields".to_string(),
+            serde_json::json!({
+                "reason": "compact_default_dispatch_result",
+                "fields": omitted_fields,
+                "artifact_refs": {
+                    "dispatch_packet_path": body.get("dispatch_packet_path").cloned().unwrap_or(serde_json::Value::Null),
+                    "host_bridge_request_path": bridge_request.get("request_path").cloned().unwrap_or(serde_json::Value::Null),
+                }
+            }),
+        );
+    }
+}
+
 fn host_bridge_state_path_from_request(
     state_root: &Path,
     request: &serde_json::Value,
@@ -3363,7 +3489,9 @@ fn internal_host_app_bridge_requires_fail_closed(
         return None;
     }
     if configured_external_cli_fallback_enabled(overlay) {
-        return Some("internal host carrier unavailable; refusing non-receipted internal bridge while an external CLI fallback is configured");
+        return Some(
+            "internal host carrier unavailable; refusing non-receipted internal bridge while an external CLI fallback is configured",
+        );
     }
     Some("internal host carrier unavailable; external CLI fallback disabled")
 }
@@ -3899,7 +4027,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         );
         body.insert(
             "host_tool_bridge_request".to_string(),
-            bridge_request.clone(),
+            compact_host_tool_bridge_request_for_dispatch_result(&bridge_request),
         );
         if let Some(argv) = host_bridge_adapter_argv.as_ref() {
             body.insert("host_bridge_adapter_argv".to_string(), argv.clone());
@@ -3931,12 +4059,16 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
                 "activation_view_is_execution_evidence".to_string(),
                 serde_json::json!(false),
             );
-            dispatch.insert("host_tool_bridge_request".to_string(), bridge_request);
+            dispatch.insert(
+                "host_tool_bridge_request".to_string(),
+                compact_host_tool_bridge_request_for_dispatch_result(&bridge_request),
+            );
             if let Some(argv) = host_bridge_adapter_argv {
                 dispatch.insert("host_bridge_adapter_argv".to_string(), argv);
             }
         }
         refresh_execution_truth(body, role_selection, receipt, Some(backend_id), "missing");
+        compact_pending_host_bridge_dispatch_result(body, role_selection, receipt, &bridge_request);
         return Ok(Some(result));
     }
     let (command, args, stdin_payload) = configured_internal_host_activation_parts(
@@ -4984,7 +5116,8 @@ mod tests {
     #[cfg(any(unix, windows))]
     use super::execute_wrapped_command;
     use super::{
-        agent_lane_dispatch_result, configured_external_dispatch_output_mode,
+        CommandTimeoutWrapper, agent_lane_dispatch_result,
+        configured_external_dispatch_output_mode,
         configured_external_dispatch_wall_timeout_seconds, configured_host_dispatch_transport,
         configured_host_execution_boundary, configured_host_receipt_mode,
         configured_host_tool_bridge_dir, configured_host_tool_bridge_string,
@@ -5003,7 +5136,6 @@ mod tests {
         parse_internal_codex_exec_output, ready_external_readiness_fallback_backend,
         should_render_store_backed_activation_view_for_internal_failure,
         wrap_command_with_optional_timeout, wrap_command_with_optional_timeouts,
-        CommandTimeoutWrapper,
     };
     use crate::RuntimeConsumptionLaneSelection;
     use std::path::{Path, PathBuf};
@@ -5090,8 +5222,8 @@ dispatch:
     }
 
     #[test]
-    fn parse_external_provider_output_trusts_pi_agent_end_success_even_when_result_mentions_auth_text(
-    ) {
+    fn parse_external_provider_output_trusts_pi_agent_end_success_even_when_result_mentions_auth_text()
+     {
         let parsed = parse_external_provider_output(
             r#"{"type":"result","subtype":"success","is_error":false,"raw_provider":{"mode":"rpc","provider":"pi","terminal_event":"agent_end"},"result":"packet text mentions authentication failed and invalid api key as configuration examples"}"#,
         )
@@ -5318,9 +5450,11 @@ dispatch:
             r#"{"type":"item.completed","item":{"id":"1","type":"error","message":"Under-development features enabled: memories. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in config.toml."}}
 {"type":"item.completed","item":{"id":"2","type":"agent_message","text":"final"}}"#,
         );
-        assert!(parsed_with_unstable_feature_warning
-            .error_messages
-            .is_empty());
+        assert!(
+            parsed_with_unstable_feature_warning
+                .error_messages
+                .is_empty()
+        );
         assert!(internal_codex_output_confirms_execution(
             &parsed_with_unstable_feature_warning,
             "",
@@ -5364,18 +5498,19 @@ dispatch:
 
     #[test]
     fn internal_host_windows_sandbox_spawn_failure_gets_specific_blocker() {
-        let stderr =
-            "2026-05-22T02:27:30Z ERROR codex_core::exec: exec error: windows sandbox: spawn setup refresh";
+        let stderr = "2026-05-22T02:27:30Z ERROR codex_core::exec: exec error: windows sandbox: spawn setup refresh";
 
         assert_eq!(
             super::internal_host_provider_failure_blocker_code(stderr, &[]),
             Some("internal_codex_windows_sandbox_unavailable")
         );
-        assert!(super::internal_host_provider_failure_blocker_reason(
-            "internal_codex_windows_sandbox_unavailable",
-            stderr.to_string()
-        )
-        .contains("configured backend/runtime profile whose sandbox is supported"));
+        assert!(
+            super::internal_host_provider_failure_blocker_reason(
+                "internal_codex_windows_sandbox_unavailable",
+                stderr.to_string()
+            )
+            .contains("configured backend/runtime profile whose sandbox is supported")
+        );
     }
 
     #[test]
@@ -5564,8 +5699,8 @@ host_tool_bridge:
     }
 
     #[test]
-    fn internal_host_dispatch_command_defaults_to_host_tool_bridge_without_explicit_process_transport(
-    ) {
+    fn internal_host_dispatch_command_defaults_to_host_tool_bridge_without_explicit_process_transport()
+     {
         let system_entry = serde_yaml::from_str(
             r#"
 execution_class: internal
@@ -6165,14 +6300,18 @@ host_tool_bridge:
             first_request["request_path"],
             second_request["request_path"]
         );
-        assert!(first_request["request_id"]
-            .as_str()
-            .expect("first request id should render")
-            .contains("dispatch-a"));
-        assert!(second_request["request_id"]
-            .as_str()
-            .expect("second request id should render")
-            .contains("dispatch-b"));
+        assert!(
+            first_request["request_id"]
+                .as_str()
+                .expect("first request id should render")
+                .contains("dispatch-a")
+        );
+        assert!(
+            second_request["request_id"]
+                .as_str()
+                .expect("second request id should render")
+                .contains("dispatch-b")
+        );
         assert!(
             result_path.exists(),
             "first result path should remain owned by first packet"
@@ -6802,7 +6941,7 @@ agent_system:
 "#,
         )
         .expect("write overlay");
-        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+        let mut role_selection = internal_codex_fallback_role_selection(serde_json::json!({
             "backend_admissibility_matrix": [
                 {
                     "backend_id": "internal_subagents",
@@ -6824,6 +6963,11 @@ agent_system:
                 "selected_model_profile_id": "internal_fast"
             }
         }));
+        role_selection.compiled_bundle = serde_json::json!({
+            "large_default_output_regression_guard": "x".repeat(200_000)
+        });
+        role_selection.execution_plan["large_default_output_regression_guard"] =
+            serde_json::json!("y".repeat(200_000));
         let receipt = internal_codex_fallback_receipt(
             dispatch_packet_path
                 .to_str()
@@ -6869,6 +7013,22 @@ agent_system:
             result["backend_dispatch"]["host_tool_bridge_request"]["status"],
             "pending"
         );
+        assert_eq!(result["host_tool_bridge_request"]["compact_projection"], true);
+        assert_eq!(result["host_tool_bridge_request"]["owned_paths_count"], 1);
+        assert!(result.get("selection").is_none());
+        assert!(result.get("role_selection").is_none());
+        assert!(result.get("dev_team_readiness").is_none());
+        assert_eq!(
+            result["role_selection_summary"]["dispatch_target"],
+            receipt.dispatch_target
+        );
+        let serialized = serde_json::to_vec_pretty(&result)
+            .expect("pending bridge result should serialize compactly");
+        assert!(
+            serialized.len() < 64 * 1024,
+            "pending bridge result should stay compact; got {} bytes",
+            serialized.len()
+        );
         for request in [
             &result["host_tool_bridge_request"],
             &result["backend_dispatch"]["host_tool_bridge_request"],
@@ -6907,14 +7067,16 @@ agent_system:
                 .expect("backend adapter argv should render"),
             adapter_argv
         );
-        assert!(result["next_actions"]
-            .as_array()
-            .expect("next actions should render")
-            .iter()
-            .all(|action| !action
-                .as_str()
-                .unwrap_or_default()
-                .starts_with("vida agent host-bridge")));
+        assert!(
+            result["next_actions"]
+                .as_array()
+                .expect("next actions should render")
+                .iter()
+                .all(|action| !action
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("vida agent host-bridge"))
+        );
 
         let _ = std::fs::remove_dir_all(&project_root);
     }
@@ -9509,16 +9671,20 @@ host_tool_bridge:
             refreshed_request["implementation_isolation"]["canonical_worktree_writes_allowed"],
             false
         );
-        assert!(refreshed_request["owned_paths"]
-            .as_array()
-            .expect("request owned paths")
-            .iter()
-            .any(|path| path == "test"));
-        assert!(refreshed_request["implementation_isolation"]["owned_paths"]
-            .as_array()
-            .expect("isolation owned paths")
-            .iter()
-            .any(|path| path == "test"));
+        assert!(
+            refreshed_request["owned_paths"]
+                .as_array()
+                .expect("request owned paths")
+                .iter()
+                .any(|path| path == "test")
+        );
+        assert!(
+            refreshed_request["implementation_isolation"]["owned_paths"]
+                .as_array()
+                .expect("isolation owned paths")
+                .iter()
+                .any(|path| path == "test")
+        );
 
         let _ = std::fs::remove_dir_all(project_root);
     }
@@ -10422,10 +10588,12 @@ agent_system:
             result["backend_dispatch"]["provider_error"],
             serde_json::Value::Null
         );
-        assert!(!result["blocker_reason"]
-            .as_str()
-            .expect("blocker reason should render")
-            .contains("SHOULD_NOT_LAUNCH"));
+        assert!(
+            !result["blocker_reason"]
+                .as_str()
+                .expect("blocker reason should render")
+                .contains("SHOULD_NOT_LAUNCH")
+        );
 
         let _ = std::fs::remove_dir_all(&project_root);
     }
@@ -10645,14 +10813,18 @@ agent_system:
             result["external_backend_readiness"]["status"],
             "external_backend_dispatch_blocked"
         );
-        assert!(result["blocker_reason"]
-            .as_str()
-            .expect("blocker reason should render")
-            .contains("disabled"));
-        assert!(!result["blocker_reason"]
-            .as_str()
-            .expect("blocker reason should render")
-            .contains("SHOULD_NOT_LAUNCH"));
+        assert!(
+            result["blocker_reason"]
+                .as_str()
+                .expect("blocker reason should render")
+                .contains("disabled")
+        );
+        assert!(
+            !result["blocker_reason"]
+                .as_str()
+                .expect("blocker reason should render")
+                .contains("SHOULD_NOT_LAUNCH")
+        );
 
         let _ = std::fs::remove_dir_all(&project_root);
     }

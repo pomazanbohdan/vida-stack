@@ -67,11 +67,15 @@ After each coherent runtime work pool, check whether the session required avoida
 
 - full backlog scans instead of filtered task search,
 - raw reruns because compact output hid key fields,
+- large default JSON/log output where a compact summary plus artifact refs would have been enough,
+- host/tool truncation, compression watchdog timeouts, transport closure, or megabyte runtime artifacts,
 - client-side JSON unwrapping because stable field selectors were missing,
 - repeated `status`, `doctor`, `task tree`, and GitHub reads for one proof bundle,
 - noisy output where a child summary would have been enough.
 
 If yes, create or update an operator-efficiency TaskFlow item under the current runtime/quality epic.
+
+Adequate runtime output is the smallest output that preserves proof and next-action clarity. Prefer selected fields, compact default views, bounded head/tail/range views, and artifact-backed raw logs. When two command shapes prove the same fact, the lower model-visible token/byte output is better. Treat oversized default output, missing selectors, raw host-bridge prompts in normal output, and >1 MiB artifacts required for normal completion as runtime defects, not cosmetic issues.
 
 For parallel task packs, run one explicit finalize sequence:
 
@@ -83,7 +87,7 @@ For parallel task packs, run one explicit finalize sequence:
 6. Run the runtime self-diagnostic once for the whole closed pack before selecting unrelated work.
 7. Actualize project-skill creation or updates through `docs/process/agent-skill-learning-protocol.md`: collect close, self-analysis, diagnostic, and user-correction events; record `no_skill_update_reason` when no skill update is needed; otherwise stage or validate the bounded proposal.
 8. Actualize TaskFlow last, after skill-learning actualization and immediately before next-work analysis.
-9. Create or update runtime follow-ups for repeated command-output loss, repo-root temp leakage, missing pack-level proof/close commands, or shell PATH drift.
+9. Create or update runtime follow-ups for repeated command-output loss, oversized output/token waste, repo-root temp leakage, missing pack-level proof/close commands, or shell PATH drift.
 
 ## Agent Research Ring
 

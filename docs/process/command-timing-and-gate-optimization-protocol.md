@@ -1,8 +1,8 @@
 # Command Timing And Gate Optimization Protocol
 
-Purpose: define the project-owned operating protocol for recording timings on significant agent, shell, script, test, CI, build, release, browser, simulator, and runtime operations, then using those timings to optimize development throughput without weakening required proof.
+Purpose: define the project-owned operating protocol for recording timing and output-token economy on significant agent, shell, script, test, CI, build, release, browser, simulator, and runtime operations, then using that evidence to optimize development throughput without weakening required proof.
 
-This document is a process protocol. It does not replace product/runtime law, release admission, TaskFlow ownership, DocFlow proof law, or CI branch protection. It defines how operators and agents must collect timing evidence, diagnose slow work, and decide whether a gate should stay blocking, become faster, move to a later admission point, or become diagnostic-only for PR iteration.
+This document is a process protocol. It does not replace product/runtime law, release admission, TaskFlow ownership, DocFlow proof law, or CI branch protection. It defines how operators and agents must collect timing and output economy evidence, diagnose slow or noisy work, and decide whether a gate should stay blocking, become faster, move to a later admission point, become diagnostic-only for PR iteration, or get a compact-output/runtime defect.
 
 ## Scope
 
@@ -20,7 +20,7 @@ This protocol applies to:
 10. CI runs, CI jobs, and individual CI steps,
 11. delegated agent lanes, advisory agents, and fallback manual emulation steps.
 
-Read-only commands are not exempt when they materially affect orchestration time. A slow read-only command is still operator-friction evidence.
+Read-only commands are not exempt when they materially affect orchestration time or token usage. A slow or noisy read-only command is still operator-friction evidence.
 
 ## Timing Envelope
 
@@ -35,8 +35,12 @@ duration_ms: wall-clock duration in milliseconds
 exit_status: pass | fail | blocked | cancelled | timed_out | unknown
 blocking_scope: none | local_iteration | pr_acceptance | main_admission | release_admission | runtime_continuation
 artifact_refs: log paths, CI URLs, receipt paths, screenshots, or command output paths
-classification: fast | watch | slow | hard_defect | long_gate_expected
-next_decision: keep_blocking | make_fast_proof | diagnostic_only_for_pr | move_to_main_or_release | remove_or_replace_stale_check | create_runtime_defect | none
+output_lines: model-visible output line count or null when unavailable
+output_bytes: model-visible output bytes or null when unavailable
+full_output_artifact_ref: path/URL for raw output when default output is compacted
+output_shape: compact | selector_bounded | artifact_backed | noisy | oversized | retention_lost | unknown
+classification: fast | watch | slow | hard_defect | long_gate_expected | output_defect
+next_decision: keep_blocking | make_fast_proof | diagnostic_only_for_pr | move_to_main_or_release | remove_or_replace_stale_check | create_runtime_defect | compact_output | add_selector | artifact_back_full_output | none
 target_dir_policy: caller_provided | repo_local_worktree_shared | repo_local_default | not_applicable
 effective_cargo_target_dir: absolute Cargo target directory when the operation can invoke Cargo or a Cargo-built binary
 ```
@@ -63,6 +67,16 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 5. A repeated slow command is stronger evidence than a single slow command. Three repeated observations in one active case require TaskFlow actualization unless the task already exists.
 6. GitHub Actions jobs that can block PR, main, release, or installer admission must set an explicit `timeout-minutes` bound. An unbounded CI job that remains running without logs is a gate defect; add the timeout first, then rerun or repair the underlying failing step from bounded evidence.
 
+## Output Economy Thresholds
+
+1. Normal operator commands should default to a compact summary, not raw logs or full nested JSON.
+2. Default human output should normally stay under 120 lines and 12 KiB model-visible text. Exceeding this repeatedly is `watch`; exceeding it when a selector could answer the question is `output_defect`.
+3. Default machine output should be field-selectable or artifact-backed before it approaches 64 KiB. A default JSON payload above 256 KiB is a runtime defect unless it is an explicit `--full` or raw artifact command.
+4. Any persisted dispatch, lane, receipt, diagnostic, or proof artifact above 1 MiB that must be read to complete a normal runtime transition is a hard runtime defect.
+5. Output that triggers host-tool truncation, compression watchdog timeouts, transport closure, or loss of key fields is a hard runtime defect.
+6. Adequate output means the operator can answer the next action from status, blocker codes, selected fields, and artifact refs without rereading the raw payload.
+7. When two command shapes provide equivalent proof, choose the lower token/byte output. Smaller output is better only when proof strength and actionability are preserved.
+
 ## Command Execution Rules
 
 1. Prefer one bounded command per proof step when timing matters.
@@ -75,6 +89,7 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 8. Scripts should expose JSON or structured status when their output is consumed by agents, runtime diagnostics, CI, or TaskFlow notes; timed JSON records should include the same stdout/stderr artifact paths in `artifact_refs`.
 9. If a command is expected to run longer than two minutes, state that expectation before running it and identify what smaller proof has already passed.
 10. Do not repeatedly rerun a long gate to discover hidden failure details; repair output/artifact capture first.
+10a. Do not repeatedly rerun a large-output command to recover hidden fields; add or use a selector, compact view, range/head/tail view, or artifact-backed raw output first.
 11. If a CI run is superseded by a newer pushed commit, cancel the stale run once the newer run is queued or running so runner capacity and status surfaces reflect the current head.
 12. Windows local proof scripts that invoke Cargo must use deterministic target-dir behavior and report it in timing records. If `CARGO_TARGET_DIR` is already set by the caller, respect that value and record `target_dir_policy=caller_provided`. If the repository is a linked worktree under `.vida/worktrees`, use the owner repository's `.vida/cargo-target` cache and record `target_dir_policy=repo_local_worktree_shared`. Otherwise use the current repository's `.vida/cargo-target` cache and record `target_dir_policy=repo_local_default`.
 13. Debug-runtime smoke commands must resolve the debug binary from `effective_cargo_target_dir`, not from a hardcoded `target/debug` path. This keeps worktree output visible under `.vida/cargo-target` while preventing each linked worktree from cold-building an isolated `target` tree.
@@ -87,6 +102,7 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 20. During task research, evaluate both external delegation modes before root implementation when useful: `external_readonly_complete` for analysis/spec/review/proof-diagnosis reports, and `external_patch_proposal` for patch plans/diffs that root will apply and verify. Record which mode ran, which mode was skipped, and why; high-ambiguity or high-risk tasks may run both in parallel before root synthesis.
 21. For write-producing development, try internal low first when the packet owns one clear scope and proof command; move to internal medium for test authoring, ambiguous bounded implementation, or coach gating; reserve high/xhigh for architecture, safety, release, or repeated low/medium failure evidence.
 22. After each coherent work pool, record whether root-token usage could have been reduced by earlier advisory prefetch, compact command output, task snapshot refresh, or batching TaskFlow mutations; create or update a TaskFlow optimization item when the answer is yes.
+23. Treat megabyte runtime JSON, unbounded `--json` defaults, raw host-bridge prompts in normal output, and missing field selectors as runtime defects when they materially increase root-token usage or make batch closure unreliable.
 
 ## Gate Decision Model
 
