@@ -6,25 +6,17 @@ Purpose: conduct external, business-level research that precedes technical work 
 
 This command maps layers as:
 
-1. `CL1 Intake` -> topic resolution, scope limits, and continuation mode selection.
-2. `CL2 Reality And Inputs` -> external evidence collection plus WVP-backed factual validation when needed.
-3. `CL3 Contract And Decisions` -> actionable candidate filtering and approval boundary for what may mutate checklist/decisions.
-4. `CL4 Materialization` -> research document updates plus approved feature/decision sync.
-5. `CL5 Gates And Handoff` -> handoff inputs for `/vida-spec`, not implementation or task-pool mutation.
+| Layer | Research role |
+| --- | --- |
+| `CL1 Intake` | topic resolution, scope limits, continuation mode |
+| `CL2 Reality And Inputs` | external evidence + WVP-backed validation |
+| `CL3 Contract And Decisions` | actionable filtering + approval boundary for checklist/decisions mutation |
+| `CL4 Materialization` | research document updates + approved feature/decision sync |
+| `CL5 Gates And Handoff` | handoff inputs for `/vida-spec`, not implementation or task-pool mutation |
 
 Canonical source: `command-layer-protocol.md`
 
-Handoff boundary:
-
-1. `/vida-research` hands off evidence and approved business-level deltas only.
-2. Technical contract formation starts in `/vida-spec`.
-3. Research must not jump directly from evidence gathering to practical validation or implementation-shaped work.
-4. The mandatory phase order is:
-   - bounded research pass,
-   - research artifact update,
-   - requirement formation,
-   - specification/intake formation,
-   - only then practical validation, technical spec work, or implementation-facing continuation.
+Handoff boundary: `/vida-research` hands off evidence and approved business-level deltas only; technical contract formation starts in `/vida-spec`; research must not jump from evidence gathering directly to practical validation or implementation-shaped work. Mandatory order: bounded research pass -> research artifact update -> requirement formation -> specification/intake formation -> practical validation, technical spec work, or implementation-facing continuation.
 
 ## Role Boundary
 
@@ -44,92 +36,21 @@ Handoff boundary:
 
 Every non-trivial research pass must end with an explicit completeness checklist.
 
-Required checklist questions:
+Required checklist questions: full bounded research pass vs first-hit summary; checked evidence classes (`existing research docs`, `current product/spec canon`, `relevant local code/config/runtime surfaces`, `external web sources`, `adjacent framework/project protocols`); remaining unknown/weak/conflicting evidence; material effect on recommendation/handoff; next research required before closure.
 
-1. Was a full bounded research pass completed for the active question, not just a first-hit summary?
-2. Which evidence classes were checked:
-   - existing research docs,
-   - current product/spec canon,
-   - relevant local code/config/runtime surfaces,
-   - external web sources,
-   - adjacent framework/project protocols?
-3. What still remains unknown, weakly supported, or conflicting?
-4. Does any unresolved gap materially affect the recommendation or handoff?
-5. If yes, what must be researched next before closure?
+Completion rule: unresolved material gaps mean the research pass is not complete; continue research before recommendations, approvals, or handoff; do not present bounded partial scan as comprehensive; close only when no material research questions remain for the active decision. Target: `100% decision-ready confidence` = no known material unknowns, no unresolved source conflicts, no missing evidence class needed, and evidence strong enough without speculative fill-in. If this cannot be claimed truthfully, continue or explicitly downgrade scope until true.
 
-Completion rule:
+Autonomous continuation rule: once research is active, execute the next required research pass automatically when the checklist shows material gaps. Do not stop after one pass to ask whether to continue unless the next step widens scope materially, spends money/uses privileged systems, or the user explicitly asked to pause. Default loop: `research -> gap check -> next required research -> repeat` until closed or blocked.
 
-1. If the checklist reveals unresolved material gaps, the research pass is not complete.
-2. Continue research before finalizing recommendations, approvals, or handoff.
-3. Do not present a bounded partial scan as if it were comprehensive.
-4. Research may close only when no unresolved material research questions remain for the active decision.
-5. The required target is `100% decision-ready confidence`, meaning:
-   - no known material unknowns remain,
-   - no known unresolved source conflicts remain,
-   - no missing evidence class is still needed for the decision,
-   - the current evidence is strong enough to support the decision without speculative fill-in.
-6. If the operator cannot truthfully claim `100% decision-ready confidence`, the research pass remains open and must continue or explicitly downgrade the scope until that condition becomes true.
+Task-completion rule: do not stop at the first acceptable-looking intermediate result while lawful task-owned work remains. Continue through required evidence collection, artifact updates, requirement formation, thematic consolidation, and spec/intake handoff preparation. A partial report is not completion. Completion requires no remaining lawful next step inside current scope.
 
-Autonomous continuation rule:
+Auto-continuation after reports: intermediate reports do not close the flow by default. If a bounded-pass report still implies a lawful next step, default to `report -> continue`. Stop only when the next step widens scope, needs paid/privileged/user-owned systems, or the user explicitly asked to pause/discuss at the report boundary.
 
-1. Once research is active, the next required research pass must be executed automatically when the current checklist still shows material gaps.
-2. Do not stop after one pass just to ask whether the remaining required research should continue, unless:
-   - the next step would widen scope materially,
-   - the next step would spend money or use privileged systems,
-   - the user explicitly asked to pause after the current pass.
-3. The default behavior is `research -> gap check -> next required research -> repeat` until the checklist closes or a lawful blocker is reached.
+Research progression rule: after each bounded pass, update the living research artifact, form explicit requirements from validated findings, then produce/update the bounded spec/intake artifact for downstream practical work. Practical research, technical validation, prototyping, or implementation-facing continuation is forbidden until those steps are complete for the current bounded question. If new evidence reopens a closed assumption, repeat: update research -> refresh requirements -> refresh spec/intake -> continue downstream.
 
-Task-completion rule:
+Thematic consolidation rule: research closure must not leave related findings scattered across unrelated or weakly-linked artifacts. When related findings accumulate across passes, create/update a thematic research artifact with evidence, open questions, and implications. Prefer one living artifact per bounded topic; if an artifact is too broad, split or add a topic-focused companion. Required result: `coherent topic-level consolidation`, not only `updated artifacts`.
 
-1. Research must not stop at the first acceptable-looking intermediate result when lawful task-owned work still remains.
-2. The operator must continue until the active bounded research task is actually complete, including:
-   - remaining required evidence collection,
-   - artifact updates,
-   - requirement formation,
-   - thematic consolidation,
-   - spec/intake handoff preparation.
-3. A partial report is not a completion reason by itself.
-4. Completion is reached only when the active research task has no remaining lawful next step inside its current scope.
-
-Auto-continuation after reports:
-
-1. Intermediate research reports do not close the flow by default.
-2. If a report is emitted at the end of a bounded pass and the checklist still implies a next lawful step, the default behavior is `report -> continue`.
-3. Stop after a report only when:
-   - the next step would materially widen scope,
-   - the next step needs paid, privileged, or user-owned systems,
-   - the user explicitly asked to pause at the current report boundary,
-   - the user explicitly asked to discuss the current report before continuation.
-
-Research progression rule:
-
-1. After each bounded research pass, update the living research artifact before treating the pass as complete.
-2. After research artifacts are updated, form explicit requirements from the validated findings.
-3. After requirements are formed, produce or update the bounded spec/intake artifact that will govern downstream practical work.
-4. Practical research, technical validation, prototyping, or implementation-facing continuation is forbidden until steps 1-3 are complete for the current bounded question.
-5. If new evidence reopens a closed assumption, repeat the sequence:
-   - update research,
-   - refresh requirements,
-   - refresh spec/intake,
-   - then continue downstream.
-
-Thematic consolidation rule:
-
-1. Research closure must not leave materially related findings scattered only across unrelated or weakly-linked artifacts.
-2. When the topic accumulates meaningfully related findings across multiple passes, create or update a thematic research artifact that consolidates the relevant evidence, open questions, and implications.
-3. Prefer one thematic living artifact per bounded topic over many fragmented notes.
-4. If an existing artifact is too broad, split or add a topic-focused companion artifact rather than forcing unrelated material into one oversized document.
-5. The required result is not only `updated artifacts` but `coherent topic-level consolidation`.
-
-Coverage rule:
-
-1. Research should be comprehensive across the relevant evidence stack:
-   - research artifacts,
-   - spec artifacts,
-   - code/runtime evidence,
-   - web validation,
-   - competing alternatives when selection is involved.
-2. Prefer explicit notes such as `covered`, `not-needed`, `not-found`, or `still-open` for each evidence class.
+Coverage rule: research should cover the relevant evidence stack: research artifacts, spec artifacts, code/runtime evidence, web validation, and competing alternatives when selection is involved. Prefer `covered`, `not-needed`, `not-found`, or `still-open` for each evidence class.
 
 ## Mandatory Artifacts
 
@@ -156,23 +77,13 @@ Continuation rule:
 
 ### Actionable Types (approval required)
 
-1. `FEATURE`
-2. `PROBLEM`
-3. `REC`
-4. `OPPORTUNITY`
-5. `DECISION`
+`FEATURE`, `PROBLEM`, `REC`, `OPPORTUNITY`, `DECISION`.
 
 ### Informational Types (no direct planning mutation)
 
-1. `INSIGHT`
-2. `RISK`
-3. `COMPETITOR`
+`INSIGHT`, `RISK`, `COMPETITOR`.
 
-Priority for actionable items:
-
-1. `🔴` critical
-2. `🟡` important
-3. `🟢` nice-to-have
+Priority for actionable items: `🔴` critical, `🟡` important, `🟢` nice-to-have.
 
 ## Feature List Contract (Do Not Change Format)
 
@@ -208,20 +119,7 @@ When approved actionable items are added to feature checklist, preserve existing
 
 ## Output Template (Research File)
 
-Each `docs/product/research/<topic>-survey.md` iteration should contain:
-
-1. `Iteration` (date, scope, objective).
-2. `Sources`.
-3. `Findings`.
-4. `Actionable Candidates`.
-5. `Informational Notes`.
-6. `Decision Options (business-level)`.
-7. `Approved to Feature List`.
-8. `Approved to Decisions`.
-9. `Handoff Inputs for /vida-spec`.
-10. `Requirements Derived From This Iteration`.
-11. `Spec / Intake Delta Needed Before Practical Continuation`.
-12. `Related Topic Consolidation`.
+Each `docs/product/research/<topic>-survey.md` iteration should contain: `Iteration` (date, scope, objective), `Sources`, `Findings`, `Actionable Candidates`, `Informational Notes`, `Decision Options (business-level)`, `Approved to Feature List`, `Approved to Decisions`, `Handoff Inputs for /vida-spec`, `Requirements Derived From This Iteration`, `Spec / Intake Delta Needed Before Practical Continuation`, `Related Topic Consolidation`.
 
 ## Lawful Report Stages
 
@@ -282,5 +180,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/command-instructions/operator.vida-research-guide.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-11T13:27:02+02:00'
+updated_at: 2026-07-03T14:05:00+03:00
 changelog_ref: operator.vida-research-guide.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: guide-prose-compaction+list-normalization+protected-command-validation
+protocol_compression_baseline_ref: 4aee9451c:vida/config/instructions/command-instructions/operator.vida-research-guide.md
+protocol_compression_audit_at: 2026-07-03T14:05:00+03:00
+protocol_compression_before_tokens: 2606
+protocol_compression_after_tokens: 2350
+protocol_compression_content_sha256: 9f40ef878833b7ab0197457ff8240f3dd0aed4c0e3f292c79b81ee3c77570420

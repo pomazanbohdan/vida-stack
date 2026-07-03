@@ -1,6 +1,6 @@
 # Algorithms Quick Reference
 
-Purpose: compress the algorithm descriptions without losing their essence by keeping explicit triggers, quality gates, and escalation rules.
+Purpose: algorithm reference preserving triggers/gates.
 
 ## Unified Matrix
 
@@ -16,45 +16,22 @@ Purpose: compress the algorithm descriptions without losing their essence by kee
 
 ## Unified Scoring Contract
 
-- `selector_score` is routing-only, stays on the `11-55` scale, and uses `C×2 + R×3 + S×3 + N×2 + F×1`.
-- Default bands: `STC <=12`, `PR-CoT 13-22`, `MAR 23-32`, `5-SOL 33-42`, `META >42`.
-- `PR-CoT` exports a gate result plus `validation_signal` from issue severity.
-- `MAR` keeps the local `1-10` weighted rubric score and exports `refinement_signal`.
-- `5-SOL` keeps local `1-5` category scoring, exports `best option %`, `agreement %`, and `options_signal`.
-- `META` uses only normalized signals after admissibility gates and weights them by task class.
+`selector_score` is routing-only, stays on `11-55`, and uses `C×2 + R×3 + S×3 + N×2 + F×1`. Default bands: `STC <=12`, `PR-CoT 13-22`, `MAR 23-32`, `5-SOL 33-42`, `META >42`. `PR-CoT` exports gate result + `validation_signal`; `MAR` keeps `1-10` weighted rubric + `refinement_signal`; `5-SOL` keeps `1-5` category scoring and exports `best option %`, `agreement %`, `options_signal`; `META` uses normalized signals after admissibility gates and task-class weights.
 
 ## Routing Escalators
 
-- Route directly to `META` when protocol conflict, execution gate mismatch, fail-closed law risk, or framework-owned behavior change is present.
-- Route directly to `META` when tracked writer execution has `no_eligible_analysis_lane`, `no_eligible_verifier`, or `no_eligible_coach` and a policy decision is required.
-- Keep the score-selected route only when the task is mainly local implementation without governance ambiguity.
-- If `STC` is later proven to be a misclassification by review/gate/root-cause evidence, do not reuse `STC` for the same task class in the current pass.
-- A confirmed `STC` misfire promotes the next route to at least `PR-CoT`, and to `META` for protocol/fail-closed/framework-routing cases.
+Route directly to `META` for protocol conflict, execution gate mismatch, fail-closed law risk, framework-owned behavior change, or tracked writer `no_eligible_analysis_lane` / `no_eligible_verifier` / `no_eligible_coach` with policy decision required. Keep score-selected route only for mostly local implementation without governance ambiguity. If review/gate/root-cause evidence proves `STC` misclassification, do not reuse `STC` for the same task class in the current pass; promote to at least `PR-CoT`, or `META` for protocol/fail-closed/framework-routing cases.
 
 ## Algorithm Cards
 
 ### STC
-- When: baseline mode for simple tasks with selector score `<=12`.
-- Input: a clear local objective.
-- Steps: generate a step, verify it, localize the first error, roll back to a clean prefix, retry.
-- Success: the task is solved without logical gaps.
-- Escalation: after 3 failed retries, or immediately for protocol/route ambiguity.
+When: simple tasks, score `<=12`. Input: clear local objective. Steps: generate step -> verify -> localize first error -> roll back to clean prefix -> retry. Success: solved without logical gaps. Escalation: after 3 failed retries or protocol/route ambiguity.
 
 ### PR-CoT
-- When: selector score `13-22`, medium complexity with a need for independent validation.
-- Input: a task with multiple aspects (logic/data/architecture/alternatives).
-- Steps: 4 perspectives -> consensus packet -> revision by each perspective.
-- Success: aligned decision with no unresolved critical findings.
-- Export: `validation_signal` from critical/major/minor issue weights.
-- Escalation: unresolved critical findings or >=2 issues.
+When: score `13-22`, medium complexity needing validation. Input: multi-aspect task. Steps: 4 perspectives -> consensus -> revision. Success: aligned decision, no unresolved critical findings. Export: `validation_signal`. Escalation: unresolved critical or >=2 issues.
 
 ### MAR
-- When: selector score `23-32`, complex non-trivial decisions.
-- Input: a task with a high impact radius.
-- Steps: 3 role rounds + accumulated lessons learned.
-- Success: weighted rubric score >= 8/10 with no unresolved critical residual risk.
-- Rubric weights: correctness `0.35`, completeness `0.25`, alignment `0.25`, simplicity `0.15`.
-- Escalation: score < 8 after 3 rounds.
+When: score `23-32`, complex non-trivial decisions. Input: high impact radius task. Steps: 3 role rounds + lessons learned. Success: weighted rubric >= 8/10 and no unresolved critical residual risk. Weights: correctness `0.35`, completeness `0.25`, alignment `0.25`, simplicity `0.15`. Escalation: score < 8 after 3 rounds.
 
 ### 5-SOL
 - When: selector score `33-42`, a justified choice between directions is needed.
@@ -98,11 +75,7 @@ Question: "How can the algorithm descriptions be optimized without losing their 
 | 5-SOL | Compared 5 documentation formats and chose a hybrid | Transparent trade-offs | Excessive for simple tasks |
 | META | Combined standard + governance | Maximum reliability | Highest time cost |
 
-Synthesis (recommended):
-1. Keep `Quick Reference` (this file) as the operational layer.
-2. Keep `Deep Spec` in `instruction-contracts/overlay.step-thinking-protocol` as canonical.
-3. Preserve: triggers, quality gates, escalation rules.
-4. Add a smoke gate: if the quality gate fails -> automatically escalate to the next algorithm.
+Synthesis: keep `Quick Reference` as operational layer; keep `Deep Spec` in `instruction-contracts/overlay.step-thinking-protocol` as canonical; preserve triggers, quality gates, escalation rules; smoke gate: if quality gate fails -> escalate to the next algorithm.
 
 -----
 artifact_path: config/instructions/references/algorithms.quick-reference
@@ -113,5 +86,13 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/references/algorithms.quick-reference.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-11T13:45:58+02:00'
+updated_at: 2026-07-03T14:05:00+03:00
 changelog_ref: algorithms.quick-reference.changelog.jsonl
+protocol_authoring_gate: enforced
+protocol_compression_status: audit_passed
+protocol_compression_algorithm: quick-reference-compaction+semantic-atom-coverage+gate-preserve-exact
+protocol_compression_baseline_ref: 4aee9451c:vida/config/instructions/references/algorithms.quick-reference.md
+protocol_compression_audit_at: 2026-07-03T14:05:00+03:00
+protocol_compression_before_tokens: 1947
+protocol_compression_after_tokens: 1946
+protocol_compression_content_sha256: 585eae2ed5819d7bc839dfc0e5c89c7a4c8ac3ae3be2b8df327993746d9aef45
