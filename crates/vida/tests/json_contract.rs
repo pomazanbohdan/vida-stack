@@ -565,6 +565,53 @@ fn requirement_analysis_source_file_rejects_symlinks() {
 }
 
 #[test]
+fn requirement_analysis_source_file_rejects_oversized_content() {
+    let state_dir = unique_state_dir();
+    let project_root = format!("{}-project", unique_state_dir());
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    write_requirement_project_markers(std::path::Path::new(&project_root));
+    let oversized_marker = "OVERSIZED_REQUIREMENT_SOURCE_MARKER";
+    let oversized_source = format!("{}{}", "x".repeat(64 * 1024 + 1), oversized_marker);
+    fs::write(format!("{project_root}/requirements.md"), oversized_source)
+        .expect("oversized source fixture should be written");
+
+    let output = vida()
+        .current_dir(&project_root)
+        .args([
+            "requirement",
+            "analyze",
+            "--task-id",
+            "oversized-source",
+            "--source-file",
+            "requirements.md",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("oversized source rejection should run");
+    assert!(
+        !output.status.success(),
+        "oversized source files should fail closed"
+    );
+    let value = parse_json_output(
+        &["requirement", "analyze", "--source-file", "--json"],
+        &output,
+    );
+    assert_eq!(value["status"], "blocked");
+    assert_eq!(
+        value["blocker_codes"],
+        json!(["requirement_source_unreadable"])
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains(oversized_marker),
+        "blocked payload must not disclose oversized source content"
+    );
+
+    let _ = fs::remove_dir_all(&project_root);
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn requirement_analysis_cli_contract() {
     let json_output = vida()
         .args([
