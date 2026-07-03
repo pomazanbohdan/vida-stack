@@ -3336,7 +3336,7 @@ fn downstream_packet_candidate_has_receipt_backed_ready_evidence(
 
 fn downstream_packet_candidate_has_packet_ready_receipt(
     packet: &serde_json::Value,
-    _packet_path: &str,
+    packet_path: &str,
     run_id: &str,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
@@ -3344,6 +3344,17 @@ fn downstream_packet_candidate_has_packet_ready_receipt(
         || canonical_resume_dispatch_status(Some(receipt.dispatch_status.as_str()))
             != "packet_ready"
     {
+        return false;
+    }
+    let receipt_packet_path_matches = receipt
+        .downstream_dispatch_packet_path
+        .as_deref()
+        .is_some_and(|path| runtime_packet_paths_equivalent(path, packet_path))
+        || receipt
+            .dispatch_packet_path
+            .as_deref()
+            .is_some_and(|path| runtime_packet_paths_equivalent(path, packet_path));
+    if !receipt_packet_path_matches {
         return false;
     }
     let Some(candidate_target) = packet
@@ -3365,26 +3376,6 @@ fn downstream_packet_candidate_has_packet_ready_receipt(
             .is_some_and(|blockers| blockers.is_empty())
 }
 
-fn downstream_packet_identity_drift_is_ready_packet(
-    error: &str,
-    packet: &serde_json::Value,
-) -> bool {
-    error.contains("Persisted dispatch receipt expects dispatch_packet_path")
-        && packet
-            .get("downstream_dispatch_ready")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        && packet
-            .get("downstream_dispatch_blockers")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|blockers| blockers.is_empty())
-        && packet
-            .get("downstream_dispatch_status")
-            .and_then(serde_json::Value::as_str)
-            .map(|status| canonical_resume_dispatch_status(Some(status)))
-            == Some("packet_ready")
-}
-
 fn normalized_runtime_packet_path_text(path: &str) -> String {
     path.trim().replace('\\', "/").to_ascii_lowercase()
 }
@@ -3400,7 +3391,7 @@ fn normalized_resume_node_token(value: &str) -> String {
     value.trim().replace('_', "-")
 }
 
-fn ready_downstream_dispatch_packet_path_from_recovery_projection(
+async fn ready_downstream_dispatch_packet_path_from_recovery_projection(
     store: &super::StateStore,
     run_id: &str,
 ) -> Result<Option<String>, String> {
@@ -3501,9 +3492,28 @@ fn ready_downstream_dispatch_packet_path_from_recovery_projection(
     else {
         return Ok(None);
     };
+    let root_receipt = match store.run_graph_dispatch_receipt(run_id).await {
+        Ok(Some(receipt)) => receipt,
+        Ok(None) => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read persisted run-graph dispatch receipt: {error}"
+            ));
+        }
+    };
     let Ok(packet) = read_dispatch_packet_for_store(store, packet_path) else {
         return Ok(None);
     };
+    if validate_receipt_packet_pair(
+        &root_receipt,
+        &packet,
+        packet_path,
+        "recovery projection downstream dispatch packet",
+    )
+    .is_err()
+    {
+        return Ok(None);
+    }
     let packet_target = packet
         .get("downstream_dispatch_target")
         .and_then(serde_json::Value::as_str)
@@ -5091,7 +5101,7 @@ async fn resume_inputs_from_downstream_packet(
                 packet_path,
                 &run_id,
                 &root_receipt,
-            ) || downstream_packet_identity_drift_is_ready_packet(&error, &packet) => {}
+            ) => {}
         Err(error) => return Err(error),
     }
     if packet
@@ -5129,7 +5139,7 @@ async fn resume_inputs_from_downstream_packet(
                 packet_path,
                 &run_id,
                 &root_receipt,
-            ) || downstream_packet_identity_drift_is_ready_packet(&error, &packet) => {}
+            ) => {}
         Err(error) => return Err(error),
     }
     let role_selection = decode_role_selection_from_packet(&packet, "downstream dispatch packet")?;
@@ -6928,7 +6938,8 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id_with_policy(
         validate_run_graph_resume_state_strict(store, &resolved_run_id).await?;
     }
     if let Some(packet_path) =
-        ready_downstream_dispatch_packet_path_from_recovery_projection(store, &resolved_run_id)?
+        ready_downstream_dispatch_packet_path_from_recovery_projection(store, &resolved_run_id)
+            .await?
     {
         let resume =
             resume_inputs_from_downstream_packet(store, Some(&resolved_run_id), &packet_path)
@@ -10022,6 +10033,63 @@ mod tests {
 
         validate_receipt_packet_pair(&receipt, &packet, &resolved_path, "dispatch packet")
             .expect("mixed separators should not invalidate the same dispatch packet path");
+    }
+
+    #[test]
+    fn downstream_packet_ready_receipt_rejects_unbound_packet_path() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "ready-path-binding-run".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "packet_ready".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(
+                ".vida/data/state/runtime-consumption/dispatch-packets/receipt-bound.json"
+                    .to_string(),
+            ),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: Some("implementer".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("worker".to_string()),
+            activation_runtime_role: Some("implementer".to_string()),
+            selected_backend: Some("worker".to_string()),
+            recorded_at: "2026-05-06T00:00:00Z".to_string(),
+        };
+        let packet = serde_json::json!({
+            "run_id": "ready-path-binding-run",
+            "downstream_dispatch_target": "implementer",
+            "downstream_dispatch_ready": true,
+            "downstream_dispatch_blockers": [],
+            "downstream_dispatch_status": "packet_ready"
+        });
+
+        assert!(!downstream_packet_candidate_has_packet_ready_receipt(
+            &packet,
+            ".vida/data/state/runtime-consumption/dispatch-packets/attacker-controlled.json",
+            "ready-path-binding-run",
+            &receipt,
+        ));
+        assert!(downstream_packet_candidate_has_packet_ready_receipt(
+            &packet,
+            ".vida/data/state/runtime-consumption/dispatch-packets/receipt-bound.json",
+            "ready-path-binding-run",
+            &receipt,
+        ));
     }
 
     #[test]
