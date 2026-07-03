@@ -11,6 +11,7 @@ use std::os::windows::process::ExitStatusExt;
 
 use crate::runtime_assignment_policy::DispatchContractLane;
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
+use crate::runtime_proof_scope::proof_scope_from_dispatch_packet_path;
 use crate::{RuntimeConsumptionLaneSelection, StateStore, yaml_lookup};
 use taskflow_host_bridge::{
     DispatchReceiptBindingInput, HostBridgeRequest, default_host_bridge_required_result_fields,
@@ -2372,130 +2373,6 @@ fn dispatch_packet_value_field(
         .filter(|value| !value.is_null())
 }
 
-fn push_unique_proof_artifact_path(paths: &mut Vec<String>, value: &str) {
-    let normalized = value
-        .trim()
-        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | ':' | ')' | '(' | '[' | ']'))
-        .replace('\\', "/");
-    if normalized.is_empty() || !(normalized.contains('/') || normalized.contains('\\')) {
-        return;
-    }
-    if !paths.iter().any(|path| path == &normalized) {
-        paths.push(normalized);
-    }
-}
-
-fn value_path_tokens(value: &str) -> impl Iterator<Item = &str> {
-    value.split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '`'))
-}
-
-fn proof_token_looks_like_artifact_path(value: &str) -> bool {
-    let normalized = value.replace('\\', "/");
-    normalized.contains("/test/")
-        || normalized.contains("/tests/")
-        || normalized.starts_with("test/")
-        || normalized.starts_with("tests/")
-        || normalized.ends_with("_test.rs")
-        || normalized.ends_with("_test.dart")
-        || normalized.ends_with(".test.ts")
-        || normalized.ends_with(".test.tsx")
-        || normalized.ends_with(".spec.ts")
-        || normalized.ends_with(".spec.tsx")
-}
-
-fn collect_explicit_proof_artifact_paths(paths: &mut Vec<String>, value: &serde_json::Value) {
-    match value {
-        serde_json::Value::String(value) => push_unique_proof_artifact_path(paths, value),
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_explicit_proof_artifact_paths(paths, value);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for value in map.values() {
-                collect_explicit_proof_artifact_paths(paths, value);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_test_like_proof_artifact_paths(paths: &mut Vec<String>, value: &serde_json::Value) {
-    match value {
-        serde_json::Value::String(value) => {
-            for token in value_path_tokens(value) {
-                if proof_token_looks_like_artifact_path(token) {
-                    push_unique_proof_artifact_path(paths, token);
-                }
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_test_like_proof_artifact_paths(paths, value);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for value in map.values() {
-                collect_test_like_proof_artifact_paths(paths, value);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_dispatch_packet_proof_artifact_paths_from_container(
-    paths: &mut Vec<String>,
-    container: &serde_json::Value,
-) {
-    for field in [
-        "proof_artifact_paths",
-        "proof_artifact_scope",
-        "proof_scope",
-        "test_owned_paths",
-        "proof_owned_paths",
-        "verification_artifact_paths",
-    ] {
-        if let Some(value) = container.get(field) {
-            collect_explicit_proof_artifact_paths(paths, value);
-        }
-    }
-    for field in [
-        "proof_targets",
-        "proof_target",
-        "verification_commands",
-        "acceptance_targets",
-    ] {
-        if let Some(value) = container.get(field) {
-            collect_test_like_proof_artifact_paths(paths, value);
-        }
-    }
-}
-
-fn dispatch_packet_proof_artifact_paths(dispatch_packet_path: &str) -> Vec<String> {
-    let Ok(raw) = std::fs::read_to_string(dispatch_packet_path) else {
-        return Vec::new();
-    };
-    let Ok(packet) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return Vec::new();
-    };
-    let mut paths = Vec::new();
-    collect_dispatch_packet_proof_artifact_paths_from_container(&mut paths, &packet);
-    for field in [
-        "delivery_task_packet",
-        "execution_block_packet",
-        "coach_review_packet",
-        "verifier_proof_packet",
-        "tracked_flow_packet",
-    ] {
-        if let Some(container) = packet.get(field) {
-            collect_dispatch_packet_proof_artifact_paths_from_container(&mut paths, container);
-        }
-    }
-    paths.sort();
-    paths.dedup();
-    paths
-}
-
 fn add_proof_artifact_scope_to_implementation_isolation(
     implementation_isolation: &mut serde_json::Value,
     proof_artifact_paths: &[String],
@@ -2848,7 +2725,7 @@ fn materialize_host_tool_bridge_request(
     } else {
         recomputed_implementation_isolation
     };
-    let proof_artifact_paths = dispatch_packet_proof_artifact_paths(dispatch_packet_path);
+    let proof_artifact_paths = proof_scope_from_dispatch_packet_path(dispatch_packet_path).paths;
     add_proof_artifact_scope_to_implementation_isolation(
         &mut implementation_isolation,
         &proof_artifact_paths,

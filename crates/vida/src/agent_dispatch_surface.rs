@@ -9,6 +9,11 @@ use crate::dev_team_sequence_contract::{
     task_flow_lookup_keys,
 };
 use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root;
+use crate::runtime_proof_scope::{
+    ProofArtifactScope, collect_test_like_paths_from_text, collect_test_like_paths_from_values,
+    path_to_proof_scope_string, proof_intent_text, proof_scope_from_container,
+    proof_scope_from_dispatch_packet_path,
+};
 use crate::{
     AgentArgs, AgentCommand, AgentDispatchNextArgs, AgentHostBridgeArgs, AgentSelectArgs,
     AgentStatusArgs, state_store, state_store::StateStore,
@@ -213,26 +218,33 @@ fn host_bridge_task_or_request_owned_paths(
     }
 }
 
-fn proof_artifact_paths_from_task_or_request(
+fn proof_artifact_scope_from_task_or_request(
     task: &crate::state_store::TaskRecord,
     request: &serde_json::Value,
-) -> Vec<PathBuf> {
-    let mut paths = host_bridge_request_proof_artifact_paths(request);
+) -> ProofArtifactScope {
+    let mut scope = ProofArtifactScope {
+        paths: host_bridge_request_proof_artifact_paths(request)
+            .iter()
+            .map(|path| path_to_proof_scope_string(path))
+            .collect(),
+        proof_intent_present: !host_bridge_request_proof_artifact_paths(request).is_empty(),
+    };
     for target in &task.planner_metadata.proof_targets {
-        push_test_like_path_tokens_from_str(&mut paths, target);
+        scope.proof_intent_present |= proof_intent_text(target);
+        collect_test_like_paths_from_text(&mut scope.paths, target);
     }
-    paths.sort();
-    paths.dedup();
-    paths
+    scope.paths.sort();
+    scope.paths.dedup();
+    scope
 }
 
-async fn proof_artifact_paths_from_task_request_or_attempts(
+async fn proof_artifact_scope_from_task_request_or_attempts(
     store: &crate::state_store::StateStore,
     task: &crate::state_store::TaskRecord,
     request: &serde_json::Value,
-) -> Vec<PathBuf> {
-    let mut paths = proof_artifact_paths_from_task_or_request(task, request);
-    paths.extend(proof_artifact_paths_from_request_packet(
+) -> ProofArtifactScope {
+    let mut scope = proof_artifact_scope_from_task_or_request(task, request);
+    scope.merge(proof_artifact_scope_from_request_packet(
         store.root(),
         request,
     ));
@@ -247,100 +259,29 @@ async fn proof_artifact_paths_from_task_request_or_attempts(
                     &artifact_path,
                     "upstream proof artifact",
                 ) {
-                    collect_test_like_path_tokens_from_value(&mut paths, &artifact);
+                    scope.merge(proof_scope_from_container(&artifact));
                 } else {
-                    push_test_like_path_tokens_from_str(&mut paths, &artifact_ref);
+                    scope.proof_intent_present |= proof_intent_text(&artifact_ref);
+                    collect_test_like_paths_from_text(&mut scope.paths, &artifact_ref);
                 }
             }
         }
     }
-    paths.sort();
-    paths.dedup();
-    paths
+    scope.paths.sort();
+    scope.paths.dedup();
+    scope
 }
 
-fn proof_artifact_paths_from_request_packet(
+fn proof_artifact_scope_from_request_packet(
     state_root: &Path,
     request: &serde_json::Value,
-) -> Vec<PathBuf> {
+) -> ProofArtifactScope {
     let Some(packet_path) = host_bridge_request_string(request, "packet_path") else {
-        return Vec::new();
+        return ProofArtifactScope::default();
     };
     let packet_path = canonical_state_artifact_path(state_root, packet_path, true)
         .unwrap_or_else(|_| PathBuf::from(packet_path));
-    let Ok(packet) = read_canonical_host_bridge_json_artifact(&packet_path, "dispatch packet")
-    else {
-        return Vec::new();
-    };
-    let mut paths = Vec::new();
-    collect_proof_artifact_paths_from_packet_value(&mut paths, &packet);
-    paths.sort();
-    paths.dedup();
-    paths
-}
-
-fn collect_proof_artifact_paths_from_packet_value(
-    paths: &mut Vec<PathBuf>,
-    value: &serde_json::Value,
-) {
-    const EXPLICIT_PATH_FIELDS: &[&str] = &[
-        "proof_artifact_paths",
-        "proof_artifact_scope",
-        "proof_scope",
-        "test_owned_paths",
-        "proof_owned_paths",
-        "verification_artifact_paths",
-    ];
-    const TEXT_PROOF_FIELDS: &[&str] = &[
-        "proof_targets",
-        "proof_target",
-        "verification_commands",
-        "acceptance_targets",
-    ];
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, value) in map {
-                if EXPLICIT_PATH_FIELDS.contains(&key.as_str()) {
-                    collect_path_like_tokens_from_value(paths, value);
-                } else if TEXT_PROOF_FIELDS.contains(&key.as_str()) {
-                    collect_test_like_path_tokens_from_value(paths, value);
-                }
-                collect_proof_artifact_paths_from_packet_value(paths, value);
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_proof_artifact_paths_from_packet_value(paths, value);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_path_like_tokens_from_value(paths: &mut Vec<PathBuf>, value: &serde_json::Value) {
-    match value {
-        serde_json::Value::String(value) => push_path_like_tokens_from_str(paths, value),
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_path_like_tokens_from_value(paths, value);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for value in map.values() {
-                collect_path_like_tokens_from_value(paths, value);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn push_path_like_tokens_from_str(paths: &mut Vec<PathBuf>, value: &str) {
-    for token in value.split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '`')) {
-        let token = token.trim_matches(|ch: char| matches!(ch, '\'' | '"' | ':' | ')' | '('));
-        if token.contains('/') || token.contains('\\') {
-            paths.push(PathBuf::from(token.replace('\\', "/")));
-        }
-    }
+    proof_scope_from_dispatch_packet_path(&packet_path.display().to_string())
 }
 
 fn refresh_host_bridge_request_proof_artifact_paths(
@@ -377,45 +318,6 @@ fn refresh_host_bridge_request_proof_artifact_paths(
                 "proof_artifact_scope".to_string(),
                 serde_json::json!(proof_paths),
             );
-        }
-    }
-}
-
-fn collect_test_like_path_tokens_from_value(paths: &mut Vec<PathBuf>, value: &serde_json::Value) {
-    match value {
-        serde_json::Value::String(value) => push_test_like_path_tokens_from_str(paths, value),
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_test_like_path_tokens_from_value(paths, value);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for value in map.values() {
-                collect_test_like_path_tokens_from_value(paths, value);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn push_test_like_path_tokens_from_str(paths: &mut Vec<PathBuf>, value: &str) {
-    for token in value.split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '`')) {
-        let token = token.trim_matches(|ch: char| matches!(ch, '\'' | '"' | ':' | ')' | '('));
-        if token.contains('/') || token.contains('\\') {
-            let normalized = token.replace('\\', "/");
-            if normalized.contains("/test/")
-                || normalized.contains("/tests/")
-                || normalized.starts_with("test/")
-                || normalized.starts_with("tests/")
-                || normalized.ends_with("_test.rs")
-                || normalized.ends_with("_test.dart")
-                || normalized.ends_with(".test.ts")
-                || normalized.ends_with(".test.tsx")
-                || normalized.ends_with(".spec.ts")
-                || normalized.ends_with(".spec.tsx")
-            {
-                paths.push(PathBuf::from(normalized));
-            }
         }
     }
 }
@@ -2102,8 +2004,13 @@ async fn attach_host_bridge_implementation_artifacts(
     };
     let mut normalized_artifacts = host_bridge_request_implementation_artifacts(&request);
     let owned_paths = host_bridge_task_or_request_owned_paths(&task, &request);
-    let proof_artifact_paths =
-        proof_artifact_paths_from_task_request_or_attempts(&store, &task, &request).await;
+    let mut proof_artifact_scope =
+        proof_artifact_scope_from_task_request_or_attempts(&store, &task, &request).await;
+    let mut proof_artifact_paths = proof_artifact_scope
+        .paths
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
     refresh_host_bridge_request_proof_artifact_paths(&mut request, &proof_artifact_paths);
     let attempt_id = normalized_host_bridge_attempt_id(&run_id, command.attempt_id.as_deref());
     let consolidation_receipt_id = normalized_host_bridge_consolidation_receipt_id(
@@ -2150,6 +2057,16 @@ async fn attach_host_bridge_implementation_artifacts(
             );
         }
         let changed_file_paths = changed_files.iter().map(PathBuf::from).collect::<Vec<_>>();
+        if proof_artifact_paths.is_empty() && proof_artifact_scope.proof_intent_present {
+            proof_artifact_scope.paths =
+                collect_test_like_paths_from_values(changed_files.iter().map(String::as_str));
+            proof_artifact_paths = proof_artifact_scope
+                .paths
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>();
+            refresh_host_bridge_request_proof_artifact_paths(&mut request, &proof_artifact_paths);
+        }
         let scope_decision = validate_implementation_artifact_scope_with_proof_paths(
             &changed_file_paths,
             &owned_paths,
@@ -10914,6 +10831,153 @@ mod tests {
             updated["implementation_artifacts"][0]["attempt_id"],
             "packet-proof-scope-attempt-1"
         );
+        assert_eq!(
+            updated["proof_artifact_paths"],
+            serde_json::json!([
+                "src/test/features/list_view/data/record_chatter_repository_test.dart",
+                "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+                "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+            ])
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_attach_artifact_derives_proof_scope_from_changed_tests_when_proof_intent_is_prose_only() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-agent-host-bridge-prose-proof-scope-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let run_id = "run-host-bridge-prose-proof-scope";
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge prose proof scope attach",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["src/lib/features/list_view".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+        let request_path = root.join("host-tool-bridge/requests/request.json");
+        let packet_path = root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = root.join("host-tool-bridge/results/result.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/receipt.json");
+        let implementation_artifact_path = root.join("attempt-artifacts/developer-patch.json");
+        for path in [
+            &request_path,
+            &packet_path,
+            &result_path,
+            &receipt_path,
+            &implementation_artifact_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "delivery_task_packet": {
+                    "proof_targets": [
+                        "RecordActivityType tests detect meeting from category or label",
+                        "Repository tests prove meeting schedule sends partner_ids/calendar.event fields",
+                        "Widget tests cover compact mini meeting form and wider full meeting form"
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        std::fs::write(
+            &implementation_artifact_path,
+            serde_json::json!({
+                "artifact_kind": "patch_proposal",
+                "changed_files": [
+                    "src/lib/features/list_view/domain/models/record_chatter.dart",
+                    "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
+                    "src/test/features/list_view/data/record_chatter_repository_test.dart",
+                    "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+                ]
+            })
+            .to_string(),
+        )
+        .expect("write implementation artifact");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "req-prose-proof-scope",
+                "run_id": run_id,
+                "task_id": run_id,
+                "dispatch_target": "writer",
+                "task_class": "implementation",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "request_path": request_path.display().to_string(),
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string(),
+                "implementation_isolation": {
+                    "owned_paths": ["src/lib/features/list_view"]
+                }
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        drop(store);
+
+        let exit = run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: vec![implementation_artifact_path],
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: Some("prose-proof-scope-attempt-1".to_string()),
+            consolidation_receipt_id: Some("prose-proof-scope-receipt-1".to_string()),
+            complete: false,
+            host_agent_id: None,
+            summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            submit_result: None,
+            validate_result: None,
+            scaffold_result: None,
+            retry_completion: false,
+            result_file: None,
+            receipt_id: None,
+            json: true,
+            state_dir: Some(root.clone()),
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let updated: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read updated request"),
+        )
+        .expect("request json");
         assert_eq!(
             updated["proof_artifact_paths"],
             serde_json::json!([

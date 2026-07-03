@@ -156,6 +156,7 @@ pub(crate) use runtime_dispatch_state::{
 };
 mod runtime_dispatch_status;
 mod runtime_lane_summary;
+mod runtime_proof_scope;
 mod runtime_web_surface;
 mod semantic_route_cache;
 mod semantic_routing_features;

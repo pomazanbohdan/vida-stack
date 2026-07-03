@@ -10,6 +10,7 @@ use crate::runtime_dispatch_packets::{
     runtime_coach_review_packet, runtime_delivery_task_packet_with_scope_context,
     runtime_escalation_packet, runtime_execution_block_packet, runtime_verifier_proof_packet,
 };
+use crate::runtime_proof_scope::proof_scope_from_planner_metadata_and_text;
 use crate::{
     RuntimeConsumptionLaneSelection, derive_lane_status,
     dispatch_contract_allowed_next_lane_sequence, dispatch_contract_lane,
@@ -72,115 +73,6 @@ fn push_unique_owned_path(paths: &mut Vec<String>, path: &str) {
         return;
     }
     paths.push(trimmed.to_string());
-}
-
-fn push_unique_proof_artifact_path(paths: &mut Vec<String>, value: &str) {
-    let normalized = value
-        .trim()
-        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | ':' | ')' | '(' | '[' | ']'))
-        .replace('\\', "/");
-    if normalized.is_empty() || !(normalized.contains('/') || normalized.contains('\\')) {
-        return;
-    }
-    if !paths.iter().any(|existing| existing == &normalized) {
-        paths.push(normalized);
-    }
-}
-
-fn proof_token_looks_like_artifact_path(value: &str) -> bool {
-    let normalized = value.replace('\\', "/");
-    normalized.contains("/test/")
-        || normalized.contains("/tests/")
-        || normalized.starts_with("test/")
-        || normalized.starts_with("tests/")
-        || normalized.ends_with("_test.rs")
-        || normalized.ends_with("_test.dart")
-        || normalized.ends_with(".test.ts")
-        || normalized.ends_with(".test.tsx")
-        || normalized.ends_with(".spec.ts")
-        || normalized.ends_with(".spec.tsx")
-}
-
-fn collect_proof_artifact_paths_from_text(paths: &mut Vec<String>, value: &str) {
-    for token in value.split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '`')) {
-        if proof_token_looks_like_artifact_path(token) {
-            push_unique_proof_artifact_path(paths, token);
-        }
-    }
-}
-
-fn collect_explicit_proof_artifact_paths_from_value(
-    paths: &mut Vec<String>,
-    value: &serde_json::Value,
-) {
-    match value {
-        serde_json::Value::String(value) => push_unique_proof_artifact_path(paths, value),
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_explicit_proof_artifact_paths_from_value(paths, value);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for value in map.values() {
-                collect_explicit_proof_artifact_paths_from_value(paths, value);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_test_like_proof_artifact_paths_from_value(
-    paths: &mut Vec<String>,
-    value: &serde_json::Value,
-) {
-    match value {
-        serde_json::Value::String(value) => collect_proof_artifact_paths_from_text(paths, value),
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_test_like_proof_artifact_paths_from_value(paths, value);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for value in map.values() {
-                collect_test_like_proof_artifact_paths_from_value(paths, value);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn proof_artifact_paths_for_dispatch_packet(
-    role_selection: &RuntimeConsumptionLaneSelection,
-    request_text: &str,
-) -> Vec<String> {
-    let mut paths = Vec::new();
-    for field in [
-        "proof_artifact_paths",
-        "proof_artifact_scope",
-        "proof_scope",
-        "test_owned_paths",
-        "proof_owned_paths",
-        "verification_artifact_paths",
-    ] {
-        if let Some(value) = role_selection
-            .execution_plan
-            .pointer(&format!("/tracked_flow_bootstrap/dev_task/planner_metadata/{field}"))
-        {
-            collect_explicit_proof_artifact_paths_from_value(&mut paths, value);
-        }
-    }
-    for field in ["proof_targets", "acceptance_targets", "verification_commands"] {
-        if let Some(value) = role_selection
-            .execution_plan
-            .pointer(&format!("/tracked_flow_bootstrap/dev_task/planner_metadata/{field}"))
-        {
-            collect_test_like_proof_artifact_paths_from_value(&mut paths, value);
-        }
-    }
-    collect_proof_artifact_paths_from_text(&mut paths, request_text);
-    paths.sort();
-    paths.dedup();
-    paths
 }
 
 pub(crate) fn test_lane_requires_test_write_scope(
@@ -394,7 +286,11 @@ impl DownstreamDispatchPacketContract {
                 Vec::new()
             };
         let proof_artifact_paths =
-            proof_artifact_paths_for_dispatch_packet(role_selection, &role_selection.request);
+            proof_scope_from_planner_metadata_and_text(
+                &role_selection.execution_plan,
+                &role_selection.request,
+            )
+            .paths;
         let mut implementation_isolation =
             implementation_isolation_contract(handoff_task_class.as_str(), &owned_paths);
         if !proof_artifact_paths.is_empty() {
