@@ -10,7 +10,7 @@ use crate::dev_team_sequence_contract::{
 };
 use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root;
 use crate::runtime_proof_scope::{
-    collect_test_like_paths_from_text, collect_test_like_paths_from_values,
+    collect_test_like_paths_from_text,
     path_to_proof_scope_string, proof_intent_text, proof_scope_from_container,
     proof_scope_from_dispatch_packet_path, ProofArtifactScope,
 };
@@ -2166,21 +2166,6 @@ async fn attach_host_bridge_implementation_artifacts(
             );
         }
         let changed_file_paths = changed_files.iter().map(PathBuf::from).collect::<Vec<_>>();
-        if proof_artifact_scope.proof_intent_present {
-            proof_artifact_scope
-                .paths
-                .extend(collect_test_like_paths_from_values(
-                    changed_files.iter().map(String::as_str),
-                ));
-            proof_artifact_scope.paths.sort();
-            proof_artifact_scope.paths.dedup();
-            proof_artifact_paths = proof_artifact_scope
-                .paths
-                .iter()
-                .map(PathBuf::from)
-                .collect::<Vec<_>>();
-            refresh_host_bridge_request_proof_artifact_paths(&mut request, &proof_artifact_paths);
-        }
         let scope_decision = validate_implementation_artifact_scope_with_proof_paths(
             &changed_file_paths,
             &owned_paths,
@@ -11501,7 +11486,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_bridge_attach_artifact_derives_proof_scope_from_changed_tests_when_proof_intent_is_prose_only(
+    async fn host_bridge_attach_artifact_rejects_changed_tests_when_proof_intent_is_prose_only(
     ) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -11632,24 +11617,18 @@ mod tests {
         })
         .await;
 
-        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(exit, ExitCode::from(1));
         let updated: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(&request_path).expect("read updated request"),
         )
         .expect("request json");
-        assert_eq!(
-            updated["proof_artifact_paths"],
-            serde_json::json!([
-                "src/test/features/list_view/data/record_chatter_repository_test.dart",
-                "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
-                "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
-            ])
-        );
+        assert!(updated.get("proof_artifact_paths").is_none());
+        assert!(updated.get("implementation_artifacts").is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn host_bridge_attach_artifact_merges_changed_tests_into_partial_proof_scope() {
+    async fn host_bridge_attach_artifact_rejects_changed_tests_outside_partial_proof_scope() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -11785,7 +11764,7 @@ mod tests {
         })
         .await;
 
-        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(exit, ExitCode::from(1));
         let updated: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(&request_path).expect("read updated request"),
         )
@@ -11793,11 +11772,10 @@ mod tests {
         assert_eq!(
             updated["proof_artifact_paths"],
             serde_json::json!([
-                "src/test/features/list_view/data/record_chatter_repository_test.dart",
-                "src/test/features/list_view/domain/models/record_chatter_models_test.dart",
-                "src/test/features/list_view/presentation/stac/widgets/record_detail_view_test.dart"
+                "src/test/features/list_view/domain/models/record_chatter_models_test.dart"
             ])
         );
+        assert!(updated.get("implementation_artifacts").is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 
