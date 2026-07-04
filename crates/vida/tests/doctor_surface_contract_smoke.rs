@@ -1285,8 +1285,9 @@ fn active_step_attribution_help_surfaces_are_discoverable() {
             args: &["doctor", "--help"],
             required_stdout: &[
                 "active-task-attribution",
-                "Next command",
                 "vida doctor active-task-attribution --json",
+                "Field/view/detail selection",
+                "status, blocker_codes, active_step, parent_task",
             ],
             forbidden_stdout: &[],
         },
@@ -1736,8 +1737,8 @@ fn task_steps_rejects_oversized_since_filter() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let payload: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .expect("oversized task steps json should parse");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("oversized task steps json should parse");
     assert_eq!(payload["surface"], "vida task steps");
     assert_eq!(payload["status"], "blocked");
     assert_eq!(
@@ -3086,6 +3087,62 @@ fn create_host_bridge_lane_fixture_for_target(
         "reviewer" => ("review", "verifier", "release_closure"),
         _ => ("implementation", "worker", "coach"),
     };
+    let role_selection_full = serde_json::json!({
+        "ok": true,
+        "activation_source": "test_fixture",
+        "selection_mode": "test",
+        "fallback_role": "orchestrator",
+        "request": "test",
+        "selected_role": runtime_role,
+        "conversational_mode": null,
+        "single_task_only": true,
+        "tracked_flow_entry": null,
+        "allow_freeform_chat": false,
+        "confidence": "high",
+        "matched_terms": [],
+        "compiled_bundle": {},
+        "reason": "test fixture",
+        "execution_plan": {
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": [
+                        "developer",
+                        "developer_rework",
+                        "coach",
+                        "tester",
+                        "reviewer",
+                        "release_closure"
+                    ],
+                    "lane_catalog": {
+                        "developer": {
+                            "dispatch_target": "developer",
+                            "task_class": "implementation"
+                        },
+                        "developer_rework": {
+                            "dispatch_target": "developer_rework",
+                            "task_class": "implementation"
+                        },
+                        "coach": {
+                            "dispatch_target": "coach",
+                            "task_class": "coach"
+                        },
+                        "tester": {
+                            "dispatch_target": "tester",
+                            "task_class": "verification"
+                        },
+                        "reviewer": {
+                            "dispatch_target": "reviewer",
+                            "task_class": "review"
+                        },
+                        "release_closure": {
+                            "dispatch_target": "release_closure",
+                            "task_class": "release_readiness"
+                        }
+                    }
+                }
+            }
+        }
+    });
 
     std::fs::write(
         &packet_path,
@@ -3114,7 +3171,9 @@ fn create_host_bridge_lane_fixture_for_target(
             "downstream_dispatch_ready": false,
             "downstream_dispatch_blockers": ["pending_implementation_evidence"],
             "downstream_dispatch_status": "blocked",
-            "downstream_lane_status": "lane_blocked"
+            "downstream_lane_status": "lane_blocked",
+            "run_graph_bootstrap": {},
+            "role_selection_full": role_selection_full
         })
         .to_string(),
     )

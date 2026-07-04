@@ -99,7 +99,14 @@ mod tests {
     #[test]
     fn completion_result_routes_negative_summary_prose_to_blocked_gate() {
         let cases = [
-            ("alpha_gate", None, "pass", "executed", "closure", "__null__"),
+            (
+                "alpha_gate",
+                None,
+                "pass",
+                "executed",
+                "closure",
+                "__null__",
+            ),
             (
                 "alpha_gate",
                 Some("alpha_gate decision=blocked; rework required"),
@@ -117,7 +124,14 @@ mod tests {
                 "beta_gate",
                 "beta_gate",
             ),
-            ("gamma_gate", None, "pass", "executed", "closure", "__null__"),
+            (
+                "gamma_gate",
+                None,
+                "pass",
+                "executed",
+                "closure",
+                "__null__",
+            ),
             (
                 "gamma_gate",
                 Some("gamma_gate decision=blocked; proof review needs rework; rework required"),
@@ -438,19 +452,12 @@ pub(crate) fn write_runtime_lane_completion_result_with_summary_next_and_blocker
         },
     );
     let blocker_codes = authority_decision.blocker_codes.clone();
-    let verdict_fields = if blocker_codes.is_empty() {
-        taskflow_host_bridge::host_bridge_result_verdict_fields_for_gate(
-            completed_target,
-            &blocker_codes,
-            pass_allowed_next_node,
-        )
-    } else {
-        taskflow_host_bridge::host_bridge_result_verdict_fields_for_gate(
-            completed_target,
-            &blocker_codes,
-            rework_target,
-        )
-    };
+    let verdict_fields = taskflow_host_bridge::host_bridge_result_verdict_fields_for_gate_and_next(
+        completed_target,
+        &blocker_codes,
+        rework_target,
+        allowed_next_node,
+    );
     let execution_state = if blocker_codes.is_empty() {
         "executed"
     } else {

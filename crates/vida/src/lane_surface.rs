@@ -20,6 +20,7 @@ use taskflow_host_bridge::{
     host_bridge_completion_verdict, host_bridge_request_artifacts_are_bare_completion_candidates,
     host_bridge_request_status_after_completion, host_bridge_result_declares_no_code_change,
     host_bridge_result_verdict_fields_for_gate,
+    host_bridge_result_verdict_fields_for_gate_and_next,
     materialize_host_bridge_completion_evidence as materialize_shared_host_bridge_completion_evidence,
     normalize_host_bridge_provenance_for_completion,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
@@ -2971,6 +2972,23 @@ fn supplied_host_bridge_completion_result_allowed_next_node(
         .map(str::to_string)
 }
 
+fn supplied_host_bridge_completion_result_rework_target(
+    args: &HostBridgeCompletionResultArgs<'_>,
+    result: Option<&serde_json::Value>,
+) -> Option<String> {
+    args.rework_target
+        .filter(|value| host_bridge_completion_rework_target_is_present(value))
+        .or_else(|| {
+            result?
+                .get("rework_target")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| host_bridge_completion_rework_target_is_present(value))
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn terminal_closure_route(value: &str) -> bool {
     crate::runtime_dispatch_state::canonical_terminal_closure_dispatch_target(value).is_some()
 }
@@ -2981,6 +2999,7 @@ fn reconcile_lane_completion_allowed_next_node(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     requested_allowed_next_node: Option<&str>,
     persisted_allowed_next_node: Option<&str>,
+    rework_target: Option<&str>,
 ) -> Result<Option<String>, String> {
     let requested_allowed_next_node = requested_allowed_next_node
         .map(str::trim)
@@ -3012,11 +3031,25 @@ fn reconcile_lane_completion_allowed_next_node(
         terminal_closure_target.clone()
     } else {
         role_selection.and_then(|selection| {
-            crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_from_execution_plan(
-                &selection.execution_plan,
-                receipt,
-                requested,
-            )
+            rework_target
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .and_then(|target| {
+                    crate::runtime_dispatch_state::lawful_explicit_rework_dispatch_target_for_completed_target(
+                        &selection.execution_plan,
+                        &receipt.dispatch_target,
+                        receipt.downstream_dispatch_last_target.as_deref(),
+                        requested,
+                        target,
+                    )
+                })
+                .or_else(|| {
+                    crate::runtime_dispatch_state::lawful_explicit_downstream_dispatch_target_from_execution_plan(
+                        &selection.execution_plan,
+                        receipt,
+                        requested,
+                    )
+                })
         })
     };
     let effective_requested = lawful_requested.as_deref().unwrap_or(requested).to_string();
@@ -3048,13 +3081,48 @@ fn reconcile_lane_completion_allowed_next_node(
                 receipt,
                 persisted,
             ) && lawful_requested.is_some();
-        if !persisted_matches && !stale_terminal_closure && !stale_current_lane_marker {
+        let lawful_rework_reroute = rework_target.is_some()
+            && lawful_requested.as_deref() == Some(effective_requested.as_str());
+        if !persisted_matches
+            && !stale_terminal_closure
+            && !stale_current_lane_marker
+            && !lawful_rework_reroute
+        {
             return Err(format!(
                 "{surface_label} allowed_next_node `{requested}` does not match persisted downstream route `{persisted}`."
             ));
         }
     }
     Ok(Some(effective_requested))
+}
+
+fn rework_allowed_next_node_from_execution_plan(
+    role_selection: Option<&crate::RuntimeConsumptionLaneSelection>,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    completed_dispatch_target: &str,
+    rework_target: Option<&str>,
+) -> Option<String> {
+    let rework_target = rework_target
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let execution_plan = &role_selection?.execution_plan;
+    let rework_lane = format!("{rework_target}_rework");
+    crate::runtime_dispatch_state::lawful_explicit_rework_dispatch_target_for_completed_target(
+        execution_plan,
+        completed_dispatch_target,
+        receipt.downstream_dispatch_last_target.as_deref(),
+        &rework_lane,
+        rework_target,
+    )
+    .or_else(|| {
+        crate::runtime_dispatch_state::lawful_explicit_rework_dispatch_target_for_completed_target(
+            execution_plan,
+            completed_dispatch_target,
+            receipt.downstream_dispatch_last_target.as_deref(),
+            rework_target,
+            rework_target,
+        )
+    })
 }
 
 fn read_supplied_host_bridge_completion_result(
@@ -4758,13 +4826,22 @@ fn materialize_host_bridge_completion_evidence(
             persisted_receipt,
             allowed_next_node,
             persisted_allowed_next_node,
+            None,
         )?
     } else {
         allowed_next_node
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .or(persisted_allowed_next_node)
             .map(str::to_string)
+            .or_else(|| {
+                rework_allowed_next_node_from_execution_plan(
+                    role_selection,
+                    persisted_receipt,
+                    dispatch_target,
+                    supplied_rework_target,
+                )
+            })
+            .or_else(|| persisted_allowed_next_node.map(str::to_string))
     };
     if let (Some(requested), Some(persisted)) = (
         allowed_next_node
@@ -4782,6 +4859,7 @@ fn materialize_host_bridge_completion_evidence(
                 persisted_receipt,
                 Some(requested),
                 Some(persisted),
+                supplied_rework_target,
             )?;
         }
     }
@@ -4793,15 +4871,11 @@ fn materialize_host_bridge_completion_evidence(
             "Host bridge completion for `{dispatch_target}` is missing a concrete downstream route."
         ));
     }
-    let pass_allowed_next_node = if blocker_codes.is_empty() {
-        effective_allowed_next_node.as_deref()
-    } else {
-        None
-    };
-    let result_verdict = host_bridge_result_verdict_fields_for_gate(
+    let result_verdict = host_bridge_result_verdict_fields_for_gate_and_next(
         dispatch_target,
         &blocker_codes,
-        pass_allowed_next_node,
+        supplied_rework_target,
+        effective_allowed_next_node.as_deref(),
     );
     let result_allowed_next_node = if authority_decision
         .effect_intents
@@ -4985,7 +5059,7 @@ fn materialize_host_bridge_completion_evidence(
         receipt_path: receipt_path.display().to_string(),
         submitted_result_path,
         execution_state: verdict.execution_state,
-        allowed_next_node: pass_allowed_next_node.map(str::to_string),
+        allowed_next_node: effective_allowed_next_node,
         blocker_code: blocker_code.clone(),
         blocker_codes,
     })
@@ -5768,6 +5842,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     &supplied_completion_result_args,
                     supplied_completion_result.as_ref(),
                 );
+            let supplied_completion_rework_target =
+                supplied_host_bridge_completion_result_rework_target(
+                    &supplied_completion_result_args,
+                    supplied_completion_result.as_ref(),
+                );
             let derive_summary_blockers = !supplied_completion_result_args
                 .has_explicit_result_contract()
                 && supplied_completion_result.is_none();
@@ -5935,6 +6014,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 &receipt,
                 effective_allowed_next_node.as_deref(),
                 persisted_allowed_next_node,
+                supplied_completion_rework_target.as_deref(),
             ) {
                 Ok(target) => target,
                 Err(error) => {
@@ -6802,13 +6882,11 @@ mod tests {
 
         assert_eq!(validation["status"], "blocked");
         assert_eq!(validation["proof_artifact_paths"], serde_json::json!([]));
-        assert!(
-            validation["blocker_codes"]
-                .as_array()
-                .expect("blocker codes")
-                .iter()
-                .any(|code| code == "implementation_attempt_scope_guard_violation")
-        );
+        assert!(validation["blocker_codes"]
+            .as_array()
+            .expect("blocker codes")
+            .iter()
+            .any(|code| code == "implementation_attempt_scope_guard_violation"));
         assert_eq!(
             validation["out_of_scope_paths"],
             serde_json::json!(["crates/vida/src/unauthorized.rs"])
@@ -7152,6 +7230,7 @@ mod tests {
             &receipt,
             Some("developer"),
             receipt.downstream_dispatch_target.as_deref(),
+            None,
         )
         .expect("stale current-lane marker must not block the concrete next lane");
 
@@ -7179,6 +7258,7 @@ mod tests {
             &receipt,
             Some("closure_lane"),
             None,
+            None,
         )
         .expect("final execution lane may route to canonical closure");
 
@@ -7190,6 +7270,7 @@ mod tests {
             Some(&role_selection),
             &receipt,
             Some("closure"),
+            None,
             None,
         )
         .expect_err("non-final execution lane must not skip to closure");
@@ -17107,8 +17188,8 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
-        let activation_result_path =
-            root.join("runtime-consumption/dispatch-results/run-completed-contract-activation.json");
+        let activation_result_path = root
+            .join("runtime-consumption/dispatch-results/run-completed-contract-activation.json");
         std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
             .expect("create activation parent");
         std::fs::write(

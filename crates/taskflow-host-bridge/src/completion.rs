@@ -2,17 +2,17 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use taskflow_contracts::{release1_contract_status_str, Release1ContractStatus};
+use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
 use time::OffsetDateTime;
 
 use crate::legacy_normalization::{
-    normalize_legacy_host_bridge_completion_result, LEGACY_OUTCOME_CONTRADICTION,
+    LEGACY_OUTCOME_CONTRADICTION, normalize_legacy_host_bridge_completion_result,
 };
 use crate::provenance::HostBridgeProvenanceDecision;
 use crate::receipt_binding::DispatchReceiptBindingDecision;
 use crate::request::{
-    host_bridge_blocked_result_contract_allowed_next_node, host_bridge_request_string,
-    HostBridgeRequest,
+    HostBridgeRequest, host_bridge_blocked_result_contract_allowed_next_node,
+    host_bridge_request_string,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -270,7 +270,7 @@ pub fn host_bridge_result_verdict_fields_for_gate(
     blocker_codes: &[String],
     rework_target: Option<&str>,
 ) -> HostBridgeResultVerdictFields {
-    host_bridge_result_verdict_fields_for_gate_and_contract(
+    host_bridge_result_verdict_fields_for_gate_and_next(
         completed_target,
         blocker_codes,
         rework_target,
@@ -279,16 +279,22 @@ pub fn host_bridge_result_verdict_fields_for_gate(
 }
 
 #[must_use]
-pub fn host_bridge_result_verdict_fields_for_gate_and_contract(
+pub fn host_bridge_result_verdict_fields_for_gate_and_next(
     completed_target: &str,
     blocker_codes: &[String],
     rework_target: Option<&str>,
-    request_contract: Option<&Value>,
+    allowed_next_node: Option<&str>,
 ) -> HostBridgeResultVerdictFields {
+    let resolved_allowed_next_node = allowed_next_node
+        .map(str::trim)
+        .filter(|target| !target.is_empty());
     if blocker_codes.is_empty() {
-        let allowed_next_node = rework_target
-            .map(str::trim)
-            .filter(|target| !target.is_empty())
+        let allowed_next_node = resolved_allowed_next_node
+            .or_else(|| {
+                rework_target
+                    .map(str::trim)
+                    .filter(|target| !target.is_empty())
+            })
             .unwrap_or("closure");
         HostBridgeResultVerdictFields {
             decision: "approve".to_string(),
@@ -303,18 +309,31 @@ pub fn host_bridge_result_verdict_fields_for_gate_and_contract(
             .filter(|target| !target.is_empty())
             .unwrap_or(completed_target)
             .to_string();
-        let resolved_allowed_next_node = request_contract
-            .and_then(host_bridge_blocked_result_contract_allowed_next_node)
-            .map(str::to_string)
-            .unwrap_or_else(|| resolved_rework_target.clone());
         HostBridgeResultVerdictFields {
             decision: "rework_required".to_string(),
             verdict: "rework_required".to_string(),
             blocker_codes: blocker_codes.to_vec(),
-            rework_target: Some(resolved_rework_target),
-            allowed_next_node: resolved_allowed_next_node,
+            rework_target: Some(resolved_rework_target.clone()),
+            allowed_next_node: resolved_allowed_next_node
+                .map(str::to_string)
+                .unwrap_or(resolved_rework_target),
         }
     }
+}
+
+#[must_use]
+pub fn host_bridge_result_verdict_fields_for_gate_and_contract(
+    completed_target: &str,
+    blocker_codes: &[String],
+    rework_target: Option<&str>,
+    request_contract: Option<&Value>,
+) -> HostBridgeResultVerdictFields {
+    host_bridge_result_verdict_fields_for_gate_and_next(
+        completed_target,
+        blocker_codes,
+        rework_target,
+        request_contract.and_then(host_bridge_blocked_result_contract_allowed_next_node),
+    )
 }
 
 #[must_use]
@@ -810,9 +829,11 @@ mod tests {
             &crate::request::default_host_bridge_required_result_fields(),
         );
 
-        assert!(blockers
-            .iter()
-            .any(|blocker| blocker == LEGACY_OUTCOME_CONTRADICTION));
+        assert!(
+            blockers
+                .iter()
+                .any(|blocker| blocker == LEGACY_OUTCOME_CONTRADICTION)
+        );
     }
 
     #[test]

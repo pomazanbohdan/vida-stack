@@ -33,14 +33,15 @@ pub use completion::{
     host_bridge_completion_requires_implementation_artifacts,
     host_bridge_completion_retryable_blocker, host_bridge_completion_verdict,
     host_bridge_existing_request_status_is_admissible,
+    host_bridge_request_artifacts_are_bare_completion_candidates,
     host_bridge_request_effectively_requires_implementation_artifacts,
     host_bridge_request_has_implementation_artifact_contract,
-    host_bridge_request_artifacts_are_bare_completion_candidates,
     host_bridge_request_requires_implementation_artifacts,
     host_bridge_request_status_after_completion,
     host_bridge_request_status_allows_parent_completion,
     host_bridge_result_declares_no_code_change, host_bridge_result_verdict_contract_blockers,
     host_bridge_result_verdict_fields, host_bridge_result_verdict_fields_for_gate,
+    host_bridge_result_verdict_fields_for_gate_and_next,
     materialize_host_bridge_completion_evidence, normalize_host_bridge_provenance_for_completion,
 };
 pub use completion_authority::{
