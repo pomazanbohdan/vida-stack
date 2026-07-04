@@ -1720,6 +1720,36 @@ fn task_steps_outputs_default_toon_json_and_filters() {
 }
 
 #[test]
+fn task_steps_rejects_oversized_since_filter() {
+    let state_dir = unique_state_dir();
+
+    let output = vida()
+        .args(["task", "steps", "--since", "9223372036854775808s", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("task steps oversized since output should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "oversized --since should be rejected without panic: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("oversized task steps json should parse");
+    assert_eq!(payload["surface"], "vida task steps");
+    assert_eq!(payload["status"], "blocked");
+    assert_eq!(
+        payload["blocker_codes"],
+        serde_json::json!(["invalid_since_filter"])
+    );
+    assert!(payload["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("too large")));
+}
+
+#[test]
 fn owned_status_from_dirty_with_active_step_maps_taskflow_owners() {
     let (project_root, state_dir) = project_bound_state_dir();
     run_git(&project_root, &["init"]);
