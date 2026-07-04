@@ -1757,6 +1757,59 @@ fn owned_status_from_dirty_with_active_step_maps_taskflow_owners() {
         .any(|action| action
             .as_str()
             .is_some_and(|text| text.contains("unrelated dirty files"))));
+
+    let file_override_output = vida()
+        .args([
+            "task",
+            "owned-status",
+            "owned-status-parent",
+            "--from-dirty",
+            "--json",
+            "--file",
+            "classify-dirty",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .current_dir(&project_root)
+        .output()
+        .expect("owned-status file override named classify-dirty should run");
+    assert_failure(
+        &file_override_output,
+        "owned-status file override named classify-dirty should not route to classifier",
+    );
+    let file_override_payload: serde_json::Value =
+        serde_json::from_slice(&file_override_output.stdout)
+            .expect("owned-status file override json should parse");
+    assert_eq!(file_override_payload["status"], "blocked");
+    assert_eq!(file_override_payload["task_id"], "owned-status-parent");
+    assert!(
+        file_override_payload.get("groups").is_none(),
+        "owned-status output must not be classify-dirty receipt"
+    );
+
+    let task_id_output = vida()
+        .args([
+            "task",
+            "owned-status",
+            "classify-dirty",
+            "--from-dirty",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .current_dir(&project_root)
+        .output()
+        .expect("owned-status task id named classify-dirty should run");
+    assert_failure(
+        &task_id_output,
+        "owned-status task id named classify-dirty should not route to classifier",
+    );
+    let task_id_payload: serde_json::Value = serde_json::from_slice(&task_id_output.stdout)
+        .expect("owned-status task id json should parse");
+    assert_eq!(task_id_payload["status"], "blocked");
+    assert_eq!(task_id_payload["task_id"], "classify-dirty");
+    assert!(
+        task_id_payload.get("groups").is_none(),
+        "owned-status task-id output must not be classify-dirty receipt"
+    );
 }
 
 #[test]
@@ -1837,10 +1890,10 @@ fn classify_dirty_groups_owned_paths_and_reports_unclassified() {
         .current_dir(&project_root)
         .output()
         .expect("classify-dirty json should run");
-    assert_success(&output, "classify-dirty json");
+    assert_failure(&output, "classify-dirty json with unclassified files");
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("classify-dirty json should parse");
-    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["status"], "blocked");
     assert_eq!(payload["groups"][0]["task_id"], "classify-dirty-task");
     assert_eq!(payload["groups"][0]["epic_id"], "classify-dirty-epic");
     assert_eq!(

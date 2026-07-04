@@ -9066,8 +9066,13 @@ fn task_dirty_classify_receipt(
                 .to_string(),
         ]
     };
+    let status = if unclassified.is_empty() {
+        "pass"
+    } else {
+        "blocked"
+    };
     TaskDirtyClassifyReceipt {
-        status: "pass".to_string(),
+        status: status.to_string(),
         repo_root,
         dirty_files,
         groups,
@@ -12140,6 +12145,16 @@ fn print_task_reset_receipt(receipt: &TaskResetReceipt, render: RenderMode, as_j
     }
 }
 
+fn task_subcommand_invoked_as_classify_dirty(args: impl IntoIterator<Item = String>) -> bool {
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        if arg == "task" {
+            return args.next().as_deref() == Some("classify-dirty");
+        }
+    }
+    false
+}
+
 async fn run_task_reset(command: crate::TaskResetArgs) -> ExitCode {
     let state_dir = command
         .state_dir
@@ -12382,7 +12397,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             }
         }
         TaskCommand::OwnedStatus(command) => {
-            let invoked_as_classify_dirty = std::env::args().any(|arg| arg == "classify-dirty");
+            let invoked_as_classify_dirty =
+                task_subcommand_invoked_as_classify_dirty(std::env::args());
             let state_dir = command
                 .state_dir
                 .clone()
@@ -12402,7 +12418,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 &receipt,
                                 command.json,
                             );
-                            ExitCode::SUCCESS
+                            if receipt.status == "pass" {
+                                ExitCode::SUCCESS
+                            } else {
+                                ExitCode::from(1)
+                            }
                         }
                         Err(error) => {
                             eprintln!("Failed to read dirty git status: {error}");
