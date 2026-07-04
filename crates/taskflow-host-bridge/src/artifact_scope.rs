@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 use crate::errors::HostBridgeError;
 use crate::request::HostBridgeRequest;
 use runtime_path_policy::atomic_write::write_json_replace;
-use runtime_path_policy::bounded_json::{TASK_ATTEMPT_ARTIFACT_LIMIT, read_json_value_file};
+use runtime_path_policy::bounded_json::{read_json_value_file, TASK_ATTEMPT_ARTIFACT_LIMIT};
 use runtime_path_policy::{
-    ArtifactPathKind, PathPolicyError, StateRoot, existing_regular_file_under_root,
-    new_output_path_under_root,
+    existing_regular_file_under_root, new_output_path_under_root, ArtifactPathKind,
+    PathPolicyError, StateRoot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,13 +363,21 @@ pub fn validate_implementation_artifact_scope_with_proof_paths(
         };
     }
 
+    let safe_proof_artifact_paths = proof_artifact_paths
+        .iter()
+        .filter(|path| proof_artifact_path_is_safe(path))
+        .collect::<Vec<_>>();
     let effective_scope = owned_paths
         .iter()
-        .chain(proof_artifact_paths.iter())
+        .chain(safe_proof_artifact_paths.iter().copied())
         .collect::<Vec<_>>();
     let out_of_scope_paths = changed_files
         .iter()
-        .filter(|path| !effective_scope.iter().any(|owned| path_is_within(path, owned)))
+        .filter(|path| {
+            !effective_scope
+                .iter()
+                .any(|owned| path_is_within(path, owned))
+        })
         .cloned()
         .collect::<Vec<_>>();
 
@@ -381,7 +389,9 @@ pub fn validate_implementation_artifact_scope_with_proof_paths(
         }
     } else {
         let blocker_code = if proof_artifact_paths.is_empty()
-            && out_of_scope_paths.iter().any(|path| path_looks_like_proof_or_test(path))
+            && out_of_scope_paths
+                .iter()
+                .any(|path| path_looks_like_proof_or_test(path))
         {
             "missing_proof_artifact_scope"
         } else {
@@ -397,6 +407,52 @@ pub fn validate_implementation_artifact_scope_with_proof_paths(
 
 fn path_is_within(path: &Path, owned: &Path) -> bool {
     path == owned || path.starts_with(owned)
+}
+
+fn proof_artifact_path_is_safe(path: &Path) -> bool {
+    let normalized = path.display().to_string().replace('\\', "/");
+    if normalized.is_empty()
+        || normalized == "."
+        || normalized == ".."
+        || normalized == "/"
+        || normalized.starts_with('/')
+        || normalized.starts_with(".vida/")
+        || normalized == ".vida"
+        || normalized.starts_with("~/")
+        || normalized.starts_with("//")
+        || normalized.ends_with('/')
+        || !normalized.contains('/')
+    {
+        return false;
+    }
+    if normalized.len() >= 2
+        && normalized.as_bytes()[1] == b':'
+        && normalized.as_bytes()[0].is_ascii_alphabetic()
+    {
+        return false;
+    }
+    let components = normalized.split('/').collect::<Vec<_>>();
+    if components
+        .iter()
+        .any(|component| component.is_empty() || *component == "." || *component == "..")
+    {
+        return false;
+    }
+    proof_artifact_components_have_proof_context(&components)
+}
+
+fn proof_artifact_components_have_proof_context(components: &[&str]) -> bool {
+    components.iter().any(|component| {
+        matches!(
+            *component,
+            "test" | "tests" | "__tests__" | "spec" | "specs" | "proof" | "proofs"
+        ) || component.ends_with("_test.rs")
+            || component.ends_with("_test.dart")
+            || component.ends_with(".test.ts")
+            || component.ends_with(".test.tsx")
+            || component.ends_with(".spec.ts")
+            || component.ends_with(".spec.tsx")
+    })
 }
 
 fn path_looks_like_proof_or_test(path: &Path) -> bool {
@@ -527,6 +583,30 @@ mod tests {
     }
 
     #[test]
+    fn artifact_scope_rejects_unsafe_proof_artifact_paths() {
+        let decision = validate_implementation_artifact_scope_with_proof_paths(
+            &[PathBuf::from(
+                "crates/vida/src/runtime_dispatch_execution.rs",
+            )],
+            &[PathBuf::from("crates/taskflow-host-bridge")],
+            &[
+                PathBuf::from("../.."),
+                PathBuf::from("/"),
+                PathBuf::from("/etc/passwd"),
+                PathBuf::from(".vida/data/state"),
+                PathBuf::from("C:/Windows"),
+                PathBuf::from("crates/vida"),
+            ],
+        );
+
+        assert!(!decision.accepted);
+        assert_eq!(
+            decision.blocker_codes,
+            vec!["implementation_artifact_out_of_scope"]
+        );
+    }
+
+    #[test]
     fn artifact_scope_accepts_proof_artifact_paths_without_role_names() {
         let decision = validate_implementation_artifact_scope_with_proof_paths(
             &[
@@ -545,7 +625,9 @@ mod tests {
     #[test]
     fn artifact_scope_reports_missing_proof_scope_for_test_paths() {
         let decision = validate_implementation_artifact_scope_with_proof_paths(
-            &[PathBuf::from("src/test/features/list_view/domain/model_test.dart")],
+            &[PathBuf::from(
+                "src/test/features/list_view/domain/model_test.dart",
+            )],
             &[PathBuf::from("src/lib/features/list_view")],
             &[],
         );
@@ -554,7 +636,9 @@ mod tests {
         assert_eq!(decision.blocker_codes, vec!["missing_proof_artifact_scope"]);
         assert_eq!(
             decision.out_of_scope_paths,
-            vec![PathBuf::from("src/test/features/list_view/domain/model_test.dart")]
+            vec![PathBuf::from(
+                "src/test/features/list_view/domain/model_test.dart"
+            )]
         );
     }
 }
