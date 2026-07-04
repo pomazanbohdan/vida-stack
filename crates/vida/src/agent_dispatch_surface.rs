@@ -176,8 +176,12 @@ fn read_host_bridge_request(
         .map(Path::to_path_buf)
         .or_else(|| infer_host_bridge_state_root_from_request_path(path));
     if let Some(state_root) = inferred_state_root {
-        let canonical_path =
-            canonical_state_artifact_path(&state_root, &path.display().to_string(), true)?;
+        let canonical_path = canonical_state_artifact_path(
+            &state_root,
+            &path.display().to_string(),
+            ArtifactPathKind::HostBridgeRequest,
+            true,
+        )?;
         return read_typed_host_bridge_request(&HostBridgeRequestPath::new(
             state_root,
             canonical_path,
@@ -196,7 +200,12 @@ fn canonical_host_bridge_request_path(
         .map(Path::to_path_buf)
         .or_else(|| infer_host_bridge_state_root_from_request_path(path));
     if let Some(state_root) = inferred_state_root {
-        return canonical_state_artifact_path(&state_root, &path.display().to_string(), true);
+        return canonical_state_artifact_path(
+            &state_root,
+            &path.display().to_string(),
+            ArtifactPathKind::HostBridgeRequest,
+            true,
+        );
     }
     Ok(path.to_path_buf())
 }
@@ -260,8 +269,13 @@ fn proof_artifact_scope_from_request_packet(
     let Some(packet_path) = host_bridge_request_string(request, "packet_path") else {
         return ProofArtifactScope::default();
     };
-    let packet_path = canonical_state_artifact_path(state_root, packet_path, true)
-        .unwrap_or_else(|_| PathBuf::from(packet_path));
+    let packet_path = canonical_state_artifact_path(
+        state_root,
+        packet_path,
+        ArtifactPathKind::HostBridgePacket,
+        true,
+    )
+    .unwrap_or_else(|_| PathBuf::from(packet_path));
     proof_scope_from_dispatch_packet_path(&packet_path.display().to_string())
 }
 
@@ -357,6 +371,7 @@ fn read_canonical_host_bridge_json_artifact(
 fn canonical_state_artifact_path(
     state_root: &Path,
     raw_path: &str,
+    artifact_kind: ArtifactPathKind,
     require_existing_file: bool,
 ) -> Result<std::path::PathBuf, String> {
     let path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(raw_path);
@@ -374,7 +389,12 @@ fn canonical_state_artifact_path(
     })?;
     if require_existing_file {
         let state_root = StateRoot::open(state_root).map_err(|error| error.to_string())?;
-        existing_regular_file_under_root(&state_root, &path, ArtifactPathKind::HostBridgeRequest)
+        let policy_path = if path.is_absolute() {
+            std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone())
+        } else {
+            path.clone()
+        };
+        existing_regular_file_under_root(&state_root, &policy_path, artifact_kind)
             .map(|file| file.path().to_path_buf())
             .map_err(|error| match error {
                 runtime_path_policy::PathPolicyError::OutsideStateRoot { path, root, .. } => {
@@ -504,17 +524,20 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         ));
         return blockers;
     };
-    let canonical_request_path =
-        match canonical_state_artifact_path(&state_root, &request_path.display().to_string(), true)
-        {
-            Ok(path) => path,
-            Err(_) => {
-                blockers.push(blocker_code_value(
-                    taskflow_contracts::BlockerCode::HostBridgeRequestUntrustedPath,
-                ));
-                return blockers;
-            }
-        };
+    let canonical_request_path = match canonical_state_artifact_path(
+        &state_root,
+        &request_path.display().to_string(),
+        ArtifactPathKind::HostBridgeRequest,
+        true,
+    ) {
+        Ok(path) => path,
+        Err(_) => {
+            blockers.push(blocker_code_value(
+                taskflow_contracts::BlockerCode::HostBridgeRequestUntrustedPath,
+            ));
+            return blockers;
+        }
+    };
     let declared_request_path = match host_bridge_request_string(request, "request_path") {
         Some(path) => path,
         None => {
@@ -524,25 +547,34 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
             return blockers;
         }
     };
-    match canonical_state_artifact_path(&state_root, declared_request_path, true) {
+    match canonical_state_artifact_path(
+        &state_root,
+        declared_request_path,
+        ArtifactPathKind::HostBridgeRequest,
+        true,
+    ) {
         Ok(path) if path == canonical_request_path => {}
         _ => blockers.push(blocker_code_value(
             taskflow_contracts::BlockerCode::HostBridgeRequestPathMismatch,
         )),
     }
     let packet_path = host_bridge_request_string(request, "packet_path");
-    let canonical_packet_path =
-        packet_path.and_then(
-            |path| match canonical_state_artifact_path(&state_root, path, true) {
-                Ok(path) => Some(path),
-                Err(_) => {
-                    blockers.push(blocker_code_value(
-                        taskflow_contracts::BlockerCode::HostBridgePacketPathUnbounded,
-                    ));
-                    None
-                }
-            },
-        );
+    let canonical_packet_path = packet_path.and_then(|path| {
+        match canonical_state_artifact_path(
+            &state_root,
+            path,
+            ArtifactPathKind::HostBridgePacket,
+            true,
+        ) {
+            Ok(path) => Some(path),
+            Err(_) => {
+                blockers.push(blocker_code_value(
+                    taskflow_contracts::BlockerCode::HostBridgePacketPathUnbounded,
+                ));
+                None
+            }
+        }
+    });
     for (field, code) in [
         (
             "result_path",
@@ -554,7 +586,12 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         ),
     ] {
         if let Some(path) = host_bridge_request_string(request, field) {
-            if canonical_state_artifact_path(&state_root, path, false).is_err() {
+            let kind = if field == "receipt_path" {
+                ArtifactPathKind::HostBridgeReceipt
+            } else {
+                ArtifactPathKind::HostBridgeResult
+            };
+            if canonical_state_artifact_path(&state_root, path, kind, false).is_err() {
                 blockers.push(blocker_code_value(code));
             }
         }
@@ -685,9 +722,14 @@ fn retryable_host_bridge_completion_receipt_matches_request(
     let Some(receipt_packet_path) = receipt.dispatch_packet_path.as_deref() else {
         return false;
     };
-    canonical_state_artifact_path(state_root, receipt_packet_path, true)
-        .ok()
-        .as_deref()
+    canonical_state_artifact_path(
+        state_root,
+        receipt_packet_path,
+        ArtifactPathKind::HostBridgePacket,
+        true,
+    )
+    .ok()
+    .as_deref()
         == Some(canonical_packet_path)
 }
 
@@ -771,9 +813,14 @@ async fn append_host_bridge_dispatch_receipt_blockers(
             .as_ref()
             .map(|path| path.display().to_string())
             != receipt.dispatch_packet_path.as_ref().and_then(|path| {
-                canonical_state_artifact_path(&state_root, path, true)
-                    .ok()
-                    .map(|path| path.display().to_string())
+                canonical_state_artifact_path(
+                    &state_root,
+                    path,
+                    ArtifactPathKind::HostBridgePacket,
+                    true,
+                )
+                .ok()
+                .map(|path| path.display().to_string())
             })
     {
         blockers.push(blocker_code_value(
@@ -843,7 +890,12 @@ fn host_bridge_request_matches_reconciled_source_packet(
     else {
         return false;
     };
-    let Ok(packet_path) = canonical_state_artifact_path(state_root, packet_path, true) else {
+    let Ok(packet_path) = canonical_state_artifact_path(
+        state_root,
+        packet_path,
+        ArtifactPathKind::HostBridgePacket,
+        true,
+    ) else {
         return false;
     };
     let Ok(packet) = read_canonical_host_bridge_json_artifact(&packet_path, "dispatch packet")
@@ -1040,7 +1092,12 @@ fn retryable_host_bridge_completion_request_for_state_root(
         let Some(raw_path) = host_bridge_request_string(request, field) else {
             continue;
         };
-        let Ok(path) = canonical_state_artifact_path(state_root, raw_path, true) else {
+        let kind = if field == "receipt_path" {
+            ArtifactPathKind::HostBridgeReceipt
+        } else {
+            ArtifactPathKind::HostBridgeResult
+        };
+        let Ok(path) = canonical_state_artifact_path(state_root, raw_path, kind, true) else {
             continue;
         };
         let artifact_label = match field {
@@ -1060,7 +1117,6 @@ fn retryable_host_bridge_completion_request_for_state_root(
     }
     false
 }
-
 
 fn host_bridge_request_lifecycle_string<'a>(
     request: &'a serde_json::Value,
@@ -1102,7 +1158,12 @@ fn completed_host_bridge_completion_request_for_state_root(
     let Some(raw_result_path) = host_bridge_request_string(request, "result_path") else {
         return false;
     };
-    let Ok(result_path) = canonical_state_artifact_path(state_root, raw_result_path, true) else {
+    let Ok(result_path) = canonical_state_artifact_path(
+        state_root,
+        raw_result_path,
+        ArtifactPathKind::HostBridgeResult,
+        true,
+    ) else {
         return false;
     };
     let Ok(result) = read_canonical_host_bridge_json_artifact(&result_path, "host bridge result")
@@ -1469,7 +1530,12 @@ fn host_bridge_result_allowed_next_is_lawful(
     };
     let state_root = infer_host_bridge_state_root_from_request_path(request_path)
         .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
-    let Ok(packet_path) = canonical_state_artifact_path(&state_root, packet_path, true) else {
+    let Ok(packet_path) = canonical_state_artifact_path(
+        &state_root,
+        packet_path,
+        ArtifactPathKind::HostBridgePacket,
+        true,
+    ) else {
         return false;
     };
     let Ok(packet) = read_canonical_host_bridge_json_artifact(&packet_path, "host bridge packet")
@@ -1510,14 +1576,15 @@ fn host_bridge_result_allowed_next_is_lawful(
     if !host_bridge_result_is_rework_completion(result) {
         return false;
     }
-    crate::runtime_dispatch_state::lawful_explicit_rework_dispatch_target_for_completed_target(
-        execution_plan,
-        completed_target,
-        previous_target,
-        result_allowed,
-        rework_target,
-    )
-    .is_some()
+    let resolved =
+        crate::runtime_dispatch_state::lawful_explicit_rework_dispatch_target_for_completed_target(
+            execution_plan,
+            completed_target,
+            previous_target,
+            result_allowed,
+            rework_target,
+        );
+    resolved.is_some()
 }
 
 fn host_bridge_result_rework_target(result: &serde_json::Value) -> Option<&str> {
@@ -5782,8 +5849,16 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                 .clone()
                 .or_else(|| infer_host_bridge_state_root_from_request_path(&command.request))
                 .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
-            let retry_packet_path = host_bridge_request_string(&request, "packet_path")
-                .and_then(|path| canonical_state_artifact_path(&retry_state_root, path, true).ok());
+            let retry_packet_path =
+                host_bridge_request_string(&request, "packet_path").and_then(|path| {
+                    canonical_state_artifact_path(
+                        &retry_state_root,
+                        path,
+                        ArtifactPathKind::HostBridgePacket,
+                        true,
+                    )
+                    .ok()
+                });
             let receipt_backed_retry_completion_evidence =
                 host_bridge_request_has_retryable_dispatch_receipt_for_state_root(
                     &retry_state_root,
@@ -11597,8 +11672,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_bridge_attach_artifact_rejects_changed_tests_when_proof_intent_is_prose_only(
-    ) {
+    async fn host_bridge_attach_artifact_rejects_changed_tests_when_proof_intent_is_prose_only() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")

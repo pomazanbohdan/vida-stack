@@ -7598,18 +7598,10 @@ pub(crate) fn lawful_explicit_downstream_dispatch_target_for_completed_target(
 pub(crate) fn lawful_explicit_rework_dispatch_target_for_completed_target(
     execution_plan: &serde_json::Value,
     completed_dispatch_target: &str,
-    previous_dispatch_target: Option<&str>,
+    _previous_dispatch_target: Option<&str>,
     explicit_target: &str,
     rework_target: &str,
 ) -> Option<String> {
-    if let Some(target) = lawful_explicit_downstream_dispatch_target_for_completed_target(
-        execution_plan,
-        completed_dispatch_target,
-        previous_dispatch_target,
-        explicit_target,
-    ) {
-        return Some(target);
-    }
     let rework_resolution = resolve_runtime_dispatch_target(execution_plan, rework_target);
     let normalized_rework_target = rework_resolution
         .as_ref()
@@ -7623,17 +7615,17 @@ pub(crate) fn lawful_explicit_rework_dispatch_target_for_completed_target(
     let completed_resolution =
         resolve_runtime_dispatch_target(execution_plan, completed_dispatch_target)?;
     let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
-    let sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
-    let rework_index = sequence
-        .iter()
-        .position(|target| normalized_dispatch_target_token(target) == normalized_rework_target);
-    let completed_index = sequence.iter().position(|target| {
-        normalized_dispatch_target_token(target)
-            == normalized_dispatch_target_token(&completed_resolution.dispatch_target)
-    });
     if !matches!(
-        (rework_index, completed_index),
-        (Some(rework_index), Some(completed_index)) if rework_index < completed_index
+        crate::team_flow_state_machine::validate_dispatch_contract_rework_transition(
+            dispatch_contract,
+            &completed_resolution
+                .lane_id
+                .clone()
+                .unwrap_or_else(|| completed_resolution.dispatch_target.clone()),
+            explicit_target,
+            &normalized_rework_target,
+        ),
+        Some(crate::team_flow_state_machine::TransitionVerdict::Allowed { .. })
     ) {
         return None;
     }
@@ -9202,6 +9194,24 @@ mod tests {
         );
 
         assert_eq!(target.as_deref(), Some("alpha_impl"));
+    }
+
+    #[test]
+    fn lawful_explicit_rework_dispatch_target_accepts_configured_rework_lane_alias() {
+        let mut plan = rework_alias_execution_plan();
+        plan["development_flow"]["dispatch_contract"]["lane_catalog"]["alpha_impl_rework"] = json!({
+            "dispatch_target": "alpha_impl_rework",
+            "task_class": "implementation"
+        });
+        let target = lawful_explicit_rework_dispatch_target_for_completed_target(
+            &plan,
+            "beta_gate",
+            None,
+            "alpha_impl_rework",
+            "alpha_impl",
+        );
+
+        assert_eq!(target.as_deref(), Some("alpha_impl_rework"));
     }
 
     #[test]

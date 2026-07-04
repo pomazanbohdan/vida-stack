@@ -84,6 +84,42 @@ impl TeamFlowStateMachine {
         }
     }
 
+    pub fn validate_rework_transition(
+        &self,
+        current_role: &str,
+        requested_next_node: &str,
+        rework_target: &str,
+    ) -> TransitionVerdict {
+        let current = normalize_step_ref(current_role);
+        let requested = normalize_step_ref(requested_next_node);
+        let rework = normalize_step_ref(rework_target);
+        let current_index = self
+            .steps
+            .iter()
+            .position(|step| normalize_step_ref(&step.role_id) == current);
+        let rework_index = self
+            .steps
+            .iter()
+            .position(|step| normalize_step_ref(&step.role_id) == rework);
+        if matches!(
+            (rework_index, current_index),
+            (Some(rework_index), Some(current_index)) if rework_index < current_index
+        ) {
+            let rework_alias = format!("{rework}_rework");
+            if requested == rework || requested == rework_alias {
+                return TransitionVerdict::Allowed {
+                    next_lane: requested_next_node.trim().to_string(),
+                };
+            }
+        }
+        TransitionVerdict::Blocked {
+            blocker_code: "invalid_allowed_next_node_for_execution_plan".to_string(),
+            allowed_next_node: self
+                .resolve_next_lane(current_role)
+                .unwrap_or_else(|| "closure".to_string()),
+        }
+    }
+
     /// Check if a role_id is a valid step in this state machine.
     pub fn is_valid_role(&self, role_id: &str) -> bool {
         self.steps.iter().any(|s| s.role_id == role_id)
@@ -184,6 +220,10 @@ impl TeamFlowStateMachine {
     }
 }
 
+fn normalize_step_ref(value: &str) -> String {
+    value.trim().replace('-', "_")
+}
+
 /// Extract the team-flow state machine from an activation bundle.
 /// This function reads from vida.config.yaml -> dev_team.flows and returns
 /// the canonical state machine for the given work item type.
@@ -249,6 +289,16 @@ pub fn validate_dispatch_contract_transition(
 ) -> Option<TransitionVerdict> {
     TeamFlowStateMachine::from_dispatch_contract(dispatch_contract, "lane_sequence")
         .map(|sm| sm.validate_transition(current_role, requested_next_node))
+}
+
+pub fn validate_dispatch_contract_rework_transition(
+    dispatch_contract: &Value,
+    current_role: &str,
+    requested_next_node: &str,
+    rework_target: &str,
+) -> Option<TransitionVerdict> {
+    TeamFlowStateMachine::from_dispatch_contract(dispatch_contract, "execution_lane_sequence")
+        .map(|sm| sm.validate_rework_transition(current_role, requested_next_node, rework_target))
 }
 
 #[cfg(test)]
@@ -373,6 +423,32 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_rework_transition_accepts_configured_back_edge_alias() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        let verdict = sm.validate_rework_transition("gamma_gate", "beta_impl_rework", "beta_impl");
+        assert_eq!(
+            verdict,
+            TransitionVerdict::Allowed {
+                next_lane: "beta_impl_rework".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_validate_rework_transition_rejects_forward_target() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        assert_eq!(
+            sm.validate_rework_transition("beta_impl", "delta_verify", "delta_verify"),
+            TransitionVerdict::Blocked {
+                blocker_code: "invalid_allowed_next_node_for_execution_plan".to_string(),
+                allowed_next_node: "gamma_gate".to_string()
+            }
+        );
+    }
+
+    #[test]
     fn test_is_valid_role() {
         let bundle = sample_activation_bundle();
         let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
@@ -429,6 +505,30 @@ mod tests {
             Some(TransitionVerdict::Blocked {
                 blocker_code: "invalid_allowed_next_node_for_execution_plan".to_string(),
                 allowed_next_node: "beta_design".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn test_dispatch_contract_rework_transition_accepts_configured_back_edge_alias() {
+        let contract = serde_json::json!({
+            "lane_sequence": ["alpha_impl", "beta_gate", "gamma_verify"],
+            "lane_catalog": {
+                "alpha_impl": {"dispatch_target": "alpha_impl", "task_class": "implementation"},
+                "beta_gate": {"dispatch_target": "beta_gate", "task_class": "quality_gate"},
+                "gamma_verify": {"dispatch_target": "gamma_verify", "task_class": "verification"}
+            }
+        });
+
+        assert_eq!(
+            validate_dispatch_contract_rework_transition(
+                &contract,
+                "beta_gate",
+                "alpha_impl_rework",
+                "alpha_impl"
+            ),
+            Some(TransitionVerdict::Allowed {
+                next_lane: "alpha_impl_rework".to_string()
             })
         );
     }
