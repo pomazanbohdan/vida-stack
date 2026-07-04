@@ -1481,6 +1481,7 @@ fn host_bridge_result_allowed_next_matches_request(
 }
 
 fn host_bridge_result_allowed_next_is_lawful(
+    request_path: &Path,
     request: &serde_json::Value,
     result: &serde_json::Value,
 ) -> bool {
@@ -1493,8 +1494,13 @@ fn host_bridge_result_allowed_next_is_lawful(
     let Some(packet_path) = host_bridge_request_string(request, "packet_path") else {
         return false;
     };
-    let packet_path = crate::runtime_dispatch_state::normalize_persisted_runtime_path(packet_path);
-    let Some(packet) = crate::read_json_file_if_present(&packet_path) else {
+    let state_root = infer_host_bridge_state_root_from_request_path(request_path)
+        .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
+    let Ok(packet_path) = canonical_state_artifact_path(&state_root, packet_path, true) else {
+        return false;
+    };
+    let Ok(packet) = read_canonical_host_bridge_json_artifact(&packet_path, "host bridge packet")
+    else {
         return false;
     };
     let execution_plan = packet
@@ -1873,7 +1879,7 @@ fn validate_host_bridge_result_dry_run(
     }
     let expected_red_pass_alias = host_bridge_result_uses_expected_red_pass_alias(result);
     let typed_blocker_codes = host_bridge_result_blocker_codes(result);
-    if !host_bridge_result_allowed_next_is_lawful(request, result) {
+    if !host_bridge_result_allowed_next_is_lawful(request_path, request, result) {
         blockers.push("invalid_allowed_next_node_for_execution_plan".to_string());
     }
     if expected_red_pass_alias {
@@ -7827,9 +7833,78 @@ mod tests {
             .any(|code| code == "invalid_allowed_next_node_for_execution_plan"));
     }
 
+    #[test]
+    fn host_bridge_result_validate_rejects_external_packet_path_fallback() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-external-packet-reject-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let external_packet_path = root.join("outside-packet.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should create");
+        std::fs::write(
+            &external_packet_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "role_selection_full": {
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "execution_lane_sequence": ["developer", "tester"],
+                                "lane_catalog": {
+                                    "developer": {
+                                        "dispatch_target": "developer",
+                                        "task_class": "implementation"
+                                    },
+                                    "tester": {
+                                        "dispatch_target": "tester",
+                                        "task_class": "verification"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("external packet should write");
+        let mut request = host_bridge_validate_request();
+        request["dispatch_target"] = serde_json::json!("developer");
+        request["allowed_next_node"] = serde_json::json!("closure");
+        request["packet_path"] = serde_json::json!(external_packet_path.display().to_string());
+        let mut result = host_bridge_validate_result("tester");
+        result["dispatch_target"] = serde_json::json!("developer");
+
+        let payload = super::validate_host_bridge_result_dry_run(
+            &request_path,
+            &request,
+            std::path::Path::new("result.json"),
+            &result,
+        );
+
+        assert_eq!(payload["status"], super::release1_blocked_status());
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "invalid_allowed_next_node_for_execution_plan"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn host_bridge_rework_backedge_request_and_result(
         result_status: &str,
-    ) -> (std::path::PathBuf, serde_json::Value, serde_json::Value) {
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        serde_json::Value,
+        serde_json::Value,
+    ) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -7838,8 +7913,14 @@ mod tests {
             "vida-host-bridge-rework-backedge-{}-{nanos}",
             std::process::id()
         ));
-        std::fs::create_dir_all(&root).expect("temp root should be created");
-        let packet_path = root.join("packet.json");
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should create");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("packet parent should create");
         std::fs::write(
             &packet_path,
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -7911,14 +7992,16 @@ mod tests {
             vec!["quality_gate_rework_required".to_string()]
         });
         result["rework_target"] = serde_json::json!("repair");
-        (root, request, result)
+        std::fs::write(&request_path, request.to_string()).expect("request should write");
+        (root, request_path, request, result)
     }
 
     #[test]
     fn host_bridge_result_validate_accepts_rework_backedge_to_configured_rework_lane() {
-        let (root, request, result) = host_bridge_rework_backedge_request_and_result("blocked");
+        let (root, request_path, request, result) =
+            host_bridge_rework_backedge_request_and_result("blocked");
         let payload = super::validate_host_bridge_result_dry_run(
-            std::path::Path::new("request.json"),
+            &request_path,
             &request,
             std::path::Path::new("result.json"),
             &result,
@@ -7939,7 +8022,8 @@ mod tests {
 
     #[test]
     fn host_bridge_result_validate_rejects_contract_rework_route_missing_from_plan() {
-        let (root, mut request, result) = host_bridge_rework_backedge_request_and_result("blocked");
+        let (root, request_path, mut request, result) =
+            host_bridge_rework_backedge_request_and_result("blocked");
         request["blocked_result_contract"] = serde_json::json!({
             "decision": "rework_required",
             "verdict": "rework_required",
@@ -7966,7 +8050,7 @@ mod tests {
         .expect("packet should write");
 
         let payload = super::validate_host_bridge_result_dry_run(
-            std::path::Path::new("request.json"),
+            &request_path,
             &request,
             std::path::Path::new("result.json"),
             &result,
@@ -7994,8 +8078,14 @@ mod tests {
             "vida-host-bridge-synthetic-rework-{}-{nanos}",
             std::process::id()
         ));
-        std::fs::create_dir_all(&root).expect("temp root should be created");
-        let packet_path = root.join("packet.json");
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should create");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("packet parent should create");
         std::fs::write(
             &packet_path,
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -8105,8 +8195,14 @@ mod tests {
             "vida-host-bridge-config-rework-{}-{nanos}",
             std::process::id()
         ));
-        std::fs::create_dir_all(&root).expect("temp root should be created");
-        let packet_path = root.join("packet.json");
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should create");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("packet parent should create");
         std::fs::write(
             &packet_path,
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -8162,6 +8258,8 @@ mod tests {
             "receipt_path": "host-tool-bridge/receipts/receipt.json",
             "allowed_next_node": "gamma_verify"
         });
+        std::fs::write(&request_path, request.to_string()).expect("request should write");
+
         let result = serde_json::json!({
             "artifact_kind": "host_tool_bridge_result",
             "schema_version": 1,
@@ -8183,7 +8281,7 @@ mod tests {
         });
 
         let payload = super::validate_host_bridge_result_dry_run(
-            std::path::Path::new("request.json"),
+            &request_path,
             &request,
             std::path::Path::new("result.json"),
             &result,
@@ -8200,7 +8298,7 @@ mod tests {
 
     #[test]
     fn host_bridge_result_validate_rejects_synthetic_rework_route_mismatch() {
-        let (root, mut request, mut result) =
+        let (root, request_path, mut request, mut result) =
             host_bridge_rework_backedge_request_and_result("blocked");
         request["blocked_result_contract"] = serde_json::json!({
             "allowed_next_node": "configured_rework_lane"
@@ -8208,7 +8306,7 @@ mod tests {
         result["allowed_next_node"] = serde_json::json!("different_rework_lane");
 
         let payload = super::validate_host_bridge_result_dry_run(
-            std::path::Path::new("request.json"),
+            &request_path,
             &request,
             std::path::Path::new("result.json"),
             &result,
@@ -8228,9 +8326,10 @@ mod tests {
 
     #[test]
     fn host_bridge_result_validate_rejects_rework_backedge_without_rework_result() {
-        let (root, request, result) = host_bridge_rework_backedge_request_and_result("pass");
+        let (root, request_path, request, result) =
+            host_bridge_rework_backedge_request_and_result("pass");
         let payload = super::validate_host_bridge_result_dry_run(
-            std::path::Path::new("request.json"),
+            &request_path,
             &request,
             std::path::Path::new("result.json"),
             &result,
