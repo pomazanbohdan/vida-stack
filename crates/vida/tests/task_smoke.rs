@@ -8843,6 +8843,71 @@ fn task_pack_finalize_rejects_self_certified_proof_evidence() {
 }
 
 #[test]
+fn task_proof_attach_release_bundle_satisfies_all_configured_targets() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("release-proof-parent");
+    let task_id = unique_test_id("release-proof-task");
+    run_and_assert_success(
+        &[
+            "task",
+            "create",
+            &parent_id,
+            "Release proof parent",
+            "--type",
+            "epic",
+        ],
+        &state_dir,
+    );
+    run_and_assert_success(
+        &[
+            "task",
+            "create",
+            &task_id,
+            "Release proof task",
+            "--parent-id",
+            &parent_id,
+            "--proof-target-literal",
+            "release build proof",
+            "--proof-target-literal",
+            "release install proof",
+        ],
+        &state_dir,
+    );
+
+    let attach = run_and_assert_success(
+        &[
+            "task",
+            "proof",
+            "attach-release-bundle",
+            &task_id,
+            "--artifact-ref",
+            "artifacts/release-proof.json",
+            "--evidence",
+            "release proof green",
+            "--json",
+        ],
+        &state_dir,
+    );
+    let attach_payload: serde_json::Value =
+        serde_json::from_str(&attach).expect("attach-release-bundle json should parse");
+    assert_eq!(attach_payload["status"], "pass");
+    assert_eq!(
+        attach_payload["proof_targets"],
+        serde_json::json!(["release build proof", "release install proof"])
+    );
+
+    let proof_status = run_and_assert_success(
+        &["task", "proof", "status", &task_id, "--json"],
+        &state_dir,
+    );
+    let status_payload: serde_json::Value =
+        serde_json::from_str(&proof_status).expect("proof status json should parse");
+    assert_eq!(status_payload["missing_count"], 0);
+    assert_eq!(status_payload["satisfied_count"], 2);
+}
+
+#[test]
 fn task_proof_attach_evidence_preserves_literal_comma_target() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
