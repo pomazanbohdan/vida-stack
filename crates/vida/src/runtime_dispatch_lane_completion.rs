@@ -55,11 +55,11 @@ mod tests {
 
         let result_path = write_runtime_lane_completion_result_with_summary(
             &state_root,
-            "run-coach",
-            "coach",
+            "run-alpha-gate",
+            "alpha_gate",
             "receipt-1",
             "packet.json",
-            Some("coach decision=blocked; rework required; implementation evidence missing"),
+            Some("alpha_gate decision=blocked; rework required; implementation evidence missing"),
         )
         .expect("completion result should write");
         let body: serde_json::Value = serde_json::from_str(
@@ -84,14 +84,14 @@ mod tests {
         assert_eq!(body["host_bridge_completion_authority"]["accepted"], false);
         assert_eq!(
             body["summary"],
-            "coach decision=blocked; rework required; implementation evidence missing"
+            "alpha_gate decision=blocked; rework required; implementation evidence missing"
         );
         assert_eq!(
             body["blocker_code"],
             "host_bridge_completion_summary_blocked"
         );
-        assert_eq!(body["rework_target"], "developer");
-        assert_eq!(body["allowed_next_node"], "developer_rework");
+        assert_eq!(body["rework_target"], "alpha_gate");
+        assert_eq!(body["allowed_next_node"], "alpha_gate");
 
         let _ = fs::remove_dir_all(&state_root);
     }
@@ -99,34 +99,32 @@ mod tests {
     #[test]
     fn completion_result_routes_negative_summary_prose_to_blocked_gate() {
         let cases = [
-            ("coach", None, "pass", "executed", "closure", "__null__"),
+            ("alpha_gate", None, "pass", "executed", "closure", "__null__"),
             (
-                "coach",
-                Some("coach decision=blocked; rework required"),
+                "alpha_gate",
+                Some("alpha_gate decision=blocked; rework required"),
                 "blocked",
                 "blocked",
-                "developer_rework",
-                "developer",
+                "alpha_gate",
+                "alpha_gate",
             ),
-            ("tester", None, "pass", "executed", "closure", "__null__"),
+            ("beta_gate", None, "pass", "executed", "closure", "__null__"),
             (
-                "tester",
-                Some("tester decision=blocked; focused proof failed; completion failed"),
+                "beta_gate",
+                Some("beta_gate decision=blocked; focused proof failed; completion failed"),
                 "blocked",
                 "blocked",
-                "developer_rework",
-                "developer",
+                "beta_gate",
+                "beta_gate",
             ),
-            ("reviewer", None, "pass", "executed", "closure", "__null__"),
+            ("gamma_gate", None, "pass", "executed", "closure", "__null__"),
             (
-                "reviewer",
-                Some(
-                    "reviewer decision=blocked; proof review needs tester rework; rework required",
-                ),
+                "gamma_gate",
+                Some("gamma_gate decision=blocked; proof review needs rework; rework required"),
                 "blocked",
                 "blocked",
-                "tester",
-                "tester",
+                "gamma_gate",
+                "gamma_gate",
             ),
         ];
 
@@ -202,12 +200,12 @@ mod tests {
 
         let result_path = write_runtime_lane_completion_result_with_summary_and_next(
             &state_root,
-            "run-analyst",
-            "analyst",
+            "run-alpha-intake",
+            "alpha_intake",
             "receipt-1",
             "packet.json",
             None,
-            Some("developer"),
+            Some("beta_impl"),
         )
         .expect("completion result should write");
         let body: serde_json::Value = serde_json::from_str(
@@ -216,7 +214,7 @@ mod tests {
         .expect("completion result should decode");
 
         assert_eq!(body["status"], "pass");
-        assert_eq!(body["allowed_next_node"], "developer");
+        assert_eq!(body["allowed_next_node"], "beta_impl");
 
         let _ = fs::remove_dir_all(&state_root);
     }
@@ -233,12 +231,12 @@ mod tests {
             super::write_runtime_lane_completion_result_with_summary_next_and_blockers(
                 &state_root,
                 "activity-meeting-event-form-fields",
-                "analyst",
+                "alpha_intake",
                 "receipt-1",
                 "packet.json",
                 Some("verdict: blocker; rework required text is advisory for explicit pass"),
                 false,
-                Some("designer"),
+                Some("beta_design"),
                 &[],
                 None,
             )
@@ -252,7 +250,7 @@ mod tests {
         assert_eq!(body["decision"], "approve");
         assert_eq!(body["verdict"], "pass");
         assert_eq!(body["blocker_codes"], serde_json::json!([]));
-        assert_eq!(body["allowed_next_node"], "designer");
+        assert_eq!(body["allowed_next_node"], "beta_design");
         assert_eq!(body["summary_classifier_source"], "typed_blockers_only");
 
         let _ = fs::remove_dir_all(&state_root);
@@ -268,13 +266,13 @@ mod tests {
 
         let pass_path = super::write_runtime_lane_completion_result_with_summary_next_and_blockers(
             &state_root,
-            "run-autotester-pass",
-            "autotester",
+            "run-alpha-verifier-pass",
+            "alpha_verifier",
             "receipt-pass",
             "packet.json",
             Some("verdict: blocked; rework required text is advisory-only"),
             false,
-            Some("developer"),
+            Some("beta_impl"),
             &[],
             None,
         )
@@ -286,7 +284,7 @@ mod tests {
 
         assert_eq!(pass["status"], "pass");
         assert_eq!(pass["blocker_codes"], serde_json::json!([]));
-        assert_eq!(pass["allowed_next_node"], "developer");
+        assert_eq!(pass["allowed_next_node"], "beta_impl");
         assert_eq!(pass["summary_classifier_source"], "typed_blockers_only");
         assert_eq!(pass["host_bridge_completion_authority"]["accepted"], true);
         assert_eq!(
@@ -302,15 +300,15 @@ mod tests {
         let blocked_path =
             super::write_runtime_lane_completion_result_with_summary_next_and_blockers(
                 &state_root,
-                "run-autotester-blocked",
-                "autotester",
+                "run-alpha-verifier-blocked",
+                "alpha_verifier",
                 "receipt-blocked",
                 "packet.json",
                 Some("summary says pass, but typed blocker is authoritative"),
                 false,
-                Some("developer"),
+                Some("beta_impl"),
                 &typed_blockers,
-                Some("developer"),
+                Some("beta_impl"),
             )
             .expect("typed blocker should produce blocked completion");
         let blocked: serde_json::Value = serde_json::from_str(
@@ -320,7 +318,7 @@ mod tests {
 
         assert_eq!(blocked["status"], "blocked");
         assert_eq!(blocked["blocker_codes"], serde_json::json!(typed_blockers));
-        assert_eq!(blocked["allowed_next_node"], "developer_rework");
+        assert_eq!(blocked["allowed_next_node"], "beta_impl");
         assert_eq!(blocked["summary_classifier_source"], "typed_blockers_only");
         assert_eq!(
             blocked["host_bridge_completion_authority"]["accepted"],

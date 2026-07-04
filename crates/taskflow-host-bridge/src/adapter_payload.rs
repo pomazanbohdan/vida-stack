@@ -16,7 +16,8 @@ use crate::completion::{
 };
 use crate::request::{
     HostBridgeRequest, default_host_bridge_required_result_fields, effective_host_bridge_request,
-    host_bridge_request_string, legacy_internal_subagents_host_bridge_request,
+    host_bridge_blocked_result_contract, host_bridge_request_string,
+    legacy_internal_subagents_host_bridge_request,
 };
 
 pub struct HostBridgeAdapterPayloadInput<'a> {
@@ -179,6 +180,24 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         .ok()
         .map(|request| request.required_result_fields.clone())
         .unwrap_or_else(default_host_bridge_required_result_fields);
+    let blocked_result_contract = host_bridge_blocked_result_contract(input.request)
+        .cloned()
+        .map(Value::Object)
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "required_result_fields": required_result_fields.clone(),
+                "rework_target_required_when_blocked": true,
+                "allowed_next_node": Value::Null,
+                "allowed_blocker_codes": [
+                    taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable.as_str(),
+                    taskflow_contracts::BlockerCode::HostToolCapabilityMissing.as_str(),
+                    "host_agent_execution_failed"
+                ]
+            })
+        });
     let mut blocker_codes = input.provenance_blockers;
     if !missing.is_empty() {
         blocker_codes.push(
@@ -353,19 +372,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
             "host_tool_calls": host_tool_calls,
             "adapter_capacity": adapter_capacity,
             "durable_job": durable_job,
-            "blocked_result_contract": {
-                "execution_state": "blocked",
-                "decision": "rework_required",
-                "verdict": "rework_required",
-                "required_result_fields": required_result_fields,
-                "rework_target_required_when_blocked": true,
-                "allowed_next_node": "developer_rework",
-                "allowed_blocker_codes": [
-                    taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable.as_str(),
-                    taskflow_contracts::BlockerCode::HostToolCapabilityMissing.as_str(),
-                    "host_agent_execution_failed"
-                ]
-            },
+            "blocked_result_contract": blocked_result_contract,
             "binary_boundary": "vida.exe emits and validates bridge artifacts; parent host adapter invokes native host tools"
         }
     })
@@ -477,18 +484,42 @@ mod tests {
             payload["host_bridge"]["blocked_result_contract"]["decision"],
             "rework_required"
         );
+        assert_eq!(
+            payload["host_bridge"]["blocked_result_contract"]["allowed_next_node"],
+            Value::Null
+        );
     }
 
     #[test]
-    fn host_bridge_adapter_payload_advertises_attach_for_developer_implementation_request() {
+    fn host_bridge_adapter_payload_echoes_explicit_blocked_result_contract_next_node() {
         let mut request = request();
-        request["dispatch_target"] = json!("developer");
+        request["host_bridge"] = json!({
+            "blocked_result_contract": {
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "allowed_next_node": "alpha_rework"
+            }
+        });
+
+        let payload = payload_for(&request);
+
+        assert_eq!(payload["status"], "pass");
+        assert_eq!(
+            payload["host_bridge"]["blocked_result_contract"]["allowed_next_node"],
+            "alpha_rework"
+        );
+    }
+
+    #[test]
+    fn host_bridge_adapter_payload_advertises_attach_for_implementation_task_class() {
+        let mut request = request();
+        request["dispatch_target"] = json!("alpha_impl");
         request["task_class"] = json!("implementation");
 
         let payload = payload_for(&request);
 
         assert_eq!(payload["status"], "pass");
-        assert_eq!(payload["host_bridge"]["dispatch_target"], "developer");
+        assert_eq!(payload["host_bridge"]["dispatch_target"], "alpha_impl");
         assert_eq!(payload["host_bridge"]["artifact_attach_required"], true);
         assert_eq!(
             payload["host_bridge"]["artifact_attach_command"],
@@ -505,20 +536,20 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_adapter_payload_advertises_attach_for_developer_downgraded_task_class() {
+    fn host_bridge_adapter_payload_does_not_infer_artifact_scope_from_dispatch_target_name() {
         let mut request = request();
-        request["dispatch_target"] = json!("developer");
-        request["task_class"] = json!("coach");
+        request["dispatch_target"] = json!("alpha_impl");
+        request["task_class"] = json!("quality_gate");
         request["implementation_artifacts"] = json!([]);
 
         let payload = payload_for(&request);
 
         assert_eq!(payload["status"], "pass");
-        assert_eq!(payload["host_bridge"]["dispatch_target"], "developer");
-        assert_eq!(payload["host_bridge"]["artifact_attach_required"], true);
+        assert_eq!(payload["host_bridge"]["dispatch_target"], "alpha_impl");
+        assert_eq!(payload["host_bridge"]["artifact_attach_required"], false);
         assert_eq!(
             payload["host_bridge"]["artifact_attach_command"],
-            "vida agent host-bridge --request request.json --attach-artifact <artifact-path> --changed-file <changed-file> --artifact-kind patch_proposal"
+            Value::Null
         );
     }
 

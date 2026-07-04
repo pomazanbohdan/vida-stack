@@ -251,7 +251,7 @@ fn normalize_legacy_completion(
             FlowStepRef(
                 string_field(result, "rework_target")
                     .or_else(|| string_field(result, "allowed_next_node"))
-                    .unwrap_or("developer")
+                    .unwrap_or("rework")
                     .to_string(),
             ),
         )?
@@ -311,7 +311,7 @@ fn result_contract_for(source_contract_version: &str, outcome: &CompletionOutcom
                 "verdict": "rework_required",
                 "blocker_codes": blocker_codes,
                 "rework_target": rework_target.0,
-                "allowed_next_node": "developer_rework"
+                "allowed_next_node": rework_target.0
             })
         }
     }

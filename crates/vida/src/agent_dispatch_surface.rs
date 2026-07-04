@@ -26,7 +26,8 @@ use runtime_path_policy::{
 use taskflow_host_bridge::{
     build_host_bridge_adapter_payload, build_host_bridge_normalized_implementation_artifact,
     decide_host_bridge_completion_authority, host_bridge_artifact_file,
-    host_bridge_artifact_has_retryable_completion_blocker, host_bridge_changed_files_from_artifact,
+    host_bridge_artifact_has_retryable_completion_blocker, host_bridge_blocked_result_contract,
+    host_bridge_blocked_result_contract_is_retryable, host_bridge_changed_files_from_artifact,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_has_preview_refresh_evidence,
     host_bridge_completed_result_status_is_admissible, host_bridge_completion_retryable_blocker,
@@ -1110,32 +1111,6 @@ fn host_bridge_request_lifecycle_string<'a>(
         })
         .map(str::trim)
         .filter(|value| !value.is_empty())
-}
-
-fn host_bridge_blocked_result_contract(
-    request: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    let object = request.as_object()?;
-    if let Some(contract) = object
-        .get("blocked_result_contract")
-        .and_then(serde_json::Value::as_object)
-    {
-        return Some(contract);
-    }
-    object
-        .values()
-        .find_map(host_bridge_blocked_result_contract)
-}
-
-fn host_bridge_blocked_result_contract_is_retryable(
-    contract: &serde_json::Map<String, serde_json::Value>,
-) -> bool {
-    let allowed_next_node = contract
-        .get("allowed_next_node")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
-    !allowed_next_node.is_empty() && allowed_next_node != "next"
 }
 
 fn completed_host_bridge_completion_request_for_state_root(
@@ -10600,13 +10575,14 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_adapter_payload_advertises_attach_before_implementer_completion() {
+    fn host_bridge_adapter_payload_advertises_attach_for_implementation_task_class() {
         let request = serde_json::json!({
             "schema_version": 1,
             "status": "pending",
             "request_id": "req-attach",
             "run_id": "run-attach",
-            "dispatch_target": "implementer",
+            "dispatch_target": "alpha_impl",
+            "task_class": "implementation",
             "packet_path": "packet.json",
             "backend_id": "internal_subagents",
             "carrier_id": "junior",

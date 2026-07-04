@@ -131,6 +131,39 @@ pub fn host_bridge_request_string<'a>(request: &'a Value, field: &str) -> Option
         .filter(|value| !value.is_empty())
 }
 
+pub fn host_bridge_blocked_result_contract(
+    request: &Value,
+) -> Option<&serde_json::Map<String, Value>> {
+    let object = request.as_object()?;
+    if let Some(contract) = object
+        .get("blocked_result_contract")
+        .and_then(Value::as_object)
+    {
+        return Some(contract);
+    }
+    object
+        .values()
+        .find_map(host_bridge_blocked_result_contract)
+}
+
+pub fn host_bridge_blocked_result_contract_allowed_next_node(request: &Value) -> Option<&str> {
+    host_bridge_blocked_result_contract(request)
+        .and_then(|contract| contract.get("allowed_next_node"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "next")
+}
+
+pub fn host_bridge_blocked_result_contract_is_retryable(
+    contract: &serde_json::Map<String, Value>,
+) -> bool {
+    contract
+        .get("allowed_next_node")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty() && value != "next")
+}
+
 pub fn host_bridge_path_array(value: &Value, field: &str) -> Vec<PathBuf> {
     value
         .get(field)
@@ -442,6 +475,48 @@ mod tests {
             effective["adapter_params"]["spawn_tool"],
             "multi_agent_v1.spawn_agent"
         );
+    }
+
+    #[test]
+    fn blocked_result_contract_helpers_find_nested_explicit_next_node() {
+        let request = serde_json::json!({
+            "status": "blocked",
+            "host_bridge": {
+                "blocked_result_contract": {
+                    "allowed_next_node": "alpha_rework"
+                }
+            }
+        });
+
+        let contract = host_bridge_blocked_result_contract(&request)
+            .expect("nested blocked result contract should be found");
+
+        assert_eq!(
+            contract.get("allowed_next_node").and_then(Value::as_str),
+            Some("alpha_rework")
+        );
+        assert_eq!(
+            host_bridge_blocked_result_contract_allowed_next_node(&request),
+            Some("alpha_rework")
+        );
+        assert!(host_bridge_blocked_result_contract_is_retryable(contract));
+    }
+
+    #[test]
+    fn blocked_result_contract_helpers_reject_abstract_next_node() {
+        let request = serde_json::json!({
+            "blocked_result_contract": {
+                "allowed_next_node": "next"
+            }
+        });
+        let contract = host_bridge_blocked_result_contract(&request)
+            .expect("blocked result contract should be found");
+
+        assert_eq!(
+            host_bridge_blocked_result_contract_allowed_next_node(&request),
+            None
+        );
+        assert!(!host_bridge_blocked_result_contract_is_retryable(contract));
     }
 
     #[test]

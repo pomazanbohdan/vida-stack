@@ -10,7 +10,10 @@ use crate::legacy_normalization::{
 };
 use crate::provenance::HostBridgeProvenanceDecision;
 use crate::receipt_binding::DispatchReceiptBindingDecision;
-use crate::request::{HostBridgeRequest, host_bridge_request_string};
+use crate::request::{
+    HostBridgeRequest, host_bridge_blocked_result_contract_allowed_next_node,
+    host_bridge_request_string,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostBridgeCompletionInput {
@@ -47,87 +50,6 @@ pub struct HostBridgeResultVerdictFields {
     pub blocker_codes: Vec<String>,
     pub rework_target: Option<String>,
     pub allowed_next_node: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HostBridgeQualityGateTransition {
-    pub gate: &'static str,
-    pub blocker_code: &'static str,
-    pub rework_target: &'static str,
-    pub blocked_allowed_next_node: &'static str,
-}
-
-const QUALITY_GATE_TRANSITIONS: &[(&[&str], HostBridgeQualityGateTransition)] = &[
-    (
-        &[
-            "coach",
-            "coach_lane",
-            "coach_test_gate",
-            "coach_implementation_gate",
-            "coach_validator",
-        ],
-        HostBridgeQualityGateTransition {
-            gate: "coach",
-            blocker_code: "coach_rework_required",
-            rework_target: "developer",
-            blocked_allowed_next_node: "developer_rework",
-        },
-    ),
-    (
-        &[
-            "tester",
-            "tester_lane",
-            "verification",
-            "verification_lane",
-            "verifier",
-            "verifier_lane",
-        ],
-        HostBridgeQualityGateTransition {
-            gate: "tester",
-            blocker_code: "verification_rework_required",
-            rework_target: "developer",
-            blocked_allowed_next_node: "developer_rework",
-        },
-    ),
-    (
-        &[
-            "reviewer",
-            "reviewer_lane",
-            "review",
-            "review_lane",
-            "duplication_reviewer",
-        ],
-        HostBridgeQualityGateTransition {
-            gate: "reviewer",
-            blocker_code: "review_rework_required",
-            rework_target: "tester",
-            blocked_allowed_next_node: "tester",
-        },
-    ),
-];
-
-#[must_use]
-pub fn host_bridge_quality_gate_transition(
-    completed_target: &str,
-) -> Option<HostBridgeQualityGateTransition> {
-    let normalized = completed_target.trim();
-    QUALITY_GATE_TRANSITIONS
-        .iter()
-        .find(|(aliases, _)| aliases.iter().any(|alias| *alias == normalized))
-        .map(|(_, transition)| *transition)
-}
-
-fn host_bridge_quality_gate_transition_for_blockers(
-    blocker_codes: &[String],
-) -> Option<HostBridgeQualityGateTransition> {
-    QUALITY_GATE_TRANSITIONS
-        .iter()
-        .find(|(_, transition)| {
-            blocker_codes
-                .iter()
-                .any(|blocker| blocker.trim() == transition.blocker_code)
-        })
-        .map(|(_, transition)| *transition)
 }
 
 pub fn materialize_host_bridge_completion_evidence(
@@ -348,6 +270,21 @@ pub fn host_bridge_result_verdict_fields_for_gate(
     blocker_codes: &[String],
     rework_target: Option<&str>,
 ) -> HostBridgeResultVerdictFields {
+    host_bridge_result_verdict_fields_for_gate_and_contract(
+        completed_target,
+        blocker_codes,
+        rework_target,
+        None,
+    )
+}
+
+#[must_use]
+pub fn host_bridge_result_verdict_fields_for_gate_and_contract(
+    completed_target: &str,
+    blocker_codes: &[String],
+    rework_target: Option<&str>,
+    request_contract: Option<&Value>,
+) -> HostBridgeResultVerdictFields {
     if blocker_codes.is_empty() {
         let allowed_next_node = rework_target
             .map(str::trim)
@@ -361,24 +298,21 @@ pub fn host_bridge_result_verdict_fields_for_gate(
             allowed_next_node: allowed_next_node.to_string(),
         }
     } else {
-        let transition = host_bridge_quality_gate_transition(completed_target)
-            .or_else(|| host_bridge_quality_gate_transition_for_blockers(blocker_codes));
+        let resolved_rework_target = rework_target
+            .map(str::trim)
+            .filter(|target| !target.is_empty())
+            .unwrap_or(completed_target)
+            .to_string();
+        let resolved_allowed_next_node = request_contract
+            .and_then(host_bridge_blocked_result_contract_allowed_next_node)
+            .map(str::to_string)
+            .unwrap_or_else(|| resolved_rework_target.clone());
         HostBridgeResultVerdictFields {
             decision: "rework_required".to_string(),
             verdict: "rework_required".to_string(),
             blocker_codes: blocker_codes.to_vec(),
-            rework_target: Some(
-                rework_target
-                    .map(str::trim)
-                    .filter(|target| !target.is_empty())
-                    .or_else(|| transition.map(|transition| transition.rework_target))
-                    .unwrap_or("developer")
-                    .to_string(),
-            ),
-            allowed_next_node: transition
-                .map(|transition| transition.blocked_allowed_next_node)
-                .unwrap_or("developer_rework")
-                .to_string(),
+            rework_target: Some(resolved_rework_target),
+            allowed_next_node: resolved_allowed_next_node,
         }
     }
 }
@@ -540,10 +474,8 @@ pub fn host_bridge_request_requires_implementation_artifacts(
     dispatch_target: &str,
     task_class: Option<&str>,
 ) -> bool {
-    matches!(
-        dispatch_target.trim(),
-        "developer" | "implementer" | "implementation"
-    ) || task_class.map(str::trim).is_some_and(|value| {
+    let _ = dispatch_target;
+    task_class.map(str::trim).is_some_and(|value| {
         matches!(
             value,
             "implementation" | "delivery_task" | "execution_block" | "writer"
@@ -768,8 +700,8 @@ mod tests {
         );
 
         let rework_fields = host_bridge_result_verdict_fields(
-            &["coach_rework_required".to_string()],
-            Some("developer"),
+            &["alpha_rework_required".to_string()],
+            Some("alpha_impl"),
         );
         let rework_result = serde_json::json!({
             "status": "blocked",
@@ -862,32 +794,29 @@ mod tests {
     }
 
     #[test]
-    fn quality_gate_transition_matrix_routes_pass_and_blocked_decisions() {
+    fn result_verdict_fields_do_not_invent_role_specific_rework_routes() {
         let cases = [
             (
-                "coach",
-                "coach decision=blocked; implementation acceptance gap",
-                "coach_rework_required",
-                "developer",
-                "developer_rework",
+                "alpha_gate",
+                "alpha_gate_rework_required",
+                Some("alpha_impl"),
+                "alpha_impl",
             ),
             (
-                "tester",
-                "tester decision=blocked; focused proof failed",
-                "verification_rework_required",
-                "developer",
-                "developer_rework",
+                "beta_gate",
+                "beta_gate_rework_required",
+                Some("beta_impl"),
+                "beta_impl",
             ),
             (
-                "reviewer",
-                "reviewer decision=blocked; proof review needs tester rework",
-                "review_rework_required",
-                "tester",
-                "tester",
+                "gamma_gate",
+                "gamma_gate_rework_required",
+                None,
+                "gamma_gate",
             ),
         ];
 
-        for (gate, _blocked_summary, blocker_code, rework_target, allowed_next_node) in cases {
+        for (gate, blocker_code, rework_target, allowed_next_node) in cases {
             let pass_fields = host_bridge_result_verdict_fields_for_gate(gate, &[], None);
             assert_eq!(pass_fields.decision, "approve", "{gate}");
             assert_eq!(pass_fields.verdict, "pass", "{gate}");
@@ -900,8 +829,11 @@ mod tests {
                 targeted_pass_fields.allowed_next_node, allowed_next_node,
                 "{gate}"
             );
-            let blocked_fields =
-                host_bridge_result_verdict_fields_for_gate(gate, &[blocker_code.to_string()], None);
+            let blocked_fields = host_bridge_result_verdict_fields_for_gate(
+                gate,
+                &[blocker_code.to_string()],
+                rework_target,
+            );
             assert_eq!(blocked_fields.decision, "rework_required", "{gate}");
             assert_eq!(blocked_fields.verdict, "rework_required", "{gate}");
             assert_eq!(
@@ -911,7 +843,7 @@ mod tests {
             );
             assert_eq!(
                 blocked_fields.rework_target,
-                Some(rework_target.to_string()),
+                Some(allowed_next_node.to_string()),
                 "{gate}"
             );
             assert_eq!(
@@ -919,6 +851,26 @@ mod tests {
                 "{gate}"
             );
         }
+    }
+
+    #[test]
+    fn result_verdict_fields_use_explicit_blocked_contract_next_node() {
+        let contract = serde_json::json!({
+            "blocked_result_contract": {
+                "allowed_next_node": "alpha_impl_rework"
+            }
+        });
+
+        let fields = host_bridge_result_verdict_fields_for_gate_and_contract(
+            "beta_gate",
+            &["beta_gate_rework_required".to_string()],
+            Some("alpha_impl"),
+            Some(&contract),
+        );
+
+        assert_eq!(fields.decision, "rework_required");
+        assert_eq!(fields.rework_target, Some("alpha_impl".to_string()));
+        assert_eq!(fields.allowed_next_node, "alpha_impl_rework");
     }
 
     #[test]
@@ -979,7 +931,7 @@ mod tests {
                     "execution_state": "executed",
                     "decision": "approve",
                     "verdict": "pass",
-                    "blocker_codes": ["coach_rework_required"],
+                    "blocker_codes": ["alpha_gate_rework_required"],
                     "rework_target": null,
                     "allowed_next_node": "closure"
                 }),
@@ -995,8 +947,8 @@ mod tests {
                     "decision": "rework_required",
                     "verdict": "rework_required",
                     "blocker_codes": [],
-                    "rework_target": "developer",
-                    "allowed_next_node": "developer_rework"
+                    "rework_target": "alpha_impl",
+                    "allowed_next_node": "alpha_impl"
                 }),
                 "host_bridge_result_blocker_codes_missing",
             ),
@@ -1009,9 +961,9 @@ mod tests {
                     },
                     "decision": "rework_required",
                     "verdict": "rework_required",
-                    "blocker_codes": ["coach_rework_required"],
+                    "blocker_codes": ["alpha_gate_rework_required"],
                     "rework_target": null,
-                    "allowed_next_node": "developer_rework"
+                    "allowed_next_node": "alpha_impl"
                 }),
                 "host_bridge_result_rework_target_missing",
             ),
@@ -1088,27 +1040,24 @@ mod tests {
     }
 
     #[test]
-    fn implementation_artifacts_are_required_for_implementation_targets_or_task_classes() {
-        assert!(host_bridge_completion_requires_implementation_artifacts(
-            "implementer"
-        ));
-        assert!(host_bridge_completion_requires_implementation_artifacts(
-            " implementation "
+    fn implementation_artifacts_are_required_for_implementation_task_classes() {
+        assert!(!host_bridge_completion_requires_implementation_artifacts(
+            "alpha_impl"
         ));
         assert!(host_bridge_request_requires_implementation_artifacts(
-            "developer",
+            "alpha_impl",
             Some("implementation")
         ));
         assert!(host_bridge_request_requires_implementation_artifacts(
-            "developer",
+            "alpha_impl",
             Some(" delivery_task ")
         ));
-        assert!(host_bridge_request_requires_implementation_artifacts(
-            "developer",
-            Some("coach")
+        assert!(!host_bridge_request_requires_implementation_artifacts(
+            "alpha_impl",
+            Some("quality_gate")
         ));
         assert!(!host_bridge_completion_requires_implementation_artifacts(
-            "verification"
+            "beta_verify"
         ));
     }
 
