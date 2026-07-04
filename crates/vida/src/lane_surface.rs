@@ -4080,13 +4080,9 @@ fn host_bridge_implementation_scope_validation(
 ) -> serde_json::Value {
     let isolation = request.get("implementation_isolation");
     let isolation_is_valid = isolation.is_some_and(|value| value.is_object());
-    let proof_artifact_paths = taskflow_host_bridge::host_bridge_request_proof_artifact_paths(request)
-        .into_iter()
-        .map(|path| path.to_string_lossy().to_string())
-        .collect::<Vec<_>>();
     let mut validation = crate::runtime_dispatch_packets::implementation_artifact_scope_validation(
         authoritative_owned_paths,
-        &proof_artifact_paths,
+        &[],
         artifacts,
         authority,
     );
@@ -6676,6 +6672,50 @@ mod tests {
     use std::fs;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn host_bridge_completion_scope_ignores_request_supplied_proof_paths() {
+        let request = serde_json::json!({
+            "implementation_isolation": {
+                "owned_paths": ["crates/vida/src/lib.rs"],
+                "proof_artifact_paths": ["crates/vida/src"]
+            }
+        });
+        let artifacts = serde_json::json!([{
+            "artifact_kind": "patch_proposal",
+            "attempt_id": "attempt-1",
+            "task_id": "task-1",
+            "stage_id": "implementation",
+            "freshness": "task-updated-at-1",
+            "receipt_backed": true,
+            "consolidation_receipt_id": "receipt-1",
+            "changed_files": ["crates/vida/src/unauthorized.rs"]
+        }]);
+
+        let validation = host_bridge_implementation_scope_validation(
+            &request,
+            &artifacts,
+            crate::runtime_dispatch_packets::ImplementationArtifactAuthority {
+                task_id: "task-1",
+                task_updated_at: "task-updated-at-1",
+            },
+            &["crates/vida/src/lib.rs".to_string()],
+        );
+
+        assert_eq!(validation["status"], "blocked");
+        assert_eq!(validation["proof_artifact_paths"], serde_json::json!([]));
+        assert!(
+            validation["blocker_codes"]
+                .as_array()
+                .expect("blocker codes")
+                .iter()
+                .any(|code| code == "implementation_attempt_scope_guard_violation")
+        );
+        assert_eq!(
+            validation["out_of_scope_paths"],
+            serde_json::json!(["crates/vida/src/unauthorized.rs"])
+        );
+    }
 
     #[test]
     fn host_bridge_retryable_completion_evidence_rejects_forged_result_without_provenance() {
