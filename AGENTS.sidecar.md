@@ -38,7 +38,7 @@ Purpose: provide the project-level agent instruction overlay for the repository 
    - `docs/process/agent-extensions/index.md`
 12. Command timing and gate optimization protocol:
    - `docs/process/command-timing-and-gate-optimization-protocol.md`
-13. Project Error Search runtime diagnostics protocol:
+13. Project TRACE runtime diagnostics protocol:
     - `docs/process/project-error-search-runtime-diagnostics-protocol.md`
 14. Agent skill learning protocol:
     - `docs/process/agent-skill-learning-protocol.md`
@@ -146,7 +146,7 @@ Project-routing rule:
 16. Project-local development routing is intentionally thin after generic runtime protocol promotion:
    - use `docs/process/project-orchestrator-operating-protocol.md` for the vida-stack top-level loop and local read set,
    - use `docs/process/command-timing-and-gate-optimization-protocol.md` for local proof ladder, slow gates, script timing, and CI/non-blocking iteration decisions,
-   - use `docs/process/project-error-search-runtime-diagnostics-protocol.md` for VIDA-specific application of the generic `Error Search / Bug Reasoning` algorithm.
+   - use `docs/process/project-error-search-runtime-diagnostics-protocol.md` for VIDA-specific application of the generic `TRACE` algorithm.
 17. Generic runtime owner law is not duplicated here. Resolve these owners through `vida protocol view <id>` or the mapped runtime instruction docs when a case needs the full rule:
    - active-unit binding, anti-stop, final-report, and continuation law: `instruction-contracts/core.orchestration-runtime-capsule`, `instruction-contracts/core.orchestration-protocol`, and `runtime-instructions/work.taskflow-protocol`,
    - TaskFlow state, parent/child closure, scheduling, and source-neutral intake: `runtime-instructions/work.taskflow-protocol`,

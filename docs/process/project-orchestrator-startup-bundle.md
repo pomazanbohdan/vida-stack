@@ -32,7 +32,7 @@ Treat this bundle as the compact project `always_on_core` startup set for routin
 4. packet rendering and prompt-stack interpretation from `project-packet-rendering-runtime-capsule.md`,
 5. skill activation routing from `project-skill-initialization-and-activation-protocol.md`,
 6. command timing, slow-gate classification, and script/gate optimization defaults from `command-timing-and-gate-optimization-protocol.md`,
-7. runtime-defect Error Search routing defaults from `project-error-search-runtime-diagnostics-protocol.md`.
+7. runtime-defect TRACE routing defaults from `project-error-search-runtime-diagnostics-protocol.md`.
 8. runtime development environment skill and issue-processing routing from `vida-runtime-development-environment.md`.
 9. wave-first epic optimization, three-step task execution, and post-task
    scorecard/checklist routing from `project-orchestrator-operating-protocol.md`.
@@ -50,7 +50,7 @@ After reading this bundle, the orchestrator should be able to answer:
 6. whether skill activation is already explicit,
 7. whether a command or gate timing must create optimization work,
 8. whether a full owner protocol read is required for an edge case,
-9. whether a runtime defect must use `META(Error Search)` because authority, ownership, receipt, proof, or routing law is involved.
+9. whether a runtime defect must use `META(TRACE)` because authority, ownership, receipt, proof, or routing law is involved.
 10. whether `vida-runtime-development` or `vida-github-issues` should be activated for the current bounded step.
 11. which wave has the smallest closure distance when the active goal is a
     long-running epic,
@@ -73,7 +73,7 @@ Expand beyond it only when:
 5. skill activation is not settled by the bundle's routing pointer,
 6. command timing, slow-gate, or script optimization decisions are not settled by the timing protocol summary,
 7. the user explicitly asks for the deeper owner protocol,
-8. a runtime defect or multi-defect pool requires the full project Error Search overlay.
+8. a runtime defect or multi-defect pool requires the full project TRACE overlay.
 9. wave-first closure distance, model-routing optimization, post-task scorecard,
    or publication authorization is unclear.
 

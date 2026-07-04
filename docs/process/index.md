@@ -69,7 +69,7 @@ Canonical entrypoints:
 27. `docs/process/command-timing-and-gate-optimization-protocol.md`
    - project-owned process for timing significant operations, diagnosing slow gates, and turning repeated command/script/CI latency into optimization work
 28. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
-   - project-owned process overlay for applying generic `Error Search / Bug Reasoning` to VIDA runtime, TaskFlow, DocFlow, agent-lane, ownership, routing, and CI defect clusters
+   - project-owned process overlay for applying generic `TRACE` to VIDA runtime, TaskFlow, DocFlow, agent-lane, ownership, routing, and CI defect clusters
 29. `docs/product/spec/multi-agent-stage-ensemble-contract.md`
    - product/runtime capability contract for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
 30. `docs/process/vida-runtime-development-environment.md`

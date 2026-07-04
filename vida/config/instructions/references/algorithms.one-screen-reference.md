@@ -7,7 +7,7 @@
 | MAR | Selector score `23-32`; complex task | 3 role rounds + knowledge carry-over | weighted rubric score >= 8/10 and no critical residual risk | -> META |
 | 5-SOL | Selector score `33-42`; choice between alternatives | R1: 5 options -> weighted ledger -> R2: 5 new options -> legal hybrid/top option | Admissible final decision with score+confidence >= 80 or explicit cautious band | -> META |
 | META | Selector score `>42`; high-stakes / meta-analysis | domain packet -> choose blocks -> admissibility gate -> family-weighted confidence -> synthesis | admissible and confidence >= 80% | repair loop -> best admissible option/user input |
-| Error Search / Bug Reasoning | Bug/incident/regression/multi-error pool | scope -> freeze evidence -> cluster -> authority map -> trace -> hypothesis -> fix locus -> proof matrix | Root cause confirmed and proof covers blast radius | -> META for authority/governance ambiguity; -> 5-SOL for post-root-cause alternatives |
+| TRACE | Bug/incident/regression/multi-error pool | scope -> freeze evidence -> cluster -> authority map -> trace -> hypothesis -> fix locus -> proof matrix | Root cause confirmed and proof covers blast radius | -> META for authority/governance ambiguity; -> 5-SOL for post-root-cause alternatives |
 | Web Search Gate | External unstable information | trigger -> sources -> reconcile | >=2 sources (>=3 sec/arch) | escalate algorithm level |
 
 Keep the essence intact: `triggers + quality gates + escalation`.

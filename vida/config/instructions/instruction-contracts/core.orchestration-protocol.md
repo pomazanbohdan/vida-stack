@@ -257,7 +257,7 @@ When the user explicitly declares the VIDA runtime defective and instructs bypas
 
 Every user-facing orchestration report must show compact external state before substance:
 
-1. `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META|Error Search>.`
+1. `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META|TRACE>.`
 2. `Requests: active=<n> | in_work=<n> | blocked=<n>` for conversation mode,
 3. `Tasks: active=<n> | in_work=<n> | blocked=<n>` for development orchestration mode,
 4. `Agents: active=<n> | working=<n> | waiting=<n>`,
@@ -410,4 +410,4 @@ protocol_compression_baseline_ref: e41e56132^:vida/config/instructions/instructi
 protocol_compression_audit_at: 2026-07-03T11:12:39.6247137+03:00
 protocol_compression_before_tokens: 8726
 protocol_compression_after_tokens: 4440
-protocol_compression_content_sha256: 2bf99fc5cb92ecaca9f7ebdcb4813e52da73414c677fd2a22e9dac9c94ba3eeb
+protocol_compression_content_sha256: e705f1fabc506e8f7c10854b00156d583f5805d9c01d1236b4d13f813f13df9d

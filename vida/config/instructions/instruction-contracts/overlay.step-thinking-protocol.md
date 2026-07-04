@@ -27,7 +27,7 @@ selection[5]{score,algorithm,purpose}:
 
 ```toon
 overrides[12]{scenario,algorithm}:
-  Bug / incident / regression,Error Search
+  Bug / incident / regression,TRACE
   Security/Auth decision,META
   Database schema,META
   Foundation architecture,META
@@ -38,7 +38,7 @@ overrides[12]{scenario,algorithm}:
   Fail-closed law risk,META
   Tracked writer + no eligible lane,META
   DEC-XXX creation,MAR
-  Multiple errors/issues,Error Search
+  Multiple errors/issues,TRACE
   "Choose between X,Y,Z",5-SOL
 ```
 
@@ -186,7 +186,7 @@ FLOW_TEMPLATES:
   MAR: [SEL-01, SEL-02, SEL-03, RFX-01, RFX-02, RFX-03, ITR-04, REP-01, REP-02]
   5-SOL: [SEL-01, SEL-02, SEL-03, CTX-01?, CTX-02?, OPT-01, OPT-02, OPT-03, OPT-04, OPT-05, REP-01, REP-02]
   META: [SEL-01, SEL-02, SEL-03, CTX-01, CTX-02, CTX-03, CTX-04?, CTX-05?, selected_block_families, ENS-00?, ENS-01, ENS-02, ENS-03, ENS-04?, ENS-05, REP-01, REP-02, REP-03]
-  Error Search: [BUG-00, BUG-01, BUG-02, BUG-03, BUG-04, BUG-05?, BUG-06, BUG-07, BUG-08, BUG-09?, BUG-10]
+  TRACE: [BUG-00, BUG-01, BUG-02, BUG-03, BUG-04, BUG-05?, BUG-06, BUG-07, BUG-08, BUG-09?, BUG-10]
 ```
 
 ## Section: stc
@@ -220,7 +220,7 @@ triggers[4]{condition,mode}:
   Score ≤ 12,MANDATORY
   local objective,CONDITION
   low blast radius,CONDITION
-  bug/root-cause gate required,ESCALATE to Error Search
+  bug/root-cause gate required,ESCALATE to TRACE
 ```
 
 ---
@@ -1560,7 +1560,7 @@ VALID_EXAMPLE: |
 
 ## Section: bug-reasoning
 
-# Error Search / Bug Reasoning
+# TRACE
 
 > **MANDATORY.** Scope -> Freeze evidence -> Cluster -> Map authority -> Trace -> Hypothesize -> Fix locus -> Prove -> Learn.
 > **Iron Law:** NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
@@ -2080,7 +2080,7 @@ ANALYSIS:
       - Debugging complex issues
       - Refactoring decisions
       - Technical debt analysis
-    vida_mapping: `instruction-contracts/overlay.step-thinking-protocol#section-bug-reasoning`, MAR Round 1
+    vida_mapping: `instruction-contracts/overlay.step-thinking-protocol#section-bug-reasoning`, MAR Round 1, TRACE
 ```
 
 ---
@@ -2368,4 +2368,4 @@ protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/instructio
 protocol_compression_audit_at: 2026-07-03T13:30:00+03:00
 protocol_compression_before_tokens: 19324
 protocol_compression_after_tokens: 19320
-protocol_compression_content_sha256: 7b73a5623ee2542e827b5bdce30cb5a61e1284d955f2ed771fce176649eb167d
+protocol_compression_content_sha256: 2c35272af6397e165910de2576ecf0b688a1475d4ac78f574472ce53b95f3215

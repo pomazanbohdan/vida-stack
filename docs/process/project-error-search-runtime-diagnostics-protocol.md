@@ -1,8 +1,8 @@
-# Project Error Search Runtime Diagnostics Protocol
+# Project TRACE Runtime Diagnostics Protocol
 
 Status: active project process doc
 
-Purpose: adapt the generic `Error Search / Bug Reasoning` algorithm to VIDA runtime, TaskFlow, DocFlow, agent-lane, and operator-surface diagnostics without redefining the framework-owned algorithm.
+Purpose: adapt the generic `TRACE` algorithm to VIDA runtime, TaskFlow, DocFlow, agent-lane, and operator-surface diagnostics without redefining the framework-owned algorithm.
 
 Owner boundary:
 
@@ -25,9 +25,9 @@ This document is mandatory bootstrap context when any active work involves:
 
 For routine startup, read the compact summary in `docs/process/project-orchestrator-startup-bundle.md`. Expand to this document when a runtime defect or multi-defect pool is active.
 
-## VIDA Runtime Error Search Overlay
+## VIDA Runtime TRACE Overlay
 
-Use `META(Error Search)` for VIDA runtime defects when any of these are present:
+Use `META(TRACE)` for VIDA runtime defects when any of these are present:
 
 1. framework-owned command behavior,
 2. fail-closed law,
@@ -37,7 +37,7 @@ Use `META(Error Search)` for VIDA runtime defects when any of these are present:
 6. provider/carrier/model/profile admissibility,
 7. more than two related failures.
 
-Use plain `Error Search` only for a local, bounded defect whose authoritative state, ownership, and proof law are already clear.
+Use plain `TRACE` only for a local, bounded defect whose authoritative state, ownership, and proof law are already clear.
 
 ## Required Evidence Packet
 
@@ -75,7 +75,7 @@ For runtime continuation defects, inspect surfaces in this order unless the acti
 
 Derived cache, rendered projection, lane preview, advisory text, and operator summaries are evidence surfaces only. They do not override the authoritative state-store, receipt, proof, or explicit runtime law.
 
-When a session/environment self-diagnostic discovers a new reusable Error Search optimization, update this protocol in the same bounded batch. Current examples include preferring `vida task show <task-id> --json` over heavier lane/run-graph projections for timeout recovery metadata, and requiring log-backed execution for long proof gates that can exceed host-tool stdout retention.
+When a session/environment self-diagnostic discovers a new reusable TRACE optimization, update this protocol in the same bounded batch. Current examples include preferring `vida task show <task-id> --json` over heavier lane/run-graph projections for timeout recovery metadata, and requiring log-backed execution for long proof gates that can exceed host-tool stdout retention.
 
 ## Output Economy Diagnostic Rule
 
@@ -132,7 +132,7 @@ Choose the patch layer by the first wrong transition point:
 
 ## Proof Matrix
 
-A VIDA runtime Error Search fix is not ready for commit until the proof matrix covers the claimed blast radius:
+A VIDA runtime TRACE fix is not ready for commit until the proof matrix covers the claimed blast radius:
 
 1. one focused regression test for the root cause,
 2. adjacent contract tests for the affected command family,

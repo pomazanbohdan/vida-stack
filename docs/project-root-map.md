@@ -41,7 +41,7 @@ This map does not cover extracted secondary bundles by default.
 13. `docs/process/command-timing-and-gate-optimization-protocol.md`
     - project-owned timing, slow-gate, script optimization, and operator-friction diagnostic protocol
 14. `docs/process/project-error-search-runtime-diagnostics-protocol.md`
-    - project-owned VIDA runtime application of generic `Error Search / Bug Reasoning`
+    - project-owned VIDA runtime application of generic `TRACE`
 15. `docs/product/spec/multi-agent-stage-ensemble-contract.md`
       - product/runtime capability contract for stage-level independent agent attempts, consolidation receipts, and append-only TaskFlow updates
 16. `docs/process/vida-runtime-development-environment.md`

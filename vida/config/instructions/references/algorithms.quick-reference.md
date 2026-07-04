@@ -11,7 +11,7 @@ Purpose: algorithm reference preserving triggers/gates.
 | MAR | Selector score `23-32`; complex tasks with regression risk | 3 rounds (Actor/Evaluator/Critic/Reflector) | Weighted rubric score >= 8/10 and no unresolved critical residual risk | <8 after 3 rounds -> META |
 | 5-SOL | Selector score `33-42`; choice between alternatives / design directions | R1: 5 options -> weighted option ledger -> R2: 5 new options -> legal hybrid/top option | Admissible choice with weighted option score + confidence >= 80, or explicit cautious band | Low score/confidence or legality pressure -> META |
 | META | Selector score `>42`; high risk/uncertainty, security/auth, explicit meta-analysis | Select domain packet -> choose blocks -> admissibility gate -> family-weighted confidence -> synthesize | Admissible result with confidence >= 80% and proof receipts | If <80% after repair loop -> best admissible option/user decision |
-| Error Search / Bug Reasoning | Bugs/incidents/regressions/multi-error pools | scope -> evidence freeze -> cluster -> authority map -> root-cause trace -> falsifiable hypothesis -> fix locus -> proof matrix | Root cause confirmed and proof covers blast radius | Governance/authority ambiguity -> META; alternatives after root cause -> 5-SOL |
+| TRACE | Bugs/incidents/regressions/multi-error pools | scope -> evidence freeze -> cluster -> authority map -> root-cause trace -> falsifiable hypothesis -> fix locus -> proof matrix | Root cause confirmed and proof covers blast radius | Governance/authority ambiguity -> META; alternatives after root cause -> 5-SOL |
 | Web-Search Gate | Unstable external knowledge | detect trigger -> find sources -> reconcile | >=2 sources (>=3 for sec/arch) | If sources conflict -> escalate algorithm |
 
 ## Unified Scoring Contract
@@ -49,7 +49,7 @@ When: score `23-32`, complex non-trivial decisions. Input: high impact radius ta
 - Family weights: task-class dependent, with validation heavier for security/schema work and options heavier for architecture/tech-stack work.
 - Escalation: if confidence remains low.
 
-### Error Search / Bug Reasoning
+### TRACE
 - When: bugs, incidents, regressions, repeated technical failures, or multi-error pools.
 - Input: observable failure evidence, ideally reproducible, with environment/config/timing context when available.
 - Steps: trigger scope -> evidence freeze -> symptom clustering -> authority/source-of-truth map -> root-cause trace -> optional delta minimization -> falsifiable hypothesis -> fix locus decision -> proof matrix -> post-fix learning.
@@ -95,4 +95,4 @@ protocol_compression_baseline_ref: 4aee9451c:vida/config/instructions/references
 protocol_compression_audit_at: 2026-07-03T14:05:00+03:00
 protocol_compression_before_tokens: 1947
 protocol_compression_after_tokens: 1946
-protocol_compression_content_sha256: 585eae2ed5819d7bc839dfc0e5c89c7a4c8ac3ae3be2b8df327993746d9aef45
+protocol_compression_content_sha256: 1824a33a426c8fc3801fc9b0070e6ff5a698dd7c82a8a4a4041cf6530026c800

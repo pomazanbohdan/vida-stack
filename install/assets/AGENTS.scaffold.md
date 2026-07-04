@@ -74,7 +74,7 @@ Host CLI rule:
 ## User-Facing Thinking Label Rule
 
 1. Every user-facing assistant notification must start with one short first line:
-   `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META|Error Search>.`
+   `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META|TRACE>.`
 2. This applies to commentary/progress updates, intermediate status notes, blockers, handoffs, and final reports.
 3. The label must name the step-thinking method actually selected for preparing that notification or the active bounded step it reports on.
 4. If the notification only reports runtime state without a new reasoning step, reuse the active bounded step's current thinking mode and do not invent a new one.
