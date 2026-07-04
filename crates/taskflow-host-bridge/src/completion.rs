@@ -2,17 +2,17 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
+use taskflow_contracts::{release1_contract_status_str, Release1ContractStatus};
 use time::OffsetDateTime;
 
 use crate::legacy_normalization::{
-    LEGACY_OUTCOME_CONTRADICTION, normalize_legacy_host_bridge_completion_result,
+    normalize_legacy_host_bridge_completion_result, LEGACY_OUTCOME_CONTRADICTION,
 };
 use crate::provenance::HostBridgeProvenanceDecision;
 use crate::receipt_binding::DispatchReceiptBindingDecision;
 use crate::request::{
-    HostBridgeRequest, host_bridge_blocked_result_contract_allowed_next_node,
-    host_bridge_request_string,
+    host_bridge_blocked_result_contract_allowed_next_node, host_bridge_request_string,
+    HostBridgeRequest,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -474,13 +474,18 @@ pub fn host_bridge_request_requires_implementation_artifacts(
     dispatch_target: &str,
     task_class: Option<&str>,
 ) -> bool {
-    let _ = dispatch_target;
-    task_class.map(str::trim).is_some_and(|value| {
+    let implementation_dispatch_target = matches!(
+        dispatch_target.trim(),
+        "developer" | "implementer" | "implementation"
+    );
+    let implementation_task_class = task_class.map(str::trim).is_some_and(|value| {
         matches!(
             value,
             "implementation" | "delivery_task" | "execution_block" | "writer"
         )
-    })
+    });
+
+    implementation_dispatch_target || implementation_task_class
 }
 
 #[must_use]
@@ -786,11 +791,9 @@ mod tests {
             &crate::request::default_host_bridge_required_result_fields(),
         );
 
-        assert!(
-            blockers
-                .iter()
-                .any(|blocker| blocker == LEGACY_OUTCOME_CONTRADICTION)
-        );
+        assert!(blockers
+            .iter()
+            .any(|blocker| blocker == LEGACY_OUTCOME_CONTRADICTION));
     }
 
     #[test]
@@ -1044,6 +1047,15 @@ mod tests {
         assert!(!host_bridge_completion_requires_implementation_artifacts(
             "alpha_impl"
         ));
+        assert!(host_bridge_completion_requires_implementation_artifacts(
+            "developer"
+        ));
+        assert!(host_bridge_completion_requires_implementation_artifacts(
+            "implementer"
+        ));
+        assert!(host_bridge_completion_requires_implementation_artifacts(
+            "implementation"
+        ));
         assert!(host_bridge_request_requires_implementation_artifacts(
             "alpha_impl",
             Some("implementation")
@@ -1055,6 +1067,14 @@ mod tests {
         assert!(!host_bridge_request_requires_implementation_artifacts(
             "alpha_impl",
             Some("quality_gate")
+        ));
+        assert!(host_bridge_request_requires_implementation_artifacts(
+            "developer",
+            Some("quality_gate")
+        ));
+        assert!(host_bridge_request_requires_implementation_artifacts(
+            "implementation",
+            None
         ));
         assert!(!host_bridge_completion_requires_implementation_artifacts(
             "beta_verify"
