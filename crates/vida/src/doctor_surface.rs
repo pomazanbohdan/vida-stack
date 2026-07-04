@@ -1874,10 +1874,10 @@ async fn run_doctor_active_task_attribution(args: super::DoctorArgs) -> ExitCode
             return ExitCode::from(1);
         }
     };
-    let rows = match crate::task_surface::load_task_snapshot_rows_with_retry(&state_dir).await {
+    let rows = match store.list_tasks(None, true).await {
         Ok(rows) => rows,
         Err(error) => {
-            eprintln!("task snapshot: failed ({error})");
+            eprintln!("authoritative task rows: failed ({error})");
             return ExitCode::from(1);
         }
     };

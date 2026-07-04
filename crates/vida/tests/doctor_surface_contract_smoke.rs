@@ -1502,6 +1502,101 @@ fn active_task_attribution_json_blocks_dirty_owner_contradiction() {
 }
 
 #[test]
+fn active_task_attribution_json_ignores_tampered_task_snapshot() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    run_git(&project_root, &["init"]);
+    run_git(
+        &project_root,
+        &["config", "user.email", "vida@example.invalid"],
+    );
+    run_git(&project_root, &["config", "user.name", "VIDA Test"]);
+    std::fs::write(format!("{project_root}/.gitignore"), ".vida/\n").expect("write gitignore");
+    std::fs::write(format!("{project_root}/README.md"), "old\n").expect("write readme fixture");
+    run_git(&project_root, &["add", "."]);
+    run_git(&project_root, &["commit", "-m", "baseline"]);
+    std::fs::write(format!("{project_root}/README.md"), "new\n").expect("modify unowned fixture");
+    create_session_triage_task(
+        &state_dir,
+        "active-task-attribution-tampered-epic",
+        "Active task attribution tampered epic",
+        "epic",
+        "open",
+        "0",
+        None,
+    );
+    create_session_triage_task(
+        &state_dir,
+        "active-task-attribution-tampered-parent",
+        "Active task attribution tampered parent",
+        "task",
+        "in_progress",
+        "1",
+        Some("active-task-attribution-tampered-epic"),
+    );
+    let step = vida()
+        .args([
+            "task",
+            "create",
+            "active-task-attribution-tampered-step",
+            "Active task attribution tampered step",
+            "--type",
+            "step",
+            "--status",
+            "in_progress",
+            "--parent-id",
+            "active-task-attribution-tampered-parent",
+            "--owned-path",
+            "crates/vida/src/doctor_surface.rs",
+            "--json",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("active attribution tampered step create should run");
+    assert_success(&step, "active attribution tampered step create");
+
+    let snapshot_path = format!("{project_root}/.vida/exports/tasks.snapshot.jsonl");
+    let snapshot = std::fs::read_to_string(&snapshot_path).expect("task snapshot should exist");
+    let tampered = snapshot
+        .lines()
+        .map(|line| {
+            let mut row: serde_json::Value =
+                serde_json::from_str(line).expect("snapshot row should parse");
+            if row["id"] == "active-task-attribution-tampered-parent"
+                || row["id"] == "active-task-attribution-tampered-step"
+            {
+                row["planner_metadata"]["owned_paths"] = serde_json::json!(["README.md", ".vida"]);
+            }
+            row.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&snapshot_path, format!("{tampered}\n")).expect("tamper task snapshot");
+
+    let output = vida()
+        .args(["doctor", "active-task-attribution", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .current_dir(&project_root)
+        .output()
+        .expect("active attribution tampered doctor should run");
+    assert_failure(
+        &output,
+        "active attribution doctor should ignore tampered snapshot and block",
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("active attribution json should parse");
+    assert_eq!(payload["status"], "blocked");
+    assert!(payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should be array")
+        .iter()
+        .any(|code| code == "dirty_ownership_ambiguous"));
+    assert_eq!(
+        payload["dirty_summary"]["unmatched_files"],
+        serde_json::json!(["README.md"])
+    );
+}
+
+#[test]
 fn task_steps_outputs_default_toon_json_and_filters() {
     let state_dir = unique_state_dir();
     create_session_triage_task(
