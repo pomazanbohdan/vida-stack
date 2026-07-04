@@ -13507,6 +13507,101 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     }
                 }
             }
+            TaskProofCommand::AttachReleaseBundle(command) => {
+                let state_dir = command
+                    .state_dir
+                    .clone()
+                    .unwrap_or_else(state_store::default_state_dir);
+                let proof_targets = match StateStore::open_existing(state_dir.clone()).await {
+                    Ok(store) => {
+                        let task = match store.show_task(&command.task_id).await {
+                            Ok(task) => task,
+                            Err(error) => {
+                                eprintln!("Failed to read task before release proof bundle attachment: {error}");
+                                return ExitCode::from(1);
+                            }
+                        };
+                        task.planner_metadata
+                            .proof_targets
+                            .iter()
+                            .map(|target| target.trim())
+                            .filter(|target| !target.is_empty())
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to open authoritative state store: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                if proof_targets.is_empty() {
+                    if command.json {
+                        crate::print_json_pretty(&serde_json::json!({
+                            "surface": "vida task proof attach-release-bundle",
+                            "status": "blocked",
+                            "task_id": command.task_id,
+                            "blocker_codes": ["task_proof_targets_missing"],
+                            "next_actions": ["Configure proof targets on the task, then rerun attach-release-bundle."],
+                            "artifact_refs": {"surface": "vida task proof attach-release-bundle"}
+                        }));
+                    } else {
+                        print_surface_header(command.render, "vida task proof attach-release-bundle");
+                        print_surface_line(command.render, "status", "blocked");
+                        print_surface_line(command.render, "blocker", "task_proof_targets_missing");
+                    }
+                    return ExitCode::from(2);
+                }
+
+                let current_exe = match std::env::current_exe() {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("Failed to resolve current vida executable: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                let mut args = vec![
+                    "task".to_string(),
+                    "proof".to_string(),
+                    "attach-evidence".to_string(),
+                    command.task_id.clone(),
+                ];
+                for target in &proof_targets {
+                    args.push("--proof-target".to_string());
+                    args.push(target.clone());
+                }
+                args.push("--result".to_string());
+                args.push(command.result.clone());
+                let command_text = command.command.clone().unwrap_or_else(|| {
+                    "vida task proof attach-release-bundle".to_string()
+                });
+                args.push("--command".to_string());
+                args.push(command_text);
+                for artifact_ref in &command.artifact_ref {
+                    args.push("--artifact-ref".to_string());
+                    args.push(artifact_ref.clone());
+                }
+                for evidence in &command.evidence {
+                    args.push("--evidence".to_string());
+                    args.push(evidence.clone());
+                }
+                args.push("--state-dir".to_string());
+                args.push(state_dir.display().to_string());
+                if command.json {
+                    args.push("--json".to_string());
+                }
+
+                match std::process::Command::new(current_exe).args(&args).output() {
+                    Ok(output) => {
+                        print!("{}", String::from_utf8_lossy(&output.stdout));
+                        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                        ExitCode::from(output.status.code().unwrap_or(1) as u8)
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to run attach-evidence for release proof bundle: {error}");
+                        ExitCode::from(1)
+                    }
+                }
+            }
         },
         TaskCommand::Ready(command) => {
             let state_dir = command
@@ -18407,6 +18502,39 @@ mod tests {
                 "artifacts/b.json".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn task_proof_attach_release_bundle_cli_accepts_bundle_fields() {
+        let parsed = cli(&[
+            "task",
+            "proof",
+            "attach-release-bundle",
+            "proof-task",
+            "--artifact-ref",
+            "artifacts/release-proof.json",
+            "--evidence",
+            "release proof green",
+            "--json",
+        ]);
+        let Some(crate::Command::Task(args)) = parsed.command else {
+            panic!("task command should parse");
+        };
+        let crate::TaskCommand::Proof(proof) = args.command else {
+            panic!("task proof command should parse");
+        };
+        let crate::TaskProofCommand::AttachReleaseBundle(command) = proof.command else {
+            panic!("attach-release-bundle command should parse");
+        };
+
+        assert_eq!(command.task_id, "proof-task");
+        assert_eq!(
+            command.artifact_ref,
+            vec!["artifacts/release-proof.json".to_string()]
+        );
+        assert_eq!(command.result, "pass");
+        assert_eq!(command.evidence, vec!["release proof green".to_string()]);
+        assert!(command.json);
     }
 
     #[test]

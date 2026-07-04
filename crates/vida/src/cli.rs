@@ -2501,6 +2501,12 @@ pub(crate) enum TaskProofCommand {
         after_help = "Examples:\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --evidence \"test log\"\n  vida task proof attach-evidence task-1 --proof-target \"proof a\" --proof-target \"proof b\" --result pass\n  vida task proof attach-evidence task-1 --proof-target \"cargo test -p vida proof\" --result pass --artifact-ref logs/a.txt --artifact-ref logs/b.txt --json\n\nOptions:\n  --proof-target <text> Proof target this evidence satisfies; repeat to attach the same evidence to multiple targets\n  --result <result>     Proof result: pass, fail, or blocked\n  --command <command>   Command or artifact command equivalent; defaults to each --proof-target\n  --artifact-ref <path> Receipt, log, screenshot, or artifact path; repeat to attach multiple artifacts\n  --evidence <text>     Additional evidence detail; accepts repeated flags\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output"
     )]
     AttachEvidence(TaskProofAttachEvidenceArgs),
+    #[command(
+        name = "attach-release-bundle",
+        about = "attach one release proof bundle to every configured proof target on a task",
+        after_help = "Examples:\n  vida task proof attach-release-bundle task-1 --artifact-ref artifacts/release-proof.json --evidence \"release proof bundle green\" --json\n\nOutput:\n  Reuses the structured attach-evidence receipt and attaches to all configured proof targets on the task.\n  Use `vida task proof status <task-id>` after the command to inspect any remaining unsatisfied targets."
+    )]
+    AttachReleaseBundle(TaskProofAttachReleaseBundleArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -2616,6 +2622,53 @@ pub(crate) struct TaskProofAttachEvidenceArgs {
         value_enum,
         default_value_t = RenderMode::Plain,
         help = "Render output mode for human-readable command output"
+    )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskProofAttachReleaseBundleArgs {
+    #[arg(help = "Task id whose configured proof targets should receive the bundle evidence")]
+    pub(crate) task_id: String,
+
+    #[arg(
+        long = "artifact-ref",
+        required = true,
+        help = "Release proof bundle, generated close proof, log, or receipt path; repeat to attach multiple artifacts"
+    )]
+    pub(crate) artifact_ref: Vec<String>,
+
+    #[arg(long = "result", default_value = "pass", help = "Proof result: pass, fail, or blocked")]
+    pub(crate) result: String,
+
+    #[arg(
+        long = "command",
+        help = "Command or artifact command equivalent; defaults to this attach-release-bundle invocation"
+    )]
+    pub(crate) command: Option<String>,
+
+    #[arg(
+        long = "evidence",
+        help = "Additional evidence detail; accepts repeated flags"
+    )]
+    pub(crate) evidence: Vec<String>,
+
+    #[arg(
+        long = "state-dir",
+        env = "VIDA_STATE_DIR",
+        help = "Override the TaskFlow state directory for this command"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(
+        long = "render",
+        env = "VIDA_RENDER",
+        value_enum,
+        default_value_t = RenderMode::Plain,
+        help = "Render output mode for human-readable output"
     )]
     pub(crate) render: RenderMode,
 

@@ -307,6 +307,7 @@ fn task_command_explicit_state_dir(args: &TaskArgs) -> Option<&std::path::Path> 
             super::TaskProofCommand::Status(command) => command.state_dir.as_deref(),
             super::TaskProofCommand::AttachBrowser(command) => command.state_dir.as_deref(),
             super::TaskProofCommand::AttachEvidence(command) => command.state_dir.as_deref(),
+            super::TaskProofCommand::AttachReleaseBundle(command) => command.state_dir.as_deref(),
         },
         TaskCommand::Ready(command) => command.state_dir.as_deref(),
         TaskCommand::Next(command) => command.state_dir.as_deref(),
