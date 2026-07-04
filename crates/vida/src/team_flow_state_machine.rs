@@ -212,8 +212,8 @@ pub fn extract_team_flow_state_machine(
 }
 
 /// Resolve the allowed next node for a given role using config-backed logic.
-/// This replaces all hardcoded literals like "developer", "tester", "closure"
-/// that were previously scattered across runtime_dispatch*, taskflow_routing*, etc.
+/// This replaces hardcoded lane ids that were previously scattered across
+/// runtime_dispatch*, taskflow_routing*, etc.
 pub fn resolve_allowed_next_node(activation_bundle: &Value, current_role: &str) -> Option<String> {
     extract_team_flow_state_machine(activation_bundle, None)
         .and_then(|sm| sm.resolve_next_lane(current_role))
@@ -229,7 +229,7 @@ pub fn validate_transition_config_backed(
         Some(sm) => sm.validate_transition(current_role, requested_next_node),
         None => TransitionVerdict::Blocked {
             blocker_code: "team_flow_state_machine_not_configured".to_string(),
-            allowed_next_node: "developer".to_string(), // legacy fallback
+            allowed_next_node: "configured_next_lane_unavailable".to_string(),
         },
     }
 }
@@ -262,10 +262,10 @@ mod tests {
                     "task_delivery_verified": {
                         "flow_id": "task_delivery_verified",
                         "steps": [
-                            {"role_id": "analyst", "runtime_role": "business_analyst", "task_class": "specification", "stage": "design_gate"},
-                            {"role_id": "developer", "runtime_role": "worker", "task_class": "implementation", "stage": "execution"},
-                            {"role_id": "coach_implementation_gate", "runtime_role": "coach", "task_class": "coach", "stage": "execution"},
-                            {"role_id": "tester", "runtime_role": "verifier", "task_class": "verification", "stage": "execution"}
+                            {"role_id": "alpha_spec", "runtime_role": "spec_runtime", "task_class": "specification", "stage": "design_gate"},
+                            {"role_id": "beta_impl", "runtime_role": "impl_runtime", "task_class": "implementation", "stage": "execution"},
+                            {"role_id": "gamma_gate", "runtime_role": "gate_runtime", "task_class": "quality_gate", "stage": "execution"},
+                            {"role_id": "delta_verify", "runtime_role": "verify_runtime", "task_class": "verification", "stage": "execution"}
                         ]
                     }
                 }
@@ -275,28 +275,28 @@ mod tests {
 
     fn sample_dispatch_contract() -> Value {
         serde_json::json!({
-            "lane_sequence": ["analyst", "designer", "autotester"],
-            "execution_lane_sequence": ["analyst", "autotester"],
+            "lane_sequence": ["alpha_spec", "beta_design", "gamma_proof"],
+            "execution_lane_sequence": ["alpha_spec", "gamma_proof"],
             "lane_catalog": {
-                "analyst": {
+                "alpha_spec": {
                     "task_class": "analysis",
                     "stage": "design_gate",
                     "activation": {
-                        "activation_runtime_role": "business_analyst"
+                        "activation_runtime_role": "spec_runtime"
                     }
                 },
-                "designer": {
+                "beta_design": {
                     "task_class": "design",
                     "stage": "design_gate",
                     "activation": {
-                        "activation_runtime_role": "designer"
+                        "activation_runtime_role": "design_runtime"
                     }
                 },
-                "autotester": {
+                "gamma_proof": {
                     "task_class": "verification",
                     "stage": "execution",
                     "activation": {
-                        "activation_runtime_role": "tester"
+                        "activation_runtime_role": "proof_runtime"
                     }
                 }
             }
@@ -310,12 +310,7 @@ mod tests {
         let sequence = sm.resolve_execution_lane_sequence();
         assert_eq!(
             sequence,
-            vec![
-                "analyst",
-                "developer",
-                "coach_implementation_gate",
-                "tester"
-            ]
+            vec!["alpha_spec", "beta_impl", "gamma_gate", "delta_verify"]
         );
     }
 
@@ -324,25 +319,25 @@ mod tests {
         let bundle = sample_activation_bundle();
         let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
         assert_eq!(
-            sm.resolve_next_lane("analyst"),
-            Some("developer".to_string())
+            sm.resolve_next_lane("alpha_spec"),
+            Some("beta_impl".to_string())
         );
         assert_eq!(
-            sm.resolve_next_lane("developer"),
-            Some("coach_implementation_gate".to_string())
+            sm.resolve_next_lane("beta_impl"),
+            Some("gamma_gate".to_string())
         );
-        assert_eq!(sm.resolve_next_lane("tester"), None); // last step
+        assert_eq!(sm.resolve_next_lane("delta_verify"), None); // last step
     }
 
     #[test]
     fn test_validate_transition_allowed() {
         let bundle = sample_activation_bundle();
         let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
-        let verdict = sm.validate_transition("analyst", "developer");
+        let verdict = sm.validate_transition("alpha_spec", "beta_impl");
         assert_eq!(
             verdict,
             TransitionVerdict::Allowed {
-                next_lane: "developer".to_string()
+                next_lane: "beta_impl".to_string()
             }
         );
     }
@@ -351,14 +346,14 @@ mod tests {
     fn test_validate_transition_blocked() {
         let bundle = sample_activation_bundle();
         let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
-        let verdict = sm.validate_transition("analyst", "tester");
+        let verdict = sm.validate_transition("alpha_spec", "delta_verify");
         match verdict {
             TransitionVerdict::Blocked {
                 blocker_code,
                 allowed_next_node,
             } => {
                 assert_eq!(blocker_code, "invalid_allowed_next_node_for_execution_plan");
-                assert_eq!(allowed_next_node, "developer");
+                assert_eq!(allowed_next_node, "beta_impl");
             }
             _ => panic!("Expected Blocked verdict"),
         }
@@ -368,7 +363,7 @@ mod tests {
     fn test_validate_transition_closure_from_last_step() {
         let bundle = sample_activation_bundle();
         let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
-        let verdict = sm.validate_transition("tester", "closure");
+        let verdict = sm.validate_transition("delta_verify", "closure");
         assert_eq!(
             verdict,
             TransitionVerdict::Allowed {
@@ -381,8 +376,8 @@ mod tests {
     fn test_is_valid_role() {
         let bundle = sample_activation_bundle();
         let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
-        assert!(sm.is_valid_role("analyst"));
-        assert!(sm.is_valid_role("developer"));
+        assert!(sm.is_valid_role("alpha_spec"));
+        assert!(sm.is_valid_role("beta_impl"));
         assert!(!sm.is_valid_role("unknown_role"));
     }
 
@@ -409,14 +404,14 @@ mod tests {
         assert_eq!(
             resolve_dispatch_contract_lane_sequence(&contract, "lane_sequence"),
             Some(vec![
-                "analyst".to_string(),
-                "designer".to_string(),
-                "autotester".to_string()
+                "alpha_spec".to_string(),
+                "beta_design".to_string(),
+                "gamma_proof".to_string()
             ])
         );
         assert_eq!(
             resolve_dispatch_contract_lane_sequence(&contract, "execution_lane_sequence"),
-            Some(vec!["analyst".to_string(), "autotester".to_string()])
+            Some(vec!["alpha_spec".to_string(), "gamma_proof".to_string()])
         );
     }
 
@@ -424,16 +419,16 @@ mod tests {
     fn test_dispatch_contract_transition_validates_against_full_lane_order() {
         let contract = sample_dispatch_contract();
         assert_eq!(
-            validate_dispatch_contract_transition(&contract, "analyst", "designer"),
+            validate_dispatch_contract_transition(&contract, "alpha_spec", "beta_design"),
             Some(TransitionVerdict::Allowed {
-                next_lane: "designer".to_string()
+                next_lane: "beta_design".to_string()
             })
         );
         assert_eq!(
-            validate_dispatch_contract_transition(&contract, "analyst", "autotester"),
+            validate_dispatch_contract_transition(&contract, "alpha_spec", "gamma_proof"),
             Some(TransitionVerdict::Blocked {
                 blocker_code: "invalid_allowed_next_node_for_execution_plan".to_string(),
-                allowed_next_node: "designer".to_string()
+                allowed_next_node: "beta_design".to_string()
             })
         );
     }

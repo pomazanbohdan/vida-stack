@@ -1046,10 +1046,12 @@ fn retryable_host_bridge_completion_request_for_state_root(
         return true;
     }
     if !matches!(
-        host_bridge_request_string(request, "status"),
+        host_bridge_request_lifecycle_string(request, "status")
+            .or_else(|| host_bridge_request_lifecycle_string(request, "request_status")),
         Some(status)
             if status == release1_blocked_status() || status == "retryable_blocked"
-    ) || host_bridge_request_string(request, "dispatch_transport") != Some("host_tool_bridge")
+    ) || host_bridge_request_lifecycle_string(request, "dispatch_transport")
+        != Some("host_tool_bridge")
     {
         return false;
     }
@@ -1086,42 +1088,54 @@ fn host_bridge_request_has_retryable_blocked_result_contract(request: &serde_jso
         .is_some_and(host_bridge_blocked_result_contract_is_retryable)
 }
 
-fn host_bridge_blocked_result_contract(
-    request: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    request
-        .get("blocked_result_contract")
-        .and_then(serde_json::Value::as_object)
+fn host_bridge_request_lifecycle_string<'a>(
+    request: &'a serde_json::Value,
+    field: &str,
+) -> Option<&'a str> {
+    host_bridge_request_string(request, field)
         .or_else(|| {
             request
                 .get("host_bridge")
-                .and_then(|host_bridge| host_bridge.get("blocked_result_contract"))
-                .and_then(serde_json::Value::as_object)
+                .and_then(|request| host_bridge_request_string(request, field))
         })
+        .or_else(|| {
+            request
+                .get("host_tool_bridge_request")
+                .and_then(|request| host_bridge_request_string(request, field))
+        })
+        .or_else(|| {
+            request
+                .get("request")
+                .and_then(|request| host_bridge_request_string(request, field))
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn host_bridge_blocked_result_contract(
+    request: &serde_json::Value,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    let object = request.as_object()?;
+    if let Some(contract) = object
+        .get("blocked_result_contract")
+        .and_then(serde_json::Value::as_object)
+    {
+        return Some(contract);
+    }
+    object
+        .values()
+        .find_map(host_bridge_blocked_result_contract)
 }
 
 fn host_bridge_blocked_result_contract_is_retryable(
     contract: &serde_json::Map<String, serde_json::Value>,
 ) -> bool {
-    let decision = contract
-        .get("decision")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
-    let verdict = contract
-        .get("verdict")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
     let allowed_next_node = contract
         .get("allowed_next_node")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
-    !allowed_next_node.is_empty()
-        && allowed_next_node != "next"
-        && matches!(decision, "rework_required" | "fail" | "blocked")
-        && matches!(verdict, "rework_required" | "fail" | "blocked")
+    !allowed_next_node.is_empty() && allowed_next_node != "next"
 }
 
 fn completed_host_bridge_completion_request_for_state_root(
@@ -7438,7 +7452,7 @@ mod tests {
             "request_id": "req-analyst",
             "run_id": "run-analyst",
             "task_id": "run-analyst",
-            "dispatch_target": "analyst",
+            "dispatch_target": "source_lane",
             "allowed_next_node": "closure",
             "packet_path": packet_path.display().to_string(),
             "runtime_role": "business_analyst",
@@ -7683,10 +7697,10 @@ mod tests {
                 },
                 "development_flow": {
                     "dispatch_contract": {
-                        "execution_lane_sequence": ["analyst", "designer", "autotester", "developer"],
+                        "execution_lane_sequence": ["alpha_spec", "beta_design", "gamma_proof", "delta_impl"],
                         "lane_catalog": {
-                            "autotester": {
-                                "dispatch_target": "autotester",
+                            "gamma_proof": {
+                                "dispatch_target": "gamma_proof",
                                 "stage": "verification",
                                 "task_class": "verification",
                                 "closure_class": "verification",
@@ -7699,8 +7713,8 @@ mod tests {
                                     "selected_carrier_id": "middle"
                                 }
                             },
-                            "developer": {
-                                "dispatch_target": "developer",
+                            "delta_impl": {
+                                "dispatch_target": "delta_impl",
                                 "stage": "execution",
                                 "task_class": "implementation",
                                 "closure_class": "implementation",
@@ -7729,7 +7743,7 @@ mod tests {
             "request_id": "req-validate-1",
             "run_id": "run-validate-1",
             "task_id": "task-validate-1",
-            "dispatch_target": "developer",
+            "dispatch_target": "delta_impl",
             "packet_path": "packet.json",
             "backend_id": "internal_subagents",
             "carrier_id": "junior",
@@ -7742,7 +7756,7 @@ mod tests {
             "request_path": "host-tool-bridge/requests/request.json",
             "result_path": "host-tool-bridge/results/result.json",
             "receipt_path": "host-tool-bridge/receipts/receipt.json",
-            "allowed_next_node": "coach_implementation_gate"
+            "allowed_next_node": "epsilon_gate"
         })
     }
 
@@ -7754,7 +7768,7 @@ mod tests {
             "execution_state": "executed",
             "request_id": "req-validate-1",
             "run_id": "run-validate-1",
-            "dispatch_target": "developer",
+            "dispatch_target": "delta_impl",
             "decision": "pass",
             "verdict": "pass",
             "blocker_codes": [],
@@ -7773,7 +7787,7 @@ mod tests {
             std::path::Path::new("request.json"),
             &host_bridge_validate_request(),
             std::path::Path::new("result.json"),
-            &host_bridge_validate_result("coach_implementation_gate"),
+            &host_bridge_validate_result("epsilon_gate"),
         );
 
         assert_eq!(payload["mode"], "result_validate");
@@ -7816,7 +7830,7 @@ mod tests {
 
     #[test]
     fn host_bridge_result_validate_reports_schema_field_failure() {
-        let mut result = host_bridge_validate_result("coach_implementation_gate");
+        let mut result = host_bridge_validate_result("epsilon_gate");
         result.as_object_mut().unwrap().remove("verdict");
         let payload = super::validate_host_bridge_result_dry_run(
             std::path::Path::new("request.json"),
@@ -7835,7 +7849,7 @@ mod tests {
 
     #[test]
     fn host_bridge_result_validate_reports_materialized_contract_failure() {
-        let mut result = host_bridge_validate_result("coach_implementation_gate");
+        let mut result = host_bridge_validate_result("epsilon_gate");
         let object = result.as_object_mut().unwrap();
         object.remove("status");
         object.remove("execution_state");
@@ -7867,7 +7881,7 @@ mod tests {
             std::path::Path::new("request.json"),
             &host_bridge_validate_request(),
             std::path::Path::new("result.json"),
-            &host_bridge_validate_result("tester"),
+            &host_bridge_validate_result("omega_verify"),
         );
 
         assert_eq!(payload["status"], super::release1_blocked_status());
@@ -7899,25 +7913,25 @@ mod tests {
                         "development_flow": {
                             "dispatch_contract": {
                                 "execution_lane_sequence": [
-                                    "developer",
-                                    "coach_implementation_gate",
-                                    "tester"
+                                    "repair",
+                                    "quality_gate",
+                                    "verification_lane"
                                 ],
                                 "lane_catalog": {
-                                    "developer": {
-                                        "dispatch_target": "developer",
+                                    "repair": {
+                                        "dispatch_target": "repair",
                                         "task_class": "implementation"
                                     },
-                                    "coach_implementation_gate": {
-                                        "dispatch_target": "coach_implementation_gate",
-                                        "task_class": "coach"
+                                    "quality_gate": {
+                                        "dispatch_target": "quality_gate",
+                                        "task_class": "quality_gate"
                                     },
-                                    "tester": {
-                                        "dispatch_target": "tester",
+                                    "verification_lane": {
+                                        "dispatch_target": "verification_lane",
                                         "task_class": "verification"
                                     },
-                                    "developer_rework": {
-                                        "dispatch_target": "developer_rework",
+                                    "repair_rework": {
+                                        "dispatch_target": "repair_rework",
                                         "task_class": "implementation"
                                     }
                                 }
@@ -7930,17 +7944,17 @@ mod tests {
         )
         .expect("packet should write");
         let mut request = host_bridge_validate_request();
-        request["dispatch_target"] = serde_json::json!("coach_implementation_gate");
+        request["dispatch_target"] = serde_json::json!("quality_gate");
         request["packet_path"] = serde_json::json!(packet_path.display().to_string());
-        request["allowed_next_node"] = serde_json::json!("tester");
-        let mut result = host_bridge_validate_result("developer_rework");
+        request["allowed_next_node"] = serde_json::json!("verification_lane");
+        let mut result = host_bridge_validate_result("repair_rework");
         result["status"] = serde_json::json!(result_status);
         result["execution_state"] = serde_json::json!(if result_status == "pass" {
             "executed"
         } else {
             "blocked"
         });
-        result["dispatch_target"] = serde_json::json!("coach_implementation_gate");
+        result["dispatch_target"] = serde_json::json!("quality_gate");
         result["decision"] = serde_json::json!(if result_status == "pass" {
             "pass"
         } else {
@@ -7959,9 +7973,9 @@ mod tests {
         result["blocker_codes"] = serde_json::json!(if result_status == "pass" {
             Vec::<String>::new()
         } else {
-            vec!["coach_rework_required".to_string()]
+            vec!["quality_gate_rework_required".to_string()]
         });
-        result["rework_target"] = serde_json::json!("developer");
+        result["rework_target"] = serde_json::json!("repair");
         (root, request, result)
     }
 
@@ -7994,21 +8008,20 @@ mod tests {
         request["blocked_result_contract"] = serde_json::json!({
             "decision": "rework_required",
             "verdict": "rework_required",
-            "allowed_next_node": "developer_rework"
+            "allowed_next_node": "repair_rework"
         });
         let packet_path = request["packet_path"]
             .as_str()
             .map(std::path::PathBuf::from)
             .expect("packet path");
-        let mut packet: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(&packet_path).expect("packet should read"),
-        )
-        .expect("packet should parse");
+        let mut packet: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&packet_path).expect("packet should read"))
+                .expect("packet should parse");
         packet["role_selection_full"]["execution_plan"]["development_flow"]["dispatch_contract"]
             ["lane_catalog"]
             .as_object_mut()
             .expect("lane catalog should be object")
-            .remove("developer_rework");
+            .remove("repair_rework");
         std::fs::write(
             &packet_path,
             serde_json::to_vec_pretty(&packet).expect("packet should serialize"),
@@ -8025,6 +8038,145 @@ mod tests {
         assert_eq!(payload["status"], super::release1_pass_status());
         assert!(
             !payload["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "invalid_allowed_next_node_for_execution_plan"),
+            "{payload}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn host_bridge_result_validate_accepts_nested_contract_declared_synthetic_rework_route() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-synthetic-rework-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should be created");
+        let packet_path = root.join("packet.json");
+        std::fs::write(
+            &packet_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "role_selection_full": {
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "execution_lane_sequence": [
+                                    "alpha_impl",
+                                    "beta_gate",
+                                    "gamma_verify"
+                                ],
+                                "lane_catalog": {
+                                    "alpha_impl": {
+                                        "dispatch_target": "alpha_impl",
+                                        "task_class": "implementation"
+                                    },
+                                    "beta_gate": {
+                                        "dispatch_target": "beta_gate",
+                                        "task_class": "quality_gate"
+                                    },
+                                    "gamma_verify": {
+                                        "dispatch_target": "gamma_verify",
+                                        "task_class": "verification"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet should write");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-synthetic-rework",
+            "run_id": "run-synthetic-rework",
+            "task_id": "task-synthetic-rework",
+            "dispatch_target": "beta_gate",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": "host-tool-bridge/requests/request.json",
+            "result_path": "host-tool-bridge/results/result.json",
+            "receipt_path": "host-tool-bridge/receipts/receipt.json",
+            "allowed_next_node": "gamma_verify",
+            "host_bridge": {
+                "blocked_result_contract": {
+                    "allowed_next_node": "alpha_rework"
+                }
+            }
+        });
+        let result = serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "schema_version": 1,
+            "status": "blocked",
+            "execution_state": "blocked",
+            "request_id": "req-synthetic-rework",
+            "run_id": "run-synthetic-rework",
+            "dispatch_target": "beta_gate",
+            "decision": "rework_required",
+            "verdict": "rework_required",
+            "completion_verdict": "rework_required",
+            "blocker_codes": ["quality_gate_rework_required"],
+            "rework_target": "alpha_impl",
+            "allowed_next_node": "alpha_rework",
+            "execution_evidence": {
+                "receipt_backed": true
+            },
+            "source_dispatch_packet_path": packet_path.display().to_string()
+        });
+
+        let payload = super::validate_host_bridge_result_dry_run(
+            std::path::Path::new("request.json"),
+            &request,
+            std::path::Path::new("result.json"),
+            &result,
+        );
+
+        assert_eq!(payload["status"], super::release1_pass_status());
+        assert!(
+            !payload["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "invalid_allowed_next_node_for_execution_plan"),
+            "{payload}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn host_bridge_result_validate_rejects_synthetic_rework_route_mismatch() {
+        let (root, mut request, mut result) =
+            host_bridge_rework_backedge_request_and_result("blocked");
+        request["blocked_result_contract"] = serde_json::json!({
+            "allowed_next_node": "configured_rework_lane"
+        });
+        result["allowed_next_node"] = serde_json::json!("different_rework_lane");
+
+        let payload = super::validate_host_bridge_result_dry_run(
+            std::path::Path::new("request.json"),
+            &request,
+            std::path::Path::new("result.json"),
+            &result,
+        );
+
+        assert_eq!(payload["status"], super::release1_blocked_status());
+        assert!(
+            payload["blocker_codes"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -8650,7 +8802,7 @@ mod tests {
             "request_id": "req-complete-missing-preflight",
             "run_id": run_id,
             "task_id": run_id,
-            "dispatch_target": "analyst",
+            "dispatch_target": "source_lane",
             "task_class": "specification",
             "packet_path": receipt_packet_path.display().to_string(),
             "backend_id": "internal_subagents",
@@ -8686,7 +8838,7 @@ mod tests {
                 "decision": "rework_required",
                 "verdict": "rework_required",
                 "blocker_codes": ["host_bridge_completion_result_blocked"],
-                "rework_target": "developer",
+                "rework_target": "repair",
                 "allowed_next_node": "developer",
                 "execution_evidence": {
                     "receipt_backed": true
@@ -9651,7 +9803,7 @@ mod tests {
             "status": "pass",
             "request_id": "req-completed",
             "run_id": "run-completed",
-            "dispatch_target": "analyst",
+            "dispatch_target": "source_lane",
             "packet_path": packet_path.display().to_string(),
             "backend_id": "internal_subagents",
             "carrier_id": "junior",
@@ -9781,8 +9933,8 @@ mod tests {
                 "decision": "rework_required",
                 "verdict": "rework_required",
                 "blocker_codes": ["implementation_artifacts_missing"],
-                "rework_target": "developer",
-                "allowed_next_node": "developer_rework"
+                "rework_target": "repair",
+                "allowed_next_node": "repair_rework"
             }))
             .expect("result should serialize"),
         )
@@ -10039,7 +10191,7 @@ mod tests {
             "status": "pending",
             "request_id": "req-missing",
             "run_id": "run-missing",
-            "dispatch_target": "analyst",
+            "dispatch_target": "source_lane",
             "packet_path": "packet.json",
             "backend_id": "internal_subagents",
             "carrier_id": "junior",
@@ -10141,8 +10293,8 @@ mod tests {
                 "decision": "rework_required",
                 "verdict": "rework_required",
                 "blocker_codes": ["host_agent_contract_violation"],
-                "rework_target": "developer",
-                "allowed_next_node": "developer_rework"
+                "rework_target": "repair",
+                "allowed_next_node": "repair_rework"
             }))
             .expect("result should serialize"),
         )
@@ -10222,7 +10374,7 @@ mod tests {
                 "decision": "rework_required",
                 "verdict": "rework_required",
                 "blocker_codes": ["host_agent_contract_violation"],
-                "allowed_next_node": "developer_rework"
+                "allowed_next_node": "repair_rework"
             }))
             .expect("result should serialize"),
         )
@@ -10232,7 +10384,7 @@ mod tests {
             "status": "blocked",
             "request_id": "req-contract-retry",
             "run_id": "run-contract-retry",
-            "dispatch_target": "coach",
+            "dispatch_target": "quality_gate",
             "packet_path": state_root.join("packets/run.json").display().to_string(),
             "backend_id": "internal_subagents",
             "carrier_id": "junior",
@@ -10245,7 +10397,96 @@ mod tests {
             "blocked_result_contract": {
                 "decision": "rework_required",
                 "verdict": "rework_required",
-                "allowed_next_node": "developer_rework"
+                "allowed_next_node": "repair_rework"
+            }
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("request file should be written");
+
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            Vec::new(),
+            Some(&state_root),
+            false,
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert!(!payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--retry-completion"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_adapter_payload_allows_nested_contract_only_synthetic_rework_retry() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-nested-contract-retry-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let result_path = state_root.join("host-tool-bridge/results/result.json");
+        let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
+        for path in [&request_path, &result_path, &receipt_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("artifact parent should be created");
+        }
+        std::fs::write(
+            &receipt_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_receipt",
+                "status": "blocked",
+                "blocker_codes": ["synthetic_gate_rework_required"]
+            }))
+            .expect("receipt should serialize"),
+        )
+        .expect("receipt file should be written");
+        std::fs::write(
+            &result_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "status": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_codes": ["synthetic_gate_rework_required"],
+                "allowed_next_node": "alpha_rework"
+            }))
+            .expect("result should serialize"),
+        )
+        .expect("result file should be written");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "blocked",
+            "request_id": "req-nested-contract-retry",
+            "run_id": "run-nested-contract-retry",
+            "dispatch_target": "beta_gate",
+            "packet_path": state_root.join("packets/run.json").display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string(),
+            "host_bridge": {
+                "blocked_result_contract": {
+                    "allowed_next_node": "alpha_rework"
+                }
             }
         });
         std::fs::write(
