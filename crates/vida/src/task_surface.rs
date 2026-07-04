@@ -3,8 +3,8 @@ use crate::contract_profile_adapter::render_operator_contract_envelope;
 use crate::task_cli_render::{
     print_task_bulk_reparent_result, print_task_closeout, print_task_defect_batch_rehome_result,
     print_task_dependency_bulk_add_result, print_task_dependency_bulk_add_result_for_surface,
-    print_task_direct_children, print_task_update_graph_blocked, task_closeout_payload,
-    task_read_metadata_value, task_ready_payload, task_show_payload,
+    print_task_direct_children, print_task_show_missing, print_task_update_graph_blocked,
+    task_closeout_payload, task_read_metadata_value, task_ready_payload, task_show_payload,
 };
 use crate::taskflow_proxy::paths_intersect;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -12372,6 +12372,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
+                    if let state_store::StateStoreError::MissingTask { task_id } = &error {
+                        print_task_show_missing(command.render, task_id, command.json);
+                        return ExitCode::from(1);
+                    }
                     eprintln!("Failed to show task: {error}");
                     ExitCode::from(1)
                 }

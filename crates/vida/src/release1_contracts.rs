@@ -1133,6 +1133,7 @@ pub(crate) enum BlockerCode {
     MissingRunGraphDispatchReceipt,
     MissingRunGraphDispatchReceiptOperatorEvidence,
     ClosedTaskActiveRunProjectionMismatch,
+    TaskMissing,
     StaleMissingTaskRunGraph,
     RunGraphLatestSnapshotInconsistent,
     LatestRunGraphStatusBlocked,
@@ -1306,6 +1307,7 @@ impl BlockerCode {
             Self::ClosedTaskActiveRunProjectionMismatch => {
                 "closed_task_active_run_projection_mismatch"
             }
+            Self::TaskMissing => "task_missing",
             Self::StaleMissingTaskRunGraph => "stale_missing_task_run_graph",
             Self::RunGraphLatestSnapshotInconsistent => "run_graph_latest_snapshot_inconsistent",
             Self::LatestRunGraphStatusBlocked => "latest_run_graph_status_blocked",
@@ -1521,6 +1523,7 @@ impl BlockerCode {
             "closed_task_active_run_projection_mismatch" => {
                 Some(Self::ClosedTaskActiveRunProjectionMismatch)
             }
+            "task_missing" => Some(Self::TaskMissing),
             "stale_missing_task_run_graph" => Some(Self::StaleMissingTaskRunGraph),
             "run_graph_latest_snapshot_inconsistent" => {
                 Some(Self::RunGraphLatestSnapshotInconsistent)

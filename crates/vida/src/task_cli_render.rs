@@ -518,6 +518,47 @@ pub(crate) fn task_show_payload(
     )
 }
 
+pub(crate) fn task_show_missing_payload(task_id: &str) -> serde_json::Value {
+    let task_id = task_id.trim();
+    build_operator_surface_payload(
+        "vida task show",
+        vec!["task_missing".to_string()],
+        vec![
+            format!(
+                "Verify task id `{task_id}` exists with `vida task list --fields id,status,title --json`."
+            ),
+            format!(
+                "Create the missing task only if it is still authoritative: `vida task create {} <title> --json`.",
+                crate::shell_quote(task_id)
+            ),
+        ],
+        serde_json::json!({
+            "requested_task_id": task_id,
+            "missing_task": true,
+            "inspect_command": format!("vida task show {} --json", crate::shell_quote(task_id)),
+        }),
+    )
+}
+
+pub(crate) fn print_task_show_missing(render: RenderMode, task_id: &str, as_json: bool) {
+    let payload = task_show_missing_payload(task_id);
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task show missing payload should render as json",
+    ) {
+        return;
+    }
+    if matches!(render, RenderMode::Plain) {
+        println!("{}", taskflow_format_toon::render_value_section("vida task show", &payload));
+        return;
+    }
+    print_surface_header(render, "vida task show");
+    print_surface_line(render, "status", "blocked");
+    print_surface_line(render, "blocker_codes", "task_missing");
+    print_surface_line(render, "requested_task_id", task_id.trim());
+}
+
 fn task_show_toon_value(task: &TaskRecord, view: &str) -> serde_json::Value {
     if view == "full" {
         return task_record_value(task);
@@ -2666,6 +2707,23 @@ mod tests {
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["shared_fields"]["status"], "pass");
         assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task show");
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_show_missing_payload_keeps_release1_operator_contract_parity() {
+        let payload = super::task_show_missing_payload("missing-task");
+
+        assert_eq!(payload["surface"], "vida task show");
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(payload["blocker_codes"], serde_json::json!(["task_missing"]));
+        assert_eq!(payload["requested_task_id"], "missing-task");
+        assert_eq!(payload["missing_task"], true);
+        assert_eq!(
+            payload["operator_contracts"]["blocker_codes"],
+            payload["blocker_codes"]
+        );
         assert_eq!(payload["artifact_refs"]["surface"], "vida task show");
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }

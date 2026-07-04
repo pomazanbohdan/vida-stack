@@ -20701,15 +20701,15 @@ fn task_show_fails_closed_for_missing_task_id() {
         run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
     assert_json_status_pass(&import_stdout);
 
-    let output = vida()
-        .args(["task", "show", "vida-missing", "--json"])
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("task show should run");
-    assert!(!output.status.success());
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Failed to show task: task is missing: vida-missing"));
+    let (missing, succeeded) =
+        run_command_json_allow_failure(&["task", "show", "vida-missing", "--json"], &state_dir);
+    assert!(!succeeded);
+    assert_eq!(missing["surface"], "vida task show");
+    assert_eq!(missing["status"], "blocked");
+    assert_eq!(missing["requested_task_id"], "vida-missing");
+    assert_eq!(missing["blocker_codes"], serde_json::json!(["task_missing"]));
+    assert_eq!(missing["artifact_refs"]["surface"], "vida task show");
+    vida_test_support::assert_release1_operator_shape("vida task show", &missing);
 
     let _ = fs::remove_dir_all(&state_dir);
 }
