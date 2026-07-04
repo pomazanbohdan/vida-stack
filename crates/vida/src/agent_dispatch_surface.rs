@@ -10,7 +10,7 @@ use crate::dev_team_sequence_contract::{
 };
 use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root;
 use crate::runtime_proof_scope::{
-    collect_test_like_paths_from_text,
+    collect_test_like_paths_from_text, collect_test_like_paths_from_values,
     path_to_proof_scope_string, proof_intent_text, proof_scope_from_container,
     proof_scope_from_dispatch_packet_path, ProofArtifactScope,
 };
@@ -239,7 +239,7 @@ fn proof_artifact_scope_from_task_or_request(
     scope
 }
 
-async fn proof_artifact_scope_from_task_request_or_attempts(
+fn proof_artifact_scope_from_task_request(
     store: &crate::state_store::StateStore,
     task: &crate::state_store::TaskRecord,
     request: &serde_json::Value,
@@ -249,25 +249,6 @@ async fn proof_artifact_scope_from_task_request_or_attempts(
         store.root(),
         request,
     ));
-    if let Ok(attempts) = store.task_attempts_for_task(&task.id).await {
-        for attempt in attempts {
-            if attempt.stage_id == "implementation" || attempt.status != "accepted" {
-                continue;
-            }
-            for artifact_ref in attempt.artifact_refs {
-                let artifact_path = PathBuf::from(&artifact_ref);
-                if let Ok(artifact) = read_canonical_host_bridge_json_artifact(
-                    &artifact_path,
-                    "upstream proof artifact",
-                ) {
-                    scope.merge(proof_scope_from_container(&artifact));
-                } else {
-                    scope.proof_intent_present |= proof_intent_text(&artifact_ref);
-                    collect_test_like_paths_from_text(&mut scope.paths, &artifact_ref);
-                }
-            }
-        }
-    }
     scope.paths.sort();
     scope.paths.dedup();
     scope
@@ -2094,8 +2075,7 @@ async fn attach_host_bridge_implementation_artifacts(
     };
     let mut normalized_artifacts = host_bridge_request_implementation_artifacts(&request);
     let owned_paths = host_bridge_task_or_request_owned_paths(&task, &request);
-    let mut proof_artifact_scope =
-        proof_artifact_scope_from_task_request_or_attempts(&store, &task, &request).await;
+    let mut proof_artifact_scope = proof_artifact_scope_from_task_request(&store, &task, &request);
     let mut proof_artifact_paths = proof_artifact_scope
         .paths
         .iter()
@@ -11857,23 +11837,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_bridge_attach_artifact_accepts_upstream_proof_target_scope() {
+    async fn host_bridge_attach_artifact_rejects_attempt_derived_proof_scope() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "vida-agent-host-bridge-upstream-proof-scope-{}-{nanos}",
+            "vida-agent-host-bridge-attempt-proof-scope-{}-{nanos}",
             std::process::id()
         ));
         let store = state_store::StateStore::open(root.clone())
             .await
             .expect("open store");
-        let run_id = "run-host-bridge-upstream-proof-scope";
+        let run_id = "run-host-bridge-attempt-proof-scope";
         let task = store
             .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: run_id,
-                title: "Host bridge upstream proof scope attach",
+                title: "Host bridge attempt proof scope attach",
                 display_id: None,
                 description: "",
                 issue_type: "task",
@@ -11965,7 +11945,7 @@ mod tests {
             serde_json::json!({
                 "schema_version": 1,
                 "status": "pending",
-                "request_id": "req-upstream-proof-scope",
+                "request_id": "req-attempt-proof-scope",
                 "run_id": run_id,
                 "task_id": run_id,
                 "dispatch_target": "writer",
@@ -12012,15 +11992,7 @@ mod tests {
         })
         .await;
 
-        assert_eq!(exit, ExitCode::SUCCESS);
-        let updated: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&request_path).expect("read updated request"),
-        )
-        .expect("request json");
-        assert_eq!(
-            updated["implementation_artifacts"][0]["attempt_id"],
-            "implementation-attempt-1"
-        );
+        assert_ne!(exit, ExitCode::SUCCESS);
         let store = state_store::StateStore::open(root.clone())
             .await
             .expect("reopen store");
@@ -12028,8 +12000,10 @@ mod tests {
             .task_stage_attempts(run_id, "implementation")
             .await
             .expect("read implementation attempts");
-        assert_eq!(attempts.len(), 1);
-        assert_eq!(attempts[0].status, "accepted");
+        assert!(
+            attempts.is_empty(),
+            "attempt-derived proof paths must not authorize implementation artifacts"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
