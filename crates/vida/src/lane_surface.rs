@@ -19,7 +19,6 @@ use taskflow_host_bridge::{
     host_bridge_completed_result_status_is_admissible,
     host_bridge_completion_authorized_request_artifacts, host_bridge_completion_retryable_blocker,
     host_bridge_completion_verdict, host_bridge_request_artifacts_are_bare_completion_candidates,
-    host_bridge_request_requires_implementation_artifacts,
     host_bridge_request_status_after_completion, host_bridge_result_declares_no_code_change,
     host_bridge_result_verdict_fields_for_gate,
     materialize_host_bridge_completion_evidence as materialize_shared_host_bridge_completion_evidence,
@@ -4581,13 +4580,11 @@ fn materialize_host_bridge_completion_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("parent host bridge reported internal agent completion");
-    let task_class = request
-        .get("task_class")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
     let requires_implementation_artifacts =
-        host_bridge_request_requires_implementation_artifacts(dispatch_target, task_class);
+        taskflow_host_bridge::host_bridge_request_effectively_requires_implementation_artifacts(
+            &request,
+            dispatch_target,
+        );
     let supplied_no_code_change = supplied_no_code_change && !requires_implementation_artifacts;
     let implementation_artifacts = if supplied_no_code_change {
         HostBridgeImplementationArtifacts {

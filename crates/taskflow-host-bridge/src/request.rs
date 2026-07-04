@@ -131,6 +131,24 @@ pub fn host_bridge_request_string<'a>(request: &'a Value, field: &str) -> Option
         .filter(|value| !value.is_empty())
 }
 
+pub fn host_bridge_request_task_class(request: &Value) -> Option<&str> {
+    host_bridge_request_string(request, "task_class").or_else(|| {
+        find_host_bridge_request_string(request, &["handoff_task_class", "task_class"])
+    })
+}
+
+fn find_host_bridge_request_string<'a>(value: &'a Value, fields: &[&str]) -> Option<&'a str> {
+    let object = value.as_object()?;
+    for field in fields {
+        if let Some(value) = host_bridge_request_string(value, field) {
+            return Some(value);
+        }
+    }
+    object
+        .values()
+        .find_map(|value| find_host_bridge_request_string(value, fields))
+}
+
 pub fn host_bridge_blocked_result_contract(
     request: &Value,
 ) -> Option<&serde_json::Map<String, Value>> {
@@ -517,6 +535,18 @@ mod tests {
             None
         );
         assert!(!host_bridge_blocked_result_contract_is_retryable(contract));
+    }
+
+    #[test]
+    fn request_task_class_falls_back_to_nested_handoff_class() {
+        let request = serde_json::json!({
+            "dispatch_target": "alpha_impl",
+            "delivery_task_packet": {
+                "handoff_task_class": " implementation "
+            }
+        });
+
+        assert_eq!(host_bridge_request_task_class(&request), Some("implementation"));
     }
 
     #[test]

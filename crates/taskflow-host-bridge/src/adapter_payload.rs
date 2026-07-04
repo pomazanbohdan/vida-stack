@@ -11,7 +11,7 @@ use serde_json::Value;
 use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
 
 use crate::completion::{
-    host_bridge_request_requires_implementation_artifacts,
+    host_bridge_request_effectively_requires_implementation_artifacts,
     host_bridge_request_status_allows_parent_completion,
 };
 use crate::request::{
@@ -127,7 +127,6 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         .as_ref()
         .ok()
         .map(|request| request.dispatch_target.as_str());
-    let task_class = host_bridge_request_string(request, "task_class");
     let packet_path = typed_request
         .as_ref()
         .ok()
@@ -238,7 +237,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         _ => "host-bridge-receipt".to_string(),
     };
     let requires_implementation_artifacts = dispatch_target.is_some_and(|target| {
-        host_bridge_request_requires_implementation_artifacts(target, task_class)
+        host_bridge_request_effectively_requires_implementation_artifacts(request, target)
     });
     let implementation_artifacts_present = request
         .get("implementation_artifacts")

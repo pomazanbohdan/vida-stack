@@ -484,6 +484,28 @@ pub fn host_bridge_request_requires_implementation_artifacts(
 }
 
 #[must_use]
+pub fn host_bridge_request_has_implementation_artifact_contract(request: &Value) -> bool {
+    request
+        .get("implementation_isolation")
+        .is_some_and(Value::is_object)
+        || request
+            .get("implementation_artifacts")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| !rows.is_empty())
+}
+
+#[must_use]
+pub fn host_bridge_request_effectively_requires_implementation_artifacts(
+    request: &Value,
+    dispatch_target: &str,
+) -> bool {
+    host_bridge_request_requires_implementation_artifacts(
+        dispatch_target,
+        crate::request::host_bridge_request_task_class(request),
+    ) || host_bridge_request_has_implementation_artifact_contract(request)
+}
+
+#[must_use]
 pub fn host_bridge_request_artifacts_are_bare_completion_candidates(
     request_artifacts: &Value,
 ) -> bool {
@@ -1058,6 +1080,22 @@ mod tests {
         ));
         assert!(!host_bridge_completion_requires_implementation_artifacts(
             "beta_verify"
+        ));
+    }
+
+    #[test]
+    fn implementation_scope_contract_requires_artifact_validation_without_top_level_task_class() {
+        let request = serde_json::json!({
+            "dispatch_target": "alpha_impl",
+            "implementation_isolation": {
+                "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                "owned_paths": ["src/lib"]
+            }
+        });
+
+        assert!(host_bridge_request_effectively_requires_implementation_artifacts(
+            &request,
+            "alpha_impl"
         ));
     }
 

@@ -33,6 +33,8 @@ pub use completion::{
     host_bridge_completion_requires_implementation_artifacts,
     host_bridge_completion_retryable_blocker, host_bridge_completion_verdict,
     host_bridge_existing_request_status_is_admissible,
+    host_bridge_request_effectively_requires_implementation_artifacts,
+    host_bridge_request_has_implementation_artifact_contract,
     host_bridge_request_artifacts_are_bare_completion_candidates,
     host_bridge_request_requires_implementation_artifacts,
     host_bridge_request_status_after_completion,
@@ -73,7 +75,7 @@ pub use request::{
     host_bridge_blocked_result_contract, host_bridge_blocked_result_contract_allowed_next_node,
     host_bridge_blocked_result_contract_is_retryable, host_bridge_path_array,
     host_bridge_request_owned_paths, host_bridge_request_proof_artifact_paths,
-    host_bridge_request_string, host_bridge_required_result_fields,
+    host_bridge_request_string, host_bridge_request_task_class, host_bridge_required_result_fields,
     legacy_internal_subagents_host_bridge_request, read_host_bridge_request,
 };
 
