@@ -334,15 +334,26 @@ pub(crate) fn degraded_read_lock_payload(
     state_dir: &std::path::Path,
     error: &str,
 ) -> serde_json::Value {
+    let retry_count = lock_probe_attempt_budget(
+        STATUS_SURFACE_LOCK_PROBE_WAIT_TIMEOUT,
+        STATUS_SURFACE_LOCK_PROBE_RETRY_DELAY,
+    );
+    let wait_budget_ms = STATUS_SURFACE_LOCK_PROBE_WAIT_TIMEOUT.as_millis() as u64;
+    let retry_delay_ms = STATUS_SURFACE_LOCK_PROBE_RETRY_DELAY.as_millis() as u64;
     let artifact_refs = serde_json::json!({
         "state_dir": state_dir.display().to_string(),
         "read_fallback": "lock_contention_degraded_response",
+        "retry_count": retry_count,
+        "wait_budget_ms": wait_budget_ms,
+        "retry_delay_ms": retry_delay_ms,
     });
     crate::release1_operator_output::build_release1_operator_output_payload(
         surface,
         vec!["state_store_read_lock_contention".to_string()],
         vec![
-            "Retry the read surface after concurrent VIDA state readers finish; this degraded response avoided opening the locked datastore."
+            format!(
+                "Retry the read surface after concurrent VIDA state readers finish; this degraded response waited up to {wait_budget_ms}ms across {retry_count} lock probes before avoiding the locked datastore."
+            )
                 .to_string(),
         ],
         artifact_refs,
@@ -354,6 +365,9 @@ pub(crate) fn degraded_read_lock_payload(
             "state_dir": state_dir.display().to_string(),
             "detail": "authoritative datastore was locked by another process during a read-only surface",
             "error": error,
+            "retry_count": retry_count,
+            "wait_budget_ms": wait_budget_ms,
+            "retry_delay_ms": retry_delay_ms,
             },
         }),
     )
@@ -527,6 +541,21 @@ pub(crate) fn state_store_lock_present_after_bounded_wait(
     }
 }
 
+pub(crate) fn state_store_lock_present_after_default_bounded_wait(
+    state_dir: &std::path::Path,
+) -> bool {
+    state_store_lock_present_after_bounded_wait(
+        state_dir,
+        STATUS_SURFACE_LOCK_PROBE_WAIT_TIMEOUT,
+        STATUS_SURFACE_LOCK_PROBE_RETRY_DELAY,
+    )
+}
+
+fn lock_probe_attempt_budget(timeout: Duration, retry_delay: Duration) -> u64 {
+    let delay_ms = retry_delay.as_millis().max(1);
+    ((timeout.as_millis() + delay_ms - 1) / delay_ms) as u64
+}
+
 async fn open_status_state_store_with_bounded_lock_retry(
     state_dir: std::path::PathBuf,
 ) -> Result<StateStore, state_store::StateStoreError> {
@@ -565,6 +594,18 @@ pub(crate) fn degraded_read_lock_toon_text(surface: &str, payload: &serde_json::
                     .as_str()
                     .unwrap_or_default(),
             ),
+            operator_output::toon_report::OperatorToonField::text(
+                "retry_count",
+                &payload["state_access"]["retry_count"].to_string(),
+            ),
+            operator_output::toon_report::OperatorToonField::text(
+                "wait_budget_ms",
+                &payload["state_access"]["wait_budget_ms"].to_string(),
+            ),
+            operator_output::toon_report::OperatorToonField::text(
+                "retry_delay_ms",
+                &payload["state_access"]["retry_delay_ms"].to_string(),
+            ),
             operator_output::toon_report::OperatorToonField::value(
                 "blocker_codes",
                 payload["blocker_codes"].clone(),
@@ -583,11 +624,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     let summary_only = args.summary || matches!(view, "compact" | "summary");
     let field_selection = args.fields.as_deref();
     let selected_output = field_selection.is_some();
-    if state_store_lock_present_after_bounded_wait(
-        &state_dir,
-        STATUS_SURFACE_LOCK_PROBE_WAIT_TIMEOUT,
-        STATUS_SURFACE_LOCK_PROBE_RETRY_DELAY,
-    ) {
+    if state_store_lock_present_after_default_bounded_wait(&state_dir) {
         return emit_degraded_read_lock_surface(
             "vida status",
             &state_dir,
@@ -3527,6 +3564,18 @@ mod tests {
             payload["artifact_refs"]["read_fallback"],
             "lock_contention_degraded_response"
         );
+        assert_eq!(payload["artifact_refs"]["retry_count"], 200);
+        assert_eq!(payload["artifact_refs"]["wait_budget_ms"], 10_000);
+        assert_eq!(payload["artifact_refs"]["retry_delay_ms"], 50);
+        assert_eq!(payload["state_access"]["retry_count"], 200);
+        assert_eq!(payload["state_access"]["wait_budget_ms"], 10_000);
+        assert_eq!(payload["state_access"]["retry_delay_ms"], 50);
+        assert!(
+            payload["next_actions"][0]
+                .as_str()
+                .expect("next action")
+                .contains("waited up to 10000ms across 200 lock probes")
+        );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
@@ -3542,6 +3591,10 @@ mod tests {
         assert!(output.starts_with("vida status\n"));
         assert!(output.contains("status: blocked"));
         assert!(output.contains("state_access: degraded_lock_contention"));
+        assert!(output.contains("wait_budget_ms"));
+        assert!(output.contains("10000"));
+        assert!(output.contains("retry_count"));
+        assert!(output.contains("200"));
         assert!(output.contains("blocker_codes[1]:"));
         assert!(output.contains("state_store_read_lock_contention"));
         assert!(serde_json::from_str::<serde_json::Value>(&output).is_err());
@@ -3603,6 +3656,22 @@ mod tests {
         file.unlock().expect("unlock guard");
         assert!(still_locked);
         let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn lock_probe_attempt_budget_rounds_up_to_visible_retry_count() {
+        assert_eq!(
+            super::lock_probe_attempt_budget(Duration::from_millis(10_000), Duration::from_millis(50)),
+            200
+        );
+        assert_eq!(
+            super::lock_probe_attempt_budget(Duration::from_millis(101), Duration::from_millis(50)),
+            3
+        );
+        assert_eq!(
+            super::lock_probe_attempt_budget(Duration::from_millis(5), Duration::ZERO),
+            5
+        );
     }
 
     #[cfg(target_os = "windows")]

@@ -694,7 +694,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let render = args.render;
     let as_json = args.json;
     let summary_only = args.summary;
-    if crate::status_surface::state_store_lock_present(&state_dir) {
+    if crate::status_surface::state_store_lock_present_after_default_bounded_wait(&state_dir) {
         return crate::status_surface::emit_degraded_read_lock_surface(
             "vida doctor",
             &state_dir,
