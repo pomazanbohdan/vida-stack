@@ -4571,19 +4571,21 @@ fn materialize_host_bridge_completion_evidence(
     let request = read_host_bridge_json_artifact_at_path(&canonical_request_path)?;
     let submitted_result_already_materialized =
         supplied_result_path_matches_request_output(state_root, &request, supplied_result_path)?;
-    let retry_override_has_routable_rework = retry_completion_override
+    let retry_override_has_routable_blocked_completion = retry_completion_override
         && host_bridge_completion_request_required(persisted_receipt)
         && allowed_next_node
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .is_some()
-        && [supplied_decision, supplied_verdict]
+        && (supplied_completion_blocked
+            || !supplied_blocker_codes.is_empty()
+            || [supplied_decision, supplied_verdict]
             .into_iter()
             .flatten()
             .map(str::trim)
-            .any(host_bridge_completion_result_value_is_rework_alias);
+                .any(host_bridge_completion_result_value_is_rework_alias));
     let replace_existing_completion_evidence =
-        replace_existing_evidence || retry_override_has_routable_rework;
+        replace_existing_evidence || retry_override_has_routable_blocked_completion;
     let validated_paths = validated_host_bridge_paths_from_receipt(
         state_root,
         &canonical_request_path,
@@ -4624,7 +4626,7 @@ fn materialize_host_bridge_completion_evidence(
         expected_task_id: Some(run_id.to_string()),
         expected_dispatch_target: Some(dispatch_target.to_string()),
     });
-    let retryable_completion_request = retry_override_has_routable_rework
+    let retryable_completion_request = retry_override_has_routable_blocked_completion
         || host_bridge_request_has_retryable_completion_evidence(state_root, request_path)
         || host_bridge_persisted_receipt_has_retryable_completion_evidence(persisted_receipt);
     let shared_provenance =
@@ -17597,6 +17599,122 @@ mod tests {
         let replaced_receipt =
             read_host_bridge_json_artifact_at_path(&receipt_path).expect("read replaced receipt");
         assert_eq!(replaced_receipt["completion_receipt_id"], "receipt-retry-existing");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_completion_retry_replaces_receipt_for_blocked_result_with_next_node() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-retry-blocked-next-receipt-{}-{nanos}",
+            std::process::id()
+        ));
+        let request_path = root.join("host-tool-bridge/requests/run-retry-blocked-next.json");
+        let result_path = root.join("host-tool-bridge/results/run-retry-blocked-next.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/run-retry-blocked-next.json");
+        let packet_path =
+            root.join("runtime-consumption/downstream-dispatch-packets/run-retry-blocked-next.json");
+        for path in [&request_path, &result_path, &receipt_path, &packet_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-retry-blocked-next",
+                "dispatch_target": "alpha_gate"
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "blocked",
+                "request_id": "run-retry-blocked-next",
+                "run_id": "run-retry-blocked-next",
+                "dispatch_target": "alpha_gate",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        std::fs::write(
+            &receipt_path,
+            serde_json::json!({
+                "artifact_kind": "host_tool_bridge_receipt",
+                "status": "blocked",
+                "completion_receipt_id": "stale-blocked-receipt"
+            })
+            .to_string(),
+        )
+        .expect("write stale receipt");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/run-retry-blocked-next-activation.json");
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation parent");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "packet_path": packet_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = "run-retry-blocked-next".to_string();
+        receipt.dispatch_target = "alpha_gate".to_string();
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+
+        let evidence = materialize_host_bridge_completion_evidence(
+            &root,
+            request_path.to_str().expect("utf8 request path"),
+            None,
+            "run-retry-blocked-next",
+            "alpha_gate",
+            &receipt,
+            "receipt-retry-blocked-next",
+            Some("agent-1"),
+            Some("blocked with next"),
+            Some("beta_rework"),
+            None,
+            Some("blocked"),
+            Some("blocked"),
+            Some("beta"),
+            &["proof_failed".to_string()],
+            true,
+            true,
+            HostBridgeTaskflowImplementationEvidence::default(),
+            &[],
+            false,
+            false,
+            true,
+            false,
+        )
+        .expect("retry completion should replace receipt for blocked result with next node");
+
+        assert_eq!(evidence.receipt_path, receipt_path.display().to_string());
+        let replaced_receipt =
+            read_host_bridge_json_artifact_at_path(&receipt_path).expect("read replaced receipt");
+        assert_eq!(replaced_receipt["completion_receipt_id"], "receipt-retry-blocked-next");
         let _ = std::fs::remove_dir_all(&root);
     }
 
