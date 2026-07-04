@@ -8023,7 +8023,7 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_result_validate_accepts_nested_contract_declared_synthetic_rework_route() {
+    fn host_bridge_result_validate_rejects_incomplete_nested_contract_synthetic_rework_route() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -8121,9 +8121,9 @@ mod tests {
             &result,
         );
 
-        assert_eq!(payload["status"], super::release1_pass_status());
+        assert_eq!(payload["status"], super::release1_fail_status());
         assert!(
-            !payload["blocker_codes"]
+            payload["blocker_codes"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -10506,7 +10506,8 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_adapter_payload_allows_nested_contract_only_synthetic_rework_retry() {
+    fn host_bridge_adapter_payload_rejects_incomplete_nested_contract_only_synthetic_rework_retry()
+    {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -10581,13 +10582,13 @@ mod tests {
             false,
         );
 
-        assert_eq!(payload["status"], "pass");
-        assert!(!payload["blocker_codes"]
+        assert_eq!(payload["status"], "fail");
+        assert!(payload["blocker_codes"]
             .as_array()
             .expect("blockers")
             .iter()
             .any(|code| code == "host_bridge_request_not_pending"));
-        assert!(payload["host_bridge"]["completion_command"]
+        assert!(!payload["host_bridge"]["completion_command"]
             .as_str()
             .expect("completion command")
             .contains("--retry-completion"));

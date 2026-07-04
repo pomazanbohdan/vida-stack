@@ -142,8 +142,9 @@ pub fn host_bridge_blocked_result_contract(
         return Some(contract);
     }
     object
-        .values()
-        .find_map(host_bridge_blocked_result_contract)
+        .get("host_bridge")
+        .and_then(|host_bridge| host_bridge.get("blocked_result_contract"))
+        .and_then(Value::as_object)
 }
 
 pub fn host_bridge_blocked_result_contract_allowed_next_node(request: &Value) -> Option<&str> {
@@ -157,11 +158,36 @@ pub fn host_bridge_blocked_result_contract_allowed_next_node(request: &Value) ->
 pub fn host_bridge_blocked_result_contract_is_retryable(
     contract: &serde_json::Map<String, Value>,
 ) -> bool {
-    contract
+    let has_retryable_route = contract
         .get("allowed_next_node")
         .and_then(Value::as_str)
         .map(str::trim)
-        .is_some_and(|value| !value.is_empty() && value != "next")
+        .is_some_and(|value| !value.is_empty() && value != "next");
+    has_retryable_route
+        && host_bridge_blocked_result_contract_field_is_retryable(contract, "decision")
+        && host_bridge_blocked_result_contract_field_is_retryable(contract, "verdict")
+}
+
+fn host_bridge_blocked_result_contract_field_is_retryable(
+    contract: &serde_json::Map<String, Value>,
+    field: &str,
+) -> bool {
+    contract
+        .get(field)
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase().replace('-', "_"))
+        .is_some_and(|value| {
+            matches!(
+                value.as_str(),
+                "rework"
+                    | "rework_required"
+                    | "fail"
+                    | "failed"
+                    | "failure"
+                    | "blocked"
+                    | "retryable_blocked"
+            )
+        })
 }
 
 pub fn host_bridge_path_array(value: &Value, field: &str) -> Vec<PathBuf> {
@@ -483,6 +509,8 @@ mod tests {
             "status": "blocked",
             "host_bridge": {
                 "blocked_result_contract": {
+                    "decision": "rework_required",
+                    "verdict": "rework_required",
                     "allowed_next_node": "alpha_rework"
                 }
             }
@@ -500,6 +528,37 @@ mod tests {
             Some("alpha_rework")
         );
         assert!(host_bridge_blocked_result_contract_is_retryable(contract));
+    }
+
+    #[test]
+    fn blocked_result_contract_helpers_reject_incomplete_nested_metadata_contract() {
+        let request = serde_json::json!({
+            "status": "blocked",
+            "metadata": {
+                "blocked_result_contract": {
+                    "decision": "rework_required",
+                    "verdict": "rework_required",
+                    "allowed_next_node": "alpha_rework"
+                }
+            },
+            "host_bridge": {
+                "blocked_result_contract": {
+                    "allowed_next_node": "metadata_rework"
+                }
+            }
+        });
+        let contract = host_bridge_blocked_result_contract(&request)
+            .expect("trusted host_bridge blocked result contract should be found");
+
+        assert_eq!(
+            contract.get("allowed_next_node").and_then(Value::as_str),
+            Some("metadata_rework")
+        );
+        assert_eq!(
+            host_bridge_blocked_result_contract_allowed_next_node(&request),
+            Some("metadata_rework")
+        );
+        assert!(!host_bridge_blocked_result_contract_is_retryable(contract));
     }
 
     #[test]
