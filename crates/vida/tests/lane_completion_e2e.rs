@@ -125,6 +125,130 @@ fn assert_blocker(payload: &serde_json::Value, expected: &str) {
     );
 }
 
+struct HostBridgeReworkFixture {
+    root: PathBuf,
+    state_root: PathBuf,
+    request_path: PathBuf,
+    result_path: PathBuf,
+    pass_result_path: PathBuf,
+}
+
+fn create_host_bridge_rework_fixture(prefix: &str) -> HostBridgeReworkFixture {
+    let root = unique_lane_state_root(prefix);
+    let state_root = root.join(".vida/data/state");
+    let bridge_dir = state_root.join("runtime-consumption/host-tool-bridge");
+    let packet_dir = state_root.join("runtime-consumption/dispatch-packets");
+    std::fs::create_dir_all(&bridge_dir).expect("create host bridge dir");
+    std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+    let packet_path = packet_dir.join("coach.json");
+    let request_path = bridge_dir.join("coach-request.json");
+    let result_path = bridge_dir.join("coach-rework.json");
+    let pass_result_path = bridge_dir.join("coach-pass-invalid-rework.json");
+    std::fs::write(
+        &packet_path,
+        serde_json::json!({
+            "role_selection_full": {
+                "execution_plan": {
+                    "development_flow": {
+                        "dispatch_contract": {
+                            "execution_lane_sequence": [
+                                "developer",
+                                "coach_implementation_gate",
+                                "tester"
+                            ],
+                            "lane_catalog": {
+                                "developer": {
+                                    "dispatch_target": "developer",
+                                    "task_class": "implementation"
+                                },
+                                "coach_implementation_gate": {
+                                    "dispatch_target": "coach_implementation_gate",
+                                    "task_class": "coach"
+                                },
+                                "tester": {
+                                    "dispatch_target": "tester",
+                                    "task_class": "verification"
+                                },
+                                "developer_rework": {
+                                    "dispatch_target": "developer_rework",
+                                    "task_class": "implementation"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write packet");
+    std::fs::write(
+        &request_path,
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-coach-rework",
+            "run_id": "run-coach-rework",
+            "task_id": "run-coach-rework",
+            "dispatch_target": "coach_implementation_gate",
+            "allowed_next_node": "tester",
+            "packet_path": packet_path,
+            "backend_id": "internal_subagents",
+            "carrier_id": "coach",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": bridge_dir.join("receipt.json"),
+            "required_result_fields": [
+                "decision",
+                "verdict",
+                "blocker_codes",
+                "rework_target",
+                "allowed_next_node"
+            ]
+        })
+        .to_string(),
+    )
+    .expect("write request");
+    let rework_result = serde_json::json!({
+        "artifact_kind": "host_tool_bridge_result",
+        "schema_version": 1,
+        "status": "blocked",
+        "execution_state": "blocked",
+        "request_id": "req-coach-rework",
+        "run_id": "run-coach-rework",
+        "dispatch_target": "coach_implementation_gate",
+        "decision": "rework_required",
+        "verdict": "rework_required",
+        "completion_verdict": "rework_required",
+        "blocker_codes": ["coach_rework_required"],
+        "rework_target": "developer",
+        "allowed_next_node": "developer_rework",
+        "execution_evidence": {"receipt_backed": true},
+        "source_dispatch_packet_path": packet_path
+    });
+    std::fs::write(&result_path, rework_result.to_string()).expect("write rework result");
+    let mut pass_result = rework_result;
+    pass_result["status"] = serde_json::json!("pass");
+    pass_result["execution_state"] = serde_json::json!("executed");
+    pass_result["decision"] = serde_json::json!("pass");
+    pass_result["verdict"] = serde_json::json!("pass");
+    pass_result["completion_verdict"] = serde_json::json!("pass");
+    pass_result["blocker_codes"] = serde_json::json!(Vec::<String>::new());
+    std::fs::write(&pass_result_path, pass_result.to_string()).expect("write pass result");
+    HostBridgeReworkFixture {
+        root,
+        state_root,
+        request_path,
+        result_path,
+        pass_result_path,
+    }
+}
+
 #[test]
 fn host_bridge_missing_request_json_parse_error_is_machine_readable() {
     let output = vida()
@@ -505,6 +629,61 @@ fn host_bridge_zombie_d_result_validation_matrix_covers_boundary_rows() {
         blocked["validation"]["validation"]["authority_blocker_codes"],
         serde_json::json!(["designer_review_required"])
     );
+
+    let _ = std::fs::remove_dir_all(&fixture.root);
+}
+
+#[test]
+fn host_bridge_validate_result_accepts_coach_rework_backedge_to_developer_rework() {
+    let fixture = create_host_bridge_rework_fixture("vida-host-bridge-coach-rework-backedge");
+    let request = fixture.request_path.to_string_lossy().to_string();
+    let result = fixture.result_path.to_string_lossy().to_string();
+    let pass_result = fixture.pass_result_path.to_string_lossy().to_string();
+
+    let (rework, rework_success) = run_host_bridge_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request,
+            "--validate-result",
+            &result,
+            "--json",
+        ],
+        &fixture.state_root,
+    );
+    assert!(
+        rework_success,
+        "coach rework backedge should validate without invalid next blocker: {rework}"
+    );
+    assert_eq!(rework["status"], "pass");
+    assert_eq!(rework["validation"]["final_state"], "Blocked");
+    assert!(
+        !rework["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code == "invalid_allowed_next_node_for_execution_plan"),
+        "{rework}"
+    );
+
+    let (pass, pass_success) = run_host_bridge_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request,
+            "--validate-result",
+            &pass_result,
+            "--json",
+        ],
+        &fixture.state_root,
+    );
+    assert!(
+        !pass_success,
+        "pass result must not use rework backedge: {pass}"
+    );
+    assert_blocker(&pass, "invalid_allowed_next_node_for_execution_plan");
 
     let _ = std::fs::remove_dir_all(&fixture.root);
 }
