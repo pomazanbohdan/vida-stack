@@ -359,7 +359,9 @@ function Remove-LegacyVidaBinaryTargets {
         (Join-Path $homeDir ".local\bin\vida.exe"),
         (Join-Path $homeDir ".local\bin\vida"),
         (Join-Path $homeDir ".cargo\bin\vida.exe"),
-        (Join-Path $homeDir ".cargo\bin\vida")
+        (Join-Path $homeDir ".cargo\bin\vida"),
+        (Join-Path $homeDir ".bun\bin\vida.exe"),
+        (Join-Path $homeDir ".bun\bin\vida")
     )) {
         if ($DryRun) {
             Write-Log "Would remove legacy VIDA binary target $legacy"
