@@ -8145,7 +8145,7 @@ mod tests {
             &result,
         );
 
-        assert_eq!(payload["status"], super::release1_fail_status());
+        assert_eq!(payload["status"], super::release1_blocked_status());
         assert!(
             payload["blocker_codes"]
                 .as_array()
