@@ -1660,10 +1660,11 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 render,
                 "launcher/runtime paths",
                 &format!(
-                    "vida={}, project_root={}, taskflow_surface={}",
+                    "vida={}, project_root={}, taskflow_surface={}, fingerprint_algorithm={}",
                     launcher_runtime_paths.vida,
                     launcher_runtime_paths.project_root,
-                    launcher_runtime_paths.taskflow_surface
+                    launcher_runtime_paths.taskflow_surface,
+                    launcher_runtime_paths.active_executable_fingerprint_algorithm
                 ),
             );
             super::print_surface_ok(render, "dependency graph", "0 issues");

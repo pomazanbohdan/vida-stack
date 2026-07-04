@@ -1589,6 +1589,14 @@ pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePaylo
             install_layout: None,
             active_executable_path: "/tmp/project/bin/vida".to_string(),
             active_executable_fingerprint: "fingerprint".to_string(),
+            active_executable_fingerprint_algorithm:
+                crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_ALGORITHM
+                    .to_string(),
+            active_executable_fingerprint_semantics:
+                crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_SEMANTICS
+                    .to_string(),
+            active_executable_fingerprint_source:
+                crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_SOURCE.to_string(),
             installed_binaries: Vec::new(),
             path_resolution: crate::runtime_consumption_surface::LauncherPathResolution {
                 command: "vida".to_string(),
@@ -3170,6 +3178,14 @@ mod tests {
                 install_layout: None,
                 active_executable_path: "/tmp/project/bin/vida".to_string(),
                 active_executable_fingerprint: "fingerprint".to_string(),
+                active_executable_fingerprint_algorithm:
+                    crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_ALGORITHM
+                        .to_string(),
+                active_executable_fingerprint_semantics:
+                    crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_SEMANTICS
+                        .to_string(),
+                active_executable_fingerprint_source:
+                    crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_SOURCE.to_string(),
                 installed_binaries: Vec::new(),
                 path_resolution: crate::runtime_consumption_surface::LauncherPathResolution {
                     command: "vida".to_string(),

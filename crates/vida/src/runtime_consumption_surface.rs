@@ -9,11 +9,18 @@ pub(crate) const DOCFLOW_READINESS_CURRENT_PATH: &str =
     "vida/config/docflow-readiness.current.jsonl";
 pub(crate) const DOCFLOW_PROOF_CURRENT_PATH: &str = "vida/config/docflow-proof.current.jsonl";
 const MAX_LAUNCHER_BINARY_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const LAUNCHER_BINARY_FINGERPRINT_ALGORITHM: &str = "blake3-hex";
+pub(crate) const LAUNCHER_BINARY_FINGERPRINT_SEMANTICS: &str =
+    "BLAKE3 digest of executable file bytes; not SHA256";
+pub(crate) const LAUNCHER_BINARY_FINGERPRINT_SOURCE: &str = "active-executable-file-bytes";
 
 #[derive(Debug, serde::Serialize, Clone, PartialEq, Eq)]
 pub(crate) struct LauncherBinaryEvidence {
     pub(crate) path: String,
     pub(crate) fingerprint: String,
+    pub(crate) fingerprint_algorithm: String,
+    pub(crate) fingerprint_semantics: String,
+    pub(crate) fingerprint_source: String,
     pub(crate) active: bool,
 }
 
@@ -25,6 +32,9 @@ pub(crate) struct DoctorLauncherSummary {
     pub(crate) install_layout: Option<crate::release_surface::ReleaseInstallLayout>,
     pub(crate) active_executable_path: String,
     pub(crate) active_executable_fingerprint: String,
+    pub(crate) active_executable_fingerprint_algorithm: String,
+    pub(crate) active_executable_fingerprint_semantics: String,
+    pub(crate) active_executable_fingerprint_source: String,
     pub(crate) installed_binaries: Vec<LauncherBinaryEvidence>,
     pub(crate) path_resolution: LauncherPathResolution,
     pub(crate) divergent_installed_binaries: bool,
@@ -77,6 +87,9 @@ pub(crate) fn doctor_launcher_summary_for_root(
         install_layout,
         active_executable_path: active_executable_path.display().to_string(),
         active_executable_fingerprint,
+        active_executable_fingerprint_algorithm: LAUNCHER_BINARY_FINGERPRINT_ALGORITHM.to_string(),
+        active_executable_fingerprint_semantics: LAUNCHER_BINARY_FINGERPRINT_SEMANTICS.to_string(),
+        active_executable_fingerprint_source: LAUNCHER_BINARY_FINGERPRINT_SOURCE.to_string(),
         installed_binaries,
         path_resolution,
         divergent_installed_binaries,
@@ -161,8 +174,18 @@ fn launcher_binary_fingerprint_skipped(size: u64) -> String {
 fn installed_launcher_binary_evidence(
     active_executable_path: &Path,
 ) -> Result<Vec<LauncherBinaryEvidence>, String> {
+    installed_launcher_binary_evidence_for_root(
+        active_executable_path,
+        crate::release_surface::release_install_root(None).as_deref(),
+    )
+}
+
+fn installed_launcher_binary_evidence_for_root(
+    active_executable_path: &Path,
+    install_root: Option<&Path>,
+) -> Result<Vec<LauncherBinaryEvidence>, String> {
     let mut candidates = Vec::new();
-    if let Some(root) = crate::release_surface::release_install_root(None) {
+    if let Some(root) = install_root {
         push_launcher_bin_candidates(&mut candidates, &root.join("current").join("bin"));
     }
     candidates.push(active_executable_path.to_path_buf());
@@ -196,8 +219,11 @@ fn installed_launcher_binary_evidence(
         };
         evidence.push(LauncherBinaryEvidence {
             fingerprint,
+            fingerprint_algorithm: LAUNCHER_BINARY_FINGERPRINT_ALGORITHM.to_string(),
+            fingerprint_semantics: LAUNCHER_BINARY_FINGERPRINT_SEMANTICS.to_string(),
+            fingerprint_source: "installed-candidate-file-bytes".to_string(),
             active,
-            path: canonical.display().to_string(),
+            path: candidate.display().to_string(),
         });
     }
     Ok(evidence)
@@ -751,10 +777,10 @@ pub(crate) fn blocking_lane_selection(
 #[cfg(test)]
 mod tests {
     use super::{
-        CANONICAL_LAUNCHER_COMMAND, LauncherBinaryEvidence, RuntimeConsumptionClosureAdmission,
-        RuntimeConsumptionEvidence, build_docflow_receipt_evidence,
-        canonical_closure_admission_artifact_json, doctor_launcher_summary_for_root,
-        launcher_binary_fingerprint_skipped,
+        build_docflow_receipt_evidence, canonical_closure_admission_artifact_json,
+        doctor_launcher_summary_for_root, launcher_binary_fingerprint_skipped,
+        LauncherBinaryEvidence, RuntimeConsumptionClosureAdmission, RuntimeConsumptionEvidence,
+        CANONICAL_LAUNCHER_COMMAND,
     };
     use std::path::PathBuf;
 
@@ -821,9 +847,27 @@ mod tests {
         assert_eq!(summary.taskflow_surface, "vida taskflow");
         assert_eq!(summary.active_executable_path, current_exe);
         assert!(!summary.active_executable_fingerprint.is_empty());
+        assert_eq!(
+            summary.active_executable_fingerprint_algorithm,
+            "blake3-hex"
+        );
+        assert_eq!(
+            summary.active_executable_fingerprint_semantics,
+            "BLAKE3 digest of executable file bytes; not SHA256"
+        );
+        assert_eq!(
+            summary.active_executable_fingerprint_source,
+            "active-executable-file-bytes"
+        );
         assert!(summary.installed_binaries.iter().any(|binary| {
             binary.active
+                && binary.fingerprint_algorithm == "blake3-hex"
+                && binary.fingerprint_semantics
+                    == "BLAKE3 digest of executable file bytes; not SHA256"
+                && binary.fingerprint_source == "installed-candidate-file-bytes"
                 && PathBuf::from(&binary.path)
+                    .canonicalize()
+                    .expect("active binary evidence path should canonicalize")
                     == PathBuf::from(&summary.active_executable_path)
                         .canonicalize()
                         .expect("active executable path should canonicalize")
@@ -894,6 +938,9 @@ mod tests {
                 .display()
                 .to_string(),
             fingerprint: "installed-release".to_string(),
+            fingerprint_algorithm: "blake3-hex".to_string(),
+            fingerprint_semantics: "BLAKE3 digest of executable file bytes; not SHA256".to_string(),
+            fingerprint_source: "installed-candidate-file-bytes".to_string(),
             active: false,
         };
         let debug_active = LauncherBinaryEvidence {
@@ -905,6 +952,9 @@ mod tests {
                 .display()
                 .to_string(),
             fingerprint: "debug-build".to_string(),
+            fingerprint_algorithm: "blake3-hex".to_string(),
+            fingerprint_semantics: "BLAKE3 digest of executable file bytes; not SHA256".to_string(),
+            fingerprint_source: "installed-candidate-file-bytes".to_string(),
             active: true,
         };
 
@@ -922,12 +972,54 @@ mod tests {
                 .display()
                 .to_string(),
             fingerprint: "stale-release".to_string(),
+            fingerprint_algorithm: "blake3-hex".to_string(),
+            fingerprint_semantics: "BLAKE3 digest of executable file bytes; not SHA256".to_string(),
+            fingerprint_source: "installed-candidate-file-bytes".to_string(),
             active: false,
         };
         assert!(super::installed_binary_divergence(
             &[installed, stale_installed],
             Some(&layout)
         ));
+    }
+
+    #[test]
+    fn installed_launcher_evidence_reports_current_bin_candidate_path() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let install_root = std::env::temp_dir().join(format!(
+            "vida-launcher-current-evidence-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let current_bin = install_root.join("current").join("bin");
+        std::fs::create_dir_all(&current_bin).expect("current bin should write");
+        let current_binary = current_bin.join(crate::release_surface::vida_binary_file_name());
+        std::fs::write(&current_binary, b"installed vida").expect("current binary should write");
+
+        let evidence = super::installed_launcher_binary_evidence_for_root(
+            &current_binary,
+            Some(&install_root),
+        )
+        .expect("launcher evidence should build");
+
+        assert_eq!(evidence.len(), 1);
+        assert!(evidence[0].active);
+        assert_eq!(PathBuf::from(&evidence[0].path), current_binary);
+        assert!(!evidence[0].fingerprint.is_empty());
+        assert_eq!(evidence[0].fingerprint_algorithm, "blake3-hex");
+        assert_eq!(
+            evidence[0].fingerprint_semantics,
+            "BLAKE3 digest of executable file bytes; not SHA256"
+        );
+        assert_eq!(
+            evidence[0].fingerprint_source,
+            "installed-candidate-file-bytes"
+        );
+
+        let _ = std::fs::remove_dir_all(install_root);
     }
 
     #[test]
@@ -995,7 +1087,7 @@ mod tests {
                 requirement: "docflow_readiness".to_string(),
                 status: "pass".to_string(),
                 evidence_refs: vec![
-                    "vida docflow readiness-check --profile active-canon".to_string(),
+                    "vida docflow readiness-check --profile active-canon".to_string()
                 ],
                 blockers: Vec::new(),
             }],
