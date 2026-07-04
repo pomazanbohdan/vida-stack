@@ -4327,8 +4327,14 @@ fn host_bridge_request_has_retryable_completion_evidence(
     if host_bridge_request_has_completed_preview_refresh_evidence(state_root, &request) {
         return true;
     }
-    if host_bridge_blocked_result_contract(&request)
-        .is_some_and(host_bridge_blocked_result_contract_is_retryable)
+    let request_status_is_retryable_blocked = request
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .is_some_and(|status| matches!(status, "blocked" | "retryable_blocked"));
+    if request_status_is_retryable_blocked
+        && host_bridge_blocked_result_contract(&request)
+            .is_some_and(host_bridge_blocked_result_contract_is_retryable)
     {
         return true;
     }
@@ -17060,6 +17066,104 @@ mod tests {
         assert_eq!(evidence.receipt_path, receipt_path.display().to_string());
         assert!(result_path.exists());
         assert!(receipt_path.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_completion_rejects_retryable_contract_for_completed_request() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-completed-contract-lane-{}-{nanos}",
+            std::process::id()
+        ));
+        let request_path = root.join("host-tool-bridge/requests/run-completed-contract.json");
+        let result_path = root.join("host-tool-bridge/results/run-completed-contract.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/run-completed-contract.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        std::fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create result parent");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "completed",
+                "request_id": "run-completed-contract",
+                "run_id": "run-completed-contract",
+                "dispatch_target": "implementer",
+                "packet_path": root.join("runtime-consumption/downstream-dispatch-packets/run-completed-contract.json").display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string(),
+                "blocked_result_contract": {
+                    "allowed_next_node": "implementation-rework"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/run-completed-contract-activation.json");
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation parent");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = "run-completed-contract".to_string();
+        receipt.dispatch_target = "implementer".to_string();
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+
+        let error = materialize_host_bridge_completion_evidence(
+            &root,
+            request_path.to_str().expect("utf8 request path"),
+            None,
+            "run-completed-contract",
+            "implementer",
+            &receipt,
+            "receipt-completed-contract",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            false,
+            true,
+            HostBridgeTaskflowImplementationEvidence::default(),
+            &[],
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect_err("completed request contract must not bypass request status validation");
+
+        assert!(
+            error.contains("request_status_not_admissible"),
+            "unexpected error: {error}"
+        );
+        assert!(!result_path.exists());
+        assert!(!receipt_path.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
