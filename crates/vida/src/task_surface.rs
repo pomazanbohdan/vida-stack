@@ -9128,7 +9128,11 @@ fn task_ancestor_with_issue_type<'a>(
     issue_type: &str,
 ) -> Option<&'a state_store::TaskRecord> {
     let mut current = task;
+    let mut visited = BTreeSet::new();
     while let Some(parent_id) = task_parent_id(current) {
+        if !visited.insert(current.id.clone()) || !visited.insert(parent_id.clone()) {
+            return None;
+        }
         let Some(parent) = task_record_by_id(rows, &parent_id) else {
             return None;
         };
@@ -9146,7 +9150,11 @@ fn task_is_descendant_of(
     ancestor_id: &str,
 ) -> bool {
     let mut current = task;
+    let mut visited = BTreeSet::new();
     while let Some(parent_id) = task_parent_id(current) {
+        if !visited.insert(current.id.clone()) || !visited.insert(parent_id.clone()) {
+            return false;
+        }
         if parent_id == ancestor_id {
             return true;
         }
@@ -15566,25 +15574,26 @@ mod tests {
         persist_task_handoff_accept_receipt, reconcile_epics_from_descendant_progress,
         render_validator_packet_text, runtime_binding_has_active_exception_takeover,
         runtime_binding_open_delegated_cycle_next_action, runtime_recovery_blocks_task_next_lawful,
-        select_task_next_lawful_binding, task_attempt_policy_attempt_id,
-        task_browser_proof_planner_metadata, task_close_automation_is_blocked,
-        task_close_automation_receipt, task_close_commit_allowlist_next_actions,
-        task_close_commit_file_strings, task_close_epic_progress_summary,
-        task_close_feedback_blocker_summary, task_close_host_agent_telemetry,
-        task_close_ignored_dirty_files_for_explicit_commit, task_close_result_payload,
-        task_close_uses_isolated_state_dir, task_continuation_candidate,
+        select_task_next_lawful_binding, task_ancestor_with_issue_type,
+        task_attempt_policy_attempt_id, task_browser_proof_planner_metadata,
+        task_close_automation_is_blocked, task_close_automation_receipt,
+        task_close_commit_allowlist_next_actions, task_close_commit_file_strings,
+        task_close_epic_progress_summary, task_close_feedback_blocker_summary,
+        task_close_host_agent_telemetry, task_close_ignored_dirty_files_for_explicit_commit,
+        task_close_result_payload, task_close_uses_isolated_state_dir, task_continuation_candidate,
         task_create_planner_metadata_arg, task_create_semantics_mismatch,
         task_create_semantics_requested, task_create_title, task_critical_path_snapshot_first,
         task_evidence_proof_planner_metadata, task_exception_takeover_metadata_path,
         task_exception_takeover_owned_write_scope, task_handoff_accept_receipt,
         task_handoff_project_receipt_root, task_handoff_receipt_path, task_handoff_receipt_root,
         task_json_success_status, task_next_lawful_apply_strategy, task_next_lawful_receipt,
-        task_next_lawful_select_ready_candidate_receipt, task_owned_status_receipt, task_parent_id,
-        task_progress_summary_for_basis, task_ready_authoritative_first,
-        task_takeover_status_default_lines, task_takeover_status_receipt,
-        task_update_planner_metadata_arg, validate_task_handoff_accept_receipt,
-        TaskCloseAutomationReceipt, TaskContinuationCandidate, TaskProofAttachBrowserReceipt,
-        TaskProofAttachEvidenceReceipt, ADAPTIVE_REPLAN_FINDING_KINDS,
+        task_next_lawful_select_ready_candidate_receipt, task_owned_status_context,
+        task_owned_status_receipt, task_parent_id, task_progress_summary_for_basis,
+        task_ready_authoritative_first, task_takeover_status_default_lines,
+        task_takeover_status_receipt, task_update_planner_metadata_arg,
+        validate_task_handoff_accept_receipt, TaskCloseAutomationReceipt,
+        TaskContinuationCandidate, TaskProofAttachBrowserReceipt, TaskProofAttachEvidenceReceipt,
+        ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
@@ -18018,6 +18027,61 @@ mod tests {
         assert_eq!(receipt.ownership_source, "missing");
         assert_eq!(receipt.blocker_codes, vec!["missing_owned_paths"]);
         assert!(receipt.stageable_files.is_empty());
+    }
+
+    fn parent_dependency(
+        issue_id: &str,
+        parent_id: &str,
+    ) -> crate::state_store::TaskDependencyRecord {
+        crate::state_store::TaskDependencyRecord {
+            issue_id: issue_id.to_string(),
+            depends_on_id: parent_id.to_string(),
+            edge_type: "parent-child".to_string(),
+            created_at: "2026-07-04T00:00:00Z".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn active_step_owned_status_ignores_cyclic_parent_chain() {
+        let selected = owned_task_record("selected-task", vec![]);
+        let mut cycle_step = owned_task_record("cycle-step", vec![]);
+        cycle_step.issue_type = "step".to_string();
+        cycle_step.status = "in_progress".to_string();
+        cycle_step.dependencies = vec![parent_dependency("cycle-step", "cycle-parent")];
+        let mut cycle_parent = owned_task_record("cycle-parent", vec![]);
+        cycle_parent.dependencies = vec![parent_dependency("cycle-parent", "cycle-step")];
+        let rows = vec![selected.clone(), cycle_step, cycle_parent];
+
+        let (active_step, active_parent_task, active_epic) =
+            task_owned_status_context(&rows, &selected, true);
+
+        assert!(active_step.is_none());
+        assert_eq!(
+            active_parent_task
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("selected-task")
+        );
+        assert!(active_epic.is_none());
+    }
+
+    #[test]
+    fn active_step_owned_status_ignores_cyclic_epic_ancestor_chain() {
+        let selected = owned_task_record("selected-task", vec![]);
+        let mut cycle_step = owned_task_record("cycle-step", vec![]);
+        cycle_step.issue_type = "step".to_string();
+        cycle_step.status = "in_progress".to_string();
+        cycle_step.dependencies = vec![parent_dependency("cycle-step", "selected-task")];
+        let mut cycle_a = owned_task_record("cycle-a", vec![]);
+        cycle_a.dependencies = vec![parent_dependency("cycle-a", "cycle-b")];
+        let mut cycle_b = owned_task_record("cycle-b", vec![]);
+        cycle_b.dependencies = vec![parent_dependency("cycle-b", "cycle-a")];
+        let rows = vec![selected, cycle_step, cycle_a.clone(), cycle_b];
+
+        assert!(task_ancestor_with_issue_type(&rows, &cycle_a, "epic").is_none());
     }
 
     #[test]
