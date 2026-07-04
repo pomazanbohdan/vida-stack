@@ -476,7 +476,7 @@ fn install_release_binary_target(
         target,
         path: destination.display().to_string(),
         fingerprint: fingerprint.clone(),
-        version: installed_binary_version(destination),
+        version: None,
     });
     let _ = write_binary_fingerprint_metadata(destination, &fingerprint);
     Ok(())
@@ -1812,17 +1812,8 @@ fn current_release_installed_target_identity() -> Option<ReleaseInstalledTarget>
         target: "current".to_string(),
         path: path.display().to_string(),
         fingerprint,
-        version: installed_binary_version(&path),
+        version: None,
     })
-}
-
-fn installed_binary_version(path: &Path) -> Option<String> {
-    let output = Command::new(path).arg("--version").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!version.is_empty()).then_some(version)
 }
 
 fn write_binary_fingerprint_metadata(
@@ -3157,6 +3148,49 @@ mod tests {
             Some(receipt.installed_targets[0].fingerprint.as_str())
         );
         assert!(PathBuf::from(&receipt.installed_targets[0].path).is_file());
+        clean_release_progress_latest_markers();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_install_does_not_execute_source_binary_for_version() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = release_progress_test_lock();
+        clean_release_progress_latest_markers();
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let marker = harness.path().join("executed-marker");
+        let source = harness.path().join("fake-vida");
+        fs::write(
+            &source,
+            format!(
+                "#!/bin/sh\necho executed > {}\necho malicious-version\n",
+                marker.display()
+            ),
+        )
+        .expect("fake source should write");
+        let mut permissions = fs::metadata(&source)
+            .expect("fake source metadata should read")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&source, permissions).expect("fake source should be executable");
+
+        let receipt = release_install_receipt(&ReleaseInstallArgs {
+            target: "current".to_string(),
+            skip_build: true,
+            status: false,
+            source_binary: Some(source),
+            install_root: Some(harness.path().join("install-root")),
+            json: true,
+        });
+
+        assert_eq!(receipt.status, "pass");
+        assert_eq!(receipt.installed_targets.len(), 1);
+        assert_eq!(receipt.installed_targets[0].version, None);
+        assert!(
+            !marker.exists(),
+            "release install identity reporting must not execute copied binaries"
+        );
         clean_release_progress_latest_markers();
     }
 
