@@ -1056,9 +1056,6 @@ fn retryable_host_bridge_completion_request_for_state_root(
     {
         return false;
     }
-    if host_bridge_request_has_retryable_blocked_result_contract(request) {
-        return true;
-    }
     for field in ["receipt_path", "result_path"] {
         let Some(raw_path) = host_bridge_request_string(request, field) else {
             continue;
@@ -1084,10 +1081,6 @@ fn retryable_host_bridge_completion_request_for_state_root(
     false
 }
 
-fn host_bridge_request_has_retryable_blocked_result_contract(request: &serde_json::Value) -> bool {
-    host_bridge_blocked_result_contract(request)
-        .is_some_and(host_bridge_blocked_result_contract_is_retryable)
-}
 
 fn host_bridge_request_lifecycle_string<'a>(
     request: &'a serde_json::Value,
@@ -10417,6 +10410,68 @@ mod tests {
     }
 
     #[test]
+    fn host_bridge_adapter_payload_rejects_self_attested_contract_without_retry_artifact() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-self-attested-contract-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("request parent should be created");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "blocked",
+            "request_id": "req-self-attested-contract",
+            "run_id": "run-self-attested-contract",
+            "dispatch_target": "quality_gate",
+            "packet_path": state_root.join("packets/run.json").display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": state_root.join("host-tool-bridge/results/missing-result.json").display().to_string(),
+            "receipt_path": state_root.join("host-tool-bridge/receipts/missing-receipt.json").display().to_string(),
+            "blocked_result_contract": {
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "allowed_next_node": "repair_rework"
+            }
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("request file should be written");
+
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            Vec::new(),
+            Some(&state_root),
+            false,
+        );
+
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
+        assert!(!payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--retry-completion"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn host_bridge_adapter_payload_allows_blocked_result_contract_rework_retry() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -10451,7 +10506,7 @@ mod tests {
                 "status": "blocked",
                 "decision": "rework_required",
                 "verdict": "rework_required",
-                "blocker_codes": ["host_agent_contract_violation"],
+                "blocker_codes": ["verification_rework_required"],
                 "allowed_next_node": "repair_rework"
             }))
             .expect("result should serialize"),
@@ -10540,7 +10595,7 @@ mod tests {
                 "status": "blocked",
                 "decision": "rework_required",
                 "verdict": "rework_required",
-                "blocker_codes": ["synthetic_gate_rework_required"],
+                "blocker_codes": ["verification_rework_required"],
                 "allowed_next_node": "alpha_rework"
             }))
             .expect("result should serialize"),
