@@ -7620,6 +7620,23 @@ pub(crate) fn lawful_explicit_rework_dispatch_target_for_completed_target(
     if normalized_rework_target.is_empty() {
         return None;
     }
+    let completed_resolution =
+        resolve_runtime_dispatch_target(execution_plan, completed_dispatch_target)?;
+    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
+    let sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
+    let rework_index = sequence
+        .iter()
+        .position(|target| normalized_dispatch_target_token(target) == normalized_rework_target);
+    let completed_index = sequence.iter().position(|target| {
+        normalized_dispatch_target_token(target)
+            == normalized_dispatch_target_token(&completed_resolution.dispatch_target)
+    });
+    if !matches!(
+        (rework_index, completed_index),
+        (Some(rework_index), Some(completed_index)) if rework_index < completed_index
+    ) {
+        return None;
+    }
     let rework_lane = format!("{normalized_rework_target}_rework");
     if let Some(target_resolution) =
         resolve_runtime_dispatch_target(execution_plan, explicit_target)
@@ -9195,6 +9212,38 @@ mod tests {
             None,
             "omega_impl_rework",
             "alpha_impl",
+        );
+
+        assert!(target.is_none());
+    }
+
+    #[test]
+    fn lawful_explicit_rework_dispatch_target_rejects_target_outside_execution_sequence() {
+        let mut plan = rework_alias_execution_plan();
+        plan["development_flow"]["dispatch_contract"]["lane_catalog"]["release_admin"] = json!({
+            "dispatch_target": "release_admin",
+            "task_class": "release"
+        });
+
+        let target = lawful_explicit_rework_dispatch_target_for_completed_target(
+            &plan,
+            "beta_gate",
+            None,
+            "release_admin",
+            "release_admin",
+        );
+
+        assert!(target.is_none());
+    }
+
+    #[test]
+    fn lawful_explicit_rework_dispatch_target_rejects_forward_sequence_target() {
+        let target = lawful_explicit_rework_dispatch_target_for_completed_target(
+            &rework_alias_execution_plan(),
+            "beta_gate",
+            None,
+            "gamma_verify",
+            "gamma_verify",
         );
 
         assert!(target.is_none());
