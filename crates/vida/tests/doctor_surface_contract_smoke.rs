@@ -3927,6 +3927,16 @@ fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
         .to_string(),
     )
     .expect("rework bridge result should write");
+    std::fs::write(
+        &fixture.bridge_receipt_path,
+        serde_json::json!({
+            "artifact_kind": "host_tool_bridge_receipt",
+            "status": "blocked",
+            "completion_receipt_id": "stale-public-retry-receipt"
+        })
+        .to_string(),
+    )
+    .expect("stale canonical receipt should write");
 
     let output = vida()
         .args([
@@ -3947,13 +3957,22 @@ fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
         .expect("agent host-bridge submitted retry should run");
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
-    assert_eq!(payload["surface"], "vida lane");
+    assert_eq!(payload["surface"], "vida lane", "payload: {payload:#}");
     assert!(!payload["blocker_codes"]
         .as_array()
         .expect("blocker codes should render")
         .iter()
         .any(|code| code.as_str() == Some("host_bridge_request_not_pending")));
     assert!(payload["artifact_refs"]["host_bridge_result_path"].is_string());
+    let receipt: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.bridge_receipt_path)
+            .expect("host bridge receipt should be readable"),
+    )
+    .expect("host bridge receipt should parse");
+    assert_ne!(
+        receipt["completion_receipt_id"],
+        "stale-public-retry-receipt"
+    );
 }
 
 #[test]

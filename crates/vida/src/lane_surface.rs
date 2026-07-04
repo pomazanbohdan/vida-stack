@@ -182,7 +182,7 @@ enum LaneCommand<'a> {
 }
 
 fn lane_usage() -> &'static str {
-    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--host-bridge-result-file <path>] [--state-dir <path>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--activate] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]\n\nField/view/detail selection:\n  Lane surfaces use fixed diagnostic and mutation projections.\n  Use default output for compact operator text or --json for full machine-readable detail.\n  Lane does not expose ad-hoc --fields, --view, or --details selectors.\n\nOptions:\n  --receipt-id <id>              Receipt id that proves the lane mutation source\n  --reason <text>                Human-readable retire reason\n  --host-bridge-request <path>   Host bridge request artifact to complete\n  --host-agent-id <id>           Parent host agent id that executed the bridge request\n  --host-bridge-summary <text>   Optional completion summary from the parent host adapter\n  --host-bridge-result-file <path> Completion result file from the parent host adapter\n  --state-dir <path>             Override the TaskFlow state directory for this lane mutation\n  --reason-class <class>         Exception takeover reason class\n  --active-bounded-unit <unit>   Bounded unit authorized by the exception path\n  --owned-write-scope <path>     Receipt-bound write scope; may be repeated\n  --verification-step <text>     Verification step for exception takeover; may be repeated\n  --activate                     Activate the exception takeover immediately\n  --completed                    Reclaim completed lanes\n  --host-agents                  Include host-agent lane handles during reclaim\n  --json                         Emit machine-readable JSON output\n  -h, --help                     Print help"
+    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane takeover-ready <run-id> [--json]\n       vida lane complete <run-id> --receipt-id <id> [--host-bridge-request <path>] [--host-agent-id <id>] [--host-bridge-summary <text>] [--host-bridge-result-file <path>] [--retry-host-bridge-completion] [--state-dir <path>] [--json]\n       vida lane retire <run-id> --receipt-id <id> --reason <text> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> --reason-class <class> --active-bounded-unit <unit> --owned-write-scope <path> [--owned-write-scope <path> ...] --why-delegated-path-not-lawful <text> --why-local-write-safe <text> --return-to-normal-when <text> --verification-step <text> [--verification-step <text> ...] [--activate] [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]\n       vida lane reclaim --completed --host-agents [--json]\n\nField/view/detail selection:\n  Lane surfaces use fixed diagnostic and mutation projections.\n  Use default output for compact operator text or --json for full machine-readable detail.\n  Lane does not expose ad-hoc --fields, --view, or --details selectors.\n\nOptions:\n  --receipt-id <id>              Receipt id that proves the lane mutation source\n  --reason <text>                Human-readable retire reason\n  --host-bridge-request <path>   Host bridge request artifact to complete\n  --host-agent-id <id>           Parent host agent id that executed the bridge request\n  --host-bridge-summary <text>   Optional completion summary from the parent host adapter\n  --host-bridge-result-file <path> Completion result file from the parent host adapter\n  --retry-host-bridge-completion Retry a blocked host bridge completion with replacement evidence\n  --state-dir <path>             Override the TaskFlow state directory for this lane mutation\n  --reason-class <class>         Exception takeover reason class\n  --active-bounded-unit <unit>   Bounded unit authorized by the exception path\n  --owned-write-scope <path>     Receipt-bound write scope; may be repeated\n  --verification-step <text>     Verification step for exception takeover; may be repeated\n  --activate                     Activate the exception takeover immediately\n  --completed                    Reclaim completed lanes\n  --host-agents                  Include host-agent lane handles during reclaim\n  --json                         Emit machine-readable JSON output\n  -h, --help                     Print help"
 }
 
 fn lane_retire_help() -> &'static str {
@@ -334,7 +334,7 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                         as_json = true;
                         index += 1;
                     }
-                    "--retry-host-bridge-completion" => {
+                    "--retry-host-bridge-completion" | "--retry-completion" => {
                         retry_host_bridge_completion = true;
                         index += 1;
                     }
@@ -3626,7 +3626,13 @@ fn trusted_host_bridge_completion_request_context(
     } else {
         None
     };
-    validate_pending_host_bridge_receipt_paths(state_root, request_path, &request, receipt)?;
+    validate_pending_host_bridge_receipt_paths(
+        state_root,
+        request_path,
+        &request,
+        receipt,
+        retryable_completion_context,
+    )?;
     if retryable_completion_context
         && !adapter_gate_context
         && !receipt_target_matches_request
@@ -3672,6 +3678,7 @@ fn validate_pending_host_bridge_receipt_paths(
     request_path: &str,
     request: &serde_json::Value,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
+    replace_existing_completion_evidence: bool,
 ) -> Result<(), String> {
     if receipt.dispatch_status != "bridge_request_pending" || receipt.dispatch_result_path.is_none()
     {
@@ -3685,7 +3692,7 @@ fn validate_pending_host_bridge_receipt_paths(
         state_root,
         Path::new(&normalized_request_path),
         receipt,
-        false,
+        replace_existing_completion_evidence,
         false,
         allow_existing_result_path,
     )?;
@@ -4534,6 +4541,42 @@ fn host_bridge_persisted_receipt_has_retryable_completion_evidence(
                 .any(|blocker| host_bridge_completion_retryable_blocker(blocker)))
 }
 
+fn host_bridge_submitted_result_has_routable_retry_completion_evidence(
+    supplied_result_path: Option<&Path>,
+) -> bool {
+    let Some(path) = supplied_result_path else {
+        return false;
+    };
+    let Ok(result) = read_host_bridge_json_artifact_at_path(path) else {
+        return false;
+    };
+    let allowed_next_node_present = result
+        .get("allowed_next_node")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| host_bridge_completion_allowed_next_node_is_present(Some(value)));
+    if !allowed_next_node_present {
+        return false;
+    }
+    let status_blocked = result
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("blocked"));
+    let has_blocker_codes = result
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|codes| !codes.is_empty())
+        || result
+            .get("blocker_code")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|code| !code.trim().is_empty());
+    let has_rework_alias = ["decision", "verdict"]
+        .into_iter()
+        .filter_map(|field| result.get(field).and_then(serde_json::Value::as_str))
+        .map(str::trim)
+        .any(host_bridge_completion_result_value_is_rework_alias);
+    status_blocked || has_blocker_codes || has_rework_alias
+}
+
 fn materialize_host_bridge_completion_evidence(
     state_root: &Path,
     request_path: &str,
@@ -4571,20 +4614,29 @@ fn materialize_host_bridge_completion_evidence(
     let request = read_host_bridge_json_artifact_at_path(&canonical_request_path)?;
     let submitted_result_already_materialized =
         supplied_result_path_matches_request_output(state_root, &request, supplied_result_path)?;
+    let submitted_result_can_replace_completion_evidence = supplied_result_path.is_some();
+    let retry_override_has_submitted_completion_result =
+        retry_completion_override && supplied_result_path.is_some();
     let retry_override_has_routable_blocked_completion = retry_completion_override
-        && allowed_next_node
+        && ((allowed_next_node
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .is_some()
-        && (supplied_completion_blocked
-            || !supplied_blocker_codes.is_empty()
-            || [supplied_decision, supplied_verdict]
-            .into_iter()
-            .flatten()
-            .map(str::trim)
-                .any(host_bridge_completion_result_value_is_rework_alias));
+            && (supplied_completion_blocked
+                || !supplied_blocker_codes.is_empty()
+                || [supplied_decision, supplied_verdict]
+                    .into_iter()
+                    .flatten()
+                    .map(str::trim)
+                    .any(host_bridge_completion_result_value_is_rework_alias)))
+            || host_bridge_submitted_result_has_routable_retry_completion_evidence(
+                supplied_result_path,
+            ));
     let replace_existing_completion_evidence =
-        replace_existing_evidence || retry_override_has_routable_blocked_completion;
+        replace_existing_evidence
+            || retry_override_has_routable_blocked_completion
+            || retry_override_has_submitted_completion_result
+            || submitted_result_can_replace_completion_evidence;
     let validated_paths = validated_host_bridge_paths_from_receipt(
         state_root,
         &canonical_request_path,
@@ -5027,7 +5079,7 @@ fn materialize_host_bridge_completion_evidence(
     } else {
         write_json_artifact_new(state_root, &result_path, &result, "host bridge result")?;
     }
-    if replace_existing_completion_evidence && receipt_path.exists() {
+    if replace_existing_completion_evidence || retry_completion_override {
         write_json_artifact_replace_existing(
             state_root,
             &receipt_path,
