@@ -1082,12 +1082,27 @@ fn retryable_host_bridge_completion_request_for_state_root(
 }
 
 fn host_bridge_request_has_retryable_blocked_result_contract(request: &serde_json::Value) -> bool {
-    let Some(contract) = request
+    host_bridge_blocked_result_contract(request)
+        .is_some_and(host_bridge_blocked_result_contract_is_retryable)
+}
+
+fn host_bridge_blocked_result_contract(
+    request: &serde_json::Value,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    request
         .get("blocked_result_contract")
         .and_then(serde_json::Value::as_object)
-    else {
-        return false;
-    };
+        .or_else(|| {
+            request
+                .get("host_bridge")
+                .and_then(|host_bridge| host_bridge.get("blocked_result_contract"))
+                .and_then(serde_json::Value::as_object)
+        })
+}
+
+fn host_bridge_blocked_result_contract_is_retryable(
+    contract: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
     let decision = contract
         .get("decision")
         .and_then(serde_json::Value::as_str)
@@ -1486,6 +1501,9 @@ fn host_bridge_result_allowed_next_is_lawful(
     let Some(result_allowed) = host_bridge_result_string(result, "allowed_next_node") else {
         return true;
     };
+    if host_bridge_result_allowed_next_matches_blocked_result_contract(request, result) {
+        return true;
+    }
     let Some(packet_path) = host_bridge_request_string(request, "packet_path") else {
         return false;
     };
@@ -1535,6 +1553,28 @@ fn host_bridge_result_allowed_next_is_lawful(
         rework_target,
     )
     .is_some()
+}
+
+fn host_bridge_result_allowed_next_matches_blocked_result_contract(
+    request: &serde_json::Value,
+    result: &serde_json::Value,
+) -> bool {
+    let Some(result_allowed) = host_bridge_result_string(result, "allowed_next_node")
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "next")
+    else {
+        return false;
+    };
+    let Some(contract) = host_bridge_blocked_result_contract(request) else {
+        return false;
+    };
+    contract
+        .get("allowed_next_node")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        == Some(result_allowed)
+        && host_bridge_result_is_rework_completion(result)
+        && host_bridge_blocked_result_contract_is_retryable(contract)
 }
 
 fn host_bridge_result_rework_target(result: &serde_json::Value) -> Option<&str> {
@@ -7937,6 +7977,52 @@ mod tests {
 
         assert_eq!(payload["status"], super::release1_pass_status());
         assert_eq!(payload["validation"]["final_state"], "Blocked");
+        assert!(
+            !payload["blocker_codes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|code| code == "invalid_allowed_next_node_for_execution_plan"),
+            "{payload}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn host_bridge_result_validate_accepts_contract_declared_rework_route() {
+        let (root, mut request, result) = host_bridge_rework_backedge_request_and_result("blocked");
+        request["blocked_result_contract"] = serde_json::json!({
+            "decision": "rework_required",
+            "verdict": "rework_required",
+            "allowed_next_node": "developer_rework"
+        });
+        let packet_path = request["packet_path"]
+            .as_str()
+            .map(std::path::PathBuf::from)
+            .expect("packet path");
+        let mut packet: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&packet_path).expect("packet should read"),
+        )
+        .expect("packet should parse");
+        packet["role_selection_full"]["execution_plan"]["development_flow"]["dispatch_contract"]
+            ["lane_catalog"]
+            .as_object_mut()
+            .expect("lane catalog should be object")
+            .remove("developer_rework");
+        std::fs::write(
+            &packet_path,
+            serde_json::to_vec_pretty(&packet).expect("packet should serialize"),
+        )
+        .expect("packet should write");
+
+        let payload = super::validate_host_bridge_result_dry_run(
+            std::path::Path::new("request.json"),
+            &request,
+            std::path::Path::new("result.json"),
+            &result,
+        );
+
+        assert_eq!(payload["status"], super::release1_pass_status());
         assert!(
             !payload["blocker_codes"]
                 .as_array()
