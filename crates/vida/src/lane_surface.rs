@@ -2924,14 +2924,14 @@ where
 fn host_bridge_completion_result_value_is_blocked(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
-        "blocked" | "failed" | "failure" | "error" | "rework_required" | "retry" | "retry_required"
+        "blocked" | "failed" | "failure" | "error" | "retry" | "retry_required"
     )
 }
 
 fn host_bridge_completion_result_value_is_rework_alias(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
-        "rework" | "needs_rework" | "rework_requested"
+        "rework" | "needs_rework" | "rework_requested" | "rework_required"
     )
 }
 
@@ -4435,7 +4435,7 @@ fn materialize_host_bridge_completion_evidence(
     authoritative_owned_paths: &[String],
     replace_existing_evidence: bool,
     allow_reconciled_request_paths: bool,
-    _retry_completion_override: bool,
+    retry_completion_override: bool,
     supplied_no_code_change: bool,
 ) -> Result<HostBridgeCompletionEvidence, String> {
     let pending_receipt_has_persisted_dispatch_evidence = persisted_receipt.dispatch_status
@@ -4490,8 +4490,20 @@ fn materialize_host_bridge_completion_evidence(
         expected_task_id: Some(run_id.to_string()),
         expected_dispatch_target: Some(dispatch_target.to_string()),
     });
-    let retryable_completion_request =
-        host_bridge_request_has_retryable_completion_evidence(state_root, request_path)
+    let retry_override_has_routable_rework = retry_completion_override
+        && host_bridge_completion_request_required(persisted_receipt)
+        && allowed_next_node
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        && [supplied_decision, supplied_verdict]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .any(host_bridge_completion_result_value_is_rework_alias)
+        && supplied_blocker_codes.is_empty();
+    let retryable_completion_request = retry_override_has_routable_rework
+        || host_bridge_request_has_retryable_completion_evidence(state_root, request_path)
             || host_bridge_persisted_receipt_has_retryable_completion_evidence(persisted_receipt);
     let shared_provenance =
         normalize_host_bridge_provenance_for_completion(&provenance, retryable_completion_request);
@@ -5783,7 +5795,10 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     receipt_id,
                     host_agent_id,
                     host_bridge_summary,
-                    supplied_completion_allowed_next_node.as_deref(),
+                    allowed_next_node
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .or(supplied_completion_allowed_next_node.as_deref()),
                     lane_completion_packet_context
                         .as_ref()
                         .map(|(role_selection, _)| role_selection),
@@ -7923,8 +7938,17 @@ mod tests {
             blocker_code: Vec::new(),
             rework_target: Some("developer"),
         };
-        assert!(supplied_host_bridge_completion_result_is_blocked(
+        assert!(!supplied_host_bridge_completion_result_is_blocked(
             &canonical_blocked_args,
+            None
+        ));
+        let canonical_missing_target_args = HostBridgeCompletionResultArgs {
+            allowed_next_node: None,
+            rework_target: None,
+            ..canonical_blocked_args
+        };
+        assert!(supplied_host_bridge_completion_result_is_blocked(
+            &canonical_missing_target_args,
             None
         ));
     }
@@ -12724,7 +12748,7 @@ mod tests {
         receipt.selected_backend = Some("internal_subagents".to_string());
         let authoritative_owned_paths = vec!["crates/vida/src/lane_surface.rs".to_string()];
 
-        let error = materialize_host_bridge_completion_evidence(
+        let evidence = materialize_host_bridge_completion_evidence(
             &root,
             request_path.to_str().expect("request path should be utf8"),
             None,
@@ -12749,14 +12773,19 @@ mod tests {
             false,
             true,
         )
-        .expect_err("implementation no-code marker must not bypass artifact evidence");
+        .expect("implementation no-code marker should record blocked artifact evidence");
 
         assert!(
-            error.contains("implementation_artifacts_missing"),
-            "unexpected error: {error}"
+            evidence
+                .blocker_codes
+                .iter()
+                .any(|code| code == "implementation_artifacts_missing"),
+            "unexpected blockers: {:?}",
+            evidence.blocker_codes
         );
-        assert!(!result_path.exists());
-        assert!(!bridge_receipt_path.exists());
+        assert_eq!(evidence.execution_state, "blocked");
+        assert!(result_path.exists());
+        assert!(bridge_receipt_path.exists());
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -18412,7 +18441,7 @@ mod tests {
 
     #[tokio::test]
     async fn focused_host_bridge_run_graph_test_autotester_pass_reconciles_stale_designer_projection()
-     {
+    {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -18703,6 +18732,271 @@ mod tests {
             args: vec!["show".to_string(), run_id.to_string(), "--json".to_string()],
         };
         assert_eq!(run_lane(show_args).await, ExitCode::SUCCESS);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_retry_completion_rework_accepts_stale_blocked_request_with_open_receipt() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-retry-rework-stale-request-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-review-rework-stale-request";
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id: run_id,
+                title: "Reviewer rework retries stale host bridge request",
+                display_id: None,
+                description: "",
+                issue_type: "defect",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/lane_surface.rs".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task with owned scope");
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "review", "review");
+        status.task_id = run_id.to_string();
+        status.active_node = "reviewer".to_string();
+        status.next_node = Some("developer_rework".to_string());
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "reviewer_blocked".to_string();
+        status.policy_gate = "host_tool_bridge_adapter_required".to_string();
+        status.handoff_state = "handoff_pending".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.reviewer_lane".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist stale run graph status");
+
+        let mut role_selection = lane_complete_role_selection(run_id);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["execution_lane_sequence"] =
+            serde_json::json!(["reviewer", "developer_rework"]);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
+            "reviewer": {
+                "dispatch_target": "reviewer",
+                "stage": "review",
+                "task_class": "verification",
+                "closure_class": "verification",
+                "completion_blocker": "pending_review_evidence",
+                "packet_template_kind": "verifier_proof_packet",
+                "activation_agent_type": "senior",
+                "activation_runtime_role": "reviewer"
+            },
+            "developer_rework": {
+                "dispatch_target": "developer_rework",
+                "stage": "execution",
+                "task_class": "implementation",
+                "closure_class": "implementation",
+                "completion_blocker": "pending_implementation_evidence",
+                "packet_template_kind": "delivery_task_packet",
+                "activation_agent_type": "junior",
+                "activation_runtime_role": "worker"
+            }
+        });
+        let packet_path =
+            root.join("runtime-consumption/downstream-dispatch-packets/reviewer-stale.json");
+        std::fs::create_dir_all(packet_path.parent().expect("dispatch packet parent"))
+            .expect("create dispatch packet dir");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "run_id": run_id,
+                "source_dispatch_target": "reviewer",
+                "source_dispatch_status": "bridge_request_pending",
+                "source_blocker_code": "host_tool_bridge_adapter_required",
+                "dispatch_target": "reviewer",
+                "activation_runtime_role": "reviewer",
+                "packet_template_kind": "verifier_proof_packet",
+                "proof_goal": "Review can request configured rework.",
+                "owned_paths": ["test/reviewer_contract_test.dart"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "verifier_proof_packet": {
+                    "proof_goal": "Review can request configured rework.",
+                    "goal": "Review can request configured rework.",
+                    "scope_in": ["dispatch_target:reviewer"],
+                    "handoff_task_class": "verification",
+                    "handoff_runtime_role": "reviewer",
+                    "owned_paths": ["test/reviewer_contract_test.dart"],
+                    "read_only_paths": [".vida/data/state/runtime-consumption"],
+                    "definition_of_done": ["reviewer rework advances to developer_rework"],
+                    "verification_command": "cargo test -p vida host_bridge_retry_completion_rework_accepts_stale_blocked_request_with_open_receipt",
+                    "proof_target": "reviewer rework materializes developer_rework packet",
+                    "stop_rules": ["stop if host bridge request is not pending"],
+                    "blocking_question": "none"
+                },
+                "role_selection_full": role_selection,
+                "run_graph_bootstrap": {
+                    "run_id": run_id
+                },
+                "downstream_dispatch_active_target": "reviewer",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["pending_review_evidence"],
+                "downstream_dispatch_status": "blocked",
+                "downstream_lane_status": "lane_blocked"
+            })
+            .to_string(),
+        )
+        .expect("write dispatch packet");
+
+        let request_path = root.join("host-tool-bridge/requests/reviewer-stale-request.json");
+        let result_path = root.join("host-tool-bridge/results/reviewer-stale-result.json");
+        let bridge_receipt_path = root.join("host-tool-bridge/receipts/reviewer-stale-receipt.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request dir");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "blocked",
+                "request_id": "reviewer-stale-request",
+                "run_id": run_id,
+                "task_id": run_id,
+                "dispatch_target": "reviewer",
+                "task_class": "verification",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "carrier_id": "senior",
+                "execution_boundary": "parent_host_session",
+                "dispatch_transport": "host_tool_bridge",
+                "receipt_mode": "host_bridge_receipt",
+                "implementation_isolation": {
+                    "schema_version": "implementation-isolation-v1",
+                    "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                    "owned_paths": ["test/reviewer_contract_test.dart"]
+                },
+                "implementation_artifacts": [],
+                "result_path": result_path.display().to_string(),
+                "receipt_path": bridge_receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write host bridge request");
+
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/reviewer-stale-activation.json");
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation result dir");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "packet_path": packet_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": bridge_receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "reviewer".to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.dispatch_command = Some("vida agent-init".to_string());
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+        receipt.blocker_code = Some("host_tool_bridge_adapter_required".to_string());
+        receipt.downstream_dispatch_target = Some("developer_rework".to_string());
+        receipt.downstream_dispatch_command = Some("vida agent-init".to_string());
+        receipt.downstream_dispatch_note =
+            Some("after reviewer evidence is recorded, activate developer_rework".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["pending_review_evidence".to_string()];
+        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_active_target = Some("reviewer".to_string());
+        receipt.activation_agent_type = Some("senior".to_string());
+        receipt.activation_runtime_role = Some("reviewer".to_string());
+        receipt.selected_backend = Some("internal_subagents".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "complete".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "reviewer-rework-retry-1".to_string(),
+                "--host-bridge-request".to_string(),
+                request_path.display().to_string(),
+                "--host-agent-id".to_string(),
+                "agent-reviewer-1".to_string(),
+                "--decision".to_string(),
+                "rework_required".to_string(),
+                "--verdict".to_string(),
+                "rework_required".to_string(),
+                "--rework-target".to_string(),
+                "developer".to_string(),
+                "--allowed-next-node".to_string(),
+                "developer_rework".to_string(),
+                "--retry-host-bridge-completion".to_string(),
+                "--state-dir".to_string(),
+                root.display().to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after lane command");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt after")
+            .expect("receipt should exist");
+        assert_eq!(after.dispatch_status, "executed");
+        assert_eq!(
+            after.downstream_dispatch_target.as_deref(),
+            Some("developer_rework")
+        );
+        assert!(after.downstream_dispatch_ready);
+        assert!(after.downstream_dispatch_blockers.is_empty());
+        let result: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&result_path).expect("read host bridge result"),
+        )
+        .expect("host bridge result should parse");
+        assert_eq!(result["allowed_next_node"], "developer_rework");
+        assert!(
+            !result["blocker_codes"]
+                .as_array()
+                .expect("blockers")
+                .iter()
+                .any(|code| code == "host_bridge_request_not_pending")
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

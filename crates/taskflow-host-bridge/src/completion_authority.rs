@@ -199,6 +199,7 @@ fn derive_completion_authority_outcome(
     blockers.extend(summary_blocker_codes(input.summary.as_deref()));
     dedup_blockers(&mut blockers);
     let passed = completion_tuple_is_passed(&input);
+    let rework = completion_tuple_is_rework(&input);
     let failed = completion_tuple_is_failed(&input);
     let blocked = completion_tuple_is_blocked(&input) || failed;
 
@@ -227,7 +228,7 @@ fn derive_completion_authority_outcome(
         return (HostBridgeCompletionOutcome::Failed, blockers);
     }
 
-    if blockers.is_empty() && passed {
+    if blockers.is_empty() && (passed || (rework && input.next_step_packet_requested)) {
         return (HostBridgeCompletionOutcome::Passed, blockers);
     }
 
@@ -285,12 +286,12 @@ pub fn completion_authority_transition_matrix() -> Vec<HostBridgeCompletionTrans
             expected_next_step_packet_admitted: false,
         },
         HostBridgeCompletionTransitionCase {
-            name: "explicit_rework_without_blocker_derives_typed_blocked_outcome",
+            name: "explicit_rework_with_next_step_route_is_accepted",
             input: input("rework_required", "rework_required", [], None),
-            expected_state: HostBridgeCompletionState::Blocked,
-            expected_events: rejected_events(),
-            expected_effect_intents: rejected_effect_intents(),
-            expected_next_step_packet_admitted: false,
+            expected_state: HostBridgeCompletionState::Passed,
+            expected_events: accepted_events(),
+            expected_effect_intents: accepted_effect_intents(true),
+            expected_next_step_packet_admitted: true,
         },
         HostBridgeCompletionTransitionCase {
             name: "explicit_failed_without_blocker_is_failed",
@@ -501,6 +502,11 @@ fn completion_tuple_is_blocked(input: &HostBridgeCompletionAuthorityInput) -> bo
             normalized(&input.verdict).as_str(),
             "blocked" | "rework_required"
         )
+}
+
+fn completion_tuple_is_rework(input: &HostBridgeCompletionAuthorityInput) -> bool {
+    matches!(normalized(&input.decision).as_str(), "rework_required")
+        && matches!(normalized(&input.verdict).as_str(), "rework_required")
 }
 
 fn completion_tuple_is_failed(input: &HostBridgeCompletionAuthorityInput) -> bool {
@@ -782,13 +788,25 @@ mod tests {
     }
 
     #[test]
-    fn explicit_rework_without_blocker_is_blocked_not_failed() {
+    fn explicit_rework_with_next_step_route_is_accepted_not_blocked() {
         let decision = decide_host_bridge_completion_authority(input(
             "rework_required",
             "rework_required",
             [],
             None,
         ));
+
+        assert!(decision.accepted);
+        assert_eq!(decision.final_state, HostBridgeCompletionState::Passed);
+        assert!(decision.blocker_codes.is_empty());
+        assert!(decision.next_step_packet_admitted);
+    }
+
+    #[test]
+    fn explicit_rework_without_next_step_route_is_blocked_not_failed() {
+        let mut input = input("rework_required", "rework_required", [], None);
+        input.next_step_packet_requested = false;
+        let decision = decide_host_bridge_completion_authority(input);
 
         assert_eq!(decision.final_state, HostBridgeCompletionState::Blocked);
         assert_eq!(decision.blocker_codes, vec![BLOCKER_TYPED_BLOCKED_OUTCOME]);
