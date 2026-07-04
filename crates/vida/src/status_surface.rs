@@ -14,8 +14,8 @@ use crate::status_surface_text_report::{StatusTextReportInputs, emit_status_text
 use crate::status_surface_truth_inputs::build_status_truth_inputs;
 
 const STATUS_SURFACE_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
-const STATUS_SURFACE_LOCK_PROBE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
-const STATUS_SURFACE_LOCK_PROBE_RETRY_DELAY: Duration = Duration::from_millis(50);
+const STATUS_SURFACE_LOCK_PROBE_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
+const STATUS_SURFACE_LOCK_PROBE_RETRY_DELAY: Duration = Duration::from_millis(250);
 const STATUS_SURFACE_RECENT_PROJECTION_MAX_AGE: Duration = Duration::from_secs(300);
 const DISPATCH_PACKET_REF_READ_LIMIT_BYTES: u64 = 1024 * 1024;
 
@@ -3564,17 +3564,17 @@ mod tests {
             payload["artifact_refs"]["read_fallback"],
             "lock_contention_degraded_response"
         );
-        assert_eq!(payload["artifact_refs"]["retry_count"], 200);
-        assert_eq!(payload["artifact_refs"]["wait_budget_ms"], 10_000);
-        assert_eq!(payload["artifact_refs"]["retry_delay_ms"], 50);
-        assert_eq!(payload["state_access"]["retry_count"], 200);
-        assert_eq!(payload["state_access"]["wait_budget_ms"], 10_000);
-        assert_eq!(payload["state_access"]["retry_delay_ms"], 50);
+        assert_eq!(payload["artifact_refs"]["retry_count"], 8);
+        assert_eq!(payload["artifact_refs"]["wait_budget_ms"], 2_000);
+        assert_eq!(payload["artifact_refs"]["retry_delay_ms"], 250);
+        assert_eq!(payload["state_access"]["retry_count"], 8);
+        assert_eq!(payload["state_access"]["wait_budget_ms"], 2_000);
+        assert_eq!(payload["state_access"]["retry_delay_ms"], 250);
         assert!(
             payload["next_actions"][0]
                 .as_str()
                 .expect("next action")
-                .contains("waited up to 10000ms across 200 lock probes")
+                .contains("waited up to 2000ms across 8 lock probes")
         );
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
@@ -3592,9 +3592,9 @@ mod tests {
         assert!(output.contains("status: blocked"));
         assert!(output.contains("state_access: degraded_lock_contention"));
         assert!(output.contains("wait_budget_ms"));
-        assert!(output.contains("10000"));
+        assert!(output.contains("2000"));
         assert!(output.contains("retry_count"));
-        assert!(output.contains("200"));
+        assert!(output.contains("8"));
         assert!(output.contains("blocker_codes[1]:"));
         assert!(output.contains("state_store_read_lock_contention"));
         assert!(serde_json::from_str::<serde_json::Value>(&output).is_err());
@@ -3661,8 +3661,8 @@ mod tests {
     #[test]
     fn lock_probe_attempt_budget_rounds_up_to_visible_retry_count() {
         assert_eq!(
-            super::lock_probe_attempt_budget(Duration::from_millis(10_000), Duration::from_millis(50)),
-            200
+            super::lock_probe_attempt_budget(Duration::from_millis(2_000), Duration::from_millis(250)),
+            8
         );
         assert_eq!(
             super::lock_probe_attempt_budget(Duration::from_millis(101), Duration::from_millis(50)),
