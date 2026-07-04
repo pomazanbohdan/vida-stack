@@ -58,6 +58,7 @@ pub(crate) struct ReleaseInstallProgressStatusReceipt {
     pub progress_path: Option<String>,
     pub process_id: Option<u32>,
     pub child_state: Option<String>,
+    pub installed_targets: Vec<ReleaseInstalledTarget>,
     pub artifact_refs: Vec<String>,
     pub latest_event: Option<serde_json::Value>,
 }
@@ -73,6 +74,7 @@ pub(crate) struct ReleaseInstalledTarget {
     pub target: String,
     pub path: String,
     pub fingerprint: String,
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -128,6 +130,15 @@ fn emit_release_install_status_receipt(
         }
         if let Some(progress_path) = receipt.progress_path.as_deref() {
             println!("progress artifact: {progress_path}");
+        }
+        for target in &receipt.installed_targets {
+            println!(
+                "installed target: {} path={} version={} fingerprint={}",
+                target.target,
+                target.path,
+                target.version.as_deref().unwrap_or("unknown"),
+                target.fingerprint
+            );
         }
         for action in &receipt.next_actions {
             println!("next action: {action}");
@@ -465,6 +476,7 @@ fn install_release_binary_target(
         target,
         path: destination.display().to_string(),
         fingerprint: fingerprint.clone(),
+        version: installed_binary_version(destination),
     });
     let _ = write_binary_fingerprint_metadata(destination, &fingerprint);
     Ok(())
@@ -743,6 +755,7 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
                 progress_path: None,
                 process_id: None,
                 child_state: None,
+                installed_targets: Vec::new(),
                 artifact_refs: Vec::new(),
                 latest_event: None,
             };
@@ -783,6 +796,7 @@ fn release_install_status_receipt() -> ReleaseInstallProgressStatusReceipt {
                 progress_path: None,
                 process_id: None,
                 child_state: None,
+                installed_targets: Vec::new(),
                 artifact_refs: vec![latest_path.display().to_string()],
                 latest_event: None,
             };
@@ -841,6 +855,13 @@ fn release_install_status_receipt_from_event(
         latest_phase.as_deref(),
         child_state.as_deref(),
     );
+    let installed_targets = if status == "pass" && latest_phase.as_deref() == Some("install") {
+        current_release_installed_target_identity()
+            .into_iter()
+            .collect()
+    } else {
+        Vec::new()
+    };
     ReleaseInstallProgressStatusReceipt {
         surface: "vida release install --status".to_string(),
         status,
@@ -852,6 +873,7 @@ fn release_install_status_receipt_from_event(
         progress_path,
         process_id,
         child_state,
+        installed_targets,
         artifact_refs,
         latest_event: Some(latest_event),
     }
@@ -876,6 +898,7 @@ fn release_install_progress_unreadable_status_receipt(
         progress_path: None,
         process_id: None,
         child_state: None,
+        installed_targets: Vec::new(),
         artifact_refs: vec![latest_path.display().to_string()],
         latest_event: None,
     }
@@ -1776,6 +1799,30 @@ fn binary_fingerprint(path: &Path) -> Result<String, ReleaseIoErrorDetail> {
     let bytes = fs::read(path)
         .map_err(|error| io_error_detail("read_fingerprint", Some(path), None, &error))?;
     Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+fn current_release_installed_target_identity() -> Option<ReleaseInstalledTarget> {
+    let layout = release_install_layout(None)?;
+    let path = PathBuf::from(layout.runtime_bin_dir).join(vida_binary_file_name());
+    if !path.is_file() {
+        return None;
+    }
+    let fingerprint = binary_fingerprint(&path).ok()?;
+    Some(ReleaseInstalledTarget {
+        target: "current".to_string(),
+        path: path.display().to_string(),
+        fingerprint,
+        version: installed_binary_version(&path),
+    })
+}
+
+fn installed_binary_version(path: &Path) -> Option<String> {
+    let output = Command::new(path).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!version.is_empty()).then_some(version)
 }
 
 fn write_binary_fingerprint_metadata(
