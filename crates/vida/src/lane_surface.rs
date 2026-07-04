@@ -3333,6 +3333,10 @@ fn supplied_host_bridge_completion_result_is_blocked(
         .into_iter()
         .filter_map(|field| result.get(field).and_then(serde_json::Value::as_str))
         .any(host_bridge_completion_result_value_is_blocked)
+        || ["status", "execution_state"]
+            .into_iter()
+            .filter_map(|field| result.get(field).and_then(serde_json::Value::as_str))
+            .any(host_bridge_completion_result_value_is_rework_alias)
         || rework_alias_without_target
         || (result_rework_target.is_some_and(host_bridge_completion_rework_target_is_present)
             && routable_rework_next_node.is_none())
@@ -7908,6 +7912,44 @@ mod tests {
             ]
         );
         assert_eq!(args.allowed_next_node, Some("developer"));
+    }
+
+    #[test]
+    fn supplied_host_bridge_completion_result_status_rework_required_blocks_completion() {
+        let args = HostBridgeCompletionResultArgs {
+            result_file: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: Some("[]"),
+            blocker_code: Vec::new(),
+            rework_target: None,
+        };
+
+        for (field, value) in [
+            ("status", "rework_required"),
+            ("execution_state", "rework_required"),
+        ] {
+            let mut result = serde_json::json!({
+                "status": "pass",
+                "execution_state": "executed",
+                "decision": null,
+                "verdict": null,
+                "blocker_codes": [],
+                "rework_target": null
+            });
+            result[field] = serde_json::Value::String(value.to_string());
+
+            assert!(
+                supplied_host_bridge_completion_result_is_blocked(&args, Some(&result)),
+                "{field}: {value} must fail closed as blocked completion evidence"
+            );
+            assert!(
+                supplied_host_bridge_completion_result_blocker_codes(&args, Some(&result))
+                    .is_empty(),
+                "the rework status itself, not an explicit blocker code, should trigger the gate"
+            );
+        }
     }
 
     #[test]
