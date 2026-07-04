@@ -1490,9 +1490,6 @@ fn host_bridge_result_allowed_next_is_lawful(
     let Some(result_allowed) = host_bridge_result_string(result, "allowed_next_node") else {
         return true;
     };
-    if host_bridge_result_allowed_next_matches_blocked_result_contract(request, result) {
-        return true;
-    }
     let Some(packet_path) = host_bridge_request_string(request, "packet_path") else {
         return false;
     };
@@ -1542,28 +1539,6 @@ fn host_bridge_result_allowed_next_is_lawful(
         rework_target,
     )
     .is_some()
-}
-
-fn host_bridge_result_allowed_next_matches_blocked_result_contract(
-    request: &serde_json::Value,
-    result: &serde_json::Value,
-) -> bool {
-    let Some(result_allowed) = host_bridge_result_string(result, "allowed_next_node")
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != "next")
-    else {
-        return false;
-    };
-    let Some(contract) = host_bridge_blocked_result_contract(request) else {
-        return false;
-    };
-    contract
-        .get("allowed_next_node")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        == Some(result_allowed)
-        && host_bridge_result_is_rework_completion(result)
-        && host_bridge_blocked_result_contract_is_retryable(contract)
 }
 
 fn host_bridge_result_rework_target(result: &serde_json::Value) -> Option<&str> {
@@ -7978,13 +7953,15 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_result_validate_accepts_contract_declared_rework_route() {
+    fn host_bridge_result_validate_rejects_contract_rework_route_missing_from_plan() {
         let (root, mut request, result) = host_bridge_rework_backedge_request_and_result("blocked");
         request["blocked_result_contract"] = serde_json::json!({
             "decision": "rework_required",
             "verdict": "rework_required",
-            "allowed_next_node": "repair_rework"
+            "allowed_next_node": "contract_only_rework"
         });
+        let mut result = result;
+        result["allowed_next_node"] = serde_json::json!("contract_only_rework");
         let packet_path = request["packet_path"]
             .as_str()
             .map(std::path::PathBuf::from)
@@ -8010,9 +7987,9 @@ mod tests {
             &result,
         );
 
-        assert_eq!(payload["status"], super::release1_pass_status());
+        assert_eq!(payload["status"], "blocked");
         assert!(
-            !payload["blocker_codes"]
+            payload["blocker_codes"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -8023,7 +8000,7 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_result_validate_accepts_nested_contract_declared_synthetic_rework_route() {
+    fn host_bridge_result_validate_rejects_nested_contract_rework_route_missing_from_plan() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -8121,9 +8098,9 @@ mod tests {
             &result,
         );
 
-        assert_eq!(payload["status"], super::release1_pass_status());
+        assert_eq!(payload["status"], "blocked");
         assert!(
-            !payload["blocker_codes"]
+            payload["blocker_codes"]
                 .as_array()
                 .unwrap()
                 .iter()
