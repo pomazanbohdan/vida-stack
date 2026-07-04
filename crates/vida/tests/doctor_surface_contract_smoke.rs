@@ -3881,6 +3881,8 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
     )
     .expect("host bridge result should parse");
     assert_eq!(result["allowed_next_node"], "developer_rework");
+    assert_eq!(result["decision"], "rework_required");
+    assert_eq!(result["verdict"], "rework_required");
 }
 
 #[test]

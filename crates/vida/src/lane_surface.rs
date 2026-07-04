@@ -2989,6 +2989,23 @@ fn supplied_host_bridge_completion_result_rework_target(
         .map(str::to_string)
 }
 
+fn supplied_host_bridge_completion_result_contract_field(
+    explicit_value: Option<&str>,
+    result: Option<&serde_json::Value>,
+    field: &str,
+) -> Option<String> {
+    explicit_value
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            result?
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        })
+        .map(str::trim)
+        .map(str::to_string)
+}
+
 fn terminal_closure_route(value: &str) -> bool {
     crate::runtime_dispatch_state::canonical_terminal_closure_dispatch_target(value).is_some()
 }
@@ -5846,6 +5863,16 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     &supplied_completion_result_args,
                     supplied_completion_result.as_ref(),
                 );
+            let supplied_completion_decision = supplied_host_bridge_completion_result_contract_field(
+                decision,
+                supplied_completion_result.as_ref(),
+                "decision",
+            );
+            let supplied_completion_verdict = supplied_host_bridge_completion_result_contract_field(
+                verdict,
+                supplied_completion_result.as_ref(),
+                "verdict",
+            );
             let derive_summary_blockers = !supplied_completion_result_args
                 .has_explicit_result_contract()
                 && supplied_completion_result.is_none();
@@ -5926,9 +5953,9 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     lane_completion_packet_context
                         .as_ref()
                         .map(|(role_selection, _)| role_selection),
-                    decision,
-                    verdict,
-                    rework_target,
+                    supplied_completion_decision.as_deref(),
+                    supplied_completion_verdict.as_deref(),
+                    supplied_completion_rework_target.as_deref().or(rework_target),
                     &supplied_completion_blocker_codes,
                     supplied_completion_blocked,
                     derive_summary_blockers,
