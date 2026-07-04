@@ -1053,6 +1053,9 @@ fn retryable_host_bridge_completion_request_for_state_root(
     {
         return false;
     }
+    if host_bridge_request_has_retryable_blocked_result_contract(request) {
+        return true;
+    }
     for field in ["receipt_path", "result_path"] {
         let Some(raw_path) = host_bridge_request_string(request, field) else {
             continue;
@@ -1076,6 +1079,34 @@ fn retryable_host_bridge_completion_request_for_state_root(
         }
     }
     false
+}
+
+fn host_bridge_request_has_retryable_blocked_result_contract(request: &serde_json::Value) -> bool {
+    let Some(contract) = request
+        .get("blocked_result_contract")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+    let decision = contract
+        .get("decision")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let verdict = contract
+        .get("verdict")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let allowed_next_node = contract
+        .get("allowed_next_node")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    !allowed_next_node.is_empty()
+        && allowed_next_node != "next"
+        && matches!(decision, "rework_required" | "fail" | "blocked")
+        && matches!(verdict, "rework_required" | "fail" | "blocked")
 }
 
 fn completed_host_bridge_completion_request_for_state_root(
@@ -10066,6 +10097,95 @@ mod tests {
             .expect("blockers")
             .iter()
             .any(|code| code == "host_bridge_request_not_pending"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_adapter_payload_allows_blocked_result_contract_rework_retry() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-contract-retry-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let result_path = state_root.join("host-tool-bridge/results/result.json");
+        let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
+        for path in [&request_path, &result_path, &receipt_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("artifact parent should be created");
+        }
+        std::fs::write(
+            &receipt_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_receipt",
+                "status": "blocked",
+                "blocker_codes": ["host_agent_contract_violation"]
+            }))
+            .expect("receipt should serialize"),
+        )
+        .expect("receipt file should be written");
+        std::fs::write(
+            &result_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "status": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_codes": ["host_agent_contract_violation"],
+                "allowed_next_node": "developer_rework"
+            }))
+            .expect("result should serialize"),
+        )
+        .expect("result file should be written");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "blocked",
+            "request_id": "req-contract-retry",
+            "run_id": "run-contract-retry",
+            "dispatch_target": "coach",
+            "packet_path": state_root.join("packets/run.json").display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string(),
+            "blocked_result_contract": {
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "allowed_next_node": "developer_rework"
+            }
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("request file should be written");
+
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            Vec::new(),
+            Some(&state_root),
+            false,
+        );
+
+        assert_eq!(payload["status"], "pass");
+        assert!(!payload["blocker_codes"]
+            .as_array()
+            .expect("blockers")
+            .iter()
+            .any(|code| code == "host_bridge_request_not_pending"));
+        assert!(payload["host_bridge"]["completion_command"]
+            .as_str()
+            .expect("completion command")
+            .contains("--retry-completion"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
