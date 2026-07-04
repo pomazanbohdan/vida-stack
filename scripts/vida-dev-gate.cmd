@@ -17,7 +17,7 @@ if not defined TEMP if defined LOCALAPPDATA set "TEMP=%LOCALAPPDATA%\Temp"
 if not defined TMP set "TMP=%TEMP%"
 if defined TEMP if not exist "%TEMP%" mkdir "%TEMP%" >nul 2>nul
 
-set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%LOCALAPPDATA%\Microsoft\WindowsApps;%ProgramFiles%\WindowsApps;%ProgramFiles%\PowerShell\7;%SystemRoot%\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;%USERPROFILE%\.cargo\bin;C:\Users\%USERNAME%\.cargo\bin;%PATH%"
+set "PATH=%SystemRoot%\System32;%SystemRoot%;%SystemRoot%\System32\Wbem;%LOCALAPPDATA%\Microsoft\WindowsApps;%ProgramFiles%\WindowsApps;%ProgramFiles%\PowerShell\7;%SystemRoot%\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;%LOCALAPPDATA%\vida-stack\current\bin;%USERPROFILE%\.cargo\bin;C:\Users\%USERNAME%\.cargo\bin;%PATH%"
 
 set "PWSH="
 if defined VIDA_PWSH if exist "%VIDA_PWSH%" set "PWSH=%VIDA_PWSH%"

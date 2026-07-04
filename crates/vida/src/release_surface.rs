@@ -1537,7 +1537,7 @@ fn install_target_paths_with_path_env(
     let root = release_install_root(install_root);
     let binary_name = vida_binary_file_name();
     match requested_target {
-        "current" | "cur" | "all" | "local" | "cargo" => {
+        "current" | "cur" | "all" | "local" | "cargo" | "path" => {
             let root = root.ok_or_else(unresolved_install_target)?;
             let current_path = root.join("current").join("bin").join(binary_name);
             if install_root.is_none() {
@@ -1545,17 +1545,9 @@ fn install_target_paths_with_path_env(
             }
             Ok(vec![("current".to_string(), current_path)])
         }
-        "path" => resolve_vida_from_path_env(path_env)
-            .map(|path| vec![("path".to_string(), path)])
-            .ok_or(BlockedRelease {
-                blocker_code: "install_target_unresolved",
-                next_action: "Ensure `vida` is on PATH, or pass `--target current` with `--install-root <path>`.".to_string(),
-                io_error: None,
-            }),
         _ => Err(BlockedRelease {
             blocker_code: "unsupported_install_target",
-            next_action: "Use `--target current`, `--target cur`, or `--target path`."
-                .to_string(),
+            next_action: "Use `--target current` or `--target cur`.".to_string(),
             io_error: None,
         }),
     }
@@ -1574,7 +1566,7 @@ fn fail_if_default_current_target_is_not_active_path(
     Err(BlockedRelease {
         blocker_code: "release_install_active_path_mismatch",
         next_action: format!(
-            "Default `--target current` would install `{}` but the first `vida` on PATH is `{}`; put current/bin first on PATH or rerun `vida release install --target path --json` to update the active PATH binary.",
+            "Default `--target current` would install `{}` but the first `vida` on PATH is `{}`; put current/bin first on PATH and remove the non-canonical `vida` binary.",
             current_path.display(),
             active_path.display()
         ),
@@ -1603,7 +1595,7 @@ fn companion_runtime_install_target_paths(
     install_root: Option<&Path>,
 ) -> Result<Vec<(String, PathBuf)>, BlockedRelease> {
     match requested_target {
-        "current" | "cur" | "all" | "local" | "cargo" => {
+        "current" | "cur" | "all" | "local" | "cargo" | "path" => {
             let root = release_install_root(install_root).ok_or_else(unresolved_install_target)?;
             Ok(vec![(
                 "current:vida-pi-agent".to_string(),
@@ -1612,7 +1604,6 @@ fn companion_runtime_install_target_paths(
                     .join(pi_agent_binary_file_name()),
             )])
         }
-        "path" => Ok(Vec::new()),
         _ => Ok(Vec::new()),
     }
 }
@@ -2081,8 +2072,8 @@ mod tests {
         assert!(help.contains("--skip-build"));
         assert!(help.contains("--status"));
         assert!(help.contains("--target"));
-        assert!(help.contains("Install target: current, cur, or path."));
-        assert!(help.contains("Legacy all/local/cargo aliases resolve to current."));
+        assert!(help.contains("Install target: current or cur."));
+        assert!(help.contains("Legacy all/local/cargo/path aliases resolve to current."));
         assert!(help.contains("--source-binary"));
         assert!(help.contains("--install-root"));
     }
@@ -2149,7 +2140,7 @@ mod tests {
             .expect_err("default current target should block when PATH uses another vida");
 
         assert_eq!(blocked.blocker_code, "release_install_active_path_mismatch");
-        assert!(blocked.next_action.contains("--target path"));
+        assert!(blocked.next_action.contains("remove the non-canonical"));
         assert!(blocked.next_action.contains("current/bin"));
         assert!(
             blocked
@@ -2197,11 +2188,21 @@ mod tests {
     }
 
     #[test]
-    fn release_install_path_target_does_not_guess_pi_agent_companion_destination() {
-        let paths = companion_runtime_install_target_paths("path", None)
-            .expect("path companion target should be a no-op");
+    fn release_install_path_target_aliases_pi_agent_companion_to_current_destination() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let root = harness.path().join("install-root");
+        let paths = companion_runtime_install_target_paths("path", Some(&root))
+            .expect("legacy path companion target should resolve to canonical current target");
 
-        assert!(paths.is_empty());
+        assert_eq!(
+            paths,
+            vec![(
+                "current:vida-pi-agent".to_string(),
+                root.join("current")
+                    .join("bin")
+                    .join(pi_agent_binary_file_name())
+            )]
+        );
     }
 
     #[test]
@@ -3275,15 +3276,27 @@ mod tests {
         assert_eq!(receipt.blocker_codes, vec!["unsupported_install_target"]);
         assert_eq!(
             receipt.next_actions,
-            vec!["Use `--target current`, `--target cur`, or `--target path`."]
+            vec!["Use `--target current` or `--target cur`."]
         );
         assert_eq!(receipt.io_error, None);
         assert!(receipt.installed_targets.is_empty());
     }
 
     #[test]
-    fn release_install_blocks_unresolved_path_target() {
-        assert_eq!(resolve_vida_from_path_env(None), None);
+    fn release_install_path_target_aliases_to_current_target() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        let root = harness.path().join("install-root");
+
+        let targets = install_target_paths_with_path_env("path", Some(&root), None)
+            .expect("legacy path target should resolve to canonical current target");
+
+        assert_eq!(
+            targets,
+            vec![(
+                "current".to_string(),
+                root.join("current").join("bin").join(vida_binary_file_name())
+            )]
+        );
     }
 
     #[test]

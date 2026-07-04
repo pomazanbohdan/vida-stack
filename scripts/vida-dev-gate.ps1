@@ -148,8 +148,8 @@ function Initialize-WindowsHostEnvironment {
         (Join-Path $env:ProgramFiles "PowerShell\7"),
         "C:\Program Files\Git\cmd",
         "C:\Program Files\Git\bin",
-        (Join-Path $userProfile ".cargo\bin"),
-        (Join-Path $env:LOCALAPPDATA "vida-stack\current\bin")
+        (Join-Path $env:LOCALAPPDATA "vida-stack\current\bin"),
+        (Join-Path $userProfile ".cargo\bin")
     )
     Add-PathEntries $pathEntries
 }

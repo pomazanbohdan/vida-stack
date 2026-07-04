@@ -1575,7 +1575,7 @@ pub(crate) struct ReleaseArgs {
 pub(crate) enum ReleaseCommand {
     #[command(
         about = "build and install target/release/vida to the canonical current/bin target",
-        long_about = "Build and install the VIDA release binary.\n\nBy default this runs `cargo build -p vida --release` and installs the platform release binary to the canonical current/bin target under the VIDA install root. Use `--target path` to update the first `vida` found on PATH. Use `--skip-build` with `--source-binary` and `--install-root` for deterministic smoke tests or controlled local installs."
+        long_about = "Build and install the VIDA release binary.\n\nBy default this runs `cargo build -p vida --release` and installs the platform release binary to the canonical current/bin target under the VIDA install root. Use `--skip-build` with `--source-binary` and `--install-root` for deterministic smoke tests or controlled local installs."
     )]
     Install(ReleaseInstallArgs),
 }
@@ -1585,7 +1585,7 @@ pub(crate) struct ReleaseInstallArgs {
     #[arg(
         long = "target",
         default_value = "current",
-        help = "Install target: current, cur, or path. Legacy all/local/cargo aliases resolve to current."
+        help = "Install target: current or cur. Legacy all/local/cargo/path aliases resolve to current."
     )]
     pub(crate) target: String,
 
@@ -3628,7 +3628,7 @@ pub(crate) struct TaskCloseArgs {
     #[arg(
         long = "install-target",
         default_value = "current",
-        help = "Release install target when --install is set: current or path"
+        help = "Release install target when --install is set: current only; legacy aliases resolve to current"
     )]
     pub(crate) install_target: String,
 

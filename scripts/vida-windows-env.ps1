@@ -232,8 +232,8 @@ function Initialize-VidaWindowsEnvironment {
         (Join-Path $windowsRoot "System32\WindowsPowerShell\v1.0"),
         "C:\Program Files\Git\cmd",
         "C:\Program Files\Git\bin",
-        (Join-Path $userProfile ".cargo\bin"),
-        (Join-Path $env:LOCALAPPDATA "vida-stack\current\bin")
+        (Join-Path $env:LOCALAPPDATA "vida-stack\current\bin"),
+        (Join-Path $userProfile ".cargo\bin")
     )
     Add-VidaPathEntries $pathEntries
 }
