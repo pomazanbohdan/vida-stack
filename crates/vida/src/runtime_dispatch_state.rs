@@ -1234,6 +1234,17 @@ pub(crate) fn resolve_runtime_dispatch_target(
     None
 }
 
+pub(crate) fn normalized_dispatch_target_token(value: &str) -> String {
+    value.trim().replace('-', "_")
+}
+
+pub(crate) fn rework_alias_base_dispatch_target(value: &str) -> Option<String> {
+    normalized_dispatch_target_token(value)
+        .strip_suffix("_rework")
+        .map(str::to_string)
+        .filter(|base| !base.trim().is_empty())
+}
+
 pub(crate) fn backend_policy_dispatch_target_for_resolution(
     resolution: &RuntimeDispatchTargetResolution,
 ) -> &str {
@@ -7599,30 +7610,39 @@ pub(crate) fn lawful_explicit_rework_dispatch_target_for_completed_target(
     ) {
         return Some(target);
     }
-    let target_resolution = resolve_runtime_dispatch_target(execution_plan, explicit_target)?;
     let rework_resolution = resolve_runtime_dispatch_target(execution_plan, rework_target);
     let normalized_rework_target = rework_resolution
         .as_ref()
         .map(|resolution| resolution.dispatch_target.as_str())
         .unwrap_or(rework_target)
-        .trim()
-        .replace('-', "_");
+        .to_string();
+    let normalized_rework_target = normalized_dispatch_target_token(&normalized_rework_target);
     if normalized_rework_target.is_empty() {
         return None;
     }
-    let target = target_resolution.dispatch_target.trim().replace('-', "_");
-    let target_lane = target_resolution
-        .lane_id
-        .as_deref()
-        .map(|lane_id| lane_id.trim().replace('-', "_"));
     let rework_lane = format!("{normalized_rework_target}_rework");
-    if target == normalized_rework_target
-        || target == rework_lane
-        || target_lane.as_deref() == Some(rework_lane.as_str())
+    if let Some(target_resolution) =
+        resolve_runtime_dispatch_target(execution_plan, explicit_target)
     {
-        return Some(target_resolution.dispatch_target);
+        let target = normalized_dispatch_target_token(&target_resolution.dispatch_target);
+        let target_lane = target_resolution
+            .lane_id
+            .as_deref()
+            .map(normalized_dispatch_target_token);
+        if target == normalized_rework_target
+            || target == rework_lane
+            || target_lane.as_deref() == Some(rework_lane.as_str())
+        {
+            return Some(target_resolution.dispatch_target);
+        }
     }
-    None
+    let alias_base = rework_alias_base_dispatch_target(explicit_target)?;
+    if alias_base != normalized_rework_target {
+        return None;
+    }
+    let base_resolution = rework_resolution
+        .or_else(|| resolve_runtime_dispatch_target(execution_plan, alias_base.as_str()))?;
+    Some(base_resolution.dispatch_target)
 }
 
 pub(crate) fn canonical_terminal_closure_dispatch_target(value: &str) -> Option<&'static str> {
@@ -9125,6 +9145,60 @@ mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    fn rework_alias_execution_plan() -> serde_json::Value {
+        json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": [
+                        "alpha_impl",
+                        "beta_gate",
+                        "gamma_verify"
+                    ],
+                    "lane_catalog": {
+                        "alpha_impl": {
+                            "dispatch_target": "alpha_impl",
+                            "task_class": "implementation"
+                        },
+                        "beta_gate": {
+                            "dispatch_target": "beta_gate",
+                            "task_class": "quality_gate"
+                        },
+                        "gamma_verify": {
+                            "dispatch_target": "gamma_verify",
+                            "task_class": "verification"
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn lawful_explicit_rework_dispatch_target_accepts_synthetic_base_alias() {
+        let target = lawful_explicit_rework_dispatch_target_for_completed_target(
+            &rework_alias_execution_plan(),
+            "beta_gate",
+            None,
+            "alpha_impl_rework",
+            "alpha_impl",
+        );
+
+        assert_eq!(target.as_deref(), Some("alpha_impl"));
+    }
+
+    #[test]
+    fn lawful_explicit_rework_dispatch_target_rejects_mismatched_synthetic_alias() {
+        let target = lawful_explicit_rework_dispatch_target_for_completed_target(
+            &rework_alias_execution_plan(),
+            "beta_gate",
+            None,
+            "omega_impl_rework",
+            "alpha_impl",
+        );
+
+        assert!(target.is_none());
+    }
 
     #[test]
     fn packet_handoff_task_class_prefers_configured_lane_task_class() {

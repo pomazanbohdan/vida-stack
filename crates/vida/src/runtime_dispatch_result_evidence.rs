@@ -482,15 +482,15 @@ mod tests {
         let result = serde_json::json!({
             "status": "blocked",
             "completion_verdict": "blocked",
-            "rework_target": "developer",
-            "allowed_next_node": "developer-rework",
+            "rework_target": "alpha_impl",
+            "allowed_next_node": "alpha-impl-rework",
             "blocker_codes": ["verification_rework_required"]
         });
 
         let route = dispatch_rework_route_from_result(&result)
             .expect("legacy completion_verdict should produce a rework route");
-        assert_eq!(route.rework_target, "developer");
-        assert_eq!(route.allowed_next_node, "developer_rework");
+        assert_eq!(route.rework_target, "alpha_impl");
+        assert_eq!(route.allowed_next_node, "alpha_impl_rework");
         assert_eq!(
             route.blocker_code.as_deref(),
             Some("verification_rework_required")
@@ -505,15 +505,15 @@ mod tests {
                 "receipt_backed": true,
                 "completion_verdict": "rework_required"
             },
-            "rework_target": "tester",
-            "allowed_next_node": "tester",
+            "rework_target": "gamma_verify",
+            "allowed_next_node": "gamma_verify",
             "blocker_code": "review_rework_required"
         });
 
         let route = dispatch_rework_route_from_result(&result)
             .expect("nested completion_verdict should produce a rework route");
-        assert_eq!(route.rework_target, "tester");
-        assert_eq!(route.allowed_next_node, "tester");
+        assert_eq!(route.rework_target, "gamma_verify");
+        assert_eq!(route.allowed_next_node, "gamma_verify");
         assert_eq!(
             route.blocker_code.as_deref(),
             Some("review_rework_required")
@@ -525,8 +525,8 @@ mod tests {
         let result = serde_json::json!({
             "status": "pass",
             "completion_verdict": "pass",
-            "rework_target": "developer",
-            "allowed_next_node": "developer_rework"
+            "rework_target": "alpha_impl",
+            "allowed_next_node": "alpha_impl_rework"
         });
 
         assert!(dispatch_rework_route_from_result(&result).is_none());
@@ -542,7 +542,7 @@ mod tests {
             "blocker_codes": [],
             "completion_verdict": "pass",
             "rework_target": null,
-            "allowed_next_node": "designer",
+            "allowed_next_node": "gamma_verify",
             "execution_evidence": {
                 "receipt_backed": true,
                 "decision": "rework_required",
@@ -559,11 +559,11 @@ mod tests {
             "development_flow": {
                 "dispatch_contract": {
                     "lane_catalog": {
-                        "developer": {"dispatch_target": "developer", "task_class": "implementation"},
-                        "tester": {"dispatch_target": "tester", "task_class": "verification"},
-                        "release_admin": {"dispatch_target": "release_admin", "task_class": "release"}
+                        "alpha_impl": {"dispatch_target": "alpha_impl", "task_class": "implementation"},
+                        "beta_gate": {"dispatch_target": "beta_gate", "task_class": "quality_gate"},
+                        "omega_release": {"dispatch_target": "omega_release", "task_class": "release"}
                     },
-                    "execution_lane_sequence": ["developer", "tester"]
+                    "execution_lane_sequence": ["alpha_impl", "beta_gate"]
                 }
             }
         })
@@ -579,8 +579,8 @@ mod tests {
             serde_json::json!({
                 "status": "blocked",
                 "completion_verdict": "rework_required",
-                "rework_target": "developer",
-                "allowed_next_node": "developer-rework",
+                "rework_target": "alpha_impl",
+                "allowed_next_node": "alpha-impl-rework",
                 "blocker_code": "verification_rework_required"
             })
             .to_string(),
@@ -589,8 +589,8 @@ mod tests {
 
         let route = dispatch_rework_route_from_result_path(&result_path.display().to_string())
             .expect("bounded regular result json should parse");
-        assert_eq!(route.rework_target, "developer");
-        assert_eq!(route.allowed_next_node, "developer_rework");
+        assert_eq!(route.rework_target, "alpha_impl");
+        assert_eq!(route.allowed_next_node, "alpha_impl_rework");
         assert_eq!(
             route.blocker_code.as_deref(),
             Some("verification_rework_required")
@@ -649,14 +649,14 @@ mod tests {
     #[test]
     fn rework_route_authorization_accepts_configured_backward_rework_edge() {
         let route = DispatchReworkRoute {
-            rework_target: "developer".to_string(),
-            allowed_next_node: "developer_rework".to_string(),
+            rework_target: "alpha_impl".to_string(),
+            allowed_next_node: "alpha_impl_rework".to_string(),
             blocker_code: Some("verification_rework_required".to_string()),
         };
 
         assert!(rework_route_is_authorized(
             &execution_plan(),
-            "tester",
+            "beta_gate",
             &route
         ));
     }
@@ -664,24 +664,24 @@ mod tests {
     #[test]
     fn rework_route_authorization_rejects_artifact_controlled_unknown_or_unsequenced_lane() {
         let unknown = DispatchReworkRoute {
-            rework_target: "developer".to_string(),
-            allowed_next_node: "release_admin".to_string(),
+            rework_target: "alpha_impl".to_string(),
+            allowed_next_node: "omega_release".to_string(),
             blocker_code: Some("verification_rework_required".to_string()),
         };
         let unsequenced_target = DispatchReworkRoute {
-            rework_target: "release_admin".to_string(),
-            allowed_next_node: "release_admin".to_string(),
+            rework_target: "omega_release".to_string(),
+            allowed_next_node: "omega_release".to_string(),
             blocker_code: Some("verification_rework_required".to_string()),
         };
 
         assert!(!rework_route_is_authorized(
             &execution_plan(),
-            "tester",
+            "beta_gate",
             &unknown
         ));
         assert!(!rework_route_is_authorized(
             &execution_plan(),
-            "tester",
+            "beta_gate",
             &unsequenced_target
         ));
     }

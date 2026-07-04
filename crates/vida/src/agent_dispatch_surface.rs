@@ -8134,6 +8134,109 @@ mod tests {
     }
 
     #[test]
+    fn host_bridge_result_validate_accepts_config_derived_synthetic_rework_route() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-config-rework-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should be created");
+        let packet_path = root.join("packet.json");
+        std::fs::write(
+            &packet_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "role_selection_full": {
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "execution_lane_sequence": [
+                                    "alpha_impl",
+                                    "beta_gate",
+                                    "gamma_verify"
+                                ],
+                                "lane_catalog": {
+                                    "alpha_impl": {
+                                        "dispatch_target": "alpha_impl",
+                                        "task_class": "implementation"
+                                    },
+                                    "beta_gate": {
+                                        "dispatch_target": "beta_gate",
+                                        "task_class": "quality_gate"
+                                    },
+                                    "gamma_verify": {
+                                        "dispatch_target": "gamma_verify",
+                                        "task_class": "verification"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }))
+            .expect("packet should serialize"),
+        )
+        .expect("packet should write");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-config-rework",
+            "run_id": "run-config-rework",
+            "task_id": "task-config-rework",
+            "dispatch_target": "beta_gate",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": "host-tool-bridge/requests/request.json",
+            "result_path": "host-tool-bridge/results/result.json",
+            "receipt_path": "host-tool-bridge/receipts/receipt.json",
+            "allowed_next_node": "gamma_verify"
+        });
+        let result = serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "schema_version": 1,
+            "status": "blocked",
+            "execution_state": "blocked",
+            "request_id": "req-config-rework",
+            "run_id": "run-config-rework",
+            "dispatch_target": "beta_gate",
+            "decision": "rework_required",
+            "verdict": "rework_required",
+            "completion_verdict": "rework_required",
+            "blocker_codes": ["quality_gate_rework_required"],
+            "rework_target": "alpha_impl",
+            "allowed_next_node": "alpha_impl_rework",
+            "execution_evidence": {
+                "receipt_backed": true
+            },
+            "source_dispatch_packet_path": packet_path.display().to_string()
+        });
+
+        let payload = super::validate_host_bridge_result_dry_run(
+            std::path::Path::new("request.json"),
+            &request,
+            std::path::Path::new("result.json"),
+            &result,
+        );
+
+        assert_eq!(payload["status"], super::release1_pass_status());
+        assert!(!payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "invalid_allowed_next_node_for_execution_plan"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn host_bridge_result_validate_rejects_synthetic_rework_route_mismatch() {
         let (root, mut request, mut result) =
             host_bridge_rework_backedge_request_and_result("blocked");
