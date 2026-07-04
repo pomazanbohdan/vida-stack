@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "release-install-status", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke", "nextest-summary-smoke")]
+    [ValidateSet("script-check", "quick", "scoped-format", "focused-nextest", "package-nextest", "workspace-nextest", "doc-test", "build-debug", "runtime-smoke", "coverage", "release-package", "release-install", "release-install-status", "target-dir-policy", "proof-scheduler", "invoke-timed-argv-smoke", "nextest-summary-smoke", "compact-cargo-test-smoke")]
     [string]$Mode = "quick",
     [string]$Package = "vida",
     [string]$TestFilter = "",
@@ -272,6 +272,8 @@ Modes:
                     Non-build summary of latest release-install artifacts, progress, and installed status.
   target-dir-policy Print the effective Cargo target directory policy.
   proof-scheduler   Run proof command snippets: non-Cargo in parallel, Cargo-like sequentially.
+  compact-cargo-test-smoke
+                    Synthetic cargo test proof that verifies compact default output and raw artifact retention.
 
 Notes:
   Cargo modes set CARGO_TARGET_DIR unless the caller already provided it.
@@ -451,6 +453,69 @@ function Test-CommandCanInvokeCargo {
         $joined.Contains("vida release install")
 }
 
+function Test-CompactProofOutputCommand {
+    param([string[]]$Command)
+
+    if ($Command.Count -eq 0) {
+        return $false
+    }
+    $joined = ($Command -join " ").Trim().ToLowerInvariant()
+    $exe = [System.IO.Path]::GetFileNameWithoutExtension($Command[0]).ToLowerInvariant()
+    return ($exe -eq "cargo" -and $Command.Count -ge 2 -and $Command[1] -eq "test") -or
+        ($exe -eq "cargo" -and $Command.Count -ge 3 -and $Command[1] -eq "nextest" -and $Command[2] -eq "run") -or
+        ($exe -eq "cargo-nextest") -or
+        ($joined -match '(^|[\s;&|])cargo(\.exe)?\s+test\s') -or
+        ($joined -match '(^|[\s;&|])cargo(\.exe)?\s+nextest\s+run\s') -or
+        ($joined -match '(^|[\s;&|])cargo-nextest(\.exe)?\s')
+}
+
+function New-CompactTestOutputSummary {
+    param(
+        [string]$OperationId,
+        [string[]]$Command,
+        [int]$ExitCode,
+        [string]$StdoutPath,
+        [string]$StderrPath
+    )
+
+    $lines = @()
+    $lines += Read-TextFileLinesSafe -Path $StdoutPath
+    $lines += Read-TextFileLinesSafe -Path $StderrPath
+    $passedCount = Get-FirstRegexInt -Lines $lines -Pattern '(?<passed>\d+)\s+passed' -GroupName "passed"
+    $failedCount = Get-FirstRegexInt -Lines $lines -Pattern '(?<failed>\d+)\s+failed' -GroupName "failed"
+    $ignoredCount = Get-FirstRegexInt -Lines $lines -Pattern '(?<ignored>\d+)\s+ignored' -GroupName "ignored"
+    $filteredCount = Get-FirstRegexInt -Lines $lines -Pattern '(?<filtered>\d+)\s+filtered out' -GroupName "filtered"
+    if ($null -eq $failedCount) {
+        $failedCount = 0
+    }
+    return [pscustomobject]@{
+        operation_id = $OperationId
+        command_or_surface = ($Command -join " ")
+        status = $(if ($ExitCode -eq 0 -and $failedCount -eq 0) { "pass" } else { "fail" })
+        passed_count = $passedCount
+        failed_count = $failedCount
+        ignored_count = $ignoredCount
+        filtered_out_count = $filteredCount
+        full_log_artifact_paths = @($StdoutPath, $StderrPath)
+    }
+}
+
+function Write-CompactProofOutput {
+    param(
+        [string]$OperationId,
+        [object]$Summary,
+        [string[]]$ArtifactRefs
+    )
+
+    $passed = if ($null -eq $Summary.passed_count) { "unknown" } else { $Summary.passed_count }
+    $failed = if ($null -eq $Summary.failed_count) { "unknown" } else { $Summary.failed_count }
+    $ignored = if ($null -eq $Summary.ignored_count) { "unknown" } else { $Summary.ignored_count }
+    Write-Output ("[{0}] {1} passed={2} failed={3} ignored={4}" -f $Summary.status, $OperationId, $passed, $failed, $ignored)
+    foreach ($artifact in $ArtifactRefs) {
+        Write-Output ("artifact: {0}" -f $artifact)
+    }
+}
+
 function New-CargoTimingContract {
     param(
         [string[]]$Command,
@@ -529,7 +594,8 @@ function Invoke-Timed {
         if ($null -eq $exitCode) {
             $exitCode = 0
         }
-        if (-not $Json -and $exitCode -eq 0) {
+        $compactProofOutput = Test-CompactProofOutputCommand -Command $Command
+        if (-not $Json -and $exitCode -eq 0 -and -not $compactProofOutput) {
             if ((Test-Path -LiteralPath $stdoutPath) -and (Get-Item -LiteralPath $stdoutPath).Length -gt 0) {
                 Get-Content -LiteralPath $stdoutPath -Encoding UTF8 | ForEach-Object { Write-Output $_ }
             }
@@ -582,6 +648,25 @@ function Invoke-Timed {
                 $artifactRefs += $nextestSummary.summary_artifact_path
                 $record.artifact_refs = $artifactRefs
                 $record | Add-Member -NotePropertyName "nextest_summary" -NotePropertyValue $nextestSummary.summary
+            }
+        }
+        if ($compactProofOutput) {
+            $compactSummary = if ($null -ne $nextestSummary) {
+                $nextestSummary.summary
+            } else {
+                New-CompactTestOutputSummary `
+                    -OperationId $OperationId `
+                    -Command $Command `
+                    -ExitCode $exitCode `
+                    -StdoutPath $stdoutPath `
+                    -StderrPath $stderrPath
+            }
+            $record | Add-Member -NotePropertyName "compact_test_summary" -NotePropertyValue $compactSummary
+            if (-not $Json -and $exitCode -eq 0) {
+                Write-CompactProofOutput `
+                    -OperationId $OperationId `
+                    -Summary $compactSummary `
+                    -ArtifactRefs $artifactRefs
             }
         }
         $Records.Add($record)
@@ -1613,6 +1698,34 @@ function Invoke-NextestSummarySmoke {
     })
 }
 
+function Invoke-CompactCargoTestSmoke {
+    $logDir = Join-Path $RootDir ".vida\data\state\command-timing"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $stubDir = Join-Path $logDir "compact-cargo-test-smoke"
+    New-Item -ItemType Directory -Force -Path $stubDir | Out-Null
+    $cargoStub = Join-Path $stubDir "cargo.cmd"
+    Set-Content -LiteralPath $cargoStub -Encoding ASCII -Value @'
+@echo off
+echo running 1 test
+echo test noisy::case ... ok
+echo test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 37 filtered out; finished in 0.01s
+'@
+
+    Invoke-Timed "compact-cargo-test-smoke" @($cargoStub, "test", "-p", "vida", "--", "--nocapture")
+    $record = $Records[$Records.Count - 1]
+    if ($null -eq $record.compact_test_summary) {
+        throw "compact cargo test smoke failed: compact_test_summary was missing."
+    }
+    if ($record.compact_test_summary.passed_count -ne 1 -or $record.compact_test_summary.failed_count -ne 0) {
+        throw "compact cargo test smoke failed: expected 1 passed and 0 failed."
+    }
+    $stdoutPath = $record.artifact_refs[0]
+    $raw = Get-Content -LiteralPath $stdoutPath -Encoding UTF8 -Raw
+    if ($raw -notmatch "37 filtered out") {
+        throw "compact cargo test smoke failed: raw stdout artifact did not retain noisy output."
+    }
+}
+
 function Get-ChangedRustSourceFiles {
     $paths = New-Object System.Collections.Generic.SortedSet[string]
     foreach ($path in (Get-GitPorcelainPaths)) {
@@ -1926,6 +2039,8 @@ exit 3
         Remove-Item -LiteralPath $retryProbePath, $retryMarkerPath, $statusFailProbePath -Force -ErrorAction SilentlyContinue
     } elseif ($Mode -eq "nextest-summary-smoke") {
         Invoke-NextestSummarySmoke
+    } elseif ($Mode -eq "compact-cargo-test-smoke") {
+        Invoke-CompactCargoTestSmoke
     } elseif ($Mode -eq "script-check") {
         Invoke-DiffWhitespaceCheck
         Invoke-RootReadmeOnlyCheck
