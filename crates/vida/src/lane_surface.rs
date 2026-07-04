@@ -4572,7 +4572,6 @@ fn materialize_host_bridge_completion_evidence(
     let submitted_result_already_materialized =
         supplied_result_path_matches_request_output(state_root, &request, supplied_result_path)?;
     let retry_override_has_routable_blocked_completion = retry_completion_override
-        && host_bridge_completion_request_required(persisted_receipt)
         && allowed_next_node
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -17603,7 +17602,7 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_completion_retry_replaces_receipt_for_blocked_result_with_next_node() {
+    fn host_bridge_completion_retry_replaces_stale_blocked_receipt_for_result_with_next_node() {
         let _guard = acquire_lane_surface_test_lock();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -17678,7 +17677,7 @@ mod tests {
             .to_string(),
         )
         .expect("write activation result");
-        let mut receipt = sample_receipt("bridge_request_pending");
+        let mut receipt = sample_receipt("blocked");
         receipt.run_id = "run-retry-blocked-next".to_string();
         receipt.dispatch_target = "alpha_gate".to_string();
         receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
