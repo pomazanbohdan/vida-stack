@@ -4286,9 +4286,11 @@ fn parse_task_steps_since(value: &str) -> Result<std::time::Duration, String> {
     let amount = number
         .parse::<u64>()
         .map_err(|_| format!("unsupported --since value: {value}"))?;
-    Ok(std::time::Duration::from_secs(
-        amount.saturating_mul(multiplier),
-    ))
+    let seconds = amount
+        .checked_mul(multiplier)
+        .filter(|seconds| *seconds <= i64::MAX as u64)
+        .ok_or_else(|| format!("--since value is too large: {value}"))?;
+    Ok(std::time::Duration::from_secs(seconds))
 }
 
 fn task_step_timestamp(value: &str) -> Option<i64> {
