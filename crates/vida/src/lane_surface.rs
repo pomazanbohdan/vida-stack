@@ -4604,8 +4604,7 @@ fn materialize_host_bridge_completion_evidence(
             .into_iter()
             .flatten()
             .map(str::trim)
-            .any(host_bridge_completion_result_value_is_rework_alias)
-        && supplied_blocker_codes.is_empty();
+            .any(host_bridge_completion_result_value_is_rework_alias);
     let retryable_completion_request = retry_override_has_routable_rework
         || host_bridge_request_has_retryable_completion_evidence(state_root, request_path)
         || host_bridge_persisted_receipt_has_retryable_completion_evidence(persisted_receipt);
@@ -17340,6 +17339,117 @@ mod tests {
         );
         assert!(!result_path.exists());
         assert!(!receipt_path.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_completion_retry_accepts_routable_rework_with_blocker_codes() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-retry-rework-blockers-{}-{nanos}",
+            std::process::id()
+        ));
+        let request_path = root.join("host-tool-bridge/requests/run-rework-blockers.json");
+        let result_path = root.join("host-tool-bridge/results/run-rework-blockers.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/run-rework-blockers.json");
+        let packet_path =
+            root.join("runtime-consumption/downstream-dispatch-packets/run-rework-blockers.json");
+        for path in [&request_path, &result_path, &receipt_path, &packet_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-rework-blockers",
+                "dispatch_target": "alpha_gate"
+            })
+            .to_string(),
+        )
+        .expect("write packet");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "blocked",
+                "request_id": "run-rework-blockers",
+                "run_id": "run-rework-blockers",
+                "dispatch_target": "alpha_gate",
+                "packet_path": packet_path.display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/run-rework-blockers-activation.json");
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation parent");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "packet_path": packet_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = "run-rework-blockers".to_string();
+        receipt.dispatch_target = "alpha_gate".to_string();
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+
+        let evidence = materialize_host_bridge_completion_evidence(
+            &root,
+            request_path.to_str().expect("utf8 request path"),
+            None,
+            "run-rework-blockers",
+            "alpha_gate",
+            &receipt,
+            "receipt-rework-blockers",
+            Some("agent-1"),
+            Some("rework required"),
+            Some("beta_rework"),
+            None,
+            Some("rework_required"),
+            Some("rework_required"),
+            Some("beta"),
+            &["proof_failed".to_string()],
+            true,
+            true,
+            HostBridgeTaskflowImplementationEvidence::default(),
+            &[],
+            false,
+            false,
+            true,
+            false,
+        )
+        .expect("routable rework with blocker codes should retry blocked request completion");
+
+        assert_eq!(evidence.result_path, result_path.display().to_string());
+        let result = read_host_bridge_json_artifact_at_path(&result_path).expect("read result");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["allowed_next_node"], "beta_rework");
+        assert!(result["blocker_codes"]
+            .as_array()
+            .expect("blocker codes")
+            .iter()
+            .any(|code| code == "proof_failed"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
