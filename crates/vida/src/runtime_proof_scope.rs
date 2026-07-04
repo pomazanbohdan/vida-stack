@@ -111,16 +111,16 @@ pub(crate) fn proof_scope_from_planner_metadata_and_text(
 ) -> ProofArtifactScope {
     let mut scope = ProofArtifactScope::default();
     for field in EXPLICIT_PROOF_PATH_FIELDS {
-        if let Some(value) =
-            execution_plan.pointer(&format!("/tracked_flow_bootstrap/dev_task/planner_metadata/{field}"))
-        {
+        if let Some(value) = execution_plan.pointer(&format!(
+            "/tracked_flow_bootstrap/dev_task/planner_metadata/{field}"
+        )) {
             collect_explicit_proof_paths(&mut scope.paths, value);
         }
     }
     for field in TEXT_PROOF_FIELDS {
-        if let Some(value) =
-            execution_plan.pointer(&format!("/tracked_flow_bootstrap/dev_task/planner_metadata/{field}"))
-        {
+        if let Some(value) = execution_plan.pointer(&format!(
+            "/tracked_flow_bootstrap/dev_task/planner_metadata/{field}"
+        )) {
             scope.proof_intent_present = true;
             collect_test_like_proof_paths_from_value(&mut scope.paths, value);
         }
@@ -187,12 +187,55 @@ fn push_unique_proof_artifact_path(paths: &mut Vec<String>, value: &str) {
         .trim()
         .trim_matches(|ch: char| matches!(ch, '\'' | '"' | ':' | ')' | '(' | '[' | ']'))
         .replace('\\', "/");
-    if normalized.is_empty() || !(normalized.contains('/') || normalized.contains('\\')) {
+    if !proof_artifact_path_is_safe(&normalized) {
         return;
     }
     if !paths.iter().any(|path| path == &normalized) {
         paths.push(normalized);
     }
+}
+
+fn proof_artifact_path_is_safe(path: &str) -> bool {
+    let path = path.trim();
+    if path.is_empty()
+        || path == "."
+        || path == ".."
+        || path == "/"
+        || path.starts_with('/')
+        || path.starts_with(".vida/")
+        || path == ".vida"
+        || path.starts_with("~/")
+        || path.starts_with("//")
+        || path.ends_with('/')
+        || !path.contains('/')
+    {
+        return false;
+    }
+    if path.len() >= 2 && path.as_bytes()[1] == b':' && path.as_bytes()[0].is_ascii_alphabetic() {
+        return false;
+    }
+    let components = path.split('/').collect::<Vec<_>>();
+    if components
+        .iter()
+        .any(|component| component.is_empty() || *component == "." || *component == "..")
+    {
+        return false;
+    }
+    proof_artifact_components_have_proof_context(&components)
+}
+
+fn proof_artifact_components_have_proof_context(components: &[&str]) -> bool {
+    components.iter().any(|component| {
+        matches!(
+            *component,
+            "test" | "tests" | "__tests__" | "spec" | "specs" | "proof" | "proofs"
+        ) || component.ends_with("_test.rs")
+            || component.ends_with("_test.dart")
+            || component.ends_with(".test.ts")
+            || component.ends_with(".test.tsx")
+            || component.ends_with(".spec.ts")
+            || component.ends_with(".spec.tsx")
+    })
 }
 
 fn value_path_tokens(value: &str) -> impl Iterator<Item = &str> {
@@ -241,7 +284,42 @@ mod tests {
             }
         });
         let scope = proof_scope_from_dispatch_packet(&packet);
-        assert_eq!(scope.paths, vec!["src/test/a_test.dart", "src/test/b_test.dart"]);
+        assert_eq!(
+            scope.paths,
+            vec!["src/test/a_test.dart", "src/test/b_test.dart"]
+        );
+        assert!(scope.proof_intent_present);
+    }
+
+    #[test]
+    fn proof_scope_rejects_scope_expanding_paths() {
+        let packet = serde_json::json!({
+            "proof_artifact_paths": [
+                "../..",
+                "/",
+                "/etc/passwd",
+                ".vida/data/state",
+                "C:/Windows",
+                "crates/vida",
+                "tests/",
+                "src/test/safe_model_test.dart"
+            ],
+            "delivery_task_packet": {
+                "verification_commands": [
+                    "flutter test ../../escape_test.dart src/test/command_safe_test.dart"
+                ]
+            }
+        });
+
+        let scope = proof_scope_from_dispatch_packet(&packet);
+
+        assert_eq!(
+            scope.paths,
+            vec![
+                "src/test/command_safe_test.dart",
+                "src/test/safe_model_test.dart"
+            ]
+        );
         assert!(scope.proof_intent_present);
     }
 

@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use runtime_path_policy::{ArtifactPathKind, StateRoot, existing_regular_file_under_root};
+use runtime_path_policy::{existing_regular_file_under_root, ArtifactPathKind, StateRoot};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -132,9 +132,8 @@ pub fn host_bridge_request_string<'a>(request: &'a Value, field: &str) -> Option
 }
 
 pub fn host_bridge_request_task_class(request: &Value) -> Option<&str> {
-    host_bridge_request_string(request, "task_class").or_else(|| {
-        find_host_bridge_request_string(request, &["handoff_task_class", "task_class"])
-    })
+    host_bridge_request_string(request, "task_class")
+        .or_else(|| find_host_bridge_request_string(request, &["handoff_task_class", "task_class"]))
 }
 
 fn find_host_bridge_request_string<'a>(value: &'a Value, fields: &[&str]) -> Option<&'a str> {
@@ -221,6 +220,59 @@ pub fn host_bridge_path_array(value: &Value, field: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+fn proof_artifact_path_is_safe(path: &Path) -> bool {
+    let normalized = path.display().to_string().replace('\\', "/");
+    if normalized.is_empty()
+        || normalized == "."
+        || normalized == ".."
+        || normalized == "/"
+        || normalized.starts_with('/')
+        || normalized.starts_with(".vida/")
+        || normalized == ".vida"
+        || normalized.starts_with("~/")
+        || normalized.starts_with("//")
+        || normalized.ends_with('/')
+        || !normalized.contains('/')
+    {
+        return false;
+    }
+    if normalized.len() >= 2
+        && normalized.as_bytes()[1] == b':'
+        && normalized.as_bytes()[0].is_ascii_alphabetic()
+    {
+        return false;
+    }
+    let components = normalized.split('/').collect::<Vec<_>>();
+    if components
+        .iter()
+        .any(|component| component.is_empty() || *component == "." || *component == "..")
+    {
+        return false;
+    }
+    proof_artifact_components_have_proof_context(&components)
+}
+
+fn proof_artifact_components_have_proof_context(components: &[&str]) -> bool {
+    components.iter().any(|component| {
+        matches!(
+            *component,
+            "test" | "tests" | "__tests__" | "spec" | "specs" | "proof" | "proofs"
+        ) || component.ends_with("_test.rs")
+            || component.ends_with("_test.dart")
+            || component.ends_with(".test.ts")
+            || component.ends_with(".test.tsx")
+            || component.ends_with(".spec.ts")
+            || component.ends_with(".spec.tsx")
+    })
+}
+
+pub fn host_bridge_proof_artifact_path_array(value: &Value, field: &str) -> Vec<PathBuf> {
+    host_bridge_path_array(value, field)
+        .into_iter()
+        .filter(|path| proof_artifact_path_is_safe(path))
+        .collect()
+}
+
 pub fn host_bridge_request_owned_paths(request: &Value) -> Vec<PathBuf> {
     let mut owned_paths = host_bridge_path_array(request, "owned_paths");
     if owned_paths.is_empty() {
@@ -239,7 +291,7 @@ pub fn host_bridge_request_proof_artifact_paths(request: &Value) -> Vec<PathBuf>
         "test_owned_paths",
         "proof_owned_paths",
     ] {
-        let paths = host_bridge_path_array(request, field);
+        let paths = host_bridge_proof_artifact_path_array(request, field);
         if !paths.is_empty() {
             return paths;
         }
@@ -252,7 +304,7 @@ pub fn host_bridge_request_proof_artifact_paths(request: &Value) -> Vec<PathBuf>
             "test_owned_paths",
             "proof_owned_paths",
         ] {
-            let paths = host_bridge_path_array(implementation_isolation, field);
+            let paths = host_bridge_proof_artifact_path_array(implementation_isolation, field);
             if !paths.is_empty() {
                 return paths;
             }
@@ -489,6 +541,29 @@ mod tests {
     }
 
     #[test]
+    fn request_proof_artifact_paths_reject_scope_expanding_paths() {
+        let request = serde_json::json!({
+            "proof_artifact_paths": [
+                "../..",
+                "/",
+                "/etc/passwd",
+                ".vida/data/state",
+                "C:/Windows",
+                "crates/vida",
+                "tests/",
+                "src/test/features/list_view/domain/model_test.dart"
+            ]
+        });
+
+        assert_eq!(
+            host_bridge_request_proof_artifact_paths(&request),
+            vec![PathBuf::from(
+                "src/test/features/list_view/domain/model_test.dart"
+            )]
+        );
+    }
+
+    #[test]
     fn request_proof_artifact_paths_fall_back_to_isolation_scope() {
         let request = serde_json::json!({
             "implementation_isolation": {
@@ -605,7 +680,10 @@ mod tests {
             }
         });
 
-        assert_eq!(host_bridge_request_task_class(&request), Some("implementation"));
+        assert_eq!(
+            host_bridge_request_task_class(&request),
+            Some("implementation")
+        );
     }
 
     #[test]
