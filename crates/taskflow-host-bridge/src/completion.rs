@@ -486,12 +486,9 @@ pub fn host_bridge_request_requires_implementation_artifacts(
 #[must_use]
 pub fn host_bridge_request_has_implementation_artifact_contract(request: &Value) -> bool {
     request
-        .get("implementation_isolation")
-        .is_some_and(Value::is_object)
-        || request
-            .get("implementation_artifacts")
-            .and_then(Value::as_array)
-            .is_some_and(|rows| !rows.is_empty())
+        .get("implementation_artifacts")
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty())
 }
 
 #[must_use]
@@ -1084,19 +1081,41 @@ mod tests {
     }
 
     #[test]
-    fn implementation_scope_contract_requires_artifact_validation_without_top_level_task_class() {
+    fn attached_implementation_artifacts_require_validation_without_top_level_task_class() {
         let request = serde_json::json!({
             "dispatch_target": "alpha_impl",
-            "implementation_isolation": {
-                "artifact_contract": "stage_attempt_implementation_artifact_v1",
-                "owned_paths": ["src/lib"]
-            }
+            "implementation_artifacts": [{
+                "artifact_kind": "patch_proposal",
+                "changed_files": ["src/lib/mod.rs"]
+            }]
         });
 
-        assert!(host_bridge_request_effectively_requires_implementation_artifacts(
-            &request,
-            "alpha_impl"
-        ));
+        assert!(
+            host_bridge_request_effectively_requires_implementation_artifacts(
+                &request,
+                "alpha_impl"
+            )
+        );
+    }
+
+    #[test]
+    fn verifier_isolation_contract_alone_does_not_require_implementation_artifacts() {
+        let request = serde_json::json!({
+            "dispatch_target": "alpha_review",
+            "task_class": "verification",
+            "implementation_isolation": {
+                "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                "owned_paths": ["tests/review_contract.rs"]
+            },
+            "implementation_artifacts": []
+        });
+
+        assert!(
+            !host_bridge_request_effectively_requires_implementation_artifacts(
+                &request,
+                "alpha_review"
+            )
+        );
     }
 
     #[test]

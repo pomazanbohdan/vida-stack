@@ -3558,6 +3558,95 @@ fn host_bridge_public_cli_retries_retryable_blocked_request_after_attempt_artifa
 }
 
 #[test]
+fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() {
+    let fixture = create_host_bridge_lane_fixture_for_target(
+        "host-bridge-blocked-contract-retry",
+        "crates/vida/src/lib.rs",
+        "coach",
+    );
+    let mut request: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&fixture.request_path).expect("request should exist"),
+    )
+    .expect("request should parse");
+    request["status"] = serde_json::json!("blocked");
+    request["request_status"] = serde_json::json!("blocked");
+    request["blocked_result_contract"] = serde_json::json!({
+        "status": "blocked",
+        "decision": "rework_required",
+        "verdict": "rework_required",
+        "allowed_next_node": "developer_rework",
+        "rework_target": "developer",
+        "blocker_codes": ["coach_rework_required"]
+    });
+    std::fs::write(
+        &fixture.request_path,
+        serde_json::to_string_pretty(&request).expect("request should serialize"),
+    )
+    .expect("request should write");
+
+    std::fs::write(
+        &fixture.result_path,
+        serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "status": "blocked",
+            "execution_state": "blocked",
+            "request_id": "host-bridge-blocked-contract-retry",
+            "run_id": &fixture.run_id,
+            "dispatch_target": "coach",
+            "source_dispatch_packet_path": fixture.request_path.clone(),
+            "decision": "rework_required",
+            "verdict": "rework_required",
+            "blocker_codes": ["coach_rework_required"],
+            "rework_target": "developer",
+            "allowed_next_node": "developer_rework",
+            "execution_evidence": {
+                "receipt_backed": true
+            }
+        })
+        .to_string(),
+    )
+    .expect("rework bridge result should write");
+
+    let output = vida()
+        .args([
+            "agent",
+            "host-bridge",
+            "--request",
+            &fixture.request_path,
+            "--retry-completion",
+            "--host-agent-id",
+            "agent-blocked-contract-retry-proof",
+            "--submit-result",
+            &fixture.result_path,
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("agent host-bridge contract retry should run");
+    assert_success(
+        &output,
+        "agent host-bridge retry after blocked result contract",
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("agent host-bridge json should parse");
+    assert_eq!(payload["surface"], "vida lane");
+    assert!(!payload["blocker_codes"]
+        .as_array()
+        .expect("blocker codes should render")
+        .iter()
+        .any(|code| code.as_str() == Some("host_bridge_request_not_pending")));
+    let result_path = payload["artifact_refs"]["host_bridge_result_path"]
+        .as_str()
+        .expect("host bridge result path should be present");
+    let result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(result_path).expect("host bridge result should be readable"),
+    )
+    .expect("host bridge result should parse");
+    assert_eq!(result["allowed_next_node"], "developer_rework");
+}
+
+#[test]
 fn host_bridge_public_cli_fails_closed_when_receipt_target_differs_from_request_target() {
     let fixture =
         create_host_bridge_lane_fixture("host-bridge-stale-receipt", "crates/vida/src/lib.rs");
