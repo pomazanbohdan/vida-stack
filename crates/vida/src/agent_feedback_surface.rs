@@ -2689,6 +2689,36 @@ mod tests {
     }
 
     #[test]
+    fn close_feedback_inference_ignores_zero_count_failure_and_blocker_fields() {
+        let reason = "Closed cleanup proof with failed_count=0, blocked_count=0, blocker_codes=[], and proof commands passed.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["outcome"], "success");
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn close_feedback_inference_preserves_positive_count_failure_fields() {
+        let reason = "Close blocked because failed_count=1 and blocker_codes=[proof_failed].";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "failure");
+        assert_eq!(score, 35);
+        assert_eq!(inference["outcome"], "failure");
+        assert!(inference["failure_markers"]
+            .as_array()
+            .expect("failure markers should render")
+            .iter()
+            .any(|marker| marker == "blocked" || marker == "failed"));
+    }
+
+    #[test]
     fn close_feedback_inference_preserves_failed_subprocess_status_reasons() {
         let reason = "Task failed subprocess status 101 while running proofs.";
         let outcome = super::infer_feedback_outcome_from_close_reason(reason);
