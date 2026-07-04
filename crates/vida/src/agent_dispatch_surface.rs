@@ -10,9 +10,8 @@ use crate::dev_team_sequence_contract::{
 };
 use crate::launcher_activation_snapshot::capture_launcher_activation_snapshot_for_root;
 use crate::runtime_proof_scope::{
-    collect_test_like_paths_from_text, collect_test_like_paths_from_values,
-    path_to_proof_scope_string, proof_intent_text, proof_scope_from_container,
-    proof_scope_from_dispatch_packet_path, ProofArtifactScope,
+    collect_test_like_paths_from_text, path_to_proof_scope_string, proof_intent_text,
+    proof_scope_from_container, proof_scope_from_dispatch_packet_path, ProofArtifactScope,
 };
 use crate::{
     state_store, state_store::StateStore, AgentArgs, AgentCommand, AgentDispatchNextArgs,
@@ -2113,9 +2112,9 @@ async fn attach_host_bridge_implementation_artifacts(
     };
     let mut normalized_artifacts = host_bridge_request_implementation_artifacts(&request);
     let owned_paths = host_bridge_task_or_request_owned_paths(&task, &request);
-    let mut proof_artifact_scope =
+    let proof_artifact_scope =
         proof_artifact_scope_from_task_request_or_attempts(&store, &task, &request).await;
-    let mut proof_artifact_paths = proof_artifact_scope
+    let proof_artifact_paths = proof_artifact_scope
         .paths
         .iter()
         .map(PathBuf::from)
@@ -2166,21 +2165,6 @@ async fn attach_host_bridge_implementation_artifacts(
             );
         }
         let changed_file_paths = changed_files.iter().map(PathBuf::from).collect::<Vec<_>>();
-        if proof_artifact_scope.proof_intent_present {
-            proof_artifact_scope
-                .paths
-                .extend(collect_test_like_paths_from_values(
-                    changed_files.iter().map(String::as_str),
-                ));
-            proof_artifact_scope.paths.sort();
-            proof_artifact_scope.paths.dedup();
-            proof_artifact_paths = proof_artifact_scope
-                .paths
-                .iter()
-                .map(PathBuf::from)
-                .collect::<Vec<_>>();
-            refresh_host_bridge_request_proof_artifact_paths(&mut request, &proof_artifact_paths);
-        }
         let scope_decision = validate_implementation_artifact_scope_with_proof_paths(
             &changed_file_paths,
             &owned_paths,
@@ -12436,6 +12420,139 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&request_path).expect("read request"))
                 .expect("request should remain json");
         assert!(unchanged.get("implementation_artifacts").is_none());
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("reopen store");
+        let attempts = store
+            .task_stage_attempts(run_id, "implementation")
+            .await
+            .expect("read implementation attempts");
+        assert!(attempts.is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn host_bridge_attach_artifact_does_not_self_authorize_test_scope_from_changed_files() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-agent-host-bridge-attach-self-proof-scope-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let run_id = "run-host-bridge-attach-self-proof-scope";
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: run_id,
+                title: "Host bridge attach self proof scope",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/taskflow-host-bridge".to_string()],
+                    proof_targets: vec!["cargo test proof gate".to_string()],
+                    ..Default::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+        let request_path = root.join("host-tool-bridge/requests/request.json");
+        let packet_path = root.join("runtime-consumption/downstream-dispatch-packets/run.json");
+        let result_path = root.join("host-tool-bridge/results/result.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/receipt.json");
+        let artifact_path = root.join("attempt-artifacts/patch-proposal.json");
+        for path in [
+            &request_path,
+            &packet_path,
+            &result_path,
+            &receipt_path,
+            &artifact_path,
+        ] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("create artifact parent");
+        }
+        std::fs::write(&packet_path, "{}").expect("write packet");
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "artifact_kind": "patch_proposal",
+                "changed_files": ["crates/vida/tests/agent_dispatch_surface_test.rs"]
+            })
+            .to_string(),
+        )
+        .expect("write artifact");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-attach-self-proof-scope",
+            "run_id": run_id,
+            "dispatch_target": "writer",
+            "task_class": "implementation",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string(),
+            "implementation_isolation": {
+                "owned_paths": ["crates/taskflow-host-bridge"]
+            }
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("write request");
+        drop(store);
+
+        let exit = run_agent_host_bridge(AgentHostBridgeArgs {
+            request: request_path.clone(),
+            attach_artifacts: vec![artifact_path],
+            artifact_kind: "patch_proposal".to_string(),
+            changed_files: Vec::new(),
+            attempt_id: Some("attach-attempt-1".to_string()),
+            consolidation_receipt_id: Some("attach-receipt-1".to_string()),
+            complete: false,
+            host_agent_id: None,
+            summary: None,
+            decision: None,
+            verdict: None,
+            allowed_next_node: None,
+            blocker_codes: None,
+            blocker_code: Vec::new(),
+            rework_target: None,
+            submit_result: None,
+            validate_result: None,
+            scaffold_result: None,
+            retry_completion: false,
+            result_file: None,
+            receipt_id: None,
+            json: true,
+            state_dir: Some(root.clone()),
+        })
+        .await;
+
+        assert_eq!(exit, ExitCode::from(1));
+        let unchanged: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&request_path).expect("read request"))
+                .expect("request should remain json");
+        assert!(unchanged.get("implementation_artifacts").is_none());
+        assert!(unchanged.get("proof_artifact_scope").is_none());
         let store = state_store::StateStore::open(root.clone())
             .await
             .expect("reopen store");
