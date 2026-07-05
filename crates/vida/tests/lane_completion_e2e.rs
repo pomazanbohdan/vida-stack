@@ -158,10 +158,16 @@ fn create_host_bridge_terminal_closure_fixture(prefix: &str) -> HostBridgeTermin
                 "execution_plan": {
                     "development_flow": {
                         "dispatch_contract": {
-                            "execution_lane_sequence": [
+                            "lane_sequence": [
                                 "alpha_build",
                                 "beta_verify",
                                 "gamma_review"
+                            ],
+                            "execution_lane_sequence": [
+                                "alpha_build",
+                                "beta_verify",
+                                "gamma_review",
+                                "terminal_closure"
                             ],
                             "lane_catalog": {
                                 "alpha_build": {
@@ -198,7 +204,7 @@ fn create_host_bridge_terminal_closure_fixture(prefix: &str) -> HostBridgeTermin
             "run_id": "run-gamma-review",
             "task_id": "run-gamma-review",
             "dispatch_target": "gamma_review",
-            "allowed_next_node": "terminal_closure",
+            "allowed_next_node": "reviewer",
             "packet_path": packet_path,
             "backend_id": "internal_subagents",
             "carrier_id": "reviewer",

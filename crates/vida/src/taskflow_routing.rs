@@ -255,12 +255,34 @@ pub(crate) fn dispatch_contract_execution_lane_sequence(
 pub(crate) fn dispatch_contract_allowed_next_lane_sequence(
     dispatch_contract: &serde_json::Value,
 ) -> Vec<String> {
-    if let Some(sequence) =
+    if let Some(mut sequence) =
         resolve_dispatch_contract_lane_sequence(dispatch_contract, "lane_sequence")
     {
+        let execution_sequence = dispatch_contract_execution_lane_sequence(dispatch_contract);
+        if let Some(last_lane) = sequence.last() {
+            if let Some(last_index) = execution_sequence
+                .iter()
+                .position(|target| target == last_lane)
+            {
+                for target in execution_sequence.iter().skip(last_index + 1) {
+                    if is_terminal_closure_dispatch_target(target)
+                        && !sequence.iter().any(|existing| existing == target)
+                    {
+                        sequence.push(target.clone());
+                    }
+                }
+            }
+        }
         return sequence;
     }
     dispatch_contract_execution_lane_sequence(dispatch_contract)
+}
+
+fn is_terminal_closure_dispatch_target(target: &str) -> bool {
+    matches!(
+        canonical_dispatch_target_name(target).as_str(),
+        "closure" | "terminal_closure" | "release_closure"
+    )
 }
 
 pub(crate) fn dispatch_target_for_runtime_role(
