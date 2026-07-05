@@ -181,10 +181,6 @@ fn create_host_bridge_terminal_closure_fixture(prefix: &str) -> HostBridgeTermin
                                 "gamma_review": {
                                     "dispatch_target": "gamma_review",
                                     "task_class": "review"
-                                },
-                                "terminal_closure": {
-                                    "dispatch_target": "terminal_closure",
-                                    "task_class": "release_readiness"
                                 }
                             }
                         }
@@ -813,9 +809,8 @@ fn host_bridge_validate_result_accepts_coach_rework_backedge_to_developer_rework
 
 #[test]
 fn host_bridge_validate_result_accepts_terminal_closure_after_final_pass() {
-    let fixture = create_host_bridge_terminal_closure_fixture(
-        "vida-host-bridge-terminal-closure-final-pass",
-    );
+    let fixture =
+        create_host_bridge_terminal_closure_fixture("vida-host-bridge-terminal-closure-final-pass");
     let request = fixture.request_path.to_string_lossy().to_string();
     let result = fixture.result_path.to_string_lossy().to_string();
 

@@ -1231,7 +1231,33 @@ pub(crate) fn resolve_runtime_dispatch_target(
             lane_id: None,
         });
     }
+    if terminal_closure_target_is_sequenced(execution_plan, &canonical_candidate) {
+        return Some(RuntimeDispatchTargetResolution {
+            dispatch_target: canonical_candidate,
+            lane_id: None,
+        });
+    }
     None
+}
+
+fn terminal_closure_target_is_sequenced(execution_plan: &serde_json::Value, target: &str) -> bool {
+    if !matches!(
+        canonical_dispatch_target_name(target).as_str(),
+        "closure" | "terminal_closure" | "release_closure"
+    ) {
+        return false;
+    }
+    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
+    crate::dispatch_contract_execution_lane_sequence(dispatch_contract)
+        .iter()
+        .any(|candidate| {
+            canonical_dispatch_target_name(candidate) == canonical_dispatch_target_name(target)
+        })
+        || crate::dispatch_contract_lane_sequence(dispatch_contract)
+            .iter()
+            .any(|candidate| {
+                canonical_dispatch_target_name(candidate) == canonical_dispatch_target_name(target)
+            })
 }
 
 pub(crate) fn normalized_dispatch_target_token(value: &str) -> String {
