@@ -246,16 +246,13 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         } else if let Some(rework_route) =
             rework_route_from_completion_evidence(&run_graph_completion_evidence(&receipt))
         {
-            let completed_target = normalize_run_graph_node(&receipt.dispatch_target);
-            let policy_gate = rework_route
-                .blocker_code
-                .unwrap_or_else(|| receipt.blocker_code.clone().unwrap_or_default());
+            let rework_target = normalize_run_graph_node(&rework_route.allowed_next_node);
             let transition = ready_transition_input(
                 &status,
-                receipt.dispatch_target.clone(),
-                Some(rework_route.allowed_next_node),
-                format!("{completed_target}_rework_required"),
-                policy_gate,
+                rework_target.clone(),
+                Some(rework_target.clone()),
+                format!("{rework_target}_dispatch_ready"),
+                "not_required".to_string(),
                 "execution_cursor".to_string(),
                 RunGraphDispatchTargetFormat::Direct,
                 true,
@@ -1249,9 +1246,13 @@ pub struct RunGraphDelegationGateSummary {
 
 impl RunGraphDelegationGateSummary {
     pub(crate) fn from_status(status: &RunGraphStatus) -> Self {
-        let handoff_pending = status.next_node.is_some()
+        let dispatch_ready_resume = status.status == "ready"
+            && status.lifecycle_stage.ends_with("_dispatch_ready")
+            && status.resume_target.starts_with("dispatch.");
+        let handoff_pending = !dispatch_ready_resume
+            && (status.next_node.is_some()
             || status.handoff_state != "none"
-            || status.resume_target != "none";
+                || status.resume_target != "none");
         let delegated_lane_active = !handoff_pending
             && status.status != "completed"
             && status.active_node != "planning"

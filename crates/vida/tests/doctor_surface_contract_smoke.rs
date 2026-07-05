@@ -3905,6 +3905,40 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
     )
     .expect("downstream dispatch packet should parse");
     assert_eq!(downstream_packet["dispatch_target"], "developer_rework");
+    let status_output = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "status",
+            &fixture.run_id,
+            "--state-dir",
+            &fixture.state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("run graph status should run");
+    assert_success(&status_output, "run graph status after rework retry");
+    let run_graph_status: serde_json::Value =
+        serde_json::from_slice(&status_output.stdout).expect("run graph status should parse");
+    assert_eq!(run_graph_status["status"], "pass");
+    assert_eq!(run_graph_status["blocker_codes"], serde_json::json!([]));
+    assert_eq!(
+        run_graph_status["run_graph_status"]["active_node"],
+        "developer_rework"
+    );
+    assert_eq!(
+        run_graph_status["run_graph_status"]["lifecycle_stage"],
+        "developer_rework_dispatch_ready"
+    );
+    assert_eq!(run_graph_status["run_graph_status"]["status"], "ready");
+    assert_eq!(
+        run_graph_status["run_graph_status"]["resume_target"],
+        "dispatch.developer_rework"
+    );
+    assert_eq!(
+        run_graph_status["delegation_gate"]["delegated_cycle_open"],
+        false
+    );
 }
 
 #[test]

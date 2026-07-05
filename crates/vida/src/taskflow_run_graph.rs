@@ -3740,6 +3740,21 @@ fn projection_truth_issue_codes_for_ready_handoff(
         .dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
+            rework_receipt_issues_are_superseded_by_ready_handoff(
+                active_node,
+                status,
+                recovery_ready,
+                resume_target,
+                receipt,
+            )
+        })
+    {
+        return Vec::new();
+    }
+    if projection_truth
+        .dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
             exception_takeover_receipt_is_behind_ready_handoff(
                 active_node,
                 status,
@@ -3826,6 +3841,30 @@ fn downstream_receipt_issues_are_superseded_by_ready_handoff(
     resume_target == format!("dispatch.{downstream_node}_lane")
 }
 
+fn rework_receipt_issues_are_superseded_by_ready_handoff(
+    active_node: &str,
+    status: &str,
+    recovery_ready: bool,
+    resume_target: &str,
+    receipt: &RunGraphDispatchReceipt,
+) -> bool {
+    if status != "ready" || !recovery_ready || !resume_target.starts_with("dispatch.") {
+        return false;
+    }
+    let Some(route) =
+        crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_route_from_receipt_fields(
+            receipt.downstream_dispatch_result_path.as_deref(),
+            receipt.dispatch_result_path.as_deref(),
+            receipt.dispatch_packet_path.as_deref(),
+            &receipt.dispatch_target,
+        )
+    else {
+        return false;
+    };
+    let allowed_next_node = route.allowed_next_node.replace('-', "_");
+    active_node == allowed_next_node && resume_target == format!("dispatch.{allowed_next_node}")
+}
+
 fn run_graph_state_surface_issue_codes(
     status: &RunGraphStatus,
     projection_truth: &RunGraphProjectionTruth,
@@ -3856,6 +3895,15 @@ fn run_graph_state_surface_issue_codes(
     if let Some(receipt) = projection_truth
         .dispatch_receipt
         .as_ref()
+        .filter(|receipt| {
+            !rework_receipt_issues_are_superseded_by_ready_handoff(
+                &status.active_node,
+                &status.status,
+                status.recovery_ready,
+                &status.resume_target,
+                receipt,
+            )
+        })
         .filter(|receipt| {
             !exception_takeover_receipt_is_behind_ready_handoff(
                 &status.active_node,
