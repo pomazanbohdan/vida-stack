@@ -231,8 +231,8 @@ fn packet_role_selection_execution_plan(packet: &serde_json::Value) -> Option<se
 fn completed_result_target(packet: &serde_json::Value, fallback: &str) -> String {
     [
         packet.get("dispatch_target"),
-        packet.get("source_dispatch_target"),
         packet.get("downstream_dispatch_target"),
+        packet.get("source_dispatch_target"),
     ]
     .into_iter()
     .find_map(|value| {
@@ -649,6 +649,64 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         std::env::temp_dir().join(format!("vida-{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[test]
+    fn completed_result_target_prefers_downstream_target_over_source_context() {
+        let packet = serde_json::json!({
+            "source_dispatch_target": "beta-gate",
+            "downstream_dispatch_target": "alpha-impl"
+        });
+
+        assert_eq!(
+            completed_result_target(&packet, "fallback_lane"),
+            "alpha_impl"
+        );
+    }
+
+    #[test]
+    fn downstream_packet_without_dispatch_target_does_not_authorize_against_source_context() {
+        let root = unique_test_dir("dispatch-rework-downstream-precedence");
+        std::fs::create_dir_all(&root).expect("test dir should be created");
+        let packet_path = root.join("packet.json");
+        let result_path = root.join("result.json");
+        std::fs::write(
+            &result_path,
+            serde_json::json!({
+                "status": "blocked",
+                "completion_verdict": "rework_required",
+                "rework_target": "alpha_impl",
+                "allowed_next_node": "alpha_impl_rework",
+                "blocker_code": "verification_rework_required"
+            })
+            .to_string(),
+        )
+        .expect("result should write");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "source_dispatch_target": "beta_gate",
+                "downstream_dispatch_target": "alpha_impl",
+                "role_selection_full": {
+                    "execution_plan": execution_plan()
+                },
+                "downstream_dispatch_result_path": result_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("packet should write");
+
+        assert!(
+            authorized_dispatch_rework_route_from_receipt_fields(
+                None,
+                None,
+                Some(&packet_path.display().to_string()),
+                "alpha_impl",
+            )
+            .is_none(),
+            "downstream packets must authorize against downstream_dispatch_target, not source context"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
