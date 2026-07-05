@@ -207,6 +207,23 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         && status.handoff_state == format!("awaiting_{retry_target}")
         && status.resume_target == format!("dispatch.{retry_target}_lane")
         && status.recovery_ready;
+    if let Some(rework_route) =
+        rework_route_from_completion_evidence(&run_graph_completion_evidence(&receipt))
+    {
+        let rework_target = normalize_run_graph_node(&rework_route.allowed_next_node);
+        let transition = ready_transition_input(
+            &status,
+            rework_target.clone(),
+            Some(rework_target.clone()),
+            format!("{rework_target}_dispatch_ready"),
+            "not_required".to_string(),
+            "execution_cursor".to_string(),
+            RunGraphDispatchTargetFormat::Direct,
+            true,
+        );
+        apply_ready_run_graph_transition(&mut status, transition);
+        return Ok(status);
+    }
     if blocked_receipt {
         if retry_ready_same_lane {
             if let Some(selected_backend) = receipt

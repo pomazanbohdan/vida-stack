@@ -2833,6 +2833,48 @@ fn persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_s
             "proof_target": "host bridge completion receipt",
             "read_only_paths": ["crates/vida/src"],
             "blocking_question": "none",
+            "role_selection_full": {
+                "execution_plan": {
+                    "development_flow": {
+                        "dispatch_contract": {
+                            "execution_lane_sequence": [
+                                "developer",
+                                "developer_rework",
+                                "coach",
+                                "tester",
+                                "reviewer",
+                                "release_closure"
+                            ],
+                            "lane_catalog": {
+                                "developer": {
+                                    "dispatch_target": "developer",
+                                    "task_class": "implementation"
+                                },
+                                "developer_rework": {
+                                    "dispatch_target": "developer_rework",
+                                    "task_class": "implementation"
+                                },
+                                "coach": {
+                                    "dispatch_target": "coach",
+                                    "task_class": "coach"
+                                },
+                                "tester": {
+                                    "dispatch_target": "tester",
+                                    "task_class": "verification"
+                                },
+                                "reviewer": {
+                                    "dispatch_target": "reviewer",
+                                    "task_class": "review"
+                                },
+                                "release_closure": {
+                                    "dispatch_target": "release_closure",
+                                    "task_class": "release_readiness"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
             "verifier_proof_packet": {
                 "proof_goal": "Complete host bridge proof.",
                 "verification_command": "cargo test -p vida host_bridge_public_cli",
@@ -3939,6 +3981,85 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
         run_graph_status["delegation_gate"]["delegated_cycle_open"],
         false
     );
+}
+
+#[test]
+fn run_graph_status_reconciles_half_applied_rework_downstream_packet() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let run_id = "run-half-applied-coach-rework";
+    create_session_triage_task(
+        &state_dir,
+        run_id,
+        "Half-applied coach rework",
+        "epic",
+        "in_progress",
+        "1",
+        None,
+    );
+    persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_state(
+        &state_dir,
+        run_id,
+        "coach",
+        "coach",
+        "developer",
+        "executed",
+        "lane_completed",
+        "",
+        "coach_blocked",
+        "true",
+        "packet_ready",
+    );
+    let result_path = format!("{state_dir}/runtime-consumption/dispatch-results/{run_id}-coach.json");
+    std::fs::write(
+        &result_path,
+        serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "status": "blocked",
+            "execution_state": "blocked",
+            "request_id": run_id,
+            "run_id": run_id,
+            "dispatch_target": "coach",
+            "decision": "rework_required",
+            "verdict": "rework_required",
+            "blocker_codes": ["meeting_attendee_selector_contract_incomplete"],
+            "rework_target": "developer",
+            "allowed_next_node": "developer_rework",
+            "execution_evidence": {
+                "receipt_backed": true
+            }
+        })
+        .to_string(),
+    )
+    .expect("rework result should write");
+
+    let status_output = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "status",
+            run_id,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .output()
+        .expect("run graph status should run");
+    assert_success(&status_output, "half-applied rework run graph status");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&status_output.stdout).expect("run graph status should parse");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+    assert_eq!(payload["run_graph_status"]["active_node"], "developer_rework");
+    assert_eq!(
+        payload["run_graph_status"]["lifecycle_stage"],
+        "developer_rework_dispatch_ready"
+    );
+    assert_eq!(
+        payload["run_graph_status"]["resume_target"],
+        "dispatch.developer_rework"
+    );
+    assert_eq!(payload["delegation_gate"]["delegated_cycle_open"], false);
 }
 
 #[test]
