@@ -1834,13 +1834,14 @@ pub(crate) fn build_orchestrator_init_view(
             "PR-CoT",
             "MAR",
             "5-SOL",
-            "META"
+            "META",
+            "TRACE"
         ],
         "mode_selection_rule": "select one thinking mode per step after request-intent classification; do not freeze one mode at bootstrap",
         "reporting_contract": {
             "required": true,
             "scope": "user-facing orchestrator progress and closure reports",
-            "thinking_mode_prefix": "Thinking mode: <STC|PR-CoT|MAR|5-SOL|META>.",
+            "thinking_mode_prefix": "Thinking mode: <STC|PR-CoT|MAR|5-SOL|META|TRACE>.",
             "request_counters_prefix": "Requests: active=<n> | in_work=<n> | blocked=<n>",
             "task_counters_prefix": "Tasks: active=<n> | in_work=<n> | blocked=<n>",
             "agent_counters_prefix": "Agents: active=<n> | working=<n> | waiting=<n>",
@@ -2288,6 +2289,7 @@ mod tests {
         );
         assert_eq!(view["allowed_thinking_modes"][0], "STC");
         assert_eq!(view["allowed_thinking_modes"][4], "META");
+        assert_eq!(view["allowed_thinking_modes"][5], "TRACE");
         assert!(
             view["minimum_commands"]
                 .as_array()

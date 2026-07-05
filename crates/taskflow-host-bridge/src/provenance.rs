@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::request::{
-    host_bridge_blocked_result_contract, host_bridge_blocked_result_contract_is_retryable,
-    HostBridgeRequest,
-};
+use crate::request::HostBridgeRequest;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostBridgeProvenanceInput {
@@ -62,9 +59,6 @@ pub fn validate_host_bridge_request_provenance(
 
 fn host_bridge_request_status_is_admissible_for_provenance(request: &HostBridgeRequest) -> bool {
     matches!(request.status.as_str(), "pending" | "pass" | "retryable_blocked")
-        || (request.status == "blocked"
-            && host_bridge_blocked_result_contract(&request.raw)
-                .is_some_and(host_bridge_blocked_result_contract_is_retryable))
 }
 
 #[must_use]
@@ -141,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn provenance_accepts_blocked_request_with_retryable_result_contract() {
+    fn provenance_rejects_blocked_request_with_self_attested_retryable_result_contract() {
         let mut request = minimal_request();
         request.status = "blocked".to_string();
         request.raw["status"] = serde_json::json!("blocked");
@@ -161,8 +155,8 @@ mod tests {
             expected_dispatch_target: Some("developer".to_string()),
         });
 
-        assert!(decision.accepted);
-        assert!(!decision
+        assert!(!decision.accepted);
+        assert!(decision
             .blocker_codes
             .contains(&"request_status_not_admissible".to_string()));
     }

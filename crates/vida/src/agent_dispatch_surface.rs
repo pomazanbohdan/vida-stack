@@ -1088,11 +1088,6 @@ fn retryable_host_bridge_completion_request_for_state_root(
     {
         return false;
     }
-    if host_bridge_blocked_result_contract(request)
-        .is_some_and(host_bridge_blocked_result_contract_is_retryable)
-    {
-        return true;
-    }
     for field in ["receipt_path", "result_path"] {
         let Some(raw_path) = host_bridge_request_string(request, field) else {
             continue;
@@ -1172,24 +1167,6 @@ fn completed_host_bridge_completion_request_for_state_root(
         return false;
     };
     let Ok(result) = read_canonical_host_bridge_json_artifact(&result_path, "host bridge result")
-    else {
-        return false;
-    };
-    host_bridge_completed_result_has_preview_refresh_evidence(request, &result)
-}
-
-fn submitted_host_bridge_result_has_retryable_completion_evidence(
-    request: &serde_json::Value,
-    result_path: Option<&Path>,
-    retry_completion: bool,
-) -> bool {
-    if !retry_completion {
-        return false;
-    }
-    let Some(result_path) = result_path else {
-        return false;
-    };
-    let Ok(result) = read_canonical_host_bridge_json_artifact(result_path, "host bridge result")
     else {
         return false;
     };
@@ -5889,22 +5866,12 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     retry_packet_path.as_deref(),
                 )
                 .await;
-            let submitted_result_retry_completion_evidence =
-                submitted_host_bridge_result_has_retryable_completion_evidence(
-                    &request,
-                    command
-                        .submit_result
-                        .as_deref()
-                        .or(command.result_file.as_deref()),
-                    command.retry_completion,
-                );
             let payload = host_bridge_adapter_payload(
                 &operator_request_path,
                 &request,
                 provenance_blockers,
                 command.state_dir.as_deref(),
-                receipt_backed_retry_completion_evidence
-                    || submitted_result_retry_completion_evidence,
+                receipt_backed_retry_completion_evidence,
             );
             if !command.attach_artifacts.is_empty() {
                 return attach_host_bridge_implementation_artifacts(command, request, payload)

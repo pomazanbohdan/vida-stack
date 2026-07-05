@@ -4726,7 +4726,6 @@ fn materialize_host_bridge_completion_evidence(
     let request = read_host_bridge_json_artifact_at_path(&canonical_request_path)?;
     let submitted_result_already_materialized =
         supplied_result_path_matches_request_output(state_root, &request, supplied_result_path)?;
-    let submitted_result_can_replace_completion_evidence = supplied_result_path.is_some();
     let retry_override_has_submitted_completion_result =
         retry_completion_override && supplied_result_path.is_some();
     let retry_override_has_routable_blocked_completion = retry_completion_override
@@ -4744,10 +4743,10 @@ fn materialize_host_bridge_completion_evidence(
             || host_bridge_submitted_result_has_routable_retry_completion_evidence(
                 supplied_result_path,
             ));
-    let replace_existing_completion_evidence = replace_existing_evidence
-        || retry_override_has_routable_blocked_completion
-        || retry_override_has_submitted_completion_result
-        || submitted_result_can_replace_completion_evidence;
+    let replace_existing_completion_evidence =
+        replace_existing_evidence
+            || retry_override_has_routable_blocked_completion
+            || retry_override_has_submitted_completion_result;
     let validated_paths = validated_host_bridge_paths_from_receipt(
         state_root,
         &canonical_request_path,
@@ -18262,6 +18261,153 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(!receipt_path.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_completion_rejects_non_retry_submitted_result_when_canonical_evidence_exists() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::current_dir()
+            .expect("current dir")
+            .join("target/tmp")
+            .join(format!(
+                "vida-host-bridge-submitted-result-no-clobber-{}-{nanos}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        let request_path = root.join("host-tool-bridge/requests/run-no-clobber.json");
+        let result_path = root.join("host-tool-bridge/results/run-no-clobber.json");
+        let receipt_path = root.join("host-tool-bridge/receipts/run-no-clobber.json");
+        let supplied_result_path = root.join("host-tool-bridge/submitted/run-no-clobber.json");
+        std::fs::create_dir_all(request_path.parent().expect("request parent"))
+            .expect("create request parent");
+        std::fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create result parent");
+        std::fs::create_dir_all(receipt_path.parent().expect("receipt parent"))
+            .expect("create receipt parent");
+        std::fs::create_dir_all(supplied_result_path.parent().expect("submitted result parent"))
+            .expect("create submitted result parent");
+        std::fs::write(
+            &request_path,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "pending",
+                "request_id": "run-no-clobber",
+                "run_id": "run-no-clobber",
+                "dispatch_target": "analyst",
+                "packet_path": root.join("runtime-consumption/downstream-dispatch-packets/run-no-clobber.json").display().to_string(),
+                "backend_id": "internal_subagents",
+                "dispatch_transport": "host_tool_bridge",
+                "result_path": result_path.display().to_string(),
+                "receipt_path": receipt_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write request");
+        let canonical_result = serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "schema_version": 1,
+            "status": "pass",
+            "execution_state": "executed",
+            "decision": "pass",
+            "verdict": "pass",
+            "request_id": "run-no-clobber",
+            "run_id": "run-no-clobber",
+            "dispatch_target": "analyst",
+            "blocker_codes": [],
+            "allowed_next_node": "developer",
+            "execution_evidence": { "receipt_backed": true },
+            "summary": "ORIGINAL_RESULT_VICTIM"
+        });
+        let canonical_result_encoded =
+            serde_json::to_string_pretty(&canonical_result).expect("encode canonical result");
+        std::fs::write(&result_path, &canonical_result_encoded).expect("seed canonical result");
+        std::fs::write(&receipt_path, "ORIGINAL_RECEIPT_VICTIM").expect("seed receipt victim");
+        std::fs::write(
+            &supplied_result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "schema_version": 1,
+                "status": "pass",
+                "execution_state": "executed",
+                "decision": "pass",
+                "verdict": "pass",
+                "request_id": "run-no-clobber",
+                "run_id": "run-no-clobber",
+                "dispatch_target": "analyst",
+                "blocker_codes": [],
+                "summary": "submitted result must not authorize replacement"
+            }))
+            .expect("encode supplied result"),
+        )
+        .expect("write supplied result");
+        let activation_result_path =
+            root.join("runtime-consumption/dispatch-results/run-no-clobber-activation.json");
+        std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
+            .expect("create activation parent");
+        std::fs::write(
+            &activation_result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "host_tool_bridge_request": {
+                    "request_path": request_path.display().to_string(),
+                    "result_path": result_path.display().to_string(),
+                    "receipt_path": receipt_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write activation result");
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.run_id = "run-no-clobber".to_string();
+        receipt.dispatch_target = "analyst".to_string();
+        receipt.dispatch_result_path = Some(activation_result_path.display().to_string());
+
+        let error = materialize_host_bridge_completion_evidence(
+            &root,
+            request_path.to_str().expect("utf8 request path"),
+            Some(&supplied_result_path),
+            "run-no-clobber",
+            "analyst",
+            &receipt,
+            "receipt-no-clobber",
+            Some("agent-1"),
+            Some("non-retry supplied result must not replace canonical evidence"),
+            Some("developer"),
+            None,
+            Some("pass"),
+            Some("pass"),
+            None,
+            &[],
+            false,
+            true,
+            HostBridgeTaskflowImplementationEvidence::default(),
+            &[],
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect_err("non-retry supplied result must fail closed on existing canonical evidence");
+
+        assert!(
+            error.contains("already exists; refusing to overwrite it"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&result_path).expect("result readable"),
+            canonical_result_encoded
+        );
+        assert_eq!(
+            std::fs::read_to_string(&receipt_path).expect("receipt victim readable"),
+            "ORIGINAL_RECEIPT_VICTIM"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
