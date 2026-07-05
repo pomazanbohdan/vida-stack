@@ -6453,10 +6453,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             if let Some(value) = host_bridge_result_file_allowed_next_node(&completion_result_path)
                 .or_else(|| (!completed_target.trim().is_empty()).then(|| completed_target.clone()))
             {
-                if host_bridge_result_file_rework_target(&completion_result_path).is_some()
-                    || host_bridge_result_file_completed_target(&completion_result_path).as_deref()
-                        == Some(value.as_str())
-                    || completed_target.trim() == value.as_str()
+                if !completion_blocked
+                    && (host_bridge_result_file_rework_target(&completion_result_path).is_some()
+                        || host_bridge_result_file_completed_target(&completion_result_path).as_deref()
+                            == Some(value.as_str())
+                        || completed_target.trim() == value.as_str())
                 {
                     receipt.downstream_dispatch_target = Some(value);
                     receipt.downstream_dispatch_ready = true;
@@ -6518,13 +6519,15 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             if receipt.downstream_dispatch_result_path.is_none() {
                 receipt.downstream_dispatch_result_path = Some(completion_result_path.clone());
             }
-            if receipt.downstream_dispatch_target.is_some()
+            if !completion_blocked
+                && receipt.downstream_dispatch_target.is_some()
                 && receipt.downstream_dispatch_blockers.is_empty()
             {
                 receipt.downstream_dispatch_ready = true;
                 receipt.downstream_dispatch_status = Some("packet_ready".to_string());
             }
-            if receipt.downstream_dispatch_packet_path.is_none()
+            if !completion_blocked
+                && receipt.downstream_dispatch_packet_path.is_none()
                 && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready")
             {
                 let fallback_packet_context = if lane_completion_packet_context.is_none() {
