@@ -1088,11 +1088,6 @@ fn retryable_host_bridge_completion_request_for_state_root(
     {
         return false;
     }
-    if host_bridge_blocked_result_contract(request)
-        .is_some_and(host_bridge_blocked_result_contract_is_retryable)
-    {
-        return true;
-    }
     for field in ["receipt_path", "result_path"] {
         let Some(raw_path) = host_bridge_request_string(request, field) else {
             continue;
