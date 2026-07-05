@@ -133,6 +133,123 @@ struct HostBridgeReworkFixture {
     pass_result_path: PathBuf,
 }
 
+struct HostBridgeTerminalClosureFixture {
+    root: PathBuf,
+    state_root: PathBuf,
+    request_path: PathBuf,
+    result_path: PathBuf,
+}
+
+fn create_host_bridge_terminal_closure_fixture(prefix: &str) -> HostBridgeTerminalClosureFixture {
+    let root = unique_lane_state_root(prefix);
+    let state_root = root.join(".vida/data/state");
+    let bridge_dir = state_root.join("runtime-consumption/host-tool-bridge");
+    let packet_dir = state_root.join("runtime-consumption/dispatch-packets");
+    std::fs::create_dir_all(&bridge_dir).expect("create host bridge dir");
+    std::fs::create_dir_all(&packet_dir).expect("create packet dir");
+    let packet_path = packet_dir.join("gamma-review.json");
+    let request_path = bridge_dir.join("gamma-review-request.json");
+    let result_path = bridge_dir.join("gamma-review-terminal-closure.json");
+    std::fs::write(
+        &packet_path,
+        serde_json::json!({
+            "dispatch_target": "gamma_review",
+            "role_selection_full": {
+                "execution_plan": {
+                    "development_flow": {
+                        "dispatch_contract": {
+                            "execution_lane_sequence": [
+                                "alpha_build",
+                                "beta_verify",
+                                "gamma_review"
+                            ],
+                            "lane_catalog": {
+                                "alpha_build": {
+                                    "dispatch_target": "alpha_build",
+                                    "task_class": "implementation"
+                                },
+                                "beta_verify": {
+                                    "dispatch_target": "beta_verify",
+                                    "task_class": "verification"
+                                },
+                                "gamma_review": {
+                                    "dispatch_target": "gamma_review",
+                                    "task_class": "review"
+                                },
+                                "terminal_closure": {
+                                    "dispatch_target": "terminal_closure",
+                                    "task_class": "release_readiness"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .expect("write packet");
+    std::fs::write(
+        &request_path,
+        serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-gamma-review",
+            "run_id": "run-gamma-review",
+            "task_id": "run-gamma-review",
+            "dispatch_target": "gamma_review",
+            "allowed_next_node": "terminal_closure",
+            "packet_path": packet_path,
+            "backend_id": "internal_subagents",
+            "carrier_id": "reviewer",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": bridge_dir.join("receipt.json"),
+            "required_result_fields": [
+                "decision",
+                "verdict",
+                "blocker_codes",
+                "allowed_next_node"
+            ]
+        })
+        .to_string(),
+    )
+    .expect("write request");
+    std::fs::write(
+        &result_path,
+        serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "schema_version": 1,
+            "status": "pass",
+            "execution_state": "completed",
+            "request_id": "req-gamma-review",
+            "run_id": "run-gamma-review",
+            "dispatch_target": "gamma_review",
+            "decision": "approve",
+            "verdict": "pass",
+            "completion_verdict": "pass",
+            "blocker_codes": [],
+            "rework_target": null,
+            "allowed_next_node": "terminal_closure",
+            "execution_evidence": {"receipt_backed": true},
+            "source_dispatch_packet_path": packet_path
+        })
+        .to_string(),
+    )
+    .expect("write terminal closure result");
+    HostBridgeTerminalClosureFixture {
+        root,
+        state_root,
+        request_path,
+        result_path,
+    }
+}
+
 fn create_host_bridge_rework_fixture(prefix: &str) -> HostBridgeReworkFixture {
     let root = unique_lane_state_root(prefix);
     let state_root = root.join(".vida/data/state");
@@ -684,6 +801,44 @@ fn host_bridge_validate_result_accepts_coach_rework_backedge_to_developer_rework
         "pass result must not use rework backedge: {pass}"
     );
     assert_blocker(&pass, "invalid_allowed_next_node_for_execution_plan");
+
+    let _ = std::fs::remove_dir_all(&fixture.root);
+}
+
+#[test]
+fn host_bridge_validate_result_accepts_terminal_closure_after_final_pass() {
+    let fixture = create_host_bridge_terminal_closure_fixture(
+        "vida-host-bridge-terminal-closure-final-pass",
+    );
+    let request = fixture.request_path.to_string_lossy().to_string();
+    let result = fixture.result_path.to_string_lossy().to_string();
+
+    let (payload, success) = run_host_bridge_json(
+        &[
+            "agent",
+            "host-bridge",
+            "--request",
+            &request,
+            "--validate-result",
+            &result,
+            "--json",
+        ],
+        &fixture.state_root,
+    );
+    assert!(
+        success,
+        "terminal closure pass result should validate without invalid next blocker: {payload}"
+    );
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["validation"]["final_state"], "Passed");
+    assert!(
+        !payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes should render")
+            .iter()
+            .any(|code| code == "invalid_allowed_next_node_for_execution_plan"),
+        "{payload}"
+    );
 
     let _ = std::fs::remove_dir_all(&fixture.root);
 }

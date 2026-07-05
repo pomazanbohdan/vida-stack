@@ -70,14 +70,14 @@ impl TeamFlowStateMachine {
             },
             None => {
                 // Current role is the last step — closure is expected
-                if requested_next_node == "closure" {
+                if is_terminal_closure_ref(requested_next_node) {
                     TransitionVerdict::Allowed {
-                        next_lane: "closure".to_string(),
+                        next_lane: requested_next_node.trim().to_string(),
                     }
                 } else {
                     TransitionVerdict::Blocked {
                         blocker_code: "no_next_lane_after_last_step".to_string(),
-                        allowed_next_node: "closure".to_string(),
+                        allowed_next_node: "terminal_closure".to_string(),
                     }
                 }
             }
@@ -222,6 +222,13 @@ impl TeamFlowStateMachine {
 
 fn normalize_step_ref(value: &str) -> String {
     value.trim().replace('-', "_")
+}
+
+fn is_terminal_closure_ref(value: &str) -> bool {
+    matches!(
+        normalize_step_ref(value).as_str(),
+        "closure" | "terminal_closure" | "release_closure"
+    )
 }
 
 /// Extract the team-flow state machine from an activation bundle.
@@ -418,6 +425,19 @@ mod tests {
             verdict,
             TransitionVerdict::Allowed {
                 next_lane: "closure".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_validate_transition_accepts_terminal_closure_from_last_step() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        let verdict = sm.validate_transition("delta_verify", "terminal_closure");
+        assert_eq!(
+            verdict,
+            TransitionVerdict::Allowed {
+                next_lane: "terminal_closure".to_string()
             }
         );
     }

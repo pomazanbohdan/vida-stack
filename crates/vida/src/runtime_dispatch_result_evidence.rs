@@ -231,8 +231,8 @@ fn packet_role_selection_execution_plan(packet: &serde_json::Value) -> Option<se
 fn completed_result_target(packet: &serde_json::Value, fallback: &str) -> String {
     [
         packet.get("dispatch_target"),
-        packet.get("source_dispatch_target"),
         packet.get("downstream_dispatch_target"),
+        packet.get("source_dispatch_target"),
     ]
     .into_iter()
     .find_map(|value| {
@@ -649,6 +649,40 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         std::env::temp_dir().join(format!("vida-{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[test]
+    fn completed_result_target_prefers_completed_lane_then_downstream_then_source() {
+        assert_eq!(
+            completed_result_target(
+                &serde_json::json!({
+                    "dispatch_target": "gamma-review",
+                    "downstream_dispatch_target": "terminal_closure",
+                    "source_dispatch_target": "beta_verify"
+                }),
+                "fallback_lane"
+            ),
+            "gamma_review"
+        );
+        assert_eq!(
+            completed_result_target(
+                &serde_json::json!({
+                    "downstream_dispatch_target": "alpha-impl",
+                    "source_dispatch_target": "beta_gate"
+                }),
+                "fallback_lane"
+            ),
+            "alpha_impl"
+        );
+        assert_eq!(
+            completed_result_target(
+                &serde_json::json!({
+                    "source_dispatch_target": "beta-gate"
+                }),
+                "fallback_lane"
+            ),
+            "beta_gate"
+        );
     }
 
     #[test]
