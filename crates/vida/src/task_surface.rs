@@ -9137,7 +9137,7 @@ fn task_ancestor_with_issue_type<'a>(
     let mut current = task;
     let mut visited = BTreeSet::new();
     while let Some(parent_id) = task_parent_id(current) {
-        if !visited.insert(current.id.clone()) || !visited.insert(parent_id.clone()) {
+        if !visited.insert(current.id.clone()) {
             return None;
         }
         let Some(parent) = task_record_by_id(rows, &parent_id) else {
@@ -9159,7 +9159,7 @@ fn task_is_descendant_of(
     let mut current = task;
     let mut visited = BTreeSet::new();
     while let Some(parent_id) = task_parent_id(current) {
-        if !visited.insert(current.id.clone()) || !visited.insert(parent_id.clone()) {
+        if !visited.insert(current.id.clone()) {
             return false;
         }
         if parent_id == ancestor_id {
@@ -18068,6 +18068,56 @@ mod tests {
             metadata: "{}".to_string(),
             thread_id: String::new(),
         }
+    }
+
+    #[test]
+    fn active_step_owned_status_finds_multi_level_selected_ancestor() {
+        let mut epic = owned_task_record("epic-root", vec![]);
+        epic.issue_type = "epic".to_string();
+        let mut parent_task = owned_task_record("task-parent", vec![]);
+        parent_task.dependencies = vec![parent_dependency("task-parent", "epic-root")];
+        let mut step = owned_task_record("step-child", vec![]);
+        step.issue_type = "step".to_string();
+        step.status = "in_progress".to_string();
+        step.dependencies = vec![parent_dependency("step-child", "task-parent")];
+        let rows = vec![epic.clone(), parent_task, step];
+
+        let (active_step, active_parent_task, active_epic) =
+            task_owned_status_context(&rows, &epic, true);
+
+        assert_eq!(
+            active_step.as_ref().map(|task| task.task_id.as_str()),
+            Some("step-child")
+        );
+        assert_eq!(
+            active_parent_task
+                .as_ref()
+                .map(|task| task.task_id.as_str()),
+            Some("task-parent")
+        );
+        assert_eq!(
+            active_epic.as_ref().map(|task| task.task_id.as_str()),
+            Some("epic-root")
+        );
+    }
+
+    #[test]
+    fn task_ancestor_with_issue_type_finds_grandparent_epic() {
+        let mut epic = owned_task_record("epic-root", vec![]);
+        epic.issue_type = "epic".to_string();
+        let mut parent_task = owned_task_record("task-parent", vec![]);
+        parent_task.dependencies = vec![parent_dependency("task-parent", "epic-root")];
+        let mut step = owned_task_record("step-child", vec![]);
+        step.issue_type = "step".to_string();
+        step.dependencies = vec![parent_dependency("step-child", "task-parent")];
+        let rows = vec![epic, parent_task, step.clone()];
+
+        let ancestor = task_ancestor_with_issue_type(&rows, &step, "epic");
+
+        assert_eq!(
+            ancestor.map(|task| task.task_id.as_str()),
+            Some("epic-root")
+        );
     }
 
     #[test]
