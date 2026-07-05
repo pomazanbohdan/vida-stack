@@ -262,9 +262,9 @@ pub(crate) fn dispatch_contract_allowed_next_lane_sequence(
         if let Some(last_lane) = sequence.last() {
             if let Some(last_index) = execution_sequence
                 .iter()
-                .position(|target| target == last_lane)
+                .rposition(|target| target == last_lane)
             {
-                for target in execution_sequence.iter().skip(last_index + 1) {
+                if let Some(target) = execution_sequence.get(last_index + 1) {
                     if is_terminal_closure_dispatch_target(target)
                         && !sequence.iter().any(|existing| existing == target)
                     {
@@ -1720,6 +1720,39 @@ mod tests {
         assert_eq!(
             dispatch_contract_allowed_next_lane_sequence(&execution_only_contract),
             vec!["analyst".to_string(), "autotester".to_string()]
+        );
+    }
+
+    #[test]
+    fn dispatch_contract_allowed_next_sequence_appends_immediate_terminal_closure_only() {
+        let immediate_closure_contract = serde_json::json!({
+            "lane_sequence": ["alpha"],
+            "execution_lane_sequence": ["alpha", "terminal_closure"]
+        });
+        assert_eq!(
+            dispatch_contract_allowed_next_lane_sequence(&immediate_closure_contract),
+            vec!["alpha".to_string(), "terminal_closure".to_string()]
+        );
+
+        let intervening_lane_contract = serde_json::json!({
+            "lane_sequence": ["alpha"],
+            "execution_lane_sequence": ["alpha", "beta_verify", "terminal_closure"]
+        });
+        assert_eq!(
+            dispatch_contract_allowed_next_lane_sequence(&intervening_lane_contract),
+            vec!["alpha".to_string()]
+        );
+    }
+
+    #[test]
+    fn dispatch_contract_allowed_next_sequence_uses_last_allowed_lane_occurrence() {
+        let duplicate_last_lane_contract = serde_json::json!({
+            "lane_sequence": ["alpha"],
+            "execution_lane_sequence": ["alpha", "terminal_closure", "alpha", "beta_verify"]
+        });
+        assert_eq!(
+            dispatch_contract_allowed_next_lane_sequence(&duplicate_last_lane_contract),
+            vec!["alpha".to_string()]
         );
     }
 
