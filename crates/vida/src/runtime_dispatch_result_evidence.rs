@@ -230,9 +230,9 @@ fn packet_role_selection_execution_plan(packet: &serde_json::Value) -> Option<se
 
 fn completed_result_target(packet: &serde_json::Value, fallback: &str) -> String {
     [
-        packet.get("downstream_dispatch_target"),
         packet.get("dispatch_target"),
         packet.get("source_dispatch_target"),
+        packet.get("downstream_dispatch_target"),
     ]
     .into_iter()
     .find_map(|value| {
@@ -377,7 +377,12 @@ fn dispatch_result_field_is_rework_verdict(value: Option<&serde_json::Value>) ->
     value
         .and_then(serde_json::Value::as_str)
         .map(|text| text.trim().to_ascii_lowercase())
-        .is_some_and(|text| matches!(text.as_str(), "rework_required" | "blocked" | "blocker"))
+        .is_some_and(|text| {
+            matches!(
+                text.as_str(),
+                "rework" | "rework_required" | "blocked" | "blocker"
+            )
+        })
 }
 
 fn result_blocker_code(result: &serde_json::Value) -> Option<String> {

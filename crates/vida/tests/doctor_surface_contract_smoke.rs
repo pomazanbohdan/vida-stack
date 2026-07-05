@@ -4063,6 +4063,90 @@ fn run_graph_status_reconciles_half_applied_rework_downstream_packet() {
 }
 
 #[test]
+fn run_graph_status_reconciles_half_applied_verifier_rework_downstream_packet() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    let run_id = "run-half-applied-verifier-rework";
+    create_session_triage_task(
+        &state_dir,
+        run_id,
+        "Half-applied verifier rework",
+        "epic",
+        "in_progress",
+        "1",
+        None,
+    );
+    persist_host_bridge_lane_receipt_with_target_and_active_node_and_downstream_state(
+        &state_dir,
+        run_id,
+        "tester",
+        "tester",
+        "developer",
+        "executed",
+        "lane_completed",
+        "",
+        "tester_blocked",
+        "true",
+        "packet_ready",
+    );
+    let result_path =
+        format!("{state_dir}/runtime-consumption/dispatch-results/{run_id}-tester.json");
+    std::fs::write(
+        &result_path,
+        serde_json::json!({
+            "artifact_kind": "host_tool_bridge_result",
+            "status": "blocked",
+            "execution_state": "blocked",
+            "request_id": run_id,
+            "run_id": run_id,
+            "dispatch_target": "tester",
+            "decision": "rework",
+            "verdict": "fail",
+            "blocker_codes": [
+                "meeting_attendee_selector_contract_incomplete",
+                "meeting_current_user_attendee_default_missing",
+                "meeting_attendee_add_remove_widget_proof_missing"
+            ],
+            "rework_target": "developer",
+            "allowed_next_node": "developer_rework",
+            "execution_evidence": {
+                "receipt_backed": true
+            }
+        })
+        .to_string(),
+    )
+    .expect("verifier rework result should write");
+
+    let status_output = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "status",
+            run_id,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .output()
+        .expect("run graph status should run");
+    assert_success(&status_output, "half-applied verifier rework run graph status");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&status_output.stdout).expect("run graph status should parse");
+    assert_eq!(payload["status"], "pass");
+    assert_eq!(payload["blocker_codes"], serde_json::json!([]));
+    assert_eq!(payload["run_graph_status"]["active_node"], "developer_rework");
+    assert_eq!(
+        payload["run_graph_status"]["lifecycle_stage"],
+        "developer_rework_dispatch_ready"
+    );
+    assert_eq!(
+        payload["run_graph_status"]["resume_target"],
+        "dispatch.developer_rework"
+    );
+    assert_eq!(payload["delegation_gate"]["delegated_cycle_open"], false);
+}
+
+#[test]
 fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
     let fixture = create_host_bridge_lane_fixture_for_target(
         "host-bridge-submitted-rework-retry",
