@@ -3883,6 +3883,28 @@ fn host_bridge_public_cli_retries_blocked_request_with_lawful_rework_contract() 
     assert_eq!(result["allowed_next_node"], "developer_rework");
     assert_eq!(result["decision"], "rework_required");
     assert_eq!(result["verdict"], "rework_required");
+    assert_eq!(
+        payload["artifact_refs"]["downstream_dispatch_target"],
+        "developer_rework"
+    );
+    assert_eq!(
+        payload["artifact_refs"]["downstream_dispatch_status"],
+        "packet_ready"
+    );
+    assert_eq!(payload["artifact_refs"]["downstream_dispatch_ready"], true);
+    assert!(payload["artifact_refs"]["downstream_dispatch_blockers"]
+        .as_array()
+        .expect("downstream blockers should render")
+        .is_empty());
+    let downstream_packet_path = payload["artifact_refs"]["downstream_dispatch_packet_path"]
+        .as_str()
+        .expect("rework retry should write downstream dispatch packet");
+    let downstream_packet: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(downstream_packet_path)
+            .expect("downstream dispatch packet should be readable"),
+    )
+    .expect("downstream dispatch packet should parse");
+    assert_eq!(downstream_packet["dispatch_target"], "developer_rework");
 }
 
 #[test]
@@ -3898,7 +3920,10 @@ fn host_bridge_public_cli_uses_submitted_rework_result_as_retry_evidence() {
     .expect("request should parse");
     request["status"] = serde_json::json!("blocked");
     request["request_status"] = serde_json::json!("blocked");
-    request.as_object_mut().expect("request object").remove("blocked_result_contract");
+    request
+        .as_object_mut()
+        .expect("request object")
+        .remove("blocked_result_contract");
     std::fs::write(
         &fixture.request_path,
         serde_json::to_string_pretty(&request).expect("request should serialize"),

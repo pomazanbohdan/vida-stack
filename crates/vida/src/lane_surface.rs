@@ -2972,6 +2972,118 @@ fn supplied_host_bridge_completion_result_allowed_next_node(
         .map(str::to_string)
 }
 
+fn host_bridge_result_file_allowed_next_node(path: &str) -> Option<String> {
+    let value = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&value).ok()?;
+    value
+        .get("allowed_next_node")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| host_bridge_completion_allowed_next_node_is_present(Some(value)))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn host_bridge_result_file_rework_target(path: &str) -> Option<String> {
+    let value = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&value).ok()?;
+    value
+        .get("rework_target")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| host_bridge_completion_rework_target_is_present(value))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn host_bridge_result_file_completed_target(path: &str) -> Option<String> {
+    let value = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&value).ok()?;
+    value
+        .get("completed_target")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn host_bridge_result_file_source_dispatch_packet_path(path: &str) -> Option<String> {
+    let value = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&value).ok()?;
+    value
+        .get("source_dispatch_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn read_json_file_lossy(path: &str) -> Option<serde_json::Value> {
+    let normalized = crate::runtime_dispatch_state::normalize_persisted_runtime_path(path);
+    let value = std::fs::read_to_string(normalized).ok()?;
+    serde_json::from_str(&value).ok()
+}
+
+fn write_rework_downstream_packet_fallback(
+    state_root: &Path,
+    run_id: &str,
+    target: &str,
+    source_packet: &serde_json::Value,
+) -> Option<String> {
+    let mut packet = source_packet.clone();
+    let object = packet.as_object_mut()?;
+    object.insert("dispatch_target".to_string(), serde_json::json!(target));
+    object.insert(
+        "downstream_dispatch_target".to_string(),
+        serde_json::Value::Null,
+    );
+    object.insert(
+        "downstream_dispatch_ready".to_string(),
+        serde_json::json!(false),
+    );
+    object.insert(
+        "downstream_dispatch_blockers".to_string(),
+        serde_json::json!([]),
+    );
+    object.insert(
+        "downstream_dispatch_status".to_string(),
+        serde_json::Value::Null,
+    );
+    let filename = format!(
+        "{}-{}-rework.json",
+        crate::runtime_dispatch_state::normalized_dispatch_target_token(run_id),
+        crate::runtime_dispatch_state::normalized_dispatch_target_token(target)
+    );
+    let path = state_root
+        .join("runtime-consumption")
+        .join("downstream-dispatch-packets")
+        .join(filename);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+    }
+    let body = serde_json::to_string_pretty(&packet).ok()?;
+    std::fs::write(&path, body).ok()?;
+    Some(path.display().to_string())
+}
+
+fn host_bridge_result_file_is_routable_rework(path: &str) -> bool {
+    let Ok(value) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&value) else {
+        return false;
+    };
+    host_bridge_result_file_allowed_next_node(path).is_some()
+        && host_bridge_result_file_rework_target(path).is_some()
+        && ["decision", "verdict"].into_iter().any(|field| {
+            value
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .is_some_and(host_bridge_completion_result_value_is_rework_alias)
+        })
+}
+
 fn supplied_host_bridge_completion_result_rework_target(
     args: &HostBridgeCompletionResultArgs<'_>,
     result: Option<&serde_json::Value>,
@@ -4632,11 +4744,10 @@ fn materialize_host_bridge_completion_evidence(
             || host_bridge_submitted_result_has_routable_retry_completion_evidence(
                 supplied_result_path,
             ));
-    let replace_existing_completion_evidence =
-        replace_existing_evidence
-            || retry_override_has_routable_blocked_completion
-            || retry_override_has_submitted_completion_result
-            || submitted_result_can_replace_completion_evidence;
+    let replace_existing_completion_evidence = replace_existing_evidence
+        || retry_override_has_routable_blocked_completion
+        || retry_override_has_submitted_completion_result
+        || submitted_result_can_replace_completion_evidence;
     let validated_paths = validated_host_bridge_paths_from_receipt(
         state_root,
         &canonical_request_path,
@@ -5141,6 +5252,7 @@ fn decode_lane_completion_packet_context(
 ) -> Result<Option<(crate::RuntimeConsumptionLaneSelection, serde_json::Value)>, String> {
     let Some(role_selection_value) = packet
         .get("role_selection_full")
+        .or_else(|| packet.get("role_selection"))
         .filter(|value| !value.is_null())
         .cloned()
     else {
@@ -5918,11 +6030,12 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     &supplied_completion_result_args,
                     supplied_completion_result.as_ref(),
                 );
-            let supplied_completion_decision = supplied_host_bridge_completion_result_contract_field(
-                decision,
-                supplied_completion_result.as_ref(),
-                "decision",
-            );
+            let supplied_completion_decision =
+                supplied_host_bridge_completion_result_contract_field(
+                    decision,
+                    supplied_completion_result.as_ref(),
+                    "decision",
+                );
             let supplied_completion_verdict = supplied_host_bridge_completion_result_contract_field(
                 verdict,
                 supplied_completion_result.as_ref(),
@@ -6010,7 +6123,9 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         .map(|(role_selection, _)| role_selection),
                     supplied_completion_decision.as_deref(),
                     supplied_completion_verdict.as_deref(),
-                    supplied_completion_rework_target.as_deref().or(rework_target),
+                    supplied_completion_rework_target
+                        .as_deref()
+                        .or(rework_target),
                     &supplied_completion_blocker_codes,
                     supplied_completion_blocked,
                     derive_summary_blockers,
@@ -6071,6 +6186,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     host_bridge_evidence
                         .as_ref()
                         .and_then(|evidence| evidence.allowed_next_node.clone())
+                })
+                .or_else(|| {
+                    supplied_completion_result_path.as_ref().and_then(|path| {
+                        host_bridge_result_file_allowed_next_node(&path.display().to_string())
+                    })
                 });
             let blocked_contract_allows_next =
                 host_bridge_request_blocked_contract_allows_next_node(
@@ -6087,6 +6207,12 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
             };
+            let supplied_completion_result_rework_target =
+                supplied_completion_rework_target.clone().or_else(|| {
+                    supplied_completion_result_path.as_ref().and_then(|path| {
+                        host_bridge_result_file_rework_target(&path.display().to_string())
+                    })
+                });
             let effective_allowed_next_node = match reconcile_lane_completion_allowed_next_node(
                 "Lane completion",
                 lane_completion_packet_context
@@ -6095,7 +6221,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 &receipt,
                 effective_allowed_next_node.as_deref(),
                 persisted_allowed_next_node,
-                supplied_completion_rework_target.as_deref(),
+                supplied_completion_result_rework_target.as_deref(),
             ) {
                 Ok(target) => target,
                 Err(error) => {
@@ -6140,7 +6266,12 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             downstream_completion_blockers.extend(supplied_completion_blocker_codes.clone());
             downstream_completion_blockers.sort();
             downstream_completion_blockers.dedup();
-            if accepted_rework_completion {
+            let result_file_declares_routable_rework = supplied_completion_result_path
+                .as_ref()
+                .is_some_and(|path| {
+                    host_bridge_result_file_is_routable_rework(&path.display().to_string())
+                });
+            if accepted_rework_completion || result_file_declares_routable_rework {
                 downstream_completion_blockers.clear();
             }
             let completed_target = if accepted_rework_completion {
@@ -6176,6 +6307,7 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 .iter()
                 .any(|blocker| blocker == "missing_owned_write_scope");
             let completion_blocked = !accepted_rework_completion
+                && !result_file_declares_routable_rework
                 && (supplied_completion_blocked
                     || !downstream_completion_blockers.is_empty()
                     || host_bridge_evidence
@@ -6285,7 +6417,10 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 receipt.downstream_dispatch_trace_path = Some(evidence.receipt_path.clone());
             }
             if !completion_blocked {
-                if let Some(value) = effective_allowed_next_node
+                let completion_allowed_next_node = effective_allowed_next_node
+                    .clone()
+                    .or_else(|| host_bridge_result_file_allowed_next_node(&completion_result_path));
+                if let Some(value) = completion_allowed_next_node
                     .as_deref()
                     .filter(|value| *value != "next")
                 {
@@ -6316,10 +6451,155 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                     None => {}
                 }
             }
+            if let Some(value) = host_bridge_result_file_allowed_next_node(&completion_result_path)
+                .or_else(|| (!completed_target.trim().is_empty()).then(|| completed_target.clone()))
+            {
+                if host_bridge_result_file_rework_target(&completion_result_path).is_some()
+                    || host_bridge_result_file_completed_target(&completion_result_path).as_deref()
+                        == Some(value.as_str())
+                    || completed_target.trim() == value.as_str()
+                {
+                    receipt.downstream_dispatch_target = Some(value);
+                    receipt.downstream_dispatch_ready = true;
+                    receipt.downstream_dispatch_blockers.clear();
+                    receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+                    receipt.dispatch_status = "executed".to_string();
+                    receipt.blocker_code = None;
+                    receipt.lane_status = crate::LaneStatus::LaneCompleted.as_str().to_string();
+                    if let Some((role_selection, run_graph_bootstrap)) =
+                        lane_completion_packet_context.as_ref()
+                    {
+                        crate::runtime_dispatch_state::refresh_downstream_dispatch_preview_with_owned_paths(
+                            &store,
+                            role_selection,
+                            run_graph_bootstrap,
+                            &mut receipt,
+                            &[],
+                        )
+                        .await
+                        .map_err(|error| {
+                            eprintln!(
+                                "Failed to refresh downstream dispatch preview after rework completion: {error}"
+                            );
+                        })
+                        .ok();
+                        if receipt.downstream_dispatch_packet_path.is_none()
+                            && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready")
+                        {
+                            receipt.downstream_dispatch_packet_path =
+                                crate::runtime_dispatch_downstream_packets::write_runtime_downstream_dispatch_packet_with_owned_paths(
+                                    store.root(),
+                                    role_selection,
+                                    run_graph_bootstrap,
+                                    &receipt,
+                                    &[],
+                                )
+                                .ok()
+                                .flatten();
+                        }
+                    }
+                }
+            }
             let downstream_dispatch_status = receipt
                 .downstream_dispatch_status
                 .clone()
                 .unwrap_or_else(|| "packet_ready".to_string());
+            if receipt.downstream_dispatch_status.is_none() {
+                receipt.downstream_dispatch_status = Some(downstream_dispatch_status.clone());
+            }
+            if receipt.downstream_dispatch_target.is_none() {
+                if let Some(target) = host_bridge_result_file_allowed_next_node(
+                    &completion_result_path,
+                )
+                .or_else(|| (!completed_target.trim().is_empty()).then(|| completed_target.clone()))
+                {
+                    receipt.downstream_dispatch_target = Some(target);
+                }
+            }
+            if receipt.downstream_dispatch_result_path.is_none() {
+                receipt.downstream_dispatch_result_path = Some(completion_result_path.clone());
+            }
+            if receipt.downstream_dispatch_target.is_some()
+                && receipt.downstream_dispatch_blockers.is_empty()
+            {
+                receipt.downstream_dispatch_ready = true;
+                receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+            }
+            if receipt.downstream_dispatch_packet_path.is_none()
+                && receipt.downstream_dispatch_status.as_deref() == Some("packet_ready")
+            {
+                let fallback_packet_context = if lane_completion_packet_context.is_none() {
+                    decode_lane_completion_packet_context(&packet)
+                        .ok()
+                        .flatten()
+                        .or_else(|| {
+                            packet
+                                .get("packet_path")
+                                .and_then(serde_json::Value::as_str)
+                                .and_then(read_json_file_lossy)
+                                .and_then(|packet| {
+                                    decode_lane_completion_packet_context(&packet)
+                                        .ok()
+                                        .flatten()
+                                })
+                        })
+                        .or_else(|| {
+                            host_bridge_result_file_source_dispatch_packet_path(
+                                &completion_result_path,
+                            )
+                            .and_then(|path| read_json_file_lossy(&path))
+                            .and_then(|packet| {
+                                decode_lane_completion_packet_context(&packet)
+                                    .ok()
+                                    .flatten()
+                            })
+                        })
+                } else {
+                    None
+                };
+                let packet_context = lane_completion_packet_context
+                    .as_ref()
+                    .or(fallback_packet_context.as_ref());
+                if let Some((role_selection, run_graph_bootstrap)) = packet_context {
+                    match crate::runtime_dispatch_downstream_packets::write_runtime_downstream_dispatch_packet_with_owned_paths(
+                        store.root(),
+                        role_selection,
+                        run_graph_bootstrap,
+                        &receipt,
+                        &[],
+                    ) {
+                        Ok(path) => {
+                            receipt.downstream_dispatch_packet_path = path;
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to write rework downstream dispatch packet: {error}");
+                        }
+                    }
+                }
+                if receipt.downstream_dispatch_packet_path.is_none() {
+                    if let Some(target) = receipt.downstream_dispatch_target.as_deref() {
+                        let source_packet = packet
+                            .get("packet_path")
+                            .and_then(serde_json::Value::as_str)
+                            .and_then(read_json_file_lossy)
+                            .or_else(|| {
+                                host_bridge_result_file_source_dispatch_packet_path(
+                                    &completion_result_path,
+                                )
+                                .and_then(|path| read_json_file_lossy(&path))
+                            });
+                        if let Some(source_packet) = source_packet.as_ref() {
+                            receipt.downstream_dispatch_packet_path =
+                                write_rework_downstream_packet_fallback(
+                                    store.root(),
+                                    run_id,
+                                    target,
+                                    source_packet,
+                                );
+                        }
+                    }
+                }
+            }
             packet["downstream_dispatch_ready"] =
                 serde_json::json!(receipt.downstream_dispatch_ready);
             packet["downstream_dispatch_blockers"] =
@@ -6328,6 +6608,10 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 serde_json::json!(downstream_dispatch_status.clone());
             packet["downstream_dispatch_result_path"] =
                 serde_json::json!(receipt.downstream_dispatch_result_path.clone());
+            packet["downstream_dispatch_target"] =
+                serde_json::json!(receipt.downstream_dispatch_target.clone());
+            packet["downstream_dispatch_packet_path"] =
+                serde_json::json!(receipt.downstream_dispatch_packet_path.clone());
             packet["downstream_lane_status"] = serde_json::json!(downstream_dispatch_status);
             packet["downstream_dispatch_active_target"] =
                 serde_json::json!(receipt.downstream_dispatch_active_target.clone());
@@ -17649,7 +17933,10 @@ mod tests {
         assert_eq!(evidence.receipt_path, receipt_path.display().to_string());
         let replaced_receipt =
             read_host_bridge_json_artifact_at_path(&receipt_path).expect("read replaced receipt");
-        assert_eq!(replaced_receipt["completion_receipt_id"], "receipt-retry-existing");
+        assert_eq!(
+            replaced_receipt["completion_receipt_id"],
+            "receipt-retry-existing"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -17667,8 +17954,8 @@ mod tests {
         let request_path = root.join("host-tool-bridge/requests/run-retry-blocked-next.json");
         let result_path = root.join("host-tool-bridge/results/run-retry-blocked-next.json");
         let receipt_path = root.join("host-tool-bridge/receipts/run-retry-blocked-next.json");
-        let packet_path =
-            root.join("runtime-consumption/downstream-dispatch-packets/run-retry-blocked-next.json");
+        let packet_path = root
+            .join("runtime-consumption/downstream-dispatch-packets/run-retry-blocked-next.json");
         for path in [&request_path, &result_path, &receipt_path, &packet_path] {
             std::fs::create_dir_all(path.parent().expect("artifact parent"))
                 .expect("create artifact parent");
@@ -17709,8 +17996,8 @@ mod tests {
             .to_string(),
         )
         .expect("write stale receipt");
-        let activation_result_path =
-            root.join("runtime-consumption/dispatch-results/run-retry-blocked-next-activation.json");
+        let activation_result_path = root
+            .join("runtime-consumption/dispatch-results/run-retry-blocked-next-activation.json");
         std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
             .expect("create activation parent");
         std::fs::write(
@@ -17765,7 +18052,10 @@ mod tests {
         assert_eq!(evidence.receipt_path, receipt_path.display().to_string());
         let replaced_receipt =
             read_host_bridge_json_artifact_at_path(&receipt_path).expect("read replaced receipt");
-        assert_eq!(replaced_receipt["completion_receipt_id"], "receipt-retry-blocked-next");
+        assert_eq!(
+            replaced_receipt["completion_receipt_id"],
+            "receipt-retry-blocked-next"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

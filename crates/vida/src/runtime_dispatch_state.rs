@@ -6913,12 +6913,19 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     Vec::new(),
                 );
             }
-            if let Some(target_resolution) = lawful_explicit_downstream_dispatch_target(
+            if let Some(target_resolution) = lawful_explicit_rework_downstream_dispatch_target(
                 &role_selection.execution_plan,
-                &allowed_next_lane_sequence,
                 receipt,
                 &explicit_target,
-            ) {
+            )
+            .or_else(|| {
+                lawful_explicit_downstream_dispatch_target(
+                    &role_selection.execution_plan,
+                    &allowed_next_lane_sequence,
+                    receipt,
+                    &explicit_target,
+                )
+            }) {
                 let missing_owned_scope = request_missing_owned_write_scope_for_dispatch_target(
                     store,
                     role_selection,
@@ -7525,6 +7532,26 @@ fn lawful_explicit_downstream_dispatch_target(
         .then_some(target_resolution)
 }
 
+fn lawful_explicit_rework_downstream_dispatch_target(
+    execution_plan: &serde_json::Value,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    explicit_target: &str,
+) -> Option<RuntimeDispatchTargetResolution> {
+    let route = crate::runtime_dispatch_result_evidence::authorized_dispatch_rework_route_from_receipt_fields(
+        receipt.downstream_dispatch_result_path.as_deref(),
+        receipt.dispatch_result_path.as_deref(),
+        receipt.dispatch_packet_path.as_deref(),
+        &receipt.dispatch_target,
+    )?;
+    let explicit_target = normalized_dispatch_target_token(explicit_target);
+    if explicit_target.is_empty()
+        || normalized_dispatch_target_token(&route.allowed_next_node) != explicit_target
+    {
+        return None;
+    }
+    resolve_runtime_dispatch_target(execution_plan, &route.allowed_next_node)
+}
+
 pub(crate) fn lawful_explicit_downstream_dispatch_target_from_execution_plan(
     execution_plan: &serde_json::Value,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -7784,12 +7811,19 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
         .and_then(|target| normalized_explicit_allowed_next_target(Some(target.as_str())));
     let result_explicit_downstream_dispatch_target =
         result_allowed_next_target.as_deref().and_then(|target| {
-            lawful_explicit_downstream_dispatch_target(
+            lawful_explicit_rework_downstream_dispatch_target(
                 &role_selection.execution_plan,
-                &allowed_next_lane_sequence,
                 receipt,
                 target,
             )
+            .or_else(|| {
+                lawful_explicit_downstream_dispatch_target(
+                    &role_selection.execution_plan,
+                    &allowed_next_lane_sequence,
+                    receipt,
+                    target,
+                )
+            })
             .map(|resolution| resolution.dispatch_target)
         });
     let invalid_result_allowed_next_target = result_allowed_next_target

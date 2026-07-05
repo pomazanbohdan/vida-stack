@@ -5892,7 +5892,10 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
             let submitted_result_retry_completion_evidence =
                 submitted_host_bridge_result_has_retryable_completion_evidence(
                     &request,
-                    command.submit_result.as_deref().or(command.result_file.as_deref()),
+                    command
+                        .submit_result
+                        .as_deref()
+                        .or(command.result_file.as_deref()),
                     command.retry_completion,
                 );
             let payload = host_bridge_adapter_payload(
@@ -5986,6 +5989,25 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     }
                     return emit_host_bridge_payload(&blocked, command.json);
                 };
+                let submitted_result = command.result_file.as_deref().and_then(|path| {
+                    read_canonical_host_bridge_json_artifact(path, "host bridge result").ok()
+                });
+                let submitted_decision = submitted_result
+                    .as_ref()
+                    .and_then(|result| host_bridge_result_string(result, "decision"))
+                    .map(ToOwned::to_owned);
+                let submitted_verdict = submitted_result
+                    .as_ref()
+                    .and_then(|result| host_bridge_result_string(result, "verdict"))
+                    .map(ToOwned::to_owned);
+                let submitted_allowed_next_node = submitted_result
+                    .as_ref()
+                    .and_then(|result| host_bridge_result_string(result, "allowed_next_node"))
+                    .map(ToOwned::to_owned);
+                let submitted_rework_target = submitted_result
+                    .as_ref()
+                    .and_then(|result| host_bridge_result_rework_target(result))
+                    .map(ToOwned::to_owned);
                 let lane_args = match host_bridge_completion_lane_args(
                     &command.request,
                     &payload,
@@ -5994,12 +6016,21 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     command.receipt_id.as_deref(),
                     command.state_dir.as_deref(),
                     command.result_file.as_deref(),
-                    command.decision.as_deref(),
-                    command.verdict.as_deref(),
-                    command.allowed_next_node.as_deref(),
+                    command
+                        .decision
+                        .as_deref()
+                        .or(submitted_decision.as_deref()),
+                    command.verdict.as_deref().or(submitted_verdict.as_deref()),
+                    command
+                        .allowed_next_node
+                        .as_deref()
+                        .or(submitted_allowed_next_node.as_deref()),
                     command.blocker_codes.as_deref(),
                     &command.blocker_code,
-                    command.rework_target.as_deref(),
+                    command
+                        .rework_target
+                        .as_deref()
+                        .or(submitted_rework_target.as_deref()),
                     command.retry_completion,
                     command.json,
                 ) {
