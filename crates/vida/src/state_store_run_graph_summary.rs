@@ -211,12 +211,13 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         rework_route_from_completion_evidence(&run_graph_completion_evidence(&receipt))
     {
         let rework_target = normalize_run_graph_node(&rework_route.allowed_next_node);
+        let policy_gate = rework_route_policy_gate(&rework_route, &receipt);
         let transition = ready_transition_input(
             &status,
             rework_target.clone(),
             Some(rework_target.clone()),
             format!("{rework_target}_dispatch_ready"),
-            "not_required".to_string(),
+            policy_gate,
             "execution_cursor".to_string(),
             RunGraphDispatchTargetFormat::Direct,
             true,
@@ -264,12 +265,13 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             rework_route_from_completion_evidence(&run_graph_completion_evidence(&receipt))
         {
             let rework_target = normalize_run_graph_node(&rework_route.allowed_next_node);
+            let policy_gate = rework_route_policy_gate(&rework_route, &receipt);
             let transition = ready_transition_input(
                 &status,
                 rework_target.clone(),
                 Some(rework_target.clone()),
                 format!("{rework_target}_dispatch_ready"),
-                "not_required".to_string(),
+                policy_gate,
                 "execution_cursor".to_string(),
                 RunGraphDispatchTargetFormat::Direct,
                 true,
@@ -589,6 +591,20 @@ fn downstream_rework_evidence_from_completion_result(
         allowed_next_node: route.allowed_next_node,
         blocker_code: route.blocker_code,
     })
+}
+
+fn rework_route_policy_gate(
+    rework_route: &RunGraphReworkEvidence,
+    receipt: &RunGraphDispatchReceiptStored,
+) -> String {
+    rework_route
+        .blocker_code
+        .as_deref()
+        .or(receipt.blocker_code.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "not_required".to_string())
 }
 
 fn blocked_source_lane_from_downstream_dispatch_packet(
@@ -5991,6 +6007,25 @@ mod tests {
         assert_eq!(projected.resume_target, "dispatch.developer_rework");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rework_route_policy_gate_preserves_governance_blocker() {
+        let mut receipt = sample_dispatch_receipt("run-governance-rework-route");
+        receipt.blocker_code = Some("receipt_fallback_blocker".to_string());
+        let stored_receipt = RunGraphDispatchReceiptStored::from(receipt);
+        let rework_route = RunGraphReworkEvidence {
+            allowed_next_node: "developer_rework".to_string(),
+            blocker_code: Some("consent_ttl_rework_required".to_string()),
+        };
+
+        let policy_gate = rework_route_policy_gate(&rework_route, &stored_receipt);
+
+        assert_eq!(policy_gate, "consent_ttl_rework_required");
+        assert!(
+            requires_memory_governance_enforcement(&policy_gate),
+            "governance-significant rework blockers must remain policy gates"
+        );
     }
 
     #[test]

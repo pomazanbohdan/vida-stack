@@ -3861,6 +3861,17 @@ fn rework_receipt_issues_are_superseded_by_ready_handoff(
     else {
         return false;
     };
+    if receipt
+        .blocker_code
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || route
+            .blocker_code
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return false;
+    }
     let allowed_next_node = route.allowed_next_node.replace('-', "_");
     active_node == allowed_next_node && resume_target == format!("dispatch.{allowed_next_node}")
 }
@@ -10952,6 +10963,76 @@ mod tests {
 
     fn blocker_codes(codes: &[&str]) -> Vec<String> {
         codes.iter().map(|code| (*code).to_string()).collect()
+    }
+
+    #[test]
+    fn ready_rework_handoff_does_not_supersede_blocker_codes() {
+        let root = test_temp_run_graph_root("vida-ready-rework-blocker-suppression");
+        let result_path = root.join("result.json");
+        let packet_path = root.join("packet.json");
+        fs::create_dir_all(&root).expect("create temp root");
+        fs::write(
+            &result_path,
+            serde_json::to_string(&serde_json::json!({
+                "status": "blocked",
+                "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_code": "consent_ttl_rework_required",
+                "blocker_codes": ["consent_ttl_rework_required"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer_rework",
+                "completion_verdict": "rework_required"
+            }))
+            .expect("serialize result"),
+        )
+        .expect("write result");
+        fs::write(
+            &packet_path,
+            serde_json::to_string(&serde_json::json!({
+                "role_selection_full": {
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "lane_catalog": {
+                                    "coach": {
+                                        "dispatch_target": "coach",
+                                        "task_class": "review"
+                                    },
+                                    "developer": {
+                                        "dispatch_target": "developer",
+                                        "task_class": "implementation"
+                                    }
+                                },
+                                "execution_lane_sequence": ["coach", "developer"]
+                            }
+                        }
+                    }
+                }
+            }))
+            .expect("serialize packet"),
+        )
+        .expect("write packet");
+
+        let mut receipt = clean_ready_downstream_dispatch_receipt("run-ready-rework-blocker");
+        receipt.dispatch_target = "coach".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.blocker_code = Some("consent_ttl_rework_required".to_string());
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
+
+        assert!(
+            !rework_receipt_issues_are_superseded_by_ready_handoff(
+                "developer_rework",
+                "ready",
+                true,
+                "dispatch.developer_rework",
+                &receipt,
+            ),
+            "ready rework handoffs must not hide governance-significant blocker codes"
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
