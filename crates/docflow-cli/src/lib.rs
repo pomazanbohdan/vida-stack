@@ -3680,13 +3680,13 @@ fn report_shape_issues(content: &str) -> Vec<ReportShapeIssue> {
     match lines.first() {
         Some(line)
             if line.starts_with("Thinking mode: ")
-                && ["STC.", "PR-CoT.", "MAR.", "5-SOL.", "META."]
+                && ["STC.", "PR-CoT.", "MAR.", "5-SOL.", "META.", "TRACE."]
                     .iter()
                     .any(|suffix| line.ends_with(suffix)) => {}
         _ => issues.push(ReportShapeIssue {
             code: "missing_thinking_mode_prefix".to_string(),
             message:
-                "The first non-empty line must start with `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META>.`."
+                "The first non-empty line must start with `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META|TRACE>.`."
                     .to_string(),
         }),
     }
@@ -6678,7 +6678,7 @@ mod tests {
         let path = temp_path("reporting-ok");
         fs::write(
             &path,
-            "Thinking mode: MAR.\nTasks: active=1 | in_work=1 | blocked=0\nAgents: active=0 | working=0 | waiting=0\n",
+            "Thinking mode: TRACE.\nTasks: active=1 | in_work=1 | blocked=0\nAgents: active=0 | working=0 | waiting=0\n",
         )
         .expect("report should be written");
 
