@@ -25,6 +25,60 @@ fn run_json_success(fixture: &PersistentRuntimeFixture, args: &[&str]) -> Value 
     fixture.json_success(args)
 }
 
+fn assert_zombie_d_operator_shape(value: &Value, label: &str) {
+    vida_test_support::assert_release1_operator_shape(label, value);
+    assert!(matches!(
+        value["status"].as_str(),
+        Some("pass") | Some("blocked")
+    ));
+    if value["status"] == "blocked" {
+        assert!(
+            value["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| !codes.is_empty()),
+            "{label} blocked verdict must expose blocker_codes: {value}"
+        );
+        assert!(
+            value["next_actions"]
+                .as_array()
+                .is_some_and(|actions| !actions.is_empty()),
+            "{label} blocked verdict must expose next_actions: {value}"
+        );
+    }
+}
+
+fn assert_zombie_d_host_bridge_shape(value: &Value) {
+    assert_eq!(value["surface"], "vida agent host-bridge");
+    assert!(matches!(
+        value["status"].as_str(),
+        Some("pass") | Some("blocked")
+    ));
+    assert!(value["blocker_codes"].is_array());
+    assert!(value["next_actions"].is_array());
+    assert!(value["artifact_refs"].is_object());
+    for field in ["status", "blocker_codes", "next_actions", "artifact_refs"] {
+        assert_eq!(value["shared_fields"][field], value[field]);
+        assert_eq!(value["operator_contracts"][field], value[field]);
+    }
+    assert!(
+        value["host_bridge"]["required_result_fields"]
+            .as_array()
+            .is_some_and(|fields| fields.iter().any(|field| field == "allowed_next_node"))
+    );
+    if value["status"] == "blocked" {
+        assert!(
+            value["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| !codes.is_empty())
+        );
+        assert!(
+            value["next_actions"]
+                .as_array()
+                .is_some_and(|actions| !actions.is_empty())
+        );
+    }
+}
+
 fn run_failure(fixture: &PersistentRuntimeFixture, args: &[&str]) -> Output {
     let output = fixture.capture(args);
     assert!(
@@ -179,15 +233,58 @@ fn closed_task_stale_host_bridge_run_projection_is_not_active_recovery() {
             "--json",
         ],
     );
-    run_json_success(
+    let seed = run_json_success(
         &fixture,
         &[
             "taskflow",
             "run-graph",
-            "dispatch-init",
+            "seed",
+            "closed-host-bridge-run",
+            "continue development",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        seed["payload"]["status"]["run_id"],
+        "closed-host-bridge-run"
+    );
+    let advance = run_json_success(
+        &fixture,
+        &[
+            "taskflow",
+            "run-graph",
+            "advance",
             "closed-host-bridge-run",
             "--json",
         ],
+    );
+    assert_eq!(
+        advance["payload"]["status"]["run_id"],
+        "closed-host-bridge-run"
+    );
+    let recovery = run_json(
+        &fixture,
+        &[
+            "taskflow",
+            "recovery",
+            "status",
+            "closed-host-bridge-run",
+            "--json",
+        ],
+    );
+    assert_eq!(recovery["status"], "blocked");
+    assert!(
+        json_string_vec(&recovery, "/blocker_codes")
+            .iter()
+            .any(|code| code == "open_delegated_cycle")
+    );
+    assert_eq!(
+        recovery["recovery"]["delegation_gate"]["delegated_cycle_open"],
+        true
+    );
+    assert_eq!(
+        recovery["recovery"]["delegation_gate"]["delegated_cycle_state"],
+        "handoff_pending"
     );
     run_json_success(
         &fixture,
@@ -961,4 +1058,228 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
         imported["task"]["planner_metadata"]["owned_paths"][0],
         "crates/vida/tests/task_runtime_workflows.rs"
     );
+}
+
+#[test]
+fn team_flow_transition_zombie_d_public_matrix() {
+    let fixture = PersistentRuntimeFixture::state_only("team-flow-transition-zombie-d");
+    fixture.boot();
+
+    let (routing, routing_success) =
+        fixture.json_allow_failure(&["taskflow", "validate-routing", "--json"]);
+    assert!(routing_success || routing["status"] == "blocked");
+    assert!(matches!(
+        routing["status"].as_str(),
+        Some("pass") | Some("blocked")
+    ));
+    assert_zombie_d_operator_shape(&routing, "vida taskflow validate-routing");
+    if routing["status"] == "pass" {
+        assert!(routing["route_count"].as_u64().unwrap_or_default() > 0);
+    } else {
+        assert!(
+            routing["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| !codes.is_empty())
+        );
+    }
+
+    let (route, route_success) = fixture.json_allow_failure(&[
+        "taskflow",
+        "route",
+        "explain",
+        "--dispatch-target",
+        "analyst",
+        "--json",
+    ]);
+    assert!(route_success || route["status"] == "blocked");
+    if route["status"] == "pass" {
+        assert_eq!(route["route"]["dispatch_target"], "analyst");
+        assert!(route["route"]["route_present"].as_bool().unwrap_or(false));
+    } else {
+        assert!(
+            route["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| !codes.is_empty())
+        );
+    }
+
+    let (route_by_role, route_by_role_success) = fixture.json_allow_failure(&[
+        "taskflow",
+        "route",
+        "explain",
+        "--runtime-role",
+        "business_analyst",
+        "--json",
+    ]);
+    assert_eq!(route["status"], route_by_role["status"]);
+    assert_eq!(route_success, route_by_role_success);
+    assert_eq!(route["blocker_codes"], route_by_role["blocker_codes"]);
+    assert_eq!(route["next_actions"], route_by_role["next_actions"]);
+    assert_eq!(route["artifact_refs"], route_by_role["artifact_refs"]);
+    if route["status"] == "pass" {
+        assert_eq!(
+            route["route"]["dispatch_target"],
+            route_by_role["route"]["dispatch_target"]
+        );
+        assert_eq!(
+            route["route"]["allowed_next_node"],
+            route_by_role["route"]["allowed_next_node"]
+        );
+    }
+    assert_zombie_d_operator_shape(&route, "vida taskflow route explain");
+    assert_zombie_d_operator_shape(&route_by_role, "vida taskflow route explain");
+
+    let compact = fixture.capture(&[
+        "taskflow",
+        "route",
+        "explain",
+        "--dispatch-target",
+        "analyst",
+    ]);
+    assert!(!compact.stdout.is_empty());
+    let compact_stdout = String::from_utf8_lossy(&compact.stdout);
+    assert!(!compact_stdout.contains("--json"));
+    assert!(compact_stdout.contains("route") || compact_stdout.contains("blocked"));
+
+    let help = fixture.capture(&["taskflow", "route", "explain", "--help"]);
+    let help_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&help.stdout),
+        String::from_utf8_lossy(&help.stderr)
+    );
+    assert!(help_text.contains("--json"));
+    assert!(help_text.contains("--dispatch-target"));
+    assert!(help_text.contains("--runtime-role"));
+
+    let run_id = "team-flow-transition-zombie-d-runtime";
+    fixture.create_run_graph_backing_task(run_id);
+    let seed = run_json_success(
+        &fixture,
+        &[
+            "taskflow",
+            "run-graph",
+            "seed",
+            run_id,
+            "continue development",
+            "--json",
+        ],
+    );
+    assert_eq!(seed["payload"]["status"]["run_id"], run_id);
+    let advance = run_json_success(
+        &fixture,
+        &["taskflow", "run-graph", "advance", run_id, "--json"],
+    );
+    let next_node = advance["payload"]["status"]["next_node"]
+        .as_str()
+        .expect("advance should expose canonical next_node");
+    assert!(!next_node.is_empty());
+    assert!(!next_node.contains('-'));
+
+    let persisted = run_json_success(
+        &fixture,
+        &["taskflow", "run-graph", "status", run_id, "--json"],
+    );
+    assert_zombie_d_operator_shape(&persisted, "vida taskflow run-graph status");
+    assert_eq!(persisted["run_graph_status"]["run_id"], run_id);
+    assert_eq!(persisted["run_graph_status"]["next_node"], next_node);
+
+    let bridge_fixture =
+        PersistentRuntimeFixture::state_only("team-flow-transition-zombie-d-host-bridge");
+    bridge_fixture.boot();
+    let bridge_state_dir = bridge_fixture.state_dir_string();
+    let bridge_run_id = "team-flow-transition-zombie-d-host-bridge-run";
+    bridge_fixture.create_run_graph_backing_task(bridge_run_id);
+    let dispatch_init = run_json_success(
+        &bridge_fixture,
+        &[
+            "taskflow",
+            "run-graph",
+            "dispatch-init",
+            bridge_run_id,
+            "--json",
+        ],
+    );
+    let dispatch_packet_path = dispatch_init["dispatch_packet_path"]
+        .as_str()
+        .expect("host bridge parity dispatch should expose packet path");
+    let (agent_init, agent_init_success) = bridge_fixture.json_allow_failure(&[
+        "agent-init",
+        "--dispatch-packet",
+        dispatch_packet_path,
+        "--execute-dispatch",
+        "--json",
+    ]);
+    assert!(
+        agent_init_success || agent_init["status"] == "blocked",
+        "host bridge dispatch must return a canonical verdict: {agent_init}"
+    );
+    let request_path = agent_init["host_tool_bridge_request"]["request_path"]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| {
+            agent_init["artifact_refs"]["host_bridge_request_path"]
+                .as_str()
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            std::fs::read_dir(
+                std::path::Path::new(&bridge_state_dir).join("host-tool-bridge/requests"),
+            )
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+            .map(|path| path.display().to_string())
+        })
+        .expect("host bridge parity must materialize a request path");
+    let (direct_bridge, direct_bridge_success) = bridge_fixture.json_allow_failure(&[
+        "agent",
+        "host-bridge",
+        "--request",
+        &request_path,
+        "--state-dir",
+        &bridge_state_dir,
+        "--json",
+    ]);
+    assert!(
+        direct_bridge_success || direct_bridge["status"] == "blocked",
+        "direct host bridge must fail closed with a canonical verdict: {direct_bridge}"
+    );
+    assert_zombie_d_host_bridge_shape(&direct_bridge);
+    let (bridge_persisted, bridge_persisted_success) = bridge_fixture.json_allow_failure(&[
+        "taskflow",
+        "run-graph",
+        "status",
+        bridge_run_id,
+        "--json",
+    ]);
+    assert!(
+        bridge_persisted_success || bridge_persisted["status"] == "blocked",
+        "persisted bridge status must be canonical: {bridge_persisted}"
+    );
+    assert_zombie_d_operator_shape(&bridge_persisted, "vida taskflow run-graph status");
+    assert_eq!(
+        direct_bridge["artifact_refs"]["request_path"],
+        bridge_persisted["artifact_refs"]["host_bridge_request_path"],
+        "direct host bridge and persisted run graph must identify the same request artifact"
+    );
+
+    let missing_route = run_json(
+        &fixture,
+        &[
+            "taskflow",
+            "route",
+            "explain",
+            "--dispatch-target",
+            "designer",
+            "--json",
+        ],
+    );
+    assert_eq!(missing_route["status"], "blocked");
+    assert!(
+        missing_route["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| code == "route_missing"))
+    );
+    assert_zombie_d_operator_shape(&missing_route, "vida taskflow route explain");
 }

@@ -336,6 +336,39 @@ impl StateStore {
         )
     }
 
+    fn apply_pairwise_parallel_safety(
+        ready: &mut [TaskSchedulingCandidate],
+        current_task: Option<&TaskRecord>,
+    ) -> Vec<TaskRecord> {
+        let mut selected = Vec::<TaskRecord>::new();
+
+        for candidate in ready {
+            let mut blockers =
+                Self::parallel_blockers_against_current(&candidate.task, current_task);
+            if blockers.is_empty() {
+                for selected_task in &selected {
+                    for blocker in Self::parallel_blockers_against_current(
+                        &candidate.task,
+                        Some(selected_task),
+                    ) {
+                        if !blockers.contains(&blocker) {
+                            blockers.push(blocker);
+                        }
+                    }
+                }
+            }
+
+            candidate.parallel_blockers = blockers;
+            candidate.ready_parallel_safe =
+                candidate.ready_now && candidate.parallel_blockers.is_empty();
+            if candidate.ready_parallel_safe {
+                selected.push(candidate.task.clone());
+            }
+        }
+
+        selected
+    }
+
     fn task_is_container_only(task: &TaskRecord) -> bool {
         task.execution_semantics.execution_mode.as_deref() == Some("container_only")
             || !work_item_is_active_bounded_unit_candidate(&task.issue_type)
@@ -480,7 +513,7 @@ impl StateStore {
             }
             let ready_now = blocked_by.is_empty();
             let parallel_blockers = if ready_now {
-                Self::parallel_blockers_against_current(task, current_task)
+                Vec::new()
             } else {
                 vec!["graph_blocked".to_string()]
             };
@@ -500,12 +533,8 @@ impl StateStore {
         }
         ready.sort_by(|left, right| task_ready_sort_key(&left.task, &right.task));
         blocked.sort_by(|left, right| task_ready_sort_key(&left.task, &right.task));
-        let parallel_candidates_after_current = ready
-            .iter()
-            .filter(|candidate| Some(candidate.task.id.as_str()) != chosen_current.as_deref())
-            .filter(|candidate| candidate.ready_parallel_safe)
-            .map(|candidate| candidate.task.clone())
-            .collect::<Vec<_>>();
+        let parallel_candidates_after_current =
+            Self::apply_pairwise_parallel_safety(&mut ready, current_task);
 
         Ok(TaskSchedulingProjection {
             current_task_id: chosen_current,
@@ -538,24 +567,9 @@ impl StateStore {
                 .map(|candidate| &candidate.task)
         });
 
-        let ready = projection
-            .ready
-            .iter()
-            .cloned()
-            .map(|mut candidate| {
-                candidate.parallel_blockers =
-                    Self::parallel_blockers_against_current(&candidate.task, current_task);
-                candidate.ready_parallel_safe =
-                    candidate.ready_now && candidate.parallel_blockers.is_empty();
-                candidate
-            })
-            .collect::<Vec<_>>();
-        let parallel_candidates_after_current = ready
-            .iter()
-            .filter(|candidate| Some(candidate.task.id.as_str()) != chosen_current.as_deref())
-            .filter(|candidate| candidate.ready_parallel_safe)
-            .map(|candidate| candidate.task.clone())
-            .collect::<Vec<_>>();
+        let mut ready = projection.ready.iter().cloned().collect::<Vec<_>>();
+        let parallel_candidates_after_current =
+            Self::apply_pairwise_parallel_safety(&mut ready, current_task);
 
         TaskSchedulingProjection {
             current_task_id: chosen_current,
@@ -1150,6 +1164,23 @@ mod tests {
             provider_mapping: None,
             dependencies: Vec::new(),
         }
+    }
+
+    fn parallel_task_record(
+        task_id: &str,
+        conflict_domain: &str,
+        owned_paths: &[&str],
+    ) -> TaskRecord {
+        let mut task = task_record(task_id, "open");
+        task.execution_semantics = TaskExecutionSemantics {
+            execution_mode: Some("parallel_safe".to_string()),
+            order_bucket: Some("wave-1".to_string()),
+            parallel_group: Some("writers".to_string()),
+            conflict_domain: Some(conflict_domain.to_string()),
+        };
+        task.planner_metadata.owned_paths =
+            owned_paths.iter().map(|path| (*path).to_string()).collect();
+        task
     }
 
     #[test]
@@ -2338,6 +2369,168 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn scheduling_projection_rejects_pairwise_path_alias_collision_after_current() {
+        let root = temp_root("task-scheduling-pairwise-owned-paths");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        create_task_with_semantics_and_owned_paths(
+            &store,
+            "task-a-current",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            Some("writers"),
+            Some("domain-a"),
+            vec!["crates/current".to_string()],
+        )
+        .await;
+        create_task_with_semantics_and_owned_paths(
+            &store,
+            "task-b-selected",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            Some("writers"),
+            Some("domain-b"),
+            vec!["crates/shared/./src".to_string()],
+        )
+        .await;
+        create_task_with_semantics_and_owned_paths(
+            &store,
+            "task-c-collision",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            Some("writers"),
+            Some("domain-c"),
+            vec!["crates\\shared\\generated\\..\\src\\lib.rs".to_string()],
+        )
+        .await;
+
+        let projection = store
+            .scheduling_projection_scoped(None, Some("task-a-current"))
+            .await
+            .expect("persisted projection should render");
+
+        assert_eq!(
+            projection
+                .parallel_candidates_after_current
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-b-selected"]
+        );
+        let collision = projection
+            .ready
+            .iter()
+            .find(|candidate| candidate.task.id == "task-c-collision")
+            .expect("third candidate should remain graph-ready");
+        assert!(!collision.ready_parallel_safe);
+        assert_eq!(
+            collision.parallel_blockers,
+            vec![scheduler_dispatch::PARALLEL_BLOCKER_OWNED_PATH_COLLISION]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn scheduling_projection_rejects_pairwise_conflict_domain_after_current() {
+        let root = temp_root("task-scheduling-pairwise-domain");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, domain) in [
+            ("task-a-current", "domain-a"),
+            ("task-b-selected", "shared-domain"),
+            ("task-c-collision", "shared-domain"),
+        ] {
+            create_task_with_semantics(
+                &store,
+                task_id,
+                Some("parallel_safe"),
+                Some("wave-1"),
+                Some("writers"),
+                Some(domain),
+            )
+            .await;
+        }
+
+        let projection = store
+            .scheduling_projection_scoped(None, Some("task-a-current"))
+            .await
+            .expect("persisted projection should render");
+
+        assert_eq!(
+            projection
+                .parallel_candidates_after_current
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-b-selected"]
+        );
+        let collision = projection
+            .ready
+            .iter()
+            .find(|candidate| candidate.task.id == "task-c-collision")
+            .expect("third candidate should remain graph-ready");
+        assert_eq!(
+            collision.parallel_blockers,
+            vec![scheduler_dispatch::PARALLEL_BLOCKER_CONFLICT_DOMAIN_COLLISION]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scheduling_projection_limits_pairwise_selection_to_requested_scope() {
+        let mut scope = task_record("scope", "open");
+        scope.issue_type = "epic".to_string();
+        let mut outside_scope = task_record("outside-scope", "open");
+        outside_scope.issue_type = "epic".to_string();
+
+        let mut current = parallel_task_record("task-a-current", "domain-a", &["crates/a"]);
+        current
+            .dependencies
+            .push(parent_child_dependency("task-a-current", "scope"));
+        let mut candidate =
+            parallel_task_record("task-b-candidate", "domain-b", &["crates/shared"]);
+        candidate
+            .dependencies
+            .push(parent_child_dependency("task-b-candidate", "scope"));
+        let mut unrelated_collision =
+            parallel_task_record("task-c-outside", "domain-c", &["crates/shared/src"]);
+        unrelated_collision
+            .dependencies
+            .push(parent_child_dependency("task-c-outside", "outside-scope"));
+
+        let projection = StateStore::scheduling_projection_scoped_from_rows(
+            &[
+                scope,
+                outside_scope,
+                current,
+                candidate,
+                unrelated_collision,
+            ],
+            Some("scope"),
+            Some("task-a-current"),
+            &BTreeSet::new(),
+        )
+        .expect("scoped projection should render");
+
+        assert_eq!(
+            projection
+                .parallel_candidates_after_current
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-b-candidate"]
+        );
+        assert!(
+            projection
+                .ready
+                .iter()
+                .all(|candidate| candidate.task.id != "task-c-outside")
+        );
     }
 
     #[tokio::test]

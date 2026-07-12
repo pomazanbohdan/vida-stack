@@ -995,6 +995,32 @@ pub(crate) fn latest_release_admission_operator_evidence_snapshot_path(
     Ok(latest.map(|(_, path)| path))
 }
 
+pub(crate) fn selected_final_snapshot_has_release_admission_operator_evidence(
+    selected_snapshot: Option<
+        &crate::runtime_consumption_state::SelectedFinalRuntimeConsumptionSnapshot,
+    >,
+) -> bool {
+    selected_snapshot
+        .and_then(|snapshot| snapshot.payload.as_ref())
+        .is_some_and(|payload| {
+            crate::release1_operator_output::shared_operator_output_contract_parity_error(payload)
+                .is_none()
+                && release_admission_operator_evidence_snapshot(payload)
+        })
+}
+
+pub(crate) fn selected_final_snapshot_release_admission_operator_evidence_path(
+    selected_snapshot: Option<
+        &crate::runtime_consumption_state::SelectedFinalRuntimeConsumptionSnapshot,
+    >,
+) -> Option<&str> {
+    selected_snapshot
+        .filter(|snapshot| {
+            selected_final_snapshot_has_release_admission_operator_evidence(Some(snapshot))
+        })
+        .map(|snapshot| snapshot.path.as_str())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExceptionTakeoverState {
     NotRecorded,
@@ -2372,10 +2398,11 @@ mod tests {
             );
         }
 
-        let shared_contract_set =
-            taskflow_contracts::canonical_blocker_code_list(scoped_surface_literals.iter().copied())
-                .into_iter()
-                .collect::<BTreeSet<_>>();
+        let shared_contract_set = taskflow_contracts::canonical_blocker_code_list(
+            scoped_surface_literals.iter().copied(),
+        )
+        .into_iter()
+        .collect::<BTreeSet<_>>();
         let canonical_set = canonical_blocker_code_list(scoped_surface_literals.iter().copied())
             .into_iter()
             .collect::<BTreeSet<_>>();
@@ -3313,24 +3340,26 @@ mod tests {
 
     #[test]
     fn blocker_code_canonicalization_rejects_case_and_whitespace_drift() {
-        assert_eq!(super::canonical_blocker_code_str("missing_packet"), Some("missing_packet"));
+        assert_eq!(
+            super::canonical_blocker_code_str("missing_packet"),
+            Some("missing_packet")
+        );
         assert_eq!(BlockerCode::from_str(" open_delegated_cycle "), None);
         assert_eq!(
             super::canonical_blocker_code_str(" open_delegated_cycle "),
             None
         );
         assert_eq!(
-            super::canonical_blocker_code_value_from_str("missing_cache_key_input:protocol_binding_revision"),
+            super::canonical_blocker_code_value_from_str(
+                "missing_cache_key_input:protocol_binding_revision"
+            ),
             Some("missing_cache_key_input:protocol_binding_revision".to_string())
         );
         assert_eq!(
             super::canonical_blocker_code_value_from_str(" open_delegated_cycle "),
             None
         );
-        assert_eq!(
-            super::canonical_blocker_code_str(" missing_packet "),
-            None
-        );
+        assert_eq!(super::canonical_blocker_code_str(" missing_packet "), None);
         assert_eq!(super::canonical_blocker_code_str("MISSING_PACKET"), None);
         assert_eq!(
             super::canonical_blocker_code_value_from_str(

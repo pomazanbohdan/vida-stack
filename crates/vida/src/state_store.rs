@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,6 +16,7 @@ mod state_store_instruction_bundle;
 mod state_store_launcher_activation;
 #[path = "state_store_open.rs"]
 mod state_store_open;
+pub(crate) use state_store_open::state_root_lifecycle_guard_path;
 #[path = "state_store_orchestrator_claim.rs"]
 mod state_store_orchestrator_claim;
 #[path = "state_store_patching.rs"]
@@ -246,6 +248,7 @@ pub(crate) use state_store_task_reconciliation::{
 pub struct StateStore {
     db: Surreal<Db>,
     root: PathBuf,
+    _lifecycle_guard: Arc<state_store_open::StateRootLifecycleGuard>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -516,16 +519,18 @@ impl StateStore {
             });
         }
 
+        let lifecycle_guard =
+            Arc::new(state_store_open::StateRootLifecycleGuard::acquire(&root).await?);
+        lifecycle_guard.validate_root_identity(&root)?;
+        // Hold the legacy in-root guard for the whole reset. The state root itself stays stable,
+        // so Windows never has to rename a directory containing our locked guard handle.
+        if root.exists() && state_reset_dir_has_existing_datastore_payload(&root)? {
+            validate_state_reset_existing_root(&root)?;
+            lifecycle_guard.acquire_legacy_guard(&root).await?;
+        }
         let archive_path = if root.exists() {
-            let _authoritative_open_guard =
-                if state_reset_dir_has_existing_datastore_payload(&root)? {
-                    validate_state_reset_existing_root(&root)?;
-                    Some(state_store_open::AuthoritativeOpenGuard::acquire(&root).await?)
-                } else {
-                    None
-                };
             let archive_path = Self::next_state_archive_path(&root);
-            Self::rename_state_root_to_archive_with_retry(&root, &archive_path).await?;
+            Self::archive_state_payload_to_archive_with_retry(&root, &archive_path).await?;
             Some(archive_path)
         } else {
             None
@@ -544,7 +549,8 @@ impl StateStore {
         };
 
         if reinit {
-            let store = Self::open(root.clone()).await?;
+            let store =
+                Self::open_with_lifecycle_guard(root.clone(), lifecycle_guard.clone()).await?;
             let task_store = store.task_store_summary().await?;
             let _state_spine = store.state_spine_summary().await?;
             summary.reinitialized = true;
@@ -583,6 +589,45 @@ impl StateStore {
             unix_timestamp_nanos(),
             std::process::id()
         ))
+    }
+
+    async fn archive_state_payload_to_archive_with_retry(
+        root: &Path,
+        archive_path: &Path,
+    ) -> Result<(), StateStoreError> {
+        fs::create_dir(archive_path)?;
+        let entries = fs::read_dir(root)?.collect::<Result<Vec<_>, _>>()?;
+        for entry in entries {
+            let file_name = entry.file_name();
+            if file_name == ".vida-authoritative-open.guard" {
+                continue;
+            }
+            let source = entry.path();
+            let target = archive_path.join(&file_name);
+            for attempt in 0..STATE_RESET_ARCHIVE_RENAME_RETRY_COUNT {
+                match fs::rename(&source, &target) {
+                    Ok(()) => break,
+                    Err(error)
+                        if state_reset_archive_rename_error_is_retryable(&error)
+                            && attempt + 1 < STATE_RESET_ARCHIVE_RENAME_RETRY_COUNT =>
+                    {
+                        let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(root);
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            STATE_RESET_ARCHIVE_RENAME_RETRY_DELAY_MS,
+                        ))
+                        .await;
+                    }
+                    Err(error) => {
+                        return Err(state_reset_archive_rename_failure(
+                            root,
+                            archive_path,
+                            &error,
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn rename_state_root_to_archive_with_retry(
@@ -774,13 +819,7 @@ fn validate_state_reset_existing_root(root: &Path) -> Result<(), StateStoreError
         });
     }
 
-    let required_entries = [
-        ".vida-authoritative-open.guard",
-        "manifest",
-        "sstables",
-        "vlog",
-        "wal",
-    ];
+    let required_entries = ["manifest", "sstables", "vlog", "wal"];
     let missing_entries = required_entries
         .iter()
         .filter(|entry| !root.join(entry).exists())
@@ -1053,31 +1092,34 @@ mod tests {
         use fs2::FileExt;
         use std::fs::OpenOptions;
 
-        let root = std::env::temp_dir().join(format!(
-            "vida-state-reset-live-guard-{}-{}",
+        let container = std::env::temp_dir().join(format!(
+            "vida-state-reset-live-guard-container-{}-{}",
             std::process::id(),
             unix_timestamp_nanos()
         ));
+        let root = container.join("state");
         fs::create_dir_all(root.join("manifest")).expect("create manifest dir");
         fs::create_dir_all(root.join("sstables")).expect("create sstables dir");
         fs::create_dir_all(root.join("vlog")).expect("create vlog dir");
         fs::create_dir_all(root.join("wal")).expect("create wal dir");
-        let guard_path = root.join(".vida-authoritative-open.guard");
-        fs::write(&guard_path, "").expect("write guard");
+        fs::write(root.join(".vida-authoritative-open.guard"), "").expect("write legacy guard");
         fs::write(
             root.join("wal").join("00000000000000000003.wal"),
             "held live",
         )
         .expect("write wal stand-in");
 
+        let lifecycle_guard_path = state_store_open::state_root_lifecycle_guard_path(&root)
+            .expect("derive lifecycle guard path");
         let guard_file = OpenOptions::new()
+            .create(true)
             .read(true)
             .write(true)
-            .open(&guard_path)
-            .expect("open guard");
+            .open(&lifecycle_guard_path)
+            .expect("open lifecycle guard");
         guard_file
             .try_lock_exclusive()
-            .expect("hold authoritative guard");
+            .expect("hold lifecycle guard");
 
         let result = tokio::time::timeout(
             std::time::Duration::from_millis(100),
@@ -1092,12 +1134,72 @@ mod tests {
                 .expect("read temp parent")
                 .filter_map(Result::ok)
                 .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                .all(|name| !name.starts_with("vida-state-reset-live-guard-")
-                    || !name.contains(".archive."))
+                .all(|name| !name.starts_with("state.archive.")),
+            "a locked lifecycle guard must prevent archive creation"
         );
 
-        guard_file.unlock().expect("unlock guard");
+        guard_file.unlock().expect("unlock lifecycle guard");
+        drop(guard_file);
+        let summary = StateStore::archive_and_reinit_state_root(root.clone(), true, true)
+            .await
+            .expect("reset should retry after lifecycle guard release");
+        let archive_path = summary.archive_path.expect("archive path");
+        assert!(!archive_path.join(".vida-authoritative-open.guard").exists());
+        assert!(root.join(".vida-authoritative-open.guard").exists());
+        let _ = fs::remove_dir_all(&container);
+    }
+
+    #[tokio::test]
+    async fn state_reset_refuses_to_archive_datastore_when_legacy_guard_is_locked() {
+        use fs2::FileExt;
+        use std::fs::OpenOptions;
+
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-reset-legacy-guard-{}-{}",
+            std::process::id(),
+            unix_timestamp_nanos()
+        ));
+        fs::create_dir_all(root.join("manifest")).expect("create manifest dir");
+        fs::create_dir_all(root.join("sstables")).expect("create sstables dir");
+        fs::create_dir_all(root.join("vlog")).expect("create vlog dir");
+        fs::create_dir_all(root.join("wal")).expect("create wal dir");
+        let legacy_guard_path = root.join(".vida-authoritative-open.guard");
+        fs::write(&legacy_guard_path, "").expect("write legacy guard");
+        fs::write(
+            root.join("wal").join("00000000000000000003.wal"),
+            "held live",
+        )
+        .expect("write wal stand-in");
+        let guard_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&legacy_guard_path)
+            .expect("open legacy guard");
+        guard_file.try_lock_exclusive().expect("hold legacy guard");
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            StateStore::archive_and_reinit_state_root(root.clone(), true, true),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "locked legacy datastore guard should not archive"
+        );
+        assert!(legacy_guard_path.exists());
+        assert!(root.join("wal").join("00000000000000000003.wal").exists());
+
+        guard_file.unlock().expect("unlock legacy guard");
+        drop(guard_file);
+        let summary = StateStore::archive_and_reinit_state_root(root.clone(), true, true)
+            .await
+            .expect("reset should retry after legacy guard release");
+        let archive_path = summary.archive_path.expect("archive path");
+        assert!(!archive_path.join(".vida-authoritative-open.guard").exists());
+        assert!(root.join(".vida-authoritative-open.guard").exists());
         let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&archive_path);
     }
 
     #[tokio::test]
@@ -1117,7 +1219,7 @@ mod tests {
 
         assert!(summary.archive_created);
         assert!(!summary.reinitialized);
-        assert!(!root.exists());
+        assert!(root.join(".vida-authoritative-open.guard").exists());
         let archive_path = summary
             .archive_path
             .as_ref()

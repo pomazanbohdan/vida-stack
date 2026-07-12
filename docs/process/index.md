@@ -90,6 +90,8 @@ Canonical entrypoints:
     - project-owned protocol for safe repository, project-adjacent, and filesystem artifact cleanup produced by `vida-stack` work
 37. `docs/process/taskflow-actualization-protocol.md`
     - runtime protocol for refreshing TaskFlow graph ownership, dependencies, ordering, duplicate handling, and parallel-safe versus sequential coherent pack classification from live evidence
+38. `docs/process/agent-extensions/requirement-analysis-method-skills.md`
+    - project-owned requirement-analysis method skills and activation evidence
 
 -----
 artifact_path: process/index

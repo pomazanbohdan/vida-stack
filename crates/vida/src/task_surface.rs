@@ -10,23 +10,22 @@ use crate::taskflow_proxy::paths_intersect;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use taskflow_core::task::block::{append_task_block_note, normalize_task_block_list};
 use taskflow_core::task::dependencies::{
-    parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines, TaskDependencyBulkEdge,
+    TaskDependencyBulkEdge, parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines,
 };
 use taskflow_core::task::import_export::{
-    task_import_jsonl_success_fields, task_replace_jsonl_success_fields, TaskImportJsonlSummary,
-    TaskReplaceJsonlSummary,
+    TaskImportJsonlSummary, TaskReplaceJsonlSummary, task_import_jsonl_success_fields,
+    task_replace_jsonl_success_fields,
 };
 use taskflow_core::task::progress::{
-    parse_task_progress_basis,
-    task_progress_summary_from_rows as core_task_progress_summary_from_rows, TaskProgressRow,
-    TaskProgressSummary as CoreTaskProgressSummary,
+    TaskProgressRow, TaskProgressSummary as CoreTaskProgressSummary, parse_task_progress_basis,
+    task_progress_summary_from_rows as core_task_progress_summary_from_rows,
 };
 use taskflow_core::task::verify::{
-    all_structured_task_proof_targets_satisfied, append_task_browser_proof_note,
-    append_task_proof_evidence_note, append_task_verify_note, canonical_task_proof_result,
-    normalized_task_verify_evidence, structured_task_proof_evidence_match,
-    task_browser_proof_target, task_reports_runtime_proof_blocker, task_verify_labels,
-    TaskBrowserProofArtifact,
+    TaskBrowserProofArtifact, all_structured_task_proof_targets_satisfied,
+    append_task_browser_proof_note, append_task_proof_evidence_note, append_task_verify_note,
+    canonical_task_proof_result, normalized_task_verify_evidence,
+    structured_task_proof_evidence_match, task_browser_proof_target,
+    task_reports_runtime_proof_blocker, task_verify_labels,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2951,10 +2950,12 @@ async fn run_task_export_jsonl(command: TaskExportJsonlArgs) -> ExitCode {
 }
 
 fn task_import_jsonl_error_payload(path: &str, error: &str) -> serde_json::Value {
-    let blocker_codes = vec![crate::release1_contracts::blocker_code_value(
-        crate::release1_contracts::BlockerCode::DependencyGraphIssues,
-    )
-    .unwrap_or_else(|| "dependency_graph_issues".to_string())];
+    let blocker_codes = vec![
+        crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::DependencyGraphIssues,
+        )
+        .unwrap_or_else(|| "dependency_graph_issues".to_string()),
+    ];
     let retry_command =
         operator_output::command_text::human_command("vida task import-jsonl <path> --json");
     let next_actions = vec![format!(
@@ -4433,7 +4434,7 @@ async fn run_task_steps(command: TaskStepsArgs) -> ExitCode {
                 command.render,
                 command.json,
                 &error,
-            )
+            );
         }
     };
     let steps = task_step_rows(
@@ -5430,6 +5431,18 @@ fn parse_task_bulk_import_raw_items(
     path: &std::path::Path,
     requested_format: crate::TaskImportFormatArg,
 ) -> Result<(String, Vec<TaskBulkImportRawItem>), String> {
+    if path == std::path::Path::new("-") {
+        if !matches!(requested_format, crate::TaskImportFormatArg::Jsonl) {
+            return Err(
+                "stdin import requires explicit `--format jsonl` with `--file -`.".to_string(),
+            );
+        }
+        let mut text = String::new();
+        let mut stdin = std::io::stdin();
+        std::io::Read::read_to_string(&mut stdin, &mut text)
+            .map_err(|error| format!("Failed to read JSONL task import from stdin: {error}"))?;
+        return parse_task_bulk_import_jsonl_text(&text).map(|items| ("jsonl".to_string(), items));
+    }
     let format = resolve_task_bulk_import_format(path, requested_format)?;
     let text = read_task_bulk_import_file(path)?;
     let items = match format {
@@ -5445,40 +5458,41 @@ fn parse_task_bulk_import_raw_items(
                 .map_err(|error| format!("Failed to normalize YAML task import file: {error}"))?;
             task_bulk_import_raw_items_from_value(value)?
         }
-        "jsonl" => {
-            let mut items = Vec::new();
-            for (line_index, line) in text.lines().enumerate() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                if items.len() >= TASK_BULK_IMPORT_MAX_TASKS {
-                    return Err(format!(
-                        "Task import contains more than {} tasks; first excess item is at line {}.",
-                        TASK_BULK_IMPORT_MAX_TASKS,
-                        line_index + 1
-                    ));
-                }
-                let value =
-                    serde_json::from_str::<serde_json::Value>(trimmed).map_err(|error| {
-                        format!(
-                            "Failed to parse JSONL task import file at line {}: {error}",
-                            line_index + 1
-                        )
-                    })?;
-                items.push(TaskBulkImportRawItem {
-                    index: items.len(),
-                    line: Some(line_index + 1),
-                    value,
-                });
-            }
-            items
-        }
+        "jsonl" => parse_task_bulk_import_jsonl_text(&text)?,
         other => {
             return Err(format!("Unsupported task import format `{other}`."));
         }
     };
     Ok((format.to_string(), items))
+}
+
+fn parse_task_bulk_import_jsonl_text(text: &str) -> Result<Vec<TaskBulkImportRawItem>, String> {
+    let mut items = Vec::new();
+    for (line_index, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if items.len() >= TASK_BULK_IMPORT_MAX_TASKS {
+            return Err(format!(
+                "Task import contains more than {} tasks; first excess item is at line {}.",
+                TASK_BULK_IMPORT_MAX_TASKS,
+                line_index + 1
+            ));
+        }
+        let value = serde_json::from_str::<serde_json::Value>(trimmed).map_err(|error| {
+            format!(
+                "Failed to parse JSONL task import at line {}: {error}",
+                line_index + 1
+            )
+        })?;
+        items.push(TaskBulkImportRawItem {
+            index: items.len(),
+            line: Some(line_index + 1),
+            value,
+        });
+    }
+    Ok(items)
 }
 
 fn task_bulk_json_field<'a>(
@@ -6406,6 +6420,32 @@ fn task_bulk_import_blocked_result(
     }
 }
 
+fn task_bulk_import_rollback_path(state_dir: &std::path::Path) -> std::path::PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    state_dir.join(format!(
+        ".task-import-rollback-{}-{nonce}.jsonl",
+        std::process::id()
+    ))
+}
+
+async fn rollback_task_bulk_import(
+    store: &StateStore,
+    rollback_path: &std::path::Path,
+) -> Result<(), String> {
+    store
+        .replace_with_task_jsonl_snapshot_file(rollback_path)
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to restore rollback snapshot `{}`: {error}",
+                rollback_path.display()
+            )
+        })
+}
+
 async fn run_task_bulk_import(command: TaskBulkImportArgs) -> ExitCode {
     let state_dir = command
         .state_dir
@@ -6478,6 +6518,19 @@ async fn run_task_bulk_import(command: TaskBulkImportArgs) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let rollback_path = task_bulk_import_rollback_path(&state_dir);
+    if let Err(error) = store.export_tasks_to_jsonl(&rollback_path).await {
+        let result = task_bulk_import_blocked_result(
+            &command,
+            format!(
+                "Failed to create atomic rollback snapshot `{}`: {error}",
+                rollback_path.display()
+            ),
+            "rollback_snapshot",
+        );
+        print_task_bulk_import_result(command.render, &result, command.json);
+        return ExitCode::from(1);
+    }
     let mut created_task_ids = Vec::new();
     for task_index in order {
         let task = &plan.tasks[task_index];
@@ -6501,7 +6554,17 @@ async fn run_task_bulk_import(command: TaskBulkImportArgs) -> ExitCode {
         {
             Ok(created) => created,
             Err(error) => {
-                let result = task_bulk_import_blocked_result(&command, error.to_string(), "task");
+                let rollback = rollback_task_bulk_import(&store, &rollback_path).await;
+                let _ = std::fs::remove_file(&rollback_path);
+                let reason = match rollback {
+                    Ok(()) => format!(
+                        "Task write failed and the prior task snapshot was restored: {error}"
+                    ),
+                    Err(rollback_error) => {
+                        format!("Task write failed: {error}; rollback blocker: {rollback_error}")
+                    }
+                };
+                let result = task_bulk_import_blocked_result(&command, reason, "task");
                 print_task_bulk_import_result(command.render, &result, command.json);
                 return ExitCode::from(1);
             }
@@ -6529,8 +6592,17 @@ async fn run_task_bulk_import(command: TaskBulkImportArgs) -> ExitCode {
             {
                 Ok(updated) => updated,
                 Err(error) => {
-                    let result =
-                        task_bulk_import_blocked_result(&command, error.to_string(), "notes");
+                    let rollback = rollback_task_bulk_import(&store, &rollback_path).await;
+                    let _ = std::fs::remove_file(&rollback_path);
+                    let reason = match rollback {
+                        Ok(()) => format!(
+                            "Notes write failed and the prior task snapshot was restored: {error}"
+                        ),
+                        Err(rollback_error) => format!(
+                            "Notes write failed: {error}; rollback blocker: {rollback_error}"
+                        ),
+                    };
+                    let result = task_bulk_import_blocked_result(&command, reason, "notes");
                     print_task_bulk_import_result(command.render, &result, command.json);
                     return ExitCode::from(1);
                 }
@@ -6542,8 +6614,14 @@ async fn run_task_bulk_import(command: TaskBulkImportArgs) -> ExitCode {
     }
     if let Err(code) = refresh_task_snapshot_after_mutation(&store, TASK_BULK_IMPORT_SURFACE).await
     {
+        let rollback = rollback_task_bulk_import(&store, &rollback_path).await;
+        let _ = std::fs::remove_file(&rollback_path);
+        if rollback.is_err() {
+            return ExitCode::from(1);
+        }
         return code;
     }
+    let _ = std::fs::remove_file(&rollback_path);
     let mut result = plan.result;
     result.applied = true;
     result.created_count = created_task_ids.len();
@@ -9925,6 +10003,47 @@ fn blocked_task_next_lawful_receipt_with_blockers(
     })
 }
 
+fn blocked_closed_task_active_run_projection_task_next_lawful_receipt(
+    ready_task_candidates: Vec<TaskContinuationCandidate>,
+) -> TaskNextLawfulReceipt {
+    let gated =
+        crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
+            serde_json::json!({
+                "active_bounded_unit": serde_json::Value::Null,
+                "next_actions": [],
+            }),
+        );
+    let next_actions = gated["next_actions"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let next_action = next_actions.first().cloned();
+    let mut receipt = blocked_task_next_lawful_receipt_with_blockers(
+        gated["active_bounded_unit"].clone(),
+        ready_task_candidates,
+        vec!["closed_task_active_run_projection_mismatch".to_string()],
+        next_action.as_deref().unwrap_or(
+            "Inspect the rejected closed-task run before retrying reconcile-closed-runs.",
+        ),
+        false,
+    );
+    receipt.active_bounded_unit = gated["active_bounded_unit"].clone();
+    receipt.sequential_vs_parallel_posture = gated["sequential_vs_parallel_posture"]
+        .as_str()
+        .unwrap_or("unknown_until_run_graph_blocker_resolved")
+        .to_string();
+    receipt.next_action = next_action.clone();
+    receipt.next_actions = next_actions;
+    receipt.ambiguity_reason = gated["ambiguity_reason"].as_str().map(ToOwned::to_owned);
+    receipt
+}
+
 fn pass_task_next_lawful_receipt(
     active_bounded_unit: serde_json::Value,
     binding_source: Option<String>,
@@ -11935,10 +12054,12 @@ fn task_attempt_store_error_payload(
 ) -> serde_json::Value {
     task_attempt_operator_payload(
         surface,
-        vec![crate::release1_contracts::blocker_code_str(
-            crate::release1_contracts::BlockerCode::ProjectActivationUnknown,
-        )
-        .to_string()],
+        vec![
+            crate::release1_contracts::blocker_code_str(
+                crate::release1_contracts::BlockerCode::ProjectActivationUnknown,
+            )
+            .to_string(),
+        ],
         vec![
             "Run `vida project-activator` or `vida boot` before recording task attempts."
                 .to_string(),
@@ -12025,10 +12146,12 @@ fn task_attempt_artifact_error_payload(
     }
     task_attempt_operator_payload(
         surface,
-        vec![crate::release1_contracts::blocker_code_str(
-            crate::release1_contracts::BlockerCode::DispatchPacketContractInvalid,
-        )
-        .to_string()],
+        vec![
+            crate::release1_contracts::blocker_code_str(
+                crate::release1_contracts::BlockerCode::DispatchPacketContractInvalid,
+            )
+            .to_string(),
+        ],
         vec![next_action],
         artifact_refs,
         serde_json::json!({
@@ -12719,43 +12842,44 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         let task_id_was_requested = requested_task_id
                             .as_ref()
                             .is_some_and(|value| !value.trim().is_empty());
-                        let (status_override, lane_source) =
-                            if let Some(run_id) = command.run_id.as_deref() {
-                                match store.run_graph_status(run_id).await {
-                                    Ok(status) => (Some(status), Some("run_id")),
-                                    Err(error) => {
-                                        eprintln!("Failed to inspect run graph status: {error}");
-                                        return ExitCode::from(1);
-                                    }
+                        let (status_override, lane_source) = if let Some(run_id) =
+                            command.run_id.as_deref()
+                        {
+                            match store.run_graph_status(run_id).await {
+                                Ok(status) => (Some(status), Some("run_id")),
+                                Err(error) => {
+                                    eprintln!("Failed to inspect run graph status: {error}");
+                                    return ExitCode::from(1);
                                 }
-                            } else if let Some(task_id) = requested_task_id
-                                .as_deref()
-                                .map(str::trim)
-                                .filter(|value| !value.is_empty())
-                            {
-                                match store.latest_run_graph_status_for_task(task_id).await {
-                                    Ok(status) => (status, Some("task_id")),
-                                    Err(error) => {
-                                        eprintln!(
+                            }
+                        } else if let Some(task_id) = requested_task_id
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                        {
+                            match store.latest_run_graph_status_for_task(task_id).await {
+                                Ok(status) => (status, Some("task_id")),
+                                Err(error) => {
+                                    eprintln!(
                                         "Failed to inspect task-scoped run graph status: {error}"
                                     );
-                                        return ExitCode::from(1);
-                                    }
+                                    return ExitCode::from(1);
                                 }
-                            } else {
-                                let current = store
-                                    .latest_run_graph_status_for_current_session()
-                                    .await
-                                    .ok()
-                                    .flatten();
-                                match current {
-                                    Some(status) => (Some(status), Some("current_session")),
-                                    None => (
-                                        store.latest_run_graph_status().await.ok().flatten(),
-                                        Some("latest"),
-                                    ),
-                                }
-                            };
+                            }
+                        } else {
+                            let current = store
+                                .latest_run_graph_status_for_current_session()
+                                .await
+                                .ok()
+                                .flatten();
+                            match current {
+                                Some(status) => (Some(status), Some("current_session")),
+                                None => (
+                                    store.latest_run_graph_status().await.ok().flatten(),
+                                    Some("latest"),
+                                ),
+                            }
+                        };
                         let Some(task_id) = requested_task_id
                             .filter(|value| !value.trim().is_empty())
                             .or_else(|| {
@@ -13551,7 +13675,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         let task = match store.show_task(&command.task_id).await {
                             Ok(task) => task,
                             Err(error) => {
-                                eprintln!("Failed to read task before release proof bundle attachment: {error}");
+                                eprintln!(
+                                    "Failed to read task before release proof bundle attachment: {error}"
+                                );
                                 return ExitCode::from(1);
                             }
                         };
@@ -13579,7 +13705,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             "artifact_refs": {"surface": "vida task proof attach-release-bundle"}
                         }));
                     } else {
-                        print_surface_header(command.render, "vida task proof attach-release-bundle");
+                        print_surface_header(
+                            command.render,
+                            "vida task proof attach-release-bundle",
+                        );
                         print_surface_line(command.render, "status", "blocked");
                         print_surface_line(command.render, "blocker", "task_proof_targets_missing");
                     }
@@ -13605,9 +13734,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
                 args.push("--result".to_string());
                 args.push(command.result.clone());
-                let command_text = command.command.clone().unwrap_or_else(|| {
-                    "vida task proof attach-release-bundle".to_string()
-                });
+                let command_text = command
+                    .command
+                    .clone()
+                    .unwrap_or_else(|| "vida task proof attach-release-bundle".to_string());
                 args.push("--command".to_string());
                 args.push(command_text);
                 for artifact_ref in &command.artifact_ref {
@@ -13631,7 +13761,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         ExitCode::from(output.status.code().unwrap_or(1) as u8)
                     }
                     Err(error) => {
-                        eprintln!("Failed to run attach-evidence for release proof bundle: {error}");
+                        eprintln!(
+                            "Failed to run attach-evidence for release proof bundle: {error}"
+                        );
                         ExitCode::from(1)
                     }
                 }
@@ -13749,6 +13881,18 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         Ok(status) => status,
                         Err(error) => {
                             eprintln!("Failed to read latest run graph status: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    let latest_terminal_task_active_run_graph_status = match store
+                        .latest_terminal_task_active_run_graph_status()
+                        .await
+                    {
+                        Ok(status) => status,
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read latest terminal closed-task run graph status: {error}"
+                            );
                             return ExitCode::from(1);
                         }
                     };
@@ -13909,6 +14053,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     } else {
                         scoped_runtime_binding
                     };
+                    let closed_task_active_run_projection_mismatch =
+                        latest_terminal_task_active_run_graph_status.is_some()
+                            || stale_closed_runtime_binding.is_some();
                     let runtime_recovery = match scoped_runtime_binding {
                         Some(binding) => {
                             store.run_graph_recovery_summary(&binding.run_id).await.ok()
@@ -13929,7 +14076,11 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         crate::latest_terminal_consume_continue_snapshot_run_id(&state_dir)
                             .ok()
                             .flatten();
-                    let mut receipt = if let Some(selected_task_id) = command.select.as_deref() {
+                    let mut receipt = if closed_task_active_run_projection_mismatch {
+                        blocked_closed_task_active_run_projection_task_next_lawful_receipt(
+                            ready_task_candidates,
+                        )
+                    } else if let Some(selected_task_id) = command.select.as_deref() {
                         if scoped_runtime_binding.is_some() {
                             blocked_task_next_lawful_receipt(
                                 serde_json::Value::Null,
@@ -15587,6 +15738,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
+        ADAPTIVE_REPLAN_FINDING_KINDS, TaskCloseAutomationReceipt, TaskContinuationCandidate,
+        TaskProofAttachBrowserReceipt, TaskProofAttachEvidenceReceipt,
         blocked_runtime_recovery_task_next_lawful_receipt, blocked_task_next_lawful_receipt,
         build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
         build_split_mutation_preview, canonical_json_string_array_entries,
@@ -15617,21 +15770,19 @@ mod tests {
         task_owned_status_receipt, task_parent_id, task_progress_summary_for_basis,
         task_ready_authoritative_first, task_takeover_status_default_lines,
         task_takeover_status_receipt, task_update_planner_metadata_arg,
-        validate_task_handoff_accept_receipt, TaskCloseAutomationReceipt,
-        TaskContinuationCandidate, TaskProofAttachBrowserReceipt, TaskProofAttachEvidenceReceipt,
-        ADAPTIVE_REPLAN_FINDING_KINDS,
+        validate_task_handoff_accept_receipt,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::EnvVarGuard;
     use crate::test_cli_support::cli;
     use crate::test_cli_support::guard_current_dir;
-    use crate::test_cli_support::EnvVarGuard;
     use std::fs;
     use std::process::Command;
     use std::process::ExitCode;
     use taskflow_core::task::verify::{
-        append_task_browser_proof_note, task_browser_proof_target, TaskBrowserProofArtifact,
         TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION, TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
+        TaskBrowserProofArtifact, append_task_browser_proof_note, task_browser_proof_target,
     };
 
     #[test]
@@ -16357,9 +16508,11 @@ mod tests {
             plan.result.validation_errors[0].field.as_deref(),
             Some("parent_id")
         );
-        assert!(plan.result.validation_errors[0]
-            .reason
-            .contains("requires parent_id"));
+        assert!(
+            plan.result.validation_errors[0]
+                .reason
+                .contains("requires parent_id")
+        );
         assert_eq!(plan.result.planned_count, 0);
         let payload = super::task_bulk_import_result_payload(&plan.result);
         assert_eq!(payload["status"], "blocked");
@@ -16367,6 +16520,91 @@ mod tests {
             payload["blocker_codes"],
             serde_json::json!(["schema_contract_missing"])
         );
+        assert!(
+            payload["next_actions"][0]
+                .as_str()
+                .expect("blocked import should include an action")
+                .contains("--dry-run")
+        );
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task import");
+    }
+
+    #[test]
+    fn task_bulk_import_apply_creates_every_valid_row_and_invalid_batch_persists_nothing() {
+        run_on_runtime_stack_for_test(|| {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+            runtime.block_on(async {
+                let harness = TempStateHarness::new().expect("temp state harness should initialize");
+                let state_dir = harness.path().join("bulk-state");
+                let valid = harness.path().join("valid.jsonl");
+                fs::write(
+                    &valid,
+                    "{\"id\":\"batch-parent\",\"title\":\"Parent\",\"type\":\"epic\"}\n{\"id\":\"batch-child\",\"title\":\"Child\",\"type\":\"task\",\"parent_id\":\"batch-parent\"}\n",
+                )
+                .expect("valid JSONL fixture should write");
+
+                let code = super::run_task_bulk_import(task_bulk_import_command_for_test(
+                    valid,
+                    state_dir.clone(),
+                ))
+                .await;
+                assert_eq!(code, ExitCode::SUCCESS);
+                {
+                    let store = crate::StateStore::open(state_dir.clone())
+                        .await
+                        .expect("state store should open");
+                    assert_eq!(store.all_tasks().await.expect("tasks should read").len(), 2);
+                }
+
+                let invalid = harness.path().join("invalid.jsonl");
+                fs::write(
+                    &invalid,
+                    "{\"id\":\"would-persist\",\"title\":\"Valid first row\",\"type\":\"epic\"}\n{\"id\":\"invalid-child\",\"title\":\"Invalid second row\",\"type\":\"task\"}\n",
+                )
+                .expect("invalid JSONL fixture should write");
+                let code = super::run_task_bulk_import(task_bulk_import_command_for_test(
+                    invalid,
+                    state_dir.clone(),
+                ))
+                .await;
+                assert_eq!(code, ExitCode::from(2));
+                let store = crate::StateStore::open(state_dir.clone())
+                    .await
+                    .expect("state store should reopen after mutation");
+                let ids = store
+                    .all_tasks()
+                    .await
+                    .expect("tasks should read")
+                    .into_iter()
+                    .map(|task| task.id)
+                    .collect::<Vec<_>>();
+                assert_eq!(ids.len(), 2, "invalid batch must not partially persist");
+                assert!(!ids.contains(&"would-persist".to_string()));
+            });
+        });
+    }
+
+    #[test]
+    fn task_bulk_import_jsonl_parser_preserves_rows_for_stdin_contract() {
+        let rows = super::parse_task_bulk_import_jsonl_text(
+            "{\"id\":\"stdin-one\",\"title\":\"One\",\"type\":\"epic\"}\n\n{\"id\":\"stdin-two\",\"title\":\"Two\",\"type\":\"epic\"}\n",
+        )
+        .expect("stdin JSONL rows should parse");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].line, Some(1));
+        assert_eq!(rows[1].line, Some(3));
+    }
+
+    #[test]
+    fn task_bulk_import_stdin_requires_explicit_jsonl_format() {
+        let error = super::parse_task_bulk_import_raw_items(
+            std::path::Path::new("-"),
+            crate::TaskImportFormatArg::Auto,
+        )
+        .expect_err("stdin must fail closed without an explicit JSONL format");
+
+        assert!(error.contains("--format jsonl"));
     }
 
     #[test]
@@ -16503,10 +16741,12 @@ mod tests {
                     .await
                     .expect("reconcile should inspect legacy state");
                 assert_eq!(dry_run.progress_basis, "descendants_excluding_root");
-                assert!(dry_run
-                    .closed_epics
-                    .iter()
-                    .all(|row| row.epic_id != "legacy-epic"));
+                assert!(
+                    dry_run
+                        .closed_epics
+                        .iter()
+                        .all(|row| row.epic_id != "legacy-epic")
+                );
                 let blocked = dry_run
                     .blocked_epics
                     .iter()
@@ -16523,10 +16763,12 @@ mod tests {
                     reconcile_epics_from_descendant_progress(&store, true, false)
                         .await
                         .expect("close-if-complete should still block legacy state");
-                assert!(close_if_complete
-                    .closed_epics
-                    .iter()
-                    .all(|row| row.epic_id != "legacy-epic"));
+                assert!(
+                    close_if_complete
+                        .closed_epics
+                        .iter()
+                        .all(|row| row.epic_id != "legacy-epic")
+                );
                 let epic = store
                     .show_task("legacy-epic")
                     .await
@@ -17055,9 +17297,11 @@ mod tests {
                 receipt.blocker_codes,
                 vec!["missing_lane_receipt".to_string()]
             );
-            assert!(!receipt
-                .blocker_codes
-                .contains(&"latest_lane_task_mismatch".to_string()));
+            assert!(
+                !receipt
+                    .blocker_codes
+                    .contains(&"latest_lane_task_mismatch".to_string())
+            );
             assert_ne!(receipt.lane["task_id"], "foreign-latest-task");
         });
     }
@@ -17136,9 +17380,11 @@ mod tests {
             assert!(lines.iter().any(|(label, value)| *label == "next action"
                 && value.contains("vida lane show")
                 && value.contains("--latest")));
-            assert!(!lines
-                .iter()
-                .any(|(_, value)| value.contains("vida lane show requested-task-without-lane")));
+            assert!(
+                !lines
+                    .iter()
+                    .any(|(_, value)| value.contains("vida lane show requested-task-without-lane"))
+            );
         });
     }
 
@@ -17292,9 +17538,10 @@ mod tests {
             assert_eq!(task.close_reason, None);
             assert!(task.labels.contains(&"source-fixed".to_string()));
             assert!(task.labels.contains(&"tests-green".to_string()));
-            assert!(task
-                .labels
-                .contains(&"proof-blocked-by-runtime".to_string()));
+            assert!(
+                task.labels
+                    .contains(&"proof-blocked-by-runtime".to_string())
+            );
             assert!(!task.labels.contains(&"runtime-proof-blocked".to_string()));
             assert_eq!(
                 task.planner_metadata.proof_targets,
@@ -17791,7 +18038,7 @@ mod tests {
     fn task_update_proof_target_replacement_contract() {
         let existing = crate::state_store::TaskPlannerMetadata {
             proof_targets: vec![
-                "cargo test -p vida --lib stale_contract -- --nocapture".to_string()
+                "cargo test -p vida --lib stale_contract -- --nocapture".to_string(),
             ],
             risk: Some("medium".to_string()),
             ..Default::default()
@@ -17864,10 +18111,12 @@ mod tests {
             state_store::StateStore::TASK_UPDATE_CLOSE_AUTHORITY_BLOCKER_CODE
         );
         assert_eq!(payload["task_id"], "proof-child");
-        assert!(payload["next_actions"][0]
-            .as_str()
-            .expect("next action")
-            .contains("vida task close proof-child --reason <closure-evidence>"));
+        assert!(
+            payload["next_actions"][0]
+                .as_str()
+                .expect("next action")
+                .contains("vida task close proof-child --reason <closure-evidence>")
+        );
     }
 
     #[test]
@@ -17902,19 +18151,27 @@ mod tests {
 
         let metadata = task_create_planner_metadata_arg(&command);
 
-        assert!(metadata.proof_targets.contains(
-            &"cargo test -p vida --test task_smoke focused_release_template -- --nocapture"
-                .to_string()
-        ));
-        assert!(metadata
-            .proof_targets
-            .contains(&"cargo check -p vida --tests".to_string()));
-        assert!(metadata
-            .proof_targets
-            .contains(&"vida release install --json".to_string()));
-        assert!(metadata
-            .proof_targets
-            .contains(&"vida doctor --json".to_string()));
+        assert!(
+            metadata.proof_targets.contains(
+                &"cargo test -p vida --test task_smoke focused_release_template -- --nocapture"
+                    .to_string()
+            )
+        );
+        assert!(
+            metadata
+                .proof_targets
+                .contains(&"cargo check -p vida --tests".to_string())
+        );
+        assert!(
+            metadata
+                .proof_targets
+                .contains(&"vida release install --json".to_string())
+        );
+        assert!(
+            metadata
+                .proof_targets
+                .contains(&"vida doctor --json".to_string())
+        );
     }
 
     #[test]
@@ -17934,18 +18191,26 @@ mod tests {
             .expect("release proof template update should pass")
             .expect("release proof template should request metadata");
 
-        assert!(metadata
-            .proof_targets
-            .contains(&"cargo test -p vida existing_focus -- --nocapture".to_string()));
-        assert!(metadata
-            .proof_targets
-            .contains(&"cargo test -p vida new_focus -- --nocapture".to_string()));
-        assert!(metadata
-            .proof_targets
-            .contains(&"vida task validate-graph --json".to_string()));
-        assert!(metadata
-            .proof_targets
-            .contains(&"vida release install --json".to_string()));
+        assert!(
+            metadata
+                .proof_targets
+                .contains(&"cargo test -p vida existing_focus -- --nocapture".to_string())
+        );
+        assert!(
+            metadata
+                .proof_targets
+                .contains(&"cargo test -p vida new_focus -- --nocapture".to_string())
+        );
+        assert!(
+            metadata
+                .proof_targets
+                .contains(&"vida task validate-graph --json".to_string())
+        );
+        assert!(
+            metadata
+                .proof_targets
+                .contains(&"vida release install --json".to_string())
+        );
 
         let clear_conflict = crate::TaskUpdateArgs {
             task_id: "runtime-defect".to_string(),
@@ -18114,10 +18379,7 @@ mod tests {
 
         let ancestor = task_ancestor_with_issue_type(&rows, &step, "epic");
 
-        assert_eq!(
-            ancestor.map(|task| task.id.as_str()),
-            Some("epic-root")
-        );
+        assert_eq!(ancestor.map(|task| task.id.as_str()), Some("epic-root"));
     }
 
     #[test]
@@ -18311,19 +18573,25 @@ mod tests {
             payload["proof_targets"][0]["legacy_close_reason_match"],
             true
         );
-        assert!(payload["proof_targets"][0]["evidence_detail"]
-            .as_str()
-            .expect("evidence detail should render")
-            .contains("structured proof evidence is required"));
+        assert!(
+            payload["proof_targets"][0]["evidence_detail"]
+                .as_str()
+                .expect("evidence detail should render")
+                .contains("structured proof evidence is required")
+        );
         assert_eq!(payload["proof_targets"][1]["status"], "missing_evidence");
-        assert!(payload["proof_targets"][1]["next_action"]
-            .as_str()
-            .expect("closed missing target next action should render")
-            .contains("already closed task"));
-        assert!(payload["next_required_command"]
-            .as_str()
-            .expect("closed missing next required command should render")
-            .contains("already closed task"));
+        assert!(
+            payload["proof_targets"][1]["next_action"]
+                .as_str()
+                .expect("closed missing target next action should render")
+                .contains("already closed task")
+        );
+        assert!(
+            payload["next_required_command"]
+                .as_str()
+                .expect("closed missing next required command should render")
+                .contains("already closed task")
+        );
         assert_eq!(
             payload["missing_targets"],
             serde_json::json!([
@@ -18415,10 +18683,12 @@ mod tests {
             payload["proof_targets"][0]["evidence_source"],
             "inherited_child_task_proof_evidence"
         );
-        assert!(payload["proof_targets"][0]["evidence_detail"]
-            .as_str()
-            .expect("inherited detail should render")
-            .contains("closed-child-proof-task"));
+        assert!(
+            payload["proof_targets"][0]["evidence_detail"]
+                .as_str()
+                .expect("inherited detail should render")
+                .contains("closed-child-proof-task")
+        );
     }
 
     #[test]
@@ -18884,10 +19154,12 @@ mod tests {
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["configured_proof_target_count"], 0);
         assert_eq!(payload["missing_proof"], false);
-        assert!(payload["next_required_command"]
-            .as_str()
-            .expect("next command should render")
-            .contains("vida task update proofless-task --proof-target"));
+        assert!(
+            payload["next_required_command"]
+                .as_str()
+                .expect("next command should render")
+                .contains("vida task update proofless-task --proof-target")
+        );
     }
 
     #[test]
@@ -18899,8 +19171,10 @@ mod tests {
             .as_str()
             .expect("next command should render");
 
-        assert!(next_required_command
-            .contains("vida task update 'safe; touch /tmp/vida_pwned #' --proof-target"));
+        assert!(
+            next_required_command
+                .contains("vida task update 'safe; touch /tmp/vida_pwned #' --proof-target")
+        );
         assert!(!next_required_command.contains("vida task update safe; touch"));
     }
 
@@ -19037,9 +19311,11 @@ mod tests {
                 .status
                 .success()
         );
-        assert!(run_git(&["config", "user.name", "VIDA Test"])
-            .status
-            .success());
+        assert!(
+            run_git(&["config", "user.name", "VIDA Test"])
+                .status
+                .success()
+        );
         std::fs::write(repo_root.join("secret.txt"), "old\n").expect("write secret");
         assert!(run_git(&["add", "."]).status.success());
         assert!(run_git(&["commit", "-m", "initial"]).status.success());
@@ -19107,9 +19383,11 @@ mod tests {
                 .status
                 .success()
         );
-        assert!(run_git(&["config", "user.name", "VIDA Test"])
-            .status
-            .success());
+        assert!(
+            run_git(&["config", "user.name", "VIDA Test"])
+                .status
+                .success()
+        );
         std::fs::write(repo_root.join("src/owned.txt"), "old\n").expect("write owned");
         std::fs::write(repo_root.join("unrelated.txt"), "old\n").expect("write unrelated");
         assert!(run_git(&["add", "."]).status.success());
@@ -19287,10 +19565,12 @@ mod tests {
                 "cargo check -p vida --bin vida"
             ]
         );
-        assert!(receipt
-            .receipt_path
-            .replace('\\', "/")
-            .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json"));
+        assert!(
+            receipt
+                .receipt_path
+                .replace('\\', "/")
+                .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json")
+        );
         assert_eq!(receipt.receipt_root, receipt_root.display().to_string());
         assert_eq!(receipt.isolation, "project_state_dir");
         validate_task_handoff_accept_receipt(&receipt)
@@ -19463,17 +19743,19 @@ mod tests {
                     receipt["receipt_root"],
                     isolated_state_dir.join("receipts").display().to_string()
                 );
-                assert!(receipt["receipt_path"]
-                    .as_str()
-                    .expect("receipt path should be string")
-                    .replace('\\', "/")
-                    .starts_with(
-                        isolated_handoff_receipts
-                            .to_str()
-                            .expect("receipt dir should be utf8")
-                            .replace('\\', "/")
-                            .as_str()
-                    ));
+                assert!(
+                    receipt["receipt_path"]
+                        .as_str()
+                        .expect("receipt path should be string")
+                        .replace('\\', "/")
+                        .starts_with(
+                            isolated_handoff_receipts
+                                .to_str()
+                                .expect("receipt dir should be utf8")
+                                .replace('\\', "/")
+                                .as_str()
+                        )
+                );
             })
             .expect("high-stack receipt test thread should spawn")
             .join()
@@ -19501,10 +19783,12 @@ mod tests {
         );
         assert_eq!(receipt.binding_source, None);
         assert!(receipt.blocker_codes.is_empty());
-        assert!(receipt
-            .source_surfaces
-            .iter()
-            .any(|surface| surface == "vida task next-lawful"));
+        assert!(
+            receipt
+                .source_surfaces
+                .iter()
+                .any(|surface| surface == "vida task next-lawful")
+        );
     }
 
     #[test]
@@ -19572,10 +19856,12 @@ mod tests {
             receipt.bind_command.as_deref(),
             Some("vida taskflow run-graph dispatch-init task-a --json")
         );
-        assert!(receipt
-            .why_not_auto_bound
-            .as_deref()
-            .is_some_and(|reason| reason.contains("multiple ready candidates")));
+        assert!(
+            receipt
+                .why_not_auto_bound
+                .as_deref()
+                .is_some_and(|reason| reason.contains("multiple ready candidates"))
+        );
     }
 
     #[test]
@@ -19599,10 +19885,12 @@ mod tests {
             receipt.blocker_codes,
             vec!["ambiguous_ready_task_candidates"]
         );
-        assert!(receipt
-            .ambiguity_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("multiple ready candidates")));
+        assert!(
+            receipt
+                .ambiguity_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("multiple ready candidates"))
+        );
         assert_eq!(receipt.artifact_refs["surface"], "vida task next-lawful");
         assert_eq!(
             receipt.artifact_refs["active_bounded_unit"],
@@ -19772,10 +20060,12 @@ mod tests {
             vec!["select_conflicts_with_active_taskflow_task"]
         );
         assert_eq!(receipt.active_bounded_unit["task_id"], "task-active");
-        assert!(receipt
-            .next_action
-            .as_deref()
-            .is_some_and(|action| action.contains("task-active")));
+        assert!(
+            receipt
+                .next_action
+                .as_deref()
+                .is_some_and(|action| action.contains("task-active"))
+        );
     }
 
     #[test]
@@ -20243,10 +20533,12 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.blocker_codes, vec!["continuation_source_drift"]);
-        assert!(receipt
-            .next_actions
-            .iter()
-            .any(|action| action.contains("consume_continue_after_downstream_chain")));
+        assert!(
+            receipt
+                .next_actions
+                .iter()
+                .any(|action| action.contains("consume_continue_after_downstream_chain"))
+        );
         assert!(receipt.next_action.as_deref().is_some_and(|action| {
             action.contains("vida taskflow recovery status current-run")
                 && !action.contains("--json")
@@ -20968,8 +21260,10 @@ mod tests {
             .next_action
             .as_deref()
             .expect("ready downstream handoff should return a next action");
-        assert!(next_action
-            .contains("vida agent-init --downstream-packet packet.json --execute-dispatch"));
+        assert!(
+            next_action
+                .contains("vida agent-init --downstream-packet packet.json --execute-dispatch")
+        );
         assert!(
             !next_action.contains("--json"),
             "human next-action guidance should prefer the default output mode"
@@ -21337,10 +21631,12 @@ mod tests {
             "taskflow-case-11-actual-agent-autonomy"
         );
         assert_eq!(projection["binding_source"], serde_json::Value::Null);
-        assert!(projection["blocker_codes"]
-            .as_array()
-            .expect("blockers should be an array")
-            .is_empty());
+        assert!(
+            projection["blocker_codes"]
+                .as_array()
+                .expect("blockers should be an array")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -21438,10 +21734,12 @@ mod tests {
             "task-ready-after-stale-closure"
         );
         assert_eq!(projection["binding_source"], serde_json::Value::Null);
-        assert!(projection["blocker_codes"]
-            .as_array()
-            .expect("blockers should be an array")
-            .is_empty());
+        assert!(
+            projection["blocker_codes"]
+                .as_array()
+                .expect("blockers should be an array")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -21572,15 +21870,19 @@ mod tests {
             serde_json::json!(["open_delegated_cycle", "timeout_without_takeover_authority"])
         );
         assert_eq!(projection["bind_command"], serde_json::Value::Null);
-        assert!(projection["ready_task_candidates"]
-            .as_array()
-            .expect("ready candidates should be an array")
-            .iter()
-            .any(|candidate| candidate["task_id"] == "unrelated-ready-task"));
-        assert!(projection["next_action"]
-            .as_str()
-            .is_some_and(|action| action.contains("vida lane show running-run")
-                && !action.contains("--json")));
+        assert!(
+            projection["ready_task_candidates"]
+                .as_array()
+                .expect("ready candidates should be an array")
+                .iter()
+                .any(|candidate| candidate["task_id"] == "unrelated-ready-task")
+        );
+        assert!(
+            projection["next_action"]
+                .as_str()
+                .is_some_and(|action| action.contains("vida lane show running-run")
+                    && !action.contains("--json"))
+        );
     }
 
     #[test]
@@ -21662,9 +21964,11 @@ mod tests {
             isolated_state_dir.display().to_string()
         );
         assert_eq!(telemetry["feedback_store"], "not_recorded");
-        assert!(!project_root
-            .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
-            .exists());
+        assert!(
+            !project_root
+                .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
+                .exists()
+        );
         assert!(!project_root.join(crate::WORKER_STRATEGY_STATE).exists());
         let _ = fs::remove_dir_all(outside_root);
     }
@@ -22017,14 +22321,18 @@ mod tests {
             state_dir.display().to_string()
         );
         assert_eq!(payload["state_access"]["silent_delete_allowed"], false);
-        assert!(payload["state_access"]["suspected_wal_or_sst_hint"]
-            .as_str()
-            .expect("hint should be text")
-            .contains("WAL/SST files are suspects"));
-        assert!(payload["state_access"]["recovery_guidance"]
-            .as_str()
-            .expect("guidance should be text")
-            .contains("Create a backup copy of the whole state directory first"));
+        assert!(
+            payload["state_access"]["suspected_wal_or_sst_hint"]
+                .as_str()
+                .expect("hint should be text")
+                .contains("WAL/SST files are suspects")
+        );
+        assert!(
+            payload["state_access"]["recovery_guidance"]
+                .as_str()
+                .expect("guidance should be text")
+                .contains("Create a backup copy of the whole state directory first")
+        );
     }
 
     #[test]
@@ -22145,10 +22453,12 @@ mod tests {
             vec!["invalid_adaptive_replan_finding_input".to_string()]
         );
         assert_eq!(error.field.as_deref(), Some("finding_kind"));
-        assert!(error
-            .supported_finding_kinds
-            .iter()
-            .any(|kind| kind == "verification_finding"));
+        assert!(
+            error
+                .supported_finding_kinds
+                .iter()
+                .any(|kind| kind == "verification_finding")
+        );
         assert_eq!(error.operator_truth["parsing_and_validation_only"], true);
     }
 
@@ -22627,11 +22937,13 @@ mod tests {
             assert!(first_child.dependencies.iter().any(|dependency| {
                 dependency.depends_on_id == "source-task" && dependency.edge_type == "parent-child"
             }));
-            assert!(store
-                .validate_task_graph()
-                .await
-                .expect("validate")
-                .is_empty());
+            assert!(
+                store
+                    .validate_task_graph()
+                    .await
+                    .expect("validate")
+                    .is_empty()
+            );
         });
     }
 

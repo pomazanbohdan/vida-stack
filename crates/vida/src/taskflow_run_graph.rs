@@ -3385,6 +3385,19 @@ fn continuation_binding_source_from_state_surface(
         .map(str::to_string)
 }
 
+fn continuation_binding_exposes_closed_task_active_run_projection_mismatch(
+    continuation_binding: Option<&serde_json::Value>,
+) -> bool {
+    continuation_binding.is_some_and(|binding| {
+        binding["ambiguity_reason"].as_str() == Some("closed_task_active_run_projection_mismatch")
+            || binding["blocker_codes"].as_array().is_some_and(|codes| {
+                codes
+                    .iter()
+                    .any(|code| code.as_str() == Some("closed_task_active_run_projection_mismatch"))
+            })
+    })
+}
+
 fn dispatch_receipt_from_state_surface(
     receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
 ) -> RunGraphDispatchReceipt {
@@ -4060,14 +4073,14 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
             }
         })
     });
-    let (projection_truth, blocker_codes) = projection_truth_from_state_surface(
+    let (projection_truth, mut blocker_codes) = projection_truth_from_state_surface(
         state_root,
         status,
         recovery,
         receipt,
         continuation_binding_source.as_deref(),
     );
-    let (recommended_command, recommended_surface) = if let Some(summary) = recovery {
+    let (mut recommended_command, mut recommended_surface) = if let Some(summary) = recovery {
         let (_codes, _why_not_now, _next_action, command, surface) =
             recovery_surface_contract(summary, &projection_truth);
         if recovery_projection_resolves_persisted_open_cycle(summary, &projection_truth)
@@ -4094,6 +4107,13 @@ pub(crate) fn build_run_graph_dispatch_compact_summary(
                 .map(recommended_surface_for_command),
         )
     };
+    if continuation_binding_exposes_closed_task_active_run_projection_mismatch(continuation_binding)
+    {
+        blocker_codes.push("closed_task_active_run_projection_mismatch".to_string());
+        blocker_codes = normalize_run_graph_issue_codes(&blocker_codes, true);
+        recommended_command = Some(closed_task_active_run_projection_mismatch_command());
+        recommended_surface = Some("vida task reconcile-closed-runs".to_string());
+    }
     let (recommended_command, recommended_surface) =
         sanitize_placeholder_continuation_bind_recommendation(
             Some(&status.run_id),
@@ -9334,6 +9354,27 @@ fn seeded_run_graph_state_from_role_selection(
     status.route_task_class = seed_base.route_task_class;
     status.selected_backend = seed_base.selected_backend;
     status.handoff_state = handoff_state;
+    if !is_conversation
+        && execution_plan["development_flow"]
+            .get("dispatch_contract")
+            .is_some_and(|dispatch_contract| {
+                crate::team_flow_state_machine::validate_dispatch_contract(
+                    dispatch_contract,
+                    "execution_lane_sequence",
+                )
+                .is_err()
+            })
+    {
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage =
+            crate::team_flow_state_machine::DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE.to_string();
+        status.policy_gate =
+            crate::team_flow_state_machine::DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE.to_string();
+        status.handoff_state = "blocked_dispatch_contract_lane_catalog".to_string();
+        status.context_state = "blocked".to_string();
+        status.recovery_ready = false;
+    }
     Ok(status)
 }
 

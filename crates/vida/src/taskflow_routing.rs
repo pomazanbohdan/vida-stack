@@ -5,7 +5,10 @@ use crate::runtime_contract_vocab::{
     RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM, RUNTIME_ROLE_PROVER, RUNTIME_ROLE_SOLUTION_ARCHITECT,
     RUNTIME_ROLE_VERIFIER, RUNTIME_ROLE_WORKER,
 };
-use crate::team_flow_state_machine::resolve_dispatch_contract_lane_sequence;
+use crate::team_flow_state_machine::{
+    DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE, resolve_dispatch_contract_lane_sequence,
+    validate_dispatch_contract,
+};
 use crate::{json_string, json_string_list};
 
 const REJECTED_NON_BEHAVIORAL_ROUTE_FIELDS: &[&str] = &[
@@ -255,6 +258,13 @@ pub(crate) fn dispatch_contract_execution_lane_sequence(
 pub(crate) fn dispatch_contract_allowed_next_lane_sequence(
     dispatch_contract: &serde_json::Value,
 ) -> Vec<String> {
+    let configured_lane_sequence = dispatch_contract["lane_sequence"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(canonical_dispatch_target_name)
+        .collect::<Vec<_>>();
     if let Some(mut sequence) =
         resolve_dispatch_contract_lane_sequence(dispatch_contract, "lane_sequence")
     {
@@ -274,6 +284,9 @@ pub(crate) fn dispatch_contract_allowed_next_lane_sequence(
             }
         }
         return sequence;
+    }
+    if dispatch_contract.get("lane_catalog").is_none() && !configured_lane_sequence.is_empty() {
+        return configured_lane_sequence;
     }
     dispatch_contract_execution_lane_sequence(dispatch_contract)
 }
@@ -697,6 +710,21 @@ pub(crate) fn route_explain_payload(
     let rejected_candidates = assignment_field("rejected_candidates");
     let candidate_pool =
         candidate_pool_from_assignment(&selected_candidate, rejected_candidates.clone());
+    let dispatch_contract_validation = execution_plan["development_flow"]
+        .get("dispatch_contract")
+        .map(|dispatch_contract| {
+            if validate_dispatch_contract(dispatch_contract, "execution_lane_sequence").is_ok() {
+                serde_json::json!({"status": "pass", "blocker_code": serde_json::Value::Null})
+            } else {
+                serde_json::json!({
+                    "status": "blocked",
+                    "blocker_code": DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE,
+                })
+            }
+        })
+        .unwrap_or_else(|| {
+            serde_json::json!({"status": "not_configured", "blocker_code": serde_json::Value::Null})
+        });
 
     serde_json::json!({
         "dispatch_target": dispatch_target,
@@ -753,6 +781,7 @@ pub(crate) fn route_explain_payload(
         "rejected_route_fields": non_behavioral_route_fields,
         "diagnostic_only_route_fields": diagnostic_only_route_fields,
         "route_field_truth": route_field_truth,
+        "dispatch_contract_validation": dispatch_contract_validation,
     })
 }
 
@@ -761,6 +790,9 @@ pub(crate) fn route_explain_status(
     admissible: Option<bool>,
 ) -> String {
     if payload["route_present"].as_bool() != Some(true) {
+        return "blocked".to_string();
+    }
+    if payload["dispatch_contract_validation"]["status"].as_str() == Some("blocked") {
         return "blocked".to_string();
     }
     if payload["selected_backend"].as_str().is_none() {
@@ -800,6 +832,9 @@ pub(crate) fn route_explain_blocker_codes(
     let mut blockers = Vec::new();
     if payload["route_present"].as_bool() != Some(true) {
         blockers.push("route_missing".to_string());
+    }
+    if payload["dispatch_contract_validation"]["status"].as_str() == Some("blocked") {
+        blockers.push(DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE.to_string());
     }
     if payload["selected_backend"].as_str().is_none() {
         blockers.push("selected_backend_missing".to_string());
@@ -1234,6 +1269,29 @@ mod tests {
             Some("internal_subagents")
         );
         assert_eq!(route_explain_status(&payload, Some(true)), "pass");
+    }
+
+    #[test]
+    fn route_explain_blocks_incomplete_dispatch_contract_catalog() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "implementation": {"executor_backend": "internal_subagents"},
+                "dispatch_contract": {"execution_lane_sequence": ["implementation"]}
+            }
+        });
+        let route = &execution_plan["development_flow"]["implementation"];
+        let payload = route_explain_payload(&execution_plan, "implementation", Some(route));
+
+        assert_eq!(
+            payload["dispatch_contract_validation"]["blocker_code"].as_str(),
+            Some(super::DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE)
+        );
+        assert_eq!(route_explain_status(&payload, Some(true)), "blocked");
+        assert!(
+            route_explain_blocker_codes(&payload, Some(true))
+                .iter()
+                .any(|code| code == super::DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE)
+        );
     }
 
     #[test]
@@ -1719,6 +1777,20 @@ mod tests {
         });
         assert_eq!(
             dispatch_contract_allowed_next_lane_sequence(&execution_only_contract),
+            vec!["analyst".to_string(), "autotester".to_string()]
+        );
+
+        let invalid_catalog_contract = serde_json::json!({
+            "lane_sequence": ["analyst", "designer", "autotester"],
+            "execution_lane_sequence": ["analyst", "autotester"],
+            "lane_catalog": {
+                "analyst": {"task_class": "analysis", "stage": "design_gate"},
+                "designer": {"task_class": "design", "stage": "design_gate"},
+                "autotester": {"task_class": "regression_test", "stage": "verification"}
+            }
+        });
+        assert_eq!(
+            dispatch_contract_allowed_next_lane_sequence(&invalid_catalog_contract),
             vec!["analyst".to_string(), "autotester".to_string()]
         );
     }

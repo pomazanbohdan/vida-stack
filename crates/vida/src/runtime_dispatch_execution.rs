@@ -3422,7 +3422,10 @@ fn configured_internal_host_activation_parts(
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("medium");
+        .ok_or_else(|| {
+            "Configured internal host carrier is missing model_reasoning_effort; configure the carrier or materialize the configured missing_reasoning_effort_policy default before dispatch."
+                .to_string()
+        })?;
     let prompt = dispatch_packet_prompt(dispatch_packet_path);
     let mut args = crate::yaml_string_list(yaml_lookup(dispatch, &["static_args"]));
     args.extend(crate::yaml_string_list(yaml_lookup(
@@ -5710,6 +5713,33 @@ dispatch:
     }
 
     #[test]
+    fn configured_internal_host_activation_parts_reject_missing_reasoning_effort() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: codex
+  prompt_mode: positional
+"#,
+        )
+        .expect("system entry should parse");
+        let carrier = serde_json::json!({
+            "model": "configured-model",
+            "sandbox_mode": "workspace-write"
+        });
+
+        let error = configured_internal_host_activation_parts(
+            Some(&system_entry),
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            &carrier,
+        )
+        .expect_err("missing reasoning effort must fail closed");
+
+        assert!(error.contains("missing model_reasoning_effort"));
+        assert!(error.contains("missing_reasoning_effort_policy"));
+    }
+
+    #[test]
     fn internal_host_tool_bridge_transport_does_not_require_codex_exec_dispatch() {
         let system_entry = serde_yaml::from_str(
             r#"
@@ -7058,7 +7088,10 @@ agent_system:
             result["backend_dispatch"]["host_tool_bridge_request"]["status"],
             "pending"
         );
-        assert_eq!(result["host_tool_bridge_request"]["compact_projection"], true);
+        assert_eq!(
+            result["host_tool_bridge_request"]["compact_projection"],
+            true
+        );
         assert_eq!(result["host_tool_bridge_request"]["owned_paths_count"], 1);
         assert!(result.get("selection").is_none());
         assert!(result.get("role_selection").is_none());
@@ -9589,8 +9622,7 @@ host_tool_bridge:
         assert_eq!(request["proof_artifact_paths"], normalized_proof_paths);
         assert_eq!(request["proof_artifact_scope"], normalized_proof_paths);
         assert_eq!(
-            request["implementation_isolation"]["scope_policy"]
-                ["changed_files_must_be_subset_of_owned_or_proof_paths"],
+            request["implementation_isolation"]["scope_policy"]["changed_files_must_be_subset_of_owned_or_proof_paths"],
             true
         );
 

@@ -336,6 +336,19 @@ Companion rule:
     Config families: typed TaskFlow lifecycle transitions, run-graph reconciliation authority, state-store adapter extraction, persisted state compatibility, public surface parity, and shared/core transition law for the `typed-transition-state-store-extraction-epic`
     Registered path: `docs/product/spec/typed-transition-state-store-extraction-contract.md`
 
+### Newly Registered Canonical Specs
+
+1. [adr-team-flow-state-machine-owner.md](adr-team-flow-state-machine-owner.md)
+   Config families: `vida.config.yaml -> dev_team.flows.*`, role-to-lane mappings, and shared team-flow state-machine transition ownership
+2. [requirements-documentation-control-plane.md](requirements-documentation-control-plane.md)
+   Config families: DB-first requirements, change-control, DocFlow validation, TaskFlow binding, repository projection, wiki projection, and external adapter authority
+3. [requirements-control-plane-state-model.md](requirements-control-plane-state-model.md)
+   Config families: DB-first control-plane records, lifecycle/approval/trace state, baseline and projection receipts, DocFlow verdicts, TaskFlow links, and adapter mappings
+4. [requirements-control-plane-runtime-implementation-model.md](requirements-control-plane-runtime-implementation-model.md)
+   Config families: state-spine runtime implementation, extraction/review/execution/projection/validation layers, TaskFlow and DocFlow integration, wiki projections, and external adapters
+5. [runtime-library-fsm-pilot-decision.md](runtime-library-fsm-pilot-decision.md)
+   Config families: isolated `taskflow-core` consume/resume FSM pilot, bounded `rust-fsm` adoption, and explicit TaskFlow authority boundaries
+
 ## Routing Rule
 
 1. Add newly promoted current product/spec artifacts here only when they are active project canon.

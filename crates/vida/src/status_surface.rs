@@ -480,48 +480,47 @@ pub(crate) fn emit_degraded_read_lock_surface(
 }
 
 pub(crate) fn state_store_lock_present(state_dir: &std::path::Path) -> bool {
-    [
-        state_dir.join(".vida-authoritative-open.guard"),
-        state_dir.join("LOCK"),
-        state_dir
-            .join(".vida")
-            .join("data")
-            .join("state")
-            .join(".vida-authoritative-open.guard"),
-        state_dir
-            .join(".vida")
-            .join("data")
-            .join("state")
-            .join("LOCK"),
-    ]
-    .into_iter()
-    .any(|path| {
-        let Ok(file) = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-        else {
-            return false;
-        };
-        match file.try_lock_exclusive() {
-            Ok(()) => {
-                let _ = file.unlock();
-                false
+    let roots = [
+        state_dir.to_path_buf(),
+        state_dir.join(".vida").join("data").join("state"),
+    ];
+    roots
+        .into_iter()
+        .flat_map(|root| {
+            [
+                crate::state_store::state_root_lifecycle_guard_path(&root).ok(),
+                Some(root.join(".vida-authoritative-open.guard")),
+                Some(root.join("LOCK")),
+            ]
+        })
+        .flatten()
+        .any(|path| {
+            let Ok(file) = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+            else {
+                return false;
+            };
+            match file.try_lock_exclusive() {
+                Ok(()) => {
+                    let _ = file.unlock();
+                    false
+                }
+                Err(error) => {
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::Interrupted
+                    ) || error.raw_os_error().is_some_and(|code| {
+                        code == libc::EWOULDBLOCK
+                            || code == libc::EAGAIN
+                            || (cfg!(windows) && matches!(code, 5 | 32 | 33))
+                    })
+                }
             }
-            Err(error) => {
-                matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock
-                        | std::io::ErrorKind::TimedOut
-                        | std::io::ErrorKind::Interrupted
-                ) || error.raw_os_error().is_some_and(|code| {
-                    code == libc::EWOULDBLOCK
-                        || code == libc::EAGAIN
-                        || (cfg!(windows) && matches!(code, 5 | 32 | 33))
-                })
-            }
-        }
-    })
+        })
 }
 
 pub(crate) fn state_store_lock_present_after_bounded_wait(
@@ -3603,10 +3602,52 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    fn status_lock_probe_ignores_unlocked_lifecycle_sidecar() {
+        let state_dir = unique_status_lock_probe_dir("unlocked");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let lock_path = crate::state_store::state_root_lifecycle_guard_path(&state_dir)
+            .expect("derive lifecycle guard path");
+        OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("create lifecycle sidecar");
+
+        assert!(!super::state_store_lock_present(&state_dir));
+        let _ = fs::remove_file(lock_path);
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn status_lock_probe_reports_locked_legacy_authoritative_guard() {
+        let state_dir = unique_status_lock_probe_dir("legacy-held");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let lock_path = state_dir.join(".vida-authoritative-open.guard");
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("open legacy guard");
+        file.lock_exclusive().expect("lock legacy guard");
+
+        assert!(super::state_store_lock_present(&state_dir));
+
+        file.unlock().expect("unlock legacy guard");
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
     fn status_lock_probe_waits_for_transient_lock_release() {
         let state_dir = unique_status_lock_probe_dir("transient");
         fs::create_dir_all(&state_dir).expect("create state dir");
-        let lock_path = state_dir.join(".vida-authoritative-open.guard");
+        let lock_path = crate::state_store::state_root_lifecycle_guard_path(&state_dir)
+            .expect("derive lifecycle guard path");
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -3637,7 +3678,8 @@ mod tests {
     fn status_lock_probe_reports_lock_after_bounded_wait_expires() {
         let state_dir = unique_status_lock_probe_dir("held");
         fs::create_dir_all(&state_dir).expect("create state dir");
-        let lock_path = state_dir.join(".vida-authoritative-open.guard");
+        let lock_path = crate::state_store::state_root_lifecycle_guard_path(&state_dir)
+            .expect("derive lifecycle guard path");
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -3661,7 +3703,10 @@ mod tests {
     #[test]
     fn lock_probe_attempt_budget_rounds_up_to_visible_retry_count() {
         assert_eq!(
-            super::lock_probe_attempt_budget(Duration::from_millis(2_000), Duration::from_millis(250)),
+            super::lock_probe_attempt_budget(
+                Duration::from_millis(2_000),
+                Duration::from_millis(250)
+            ),
             8
         );
         assert_eq!(

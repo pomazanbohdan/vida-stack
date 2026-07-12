@@ -16,6 +16,12 @@ struct RuntimeConsumptionSnapshotEntry {
     modified: SystemTime,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct SelectedFinalRuntimeConsumptionSnapshot {
+    pub(crate) path: String,
+    pub(crate) payload: Option<serde_json::Value>,
+}
+
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct RuntimeConsumptionSummary {
     pub(crate) total_snapshots: usize,
@@ -799,6 +805,77 @@ fn runtime_consumption_snapshot_source_run_id(snapshot: &serde_json::Value) -> O
         })
         .map(str::trim)
         .filter(|run_id| !run_id.is_empty())
+}
+
+pub(crate) fn selected_final_runtime_consumption_snapshot_for_run(
+    state_root: &Path,
+    effective_run_id: Option<&str>,
+) -> Result<Option<SelectedFinalRuntimeConsumptionSnapshot>, String> {
+    let Some(effective_run_id) = effective_run_id
+        .map(str::trim)
+        .filter(|run_id| !run_id.is_empty())
+    else {
+        return Ok(None);
+    };
+    let snapshot_dir = state_root.join("runtime-consumption");
+    let mut newest_malformed_snapshot_path = None;
+    for entry in runtime_consumption_snapshot_entries_newest_first(&snapshot_dir)? {
+        let payload = match std::fs::read_to_string(&entry.path) {
+            Ok(payload) => payload,
+            Err(_) => continue,
+        };
+        let payload = match serde_json::from_str::<serde_json::Value>(&payload) {
+            Ok(payload) => payload,
+            Err(_) => {
+                newest_malformed_snapshot_path
+                    .get_or_insert_with(|| runtime_consumption_snapshot_path_string(&entry.path));
+                continue;
+            }
+        };
+        if runtime_consumption_snapshot_source_run_id(&payload) != Some(effective_run_id) {
+            continue;
+        }
+        return Ok(Some(SelectedFinalRuntimeConsumptionSnapshot {
+            path: runtime_consumption_snapshot_path_string(&entry.path),
+            payload: Some(payload),
+        }));
+    }
+
+    Ok(
+        newest_malformed_snapshot_path.map(|path| SelectedFinalRuntimeConsumptionSnapshot {
+            path,
+            payload: None,
+        }),
+    )
+}
+
+pub(crate) fn retrieval_trust_signal_from_selected_final_snapshot(
+    selected_snapshot: Option<&SelectedFinalRuntimeConsumptionSnapshot>,
+    protocol_binding_latest_receipt_id: Option<&str>,
+) -> Option<serde_json::Value> {
+    let acl = protocol_binding_latest_receipt_id?.trim();
+    if acl.is_empty() {
+        return None;
+    }
+    let selected_snapshot = selected_snapshot?;
+    let payload = selected_snapshot.payload.as_ref()?;
+    if !runtime_consumption_snapshot_has_admissible_release_admission(payload) {
+        return None;
+    }
+
+    Some(serde_json::json!({
+        "source": RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+        "source_registry_ref": RETRIEVAL_TRUST_SOURCE_REGISTRY_REF_RUNTIME_CONSUMPTION_FINAL,
+        "citation": selected_snapshot.path,
+        "freshness": "final",
+        "freshness_posture": RETRIEVAL_TRUST_FRESHNESS_POSTURE_LATEST_FINAL_SNAPSHOT,
+        "acl": acl,
+        "acl_context": format!(
+            "{}:{acl}",
+            RETRIEVAL_TRUST_ACL_CONTEXT_PROTOCOL_BINDING_RECEIPT
+        ),
+        "acl_propagation": RETRIEVAL_TRUST_ACL_PROPAGATION_PROTOCOL_BINDING_GATE,
+    }))
 }
 
 pub(crate) fn release_admission_operator_evidence_complete_for_run(

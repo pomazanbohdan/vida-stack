@@ -27,6 +27,8 @@ This map covers project-facing documentation tooling for the active `vida-stack`
    - canonical DocFlow scan-ignore/profile policy consumed by the active Rust DocFlow runtime
 7. `docs/product/spec/protocol-authoring-and-token-economy-law.md`
    - product-spec owner for protocol authoring, block-level token reduction, algorithm selection, and validation gates
+8. `docs/process/runtime-command-authority-inventory.md`
+   - project-owned inventory of public VIDA runtime and CLI command authority
 
 ## Read / Status Commands
 

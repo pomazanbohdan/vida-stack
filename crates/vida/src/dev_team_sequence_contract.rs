@@ -28,6 +28,273 @@ pub(crate) struct ConfiguredDevTeamTaskRoute {
     pub(crate) sequence: Vec<DevTeamSequenceStep>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DevTeamReceiptGate {
+    pub(crate) selected_step_index: Option<usize>,
+    pub(crate) status: &'static str,
+    pub(crate) blocker_code: Option<String>,
+    pub(crate) next_action: String,
+    pub(crate) predecessor_role_label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfiguredReceiptTransition {
+    transition_kind: &'static str,
+    event: String,
+    target_role_label: String,
+}
+
+fn receipt_state_keys(receipt: &state_store::RunGraphDispatchReceipt) -> Vec<String> {
+    let mut keys = Vec::new();
+    for state in [&receipt.dispatch_status, &receipt.lane_status] {
+        let state = state.trim().to_ascii_lowercase();
+        if state.is_empty() {
+            continue;
+        }
+        if !keys.contains(&state) {
+            keys.push(state.clone());
+        }
+        if let Some(normalized) = state.strip_prefix("lane_") {
+            let normalized = normalized.to_string();
+            if !keys.contains(&normalized) {
+                keys.push(normalized);
+            }
+        }
+    }
+    keys
+}
+
+fn configured_receipt_transition(
+    step: &DevTeamSequenceStep,
+    receipt: &state_store::RunGraphDispatchReceipt,
+) -> Option<ConfiguredReceiptTransition> {
+    let state_keys = receipt_state_keys(receipt);
+    [
+        ("rework", &step.rework_transitions),
+        ("resume", &step.resume_transitions),
+    ]
+    .into_iter()
+    .find_map(|(transition_kind, transitions)| {
+        let transitions = transitions.as_object()?;
+        state_keys.iter().find_map(|event| {
+            transitions
+                .get(event)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .map(|target_role_label| ConfiguredReceiptTransition {
+                    transition_kind,
+                    event: event.clone(),
+                    target_role_label: target_role_label.to_string(),
+                })
+        })
+    })
+}
+
+fn receipt_failure_class(receipt: &state_store::RunGraphDispatchReceipt) -> &'static str {
+    let states = receipt_state_keys(receipt).join(" ");
+    if states.contains("exception") {
+        "exception"
+    } else if states.contains("failed")
+        || states.contains("failure")
+        || states.contains("error")
+        || states.contains("rejected")
+    {
+        "failed"
+    } else if states.contains("blocked") {
+        "blocked"
+    } else {
+        "unknown_state"
+    }
+}
+
+pub(crate) fn dev_team_receipt_gate(
+    sequence: &[DevTeamSequenceStep],
+    task_id: &str,
+    bound_run_id: Option<&str>,
+    receipt: Option<&state_store::RunGraphDispatchReceipt>,
+) -> DevTeamReceiptGate {
+    let task_step_indexes = sequence
+        .iter()
+        .enumerate()
+        .filter_map(|(index, step)| step.requires_task.then_some(index))
+        .collect::<Vec<_>>();
+    let Some(first_step_index) = task_step_indexes.first().copied() else {
+        return DevTeamReceiptGate {
+            selected_step_index: None,
+            status: "blocked",
+            blocker_code: Some("configured_dev_team_sequence_requires_task_step".to_string()),
+            next_action:
+                "Configure a task-bound dev-team step before materializing a dispatch packet."
+                    .to_string(),
+            predecessor_role_label: None,
+        };
+    };
+    let Some(receipt) = receipt else {
+        return DevTeamReceiptGate {
+            selected_step_index: Some(first_step_index),
+            status: "initial_step_ready",
+            blocker_code: None,
+            next_action: "Materialize only the initial dev-team step; later roles require a completed same-task predecessor receipt."
+                .to_string(),
+            predecessor_role_label: None,
+        };
+    };
+    if receipt.run_id.trim().is_empty()
+        || receipt.dispatch_target.trim().is_empty()
+        || receipt.dispatch_status.trim().is_empty()
+        || receipt.lane_status.trim().is_empty()
+    {
+        return DevTeamReceiptGate {
+            selected_step_index: None,
+            status: "blocked",
+            blocker_code: Some(format!(
+                "dev_team_predecessor_receipt_malformed:task={task_id}:receipt_run={}",
+                receipt.run_id,
+            )),
+            next_action: format!(
+                "Repair malformed predecessor receipt state for TaskFlow task `{task_id}` before materializing another sequential dev-team packet."
+            ),
+            predecessor_role_label: None,
+        };
+    }
+    let Some(bound_run_id) = bound_run_id
+        .map(str::trim)
+        .filter(|run_id| !run_id.is_empty())
+    else {
+        return DevTeamReceiptGate {
+            selected_step_index: None,
+            status: "blocked",
+            blocker_code: Some(format!(
+                "dev_team_predecessor_receipt_run_binding_missing:task={task_id}"
+            )),
+            next_action: format!(
+                "Resolve the authoritative latest run bound to TaskFlow task `{task_id}` before using predecessor receipt evidence."
+            ),
+            predecessor_role_label: None,
+        };
+    };
+    if receipt.run_id != bound_run_id {
+        return DevTeamReceiptGate {
+            selected_step_index: None,
+            status: "blocked",
+            blocker_code: Some(format!(
+                "dev_team_predecessor_receipt_run_mismatch:task={task_id}:bound_run={bound_run_id}:receipt_run={}",
+                receipt.run_id
+            )),
+            next_action: format!(
+                "Read the predecessor receipt for authoritative run `{bound_run_id}` bound to TaskFlow task `{task_id}` before materializing another sequential dev-team packet."
+            ),
+            predecessor_role_label: None,
+        };
+    }
+    let Some(receipt_step_index) = task_step_indexes
+        .iter()
+        .copied()
+        .find(|index| sequence[*index].role_label == receipt.dispatch_target)
+    else {
+        return DevTeamReceiptGate {
+            selected_step_index: None,
+            status: "blocked",
+            blocker_code: Some(format!(
+                "dev_team_predecessor_receipt_target_not_in_sequence:task={task_id}:target={}",
+                receipt.dispatch_target
+            )),
+            next_action: format!(
+                "Repair stale receipt target `{}` or resume the current TaskFlow task `{task_id}` before materializing another dev-team packet.",
+                receipt.dispatch_target
+            ),
+            predecessor_role_label: None,
+        };
+    };
+    if receipt.recorded_at.trim().is_empty() || receipt.lane_status == "lane_superseded" {
+        return DevTeamReceiptGate {
+            selected_step_index: None,
+            status: "blocked",
+            blocker_code: Some(format!(
+                "dev_team_predecessor_receipt_stale:task={task_id}:target={}",
+                receipt.dispatch_target
+            )),
+            next_action: format!(
+                "Repair or replace the stale `{}` receipt for TaskFlow task `{task_id}` before materializing a future dev-team role.",
+                receipt.dispatch_target
+            ),
+            predecessor_role_label: Some(receipt.dispatch_target.clone()),
+        };
+    }
+    if receipt.dispatch_status == "executed" && receipt.lane_status == "lane_completed" {
+        let next_step_index = task_step_indexes
+            .iter()
+            .copied()
+            .find(|index| *index > receipt_step_index);
+        return DevTeamReceiptGate {
+            selected_step_index: next_step_index,
+            status: if next_step_index.is_some() {
+                "predecessor_completed"
+            } else {
+                "sequence_completed"
+            },
+            blocker_code: next_step_index.is_none().then(|| {
+                format!("dev_team_sequence_completed:task={task_id}")
+            }),
+            next_action: next_step_index.map_or_else(
+                || format!("The configured dev-team sequence for TaskFlow task `{task_id}` is complete."),
+                |_| format!(
+                    "The `{}` receipt is completed for TaskFlow task `{task_id}`; materialize only its configured successor.",
+                    receipt.dispatch_target
+                ),
+            ),
+            predecessor_role_label: Some(receipt.dispatch_target.clone()),
+        };
+    }
+    if let Some(transition) = configured_receipt_transition(&sequence[receipt_step_index], receipt)
+    {
+        let target_step_index = task_step_indexes
+            .iter()
+            .copied()
+            .find(|index| sequence[*index].role_label == transition.target_role_label);
+        let Some(target_step_index) = target_step_index else {
+            return DevTeamReceiptGate {
+                selected_step_index: None,
+                status: "blocked",
+                blocker_code: Some(format!(
+                    "dev_team_predecessor_receipt_transition_target_not_in_sequence:task={task_id}:target={}",
+                    transition.target_role_label
+                )),
+                next_action: format!(
+                    "Repair configured {} transition `{}` so it targets a task-bound role in the sequential dev-team flow for `{task_id}`.",
+                    transition.transition_kind, transition.event
+                ),
+                predecessor_role_label: Some(receipt.dispatch_target.clone()),
+            };
+        };
+        return DevTeamReceiptGate {
+            selected_step_index: Some(target_step_index),
+            status: "configured_transition_authorized",
+            blocker_code: None,
+            next_action: format!(
+                "Configured {} transition `{}` authorizes `{}` for TaskFlow task `{task_id}`; materialize only that sequential step.",
+                transition.transition_kind, transition.event, transition.target_role_label
+            ),
+            predecessor_role_label: Some(receipt.dispatch_target.clone()),
+        };
+    }
+    let failure_class = receipt_failure_class(receipt);
+    DevTeamReceiptGate {
+        selected_step_index: None,
+        status: "blocked",
+        blocker_code: Some(format!(
+            "dev_team_predecessor_receipt_{failure_class}_fail_closed:task={task_id}:target={}",
+            receipt.dispatch_target
+        )),
+        next_action: format!(
+            "Receipt state dispatch_status=`{}` lane_status=`{}` does not authorize resume or rework for `{}` on TaskFlow task `{task_id}`; configure an explicit matching transition or repair the receipt before retrying.",
+            receipt.dispatch_status, receipt.lane_status, receipt.dispatch_target
+        ),
+        predecessor_role_label: Some(receipt.dispatch_target.clone()),
+    }
+}
+
 pub(crate) fn configured_dev_team_first_step_for_task(
     activation_bundle: &serde_json::Value,
     task: &state_store::TaskRecord,
@@ -58,6 +325,22 @@ pub(crate) fn selected_dev_team_flow_for_task<'a>(
         }
     }
     selected_dev_team_flow_for_work_item(readiness, None)
+}
+
+pub(crate) fn dev_team_flow_is_explicitly_sequential(
+    readiness: &serde_json::Value,
+    flow_id: Option<&str>,
+) -> bool {
+    flow_id
+        .and_then(|flow_id| {
+            readiness["flows"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|flow| flow["flow_id"].as_str() == Some(flow_id))
+        })
+        .and_then(|flow| flow["sequential"].as_bool())
+        == Some(true)
 }
 
 pub(crate) fn selected_dev_team_flow_for_lookup_key<'a>(
@@ -173,7 +456,10 @@ pub(crate) fn dev_team_sequence(activation_bundle: &serde_json::Value) -> Vec<De
                 role_label: dispatch_target,
                 runtime_role,
                 task_class,
-                packet_template_kind: crate::json_trimmed_string_field(route, "packet_template_kind"),
+                packet_template_kind: crate::json_trimmed_string_field(
+                    route,
+                    "packet_template_kind",
+                ),
                 closure_class: crate::json_trimmed_string_field(route, "closure_class"),
                 stage: crate::json_trimmed_string_field(route, "stage"),
                 completion_blocker: crate::json_trimmed_string_field(route, "completion_blocker"),
@@ -431,7 +717,10 @@ fn dev_team_sequence_from_readiness_with_default(
                 role_label: role_id.to_string(),
                 runtime_role,
                 task_class,
-                packet_template_kind: crate::json_trimmed_string_field(role, "packet_template_kind"),
+                packet_template_kind: crate::json_trimmed_string_field(
+                    role,
+                    "packet_template_kind",
+                ),
                 closure_class: crate::json_trimmed_string_field(role, "closure_class"),
                 stage: crate::json_trimmed_string_field(role, "stage"),
                 completion_blocker: crate::json_trimmed_string_field(role, "completion_blocker"),
@@ -709,5 +998,143 @@ mod tests {
         assert_eq!(sequence[0].closure_class, None);
         assert_eq!(sequence[0].completion_blocker, None);
         assert_eq!(sequence[0].inclusion_rule, None);
+    }
+
+    fn receipt(
+        run_id: &str,
+        dispatch_target: &str,
+        dispatch_status: &str,
+        lane_status: &str,
+    ) -> state_store::RunGraphDispatchReceipt {
+        state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: dispatch_target.to_string(),
+            dispatch_status: dispatch_status.to_string(),
+            lane_status: lane_status.to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: None,
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: None,
+            recorded_at: "2026-07-10T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn dev_team_receipt_gate_requires_bound_run_completion_and_explicit_transitions() {
+        let mut sequence = ["developer", "coach", "tester", "reviewer"]
+            .into_iter()
+            .map(|role_label| DevTeamSequenceStep {
+                role_label: role_label.to_string(),
+                runtime_role: "worker".to_string(),
+                task_class: "implementation".to_string(),
+                packet_template_kind: None,
+                closure_class: None,
+                stage: None,
+                completion_blocker: None,
+                inclusion_rule: None,
+                requires_task: true,
+                requires_user_approval: false,
+                approval_policy: serde_json::Value::Null,
+                lifecycle_hook_templates: serde_json::Value::Null,
+                resume_transitions: serde_json::Value::Null,
+                rework_transitions: serde_json::Value::Null,
+            })
+            .collect::<Vec<_>>();
+        let completed = |role| receipt("run-a", role, "executed", "lane_completed");
+
+        for (receipt, expected_index) in [
+            (None, 0),
+            (Some(completed("developer")), 1),
+            (Some(completed("coach")), 2),
+            (Some(completed("tester")), 3),
+        ] {
+            let gate = dev_team_receipt_gate(&sequence, "task-a", Some("run-a"), receipt.as_ref());
+            assert_eq!(gate.selected_step_index, Some(expected_index), "{gate:?}");
+            assert!(gate.blocker_code.is_none(), "{gate:?}");
+        }
+
+        let blocked = receipt("run-a", "developer", "blocked", "lane_blocked");
+        let blocked_gate =
+            dev_team_receipt_gate(&sequence, "task-a", Some("run-a"), Some(&blocked));
+        assert_eq!(blocked_gate.status, "blocked");
+        assert!(blocked_gate.blocker_code.as_deref().is_some_and(|code| {
+            code.starts_with("dev_team_predecessor_receipt_blocked_fail_closed:")
+        }));
+
+        sequence[0].rework_transitions = serde_json::json!({"blocked": "developer"});
+        let authorized_gate =
+            dev_team_receipt_gate(&sequence, "task-a", Some("run-a"), Some(&blocked));
+        assert_eq!(authorized_gate.status, "configured_transition_authorized");
+        assert_eq!(authorized_gate.selected_step_index, Some(0));
+        assert!(authorized_gate.blocker_code.is_none());
+
+        let wrong_run = receipt("run-b", "developer", "executed", "lane_completed");
+        let wrong_run_gate =
+            dev_team_receipt_gate(&sequence, "task-a", Some("run-a"), Some(&wrong_run));
+        assert!(
+            wrong_run_gate
+                .blocker_code
+                .as_deref()
+                .is_some_and(|code| code.starts_with("dev_team_predecessor_receipt_run_mismatch:"))
+        );
+
+        let stale = receipt("run-a", "developer", "executed", "lane_superseded");
+        let stale_gate = dev_team_receipt_gate(&sequence, "task-a", Some("run-a"), Some(&stale));
+        assert!(
+            stale_gate
+                .blocker_code
+                .as_deref()
+                .is_some_and(|code| code.starts_with("dev_team_predecessor_receipt_stale:"))
+        );
+
+        for (mut invalid, blocker_prefix) in [
+            (
+                receipt("run-a", "coach", "failed", "lane_failed"),
+                "dev_team_predecessor_receipt_failed_fail_closed:",
+            ),
+            (
+                receipt("run-a", "coach", "exception", "lane_exception_takeover"),
+                "dev_team_predecessor_receipt_exception_fail_closed:",
+            ),
+            (
+                receipt("run-a", "coach", "pending", "lane_active"),
+                "dev_team_predecessor_receipt_unknown_state_fail_closed:",
+            ),
+            (
+                receipt("run-a", "coach", "", "lane_active"),
+                "dev_team_predecessor_receipt_malformed:",
+            ),
+        ] {
+            if invalid.dispatch_status == "failed" {
+                invalid.blocker_code = Some("execution_failed".to_string());
+            }
+            let gate = dev_team_receipt_gate(&sequence, "task-a", Some("run-a"), Some(&invalid));
+            assert_eq!(gate.status, "blocked", "{gate:?}");
+            assert!(
+                gate.blocker_code
+                    .as_deref()
+                    .is_some_and(|code| code.starts_with(blocker_prefix)),
+                "{gate:?}"
+            );
+        }
     }
 }

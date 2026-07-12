@@ -1268,7 +1268,7 @@ impl RunGraphDelegationGateSummary {
             && status.resume_target.starts_with("dispatch.");
         let handoff_pending = !dispatch_ready_resume
             && (status.next_node.is_some()
-            || status.handoff_state != "none"
+                || status.handoff_state != "none"
                 || status.resume_target != "none");
         let delegated_lane_active = !handoff_pending
             && status.status != "completed"
@@ -3749,7 +3749,9 @@ impl StateStore {
                 .unwrap_or_else(|| run_id.to_string()),
             task_id: execution
                 .as_ref()
-                .map(|row| row.task_id.clone())
+                .map(|row| row.task_id.trim())
+                .filter(|task_id| !task_id.is_empty())
+                .map(str::to_string)
                 .unwrap_or(fallback_task_id),
             task_class: execution
                 .as_ref()
@@ -4019,11 +4021,15 @@ impl StateStore {
             )
             .await?;
         let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
+        let mut latest_terminal_task_active_run_id = None;
         for latest in rows {
             let terminal_task_active = self
                 .run_graph_latest_row_points_to_terminal_task_active(&latest)
                 .await?;
             if terminal_task_active {
+                if latest_terminal_task_active_run_id.is_none() {
+                    latest_terminal_task_active_run_id = Some(latest.run_id.clone());
+                }
                 continue;
             }
             if self
@@ -4033,6 +4039,9 @@ impl StateStore {
                 continue;
             }
             return Ok(Some(latest.run_id));
+        }
+        if let Some(run_id) = latest_terminal_task_active_run_id {
+            return Ok(Some(run_id));
         }
         let mut receipt_query = self
             .db

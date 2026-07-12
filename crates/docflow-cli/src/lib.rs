@@ -2768,6 +2768,50 @@ fn normalize_path_for_root(path: &std::path::Path, root: &std::path::Path) -> St
         .replace('\\', "/")
 }
 
+fn normalize_repository_coordinate(value: &str) -> String {
+    let mut components = Vec::new();
+    let normalized = value.replace('\\', "/");
+    for component in normalized.split('/') {
+        match component {
+            "" | "." => {}
+            ".." if components.last().is_some_and(|value| *value != "..") => {
+                components.pop();
+            }
+            ".." => components.push(".."),
+            component => components.push(component),
+        }
+    }
+    components.join("/")
+}
+
+fn normalize_source_path_coordinate(value: &str) -> Option<String> {
+    let normalized = value.trim().replace('\\', "/");
+    if normalized.is_empty() || normalized.starts_with('/') || normalized.contains(':') {
+        return None;
+    }
+
+    let components = normalized.split('/').collect::<Vec<_>>();
+    if components
+        .iter()
+        .any(|component| component.is_empty() || matches!(*component, "." | ".."))
+    {
+        return None;
+    }
+
+    Some(components.join("/"))
+}
+
+fn validation_coordinates(
+    path: &std::path::Path,
+    scope_root: &std::path::Path,
+) -> (std::path::PathBuf, String) {
+    let canonical_root = detect_project_root_for(path)
+        .or_else(|| detect_project_root_for(scope_root))
+        .unwrap_or_else(|| scope_root.to_path_buf());
+    let rel = normalize_repository_coordinate(&normalize_path_for_root(path, &canonical_root));
+    (canonical_root, rel)
+}
+
 fn is_activation_governed_protocol(path: &str) -> bool {
     path.starts_with("vida/config/instructions/")
         && path.ends_with("protocol.md")
@@ -2885,8 +2929,7 @@ fn resolve_validation_scope(path: &str) -> (std::path::PathBuf, String) {
     let target = std::path::Path::new(path);
     if target.is_absolute() {
         if let Some(scope_root) = detect_project_root_for(target) {
-            let rel = normalize_path_for_root(target, &scope_root);
-            return (scope_root, rel);
+            return validation_coordinates(target, &scope_root);
         }
         let scope_root = target
             .parent()
@@ -2898,7 +2941,12 @@ fn resolve_validation_scope(path: &str) -> (std::path::PathBuf, String) {
             .unwrap_or_else(|| path.to_string());
         return (scope_root, rel);
     }
-    (runtime_root(), path.to_string())
+    let runtime = runtime_root();
+    let resolved = runtime.join(target);
+    if detect_project_root_for(&resolved).is_some() {
+        return validation_coordinates(&resolved, &runtime);
+    }
+    (runtime, normalize_repository_coordinate(path))
 }
 
 fn is_project_visible_doc(rel: &str) -> bool {
@@ -2906,7 +2954,7 @@ fn is_project_visible_doc(rel: &str) -> bool {
 }
 
 fn project_doc_owning_maps(rel: &str) -> Vec<&'static str> {
-    match rel {
+    let maps = match rel {
         "docs/project-root-map.md" => vec![],
         "docs/product/index.md" => vec!["docs/project-root-map.md"],
         "docs/product/spec/index.md" => vec!["docs/product/index.md"],
@@ -2920,6 +2968,7 @@ fn project_doc_owning_maps(rel: &str) -> Vec<&'static str> {
             vec![
                 "docs/product/spec/index.md",
                 "docs/product/spec/current-spec-map.md",
+                "docs/product/spec/current-spec-catalog.md",
             ]
         }
         "docs/product/research/index.md" => vec!["docs/product/index.md"],
@@ -2935,7 +2984,8 @@ fn project_doc_owning_maps(rel: &str) -> Vec<&'static str> {
         }
         _ if rel.starts_with("docs/research/") => vec!["docs/research/index.md"],
         _ => vec![],
-    }
+    };
+    maps.into_iter().filter(|map| *map != rel).collect()
 }
 
 fn normalized_doc_ref(value: &str) -> String {
@@ -2976,24 +3026,234 @@ fn relative_doc_ref(from_rel: &str, to_rel: &str) -> String {
 }
 
 fn project_doc_map_contains_registration(map_rel: &str, body: &str, rel: &str) -> bool {
-    let canonical_rel = normalized_doc_ref(rel);
+    if map_rel == rel {
+        return false;
+    }
+
+    let expected = project_doc_registration_variants(map_rel, rel);
+    markdown_registration_targets(body)
+        .into_iter()
+        .any(|target| {
+            registration_target_candidates(map_rel, &target)
+                .into_iter()
+                .any(|candidate| expected.contains(&candidate))
+        })
+}
+
+fn project_doc_registration_variants(map_rel: &str, rel: &str) -> BTreeSet<String> {
+    let canonical_rel = normalize_repository_coordinate(rel);
     let relative_rel = relative_doc_ref(map_rel, rel);
-    let readme_dir_refs = canonical_rel
-        .strip_suffix("README.md")
-        .map(|canonical_dir| {
-            let relative_dir = relative_rel
+    let mut variants = BTreeSet::from([
+        canonical_rel.clone(),
+        normalize_repository_coordinate(&relative_rel),
+    ]);
+
+    if let Some(canonical_dir) = canonical_rel.strip_suffix("README.md") {
+        variants.insert(canonical_dir.trim_end_matches('/').to_string());
+        variants.insert(
+            relative_rel
                 .strip_suffix("README.md")
                 .unwrap_or(&relative_rel)
-                .to_string();
-            (canonical_dir.to_string(), relative_dir)
-        });
-    body.contains(&canonical_rel)
-        || body.contains(&relative_rel)
-        || readme_dir_refs
-            .as_ref()
-            .is_some_and(|(canonical_dir, relative_dir)| {
-                body.contains(canonical_dir) || body.contains(relative_dir)
-            })
+                .trim_end_matches('/')
+                .to_string(),
+        );
+    }
+
+    variants
+}
+
+fn markdown_registration_targets(body: &str) -> Vec<String> {
+    let bytes = body.as_bytes();
+    let mut targets = Vec::new();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'`' {
+            let run = backtick_run_length(bytes, index);
+            if let Some(end) = closing_backtick_run(bytes, index + run, run) {
+                let target = body[index + run..end].trim();
+                if !target.is_empty() {
+                    targets.push(target.to_string());
+                }
+                index = end + run;
+                continue;
+            }
+        }
+
+        if bytes[index] == b'['
+            && (index == 0 || bytes[index - 1] != b'!')
+            && let Some((target, end)) = parse_markdown_inline_link(body, index)
+        {
+            targets.push(target);
+            index = end;
+            continue;
+        }
+
+        index += 1;
+    }
+
+    targets
+}
+
+fn backtick_run_length(bytes: &[u8], start: usize) -> usize {
+    let mut end = start;
+    while end < bytes.len() && bytes[end] == b'`' {
+        end += 1;
+    }
+    end - start
+}
+
+fn closing_backtick_run(bytes: &[u8], start: usize, run: usize) -> Option<usize> {
+    let mut index = start;
+    while index < bytes.len() {
+        if bytes[index] == b'`' {
+            let candidate_run = backtick_run_length(bytes, index);
+            if candidate_run == run {
+                return Some(index);
+            }
+            index += candidate_run;
+        } else {
+            index += 1;
+        }
+    }
+    None
+}
+
+fn parse_markdown_inline_link(body: &str, open: usize) -> Option<(String, usize)> {
+    let bytes = body.as_bytes();
+    let mut index = open + 1;
+    let mut bracket_depth = 0;
+    let close = loop {
+        let byte = *bytes.get(index)?;
+        match byte {
+            b'\\' => index += 2,
+            b'[' => {
+                bracket_depth += 1;
+                index += 1;
+            }
+            b']' if bracket_depth == 0 => break index,
+            b']' => {
+                bracket_depth -= 1;
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    };
+
+    let mut index = close + 1;
+    if bytes.get(index) != Some(&b'(') {
+        return None;
+    }
+    index += 1;
+    while bytes
+        .get(index)
+        .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
+        index += 1;
+    }
+
+    let target = if bytes.get(index) == Some(&b'<') {
+        let start = index + 1;
+        let end = body[start..].find('>')? + start;
+        index = end + 1;
+        body[start..end].to_string()
+    } else {
+        let start = index;
+        let mut paren_depth = 0;
+        loop {
+            let byte = *bytes.get(index)?;
+            match byte {
+                b'\\' => index += 2,
+                b'(' => {
+                    paren_depth += 1;
+                    index += 1;
+                }
+                b')' if paren_depth == 0 => break,
+                b')' => {
+                    paren_depth -= 1;
+                    index += 1;
+                }
+                byte if byte.is_ascii_whitespace() && paren_depth == 0 => break,
+                _ => index += 1,
+            }
+        }
+        if start == index {
+            return None;
+        }
+        body[start..index].to_string()
+    };
+
+    while bytes
+        .get(index)
+        .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
+        index += 1;
+    }
+    let end = markdown_link_closing_paren(bytes, index)?;
+    Some((target, end + 1))
+}
+
+fn markdown_link_closing_paren(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start;
+    let mut paren_depth = 0;
+    let mut quote = None;
+    while let Some(byte) = bytes.get(index).copied() {
+        match byte {
+            b'\\' => index += 2,
+            b'\'' | b'"' if quote == Some(byte) => {
+                quote = None;
+                index += 1;
+            }
+            b'\'' | b'"' if quote.is_none() => {
+                quote = Some(byte);
+                index += 1;
+            }
+            b'(' if quote.is_none() => {
+                paren_depth += 1;
+                index += 1;
+            }
+            b')' if quote.is_none() && paren_depth == 0 => return Some(index),
+            b')' if quote.is_none() => {
+                paren_depth -= 1;
+                index += 1;
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+fn registration_target_candidates(map_rel: &str, target: &str) -> Vec<String> {
+    let Some(normalized) = normalize_registration_target(target) else {
+        return Vec::new();
+    };
+    let mut candidates = vec![normalized.clone()];
+    let map_dir = map_rel.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    if !map_dir.is_empty() {
+        candidates.push(normalize_repository_coordinate(&format!(
+            "{map_dir}/{normalized}"
+        )));
+    }
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+fn normalize_registration_target(target: &str) -> Option<String> {
+    let target = target.trim();
+    if target.is_empty()
+        || target.starts_with('#')
+        || target.starts_with('/')
+        || target.starts_with("//")
+        || target.contains("://")
+        || target.contains(':')
+    {
+        return None;
+    }
+    let target = target.split('#').next().unwrap_or(target);
+    let target = target.split('?').next().unwrap_or(target);
+    let normalized = normalize_repository_coordinate(target);
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn project_doc_registration_validation_issues(
@@ -3346,7 +3606,10 @@ fn protocol_compression_metadata_validation_issues(
         ));
     }
 
-    if metadata_value(content, "source_path").is_none_or(|value| value != rel) {
+    if metadata_value(content, "source_path")
+        .and_then(|value| normalize_source_path_coordinate(&value))
+        .is_none_or(|value| value != rel)
+    {
         issues.push(custom_validation_issue(
             rel,
             "invalid_protocol_compression_source_path",
@@ -3722,9 +3985,9 @@ fn check_rows(
 
     for (scope_root, file_path) in targets {
         let content = fs::read_to_string(&file_path).map_err(|err| err.to_string())?;
-        let rel = normalize_path_for_root(&file_path, &scope_root);
+        let (validation_root, rel) = validation_coordinates(&file_path, &scope_root);
         let footer = footer_map(&content);
-        let mut row_issues = collect_file_validation_issues(&scope_root, &rel, &content)
+        let mut row_issues = collect_file_validation_issues(&validation_root, &rel, &content)
             .into_iter()
             .map(|issue| issue.code)
             .collect::<Vec<_>>();
@@ -3757,8 +4020,12 @@ fn fastcheck_rows(
     let mut issues = Vec::new();
     for (scope_root, file_path) in targets {
         let content = fs::read_to_string(&file_path).map_err(|err| err.to_string())?;
-        let rel = normalize_path_for_root(&file_path, &scope_root);
-        issues.extend(collect_file_validation_issues(&scope_root, &rel, &content));
+        let (validation_root, rel) = validation_coordinates(&file_path, &scope_root);
+        issues.extend(collect_file_validation_issues(
+            &validation_root,
+            &rel,
+            &content,
+        ));
     }
     Ok(issues)
 }
@@ -3772,7 +4039,7 @@ fn activation_rows(
     let targets = resolve_profile_targets(root, profile, files)?;
     let mut rows = Vec::new();
     for (scope_root, file_path) in targets {
-        let rel = normalize_path_for_root(&file_path, &scope_root);
+        let (_, rel) = validation_coordinates(&file_path, &scope_root);
         if let Some(issue) = activation_issue_for(&rel, &activation_body) {
             rows.push(issue);
         }
@@ -3790,7 +4057,7 @@ fn protocol_coverage_rows(
     let targets = resolve_profile_targets(root, profile, files)?;
     let mut rows = Vec::new();
     for (scope_root, file_path) in targets {
-        let rel = normalize_path_for_root(&file_path, &scope_root);
+        let (_, rel) = validation_coordinates(&file_path, &scope_root);
         if let Some(issue) =
             protocol_coverage_issue_for(&rel, &activation_body, &protocol_index_body)
         {
@@ -3809,8 +4076,12 @@ fn readiness_rows(
     let mut issues = Vec::new();
     for (scope_root, file_path) in targets {
         let content = fs::read_to_string(&file_path).map_err(|err| err.to_string())?;
-        let rel = normalize_path_for_root(&file_path, &scope_root);
-        issues.extend(collect_file_validation_issues(&scope_root, &rel, &content));
+        let (validation_root, rel) = validation_coordinates(&file_path, &scope_root);
+        issues.extend(collect_file_validation_issues(
+            &validation_root,
+            &rel,
+            &content,
+        ));
     }
     Ok(issues_to_readiness_rows(&issues))
 }
@@ -5474,15 +5745,21 @@ fn collect_tree_issues(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::trusted_tokenizer_path_for;
     use super::{
-        Cli, activation_issue_for, protocol_compression_hash_content, protocol_coverage_issue_for,
-        run, run_with_exit, sha256_hex, trusted_tokenizer_path_for,
+        Cli, activation_issue_for, activation_rows, check_rows, fastcheck_rows,
+        normalize_path_for_root, normalize_source_path_coordinate,
+        protocol_compression_hash_content, protocol_coverage_issue_for, protocol_coverage_rows,
+        readiness_rows, resolve_validation_scope, run, run_with_exit, sha256_hex,
+        validation_coordinates,
     };
     use clap::Parser;
     use serde_json::Value;
     use std::fs;
     use std::path::PathBuf;
     use std::process::{Command, ExitCode};
+    #[cfg(unix)]
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -5502,9 +5779,285 @@ mod tests {
         std::env::temp_dir().join(format!("docflow-cli-{name}-{}-{nanos}", std::process::id()))
     }
 
+    #[cfg(unix)]
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn active_canon_source_path_root(name: &str) -> PathBuf {
+        let root = temp_dir(name);
+        fs::create_dir_all(root.join("docs/product/spec")).expect("product spec scope");
+        fs::create_dir_all(root.join("vida/config/instructions")).expect("instruction scope");
+        fs::write(root.join("vida.config.yaml"), "version: 1\n").expect("root marker");
+        fs::write(
+            root.join("AGENTS.sidecar.md"),
+            "docs/project-root-map.md\ndocs/process/documentation-tooling-map.md\n",
+        )
+        .expect("sidecar");
+        fs::write(
+            root.join("docs/product/spec/current-spec-map.md"),
+            "docs/product/spec/synthetic-protocol.md\n",
+        )
+        .expect("spec map");
+        root
+    }
+
+    #[test]
+    fn active_canon_source_path_accepts_repo_coordinates_for_scoped_profiles() {
+        let root = active_canon_source_path_root("active-canon-source-path-valid");
+        for (repo_rel, scope_rel) in [
+            (
+                "vida/config/instructions/synthetic-protocol.md",
+                "vida/config/instructions",
+            ),
+            (
+                "docs/product/spec/synthetic-protocol.md",
+                "docs/product/spec",
+            ),
+        ] {
+            let target = root.join(repo_rel);
+            fs::write(&target, audited_protocol_doc(repo_rel)).expect("audited protocol");
+            let file = target.to_string_lossy().to_string();
+            let scope = root.join(scope_rel).to_string_lossy().to_string();
+
+            let fastcheck = fastcheck_rows(Some(&scope), "", std::slice::from_ref(&file))
+                .expect("fastcheck rows");
+            assert!(
+                !fastcheck
+                    .iter()
+                    .any(|issue| issue.code == "invalid_protocol_compression_source_path"),
+                "fastcheck rejected canonical source_path for {repo_rel}: {fastcheck:?}"
+            );
+
+            let readiness = readiness_rows(Some(&scope), "", std::slice::from_ref(&file))
+                .expect("readiness rows");
+            assert!(
+                readiness.is_empty(),
+                "readiness rejected canonical source_path for {repo_rel}: {readiness:?}"
+            );
+
+            let check =
+                check_rows(Some(&scope), "", std::slice::from_ref(&file)).expect("check rows");
+            assert!(
+                !check.iter().any(|row| {
+                    row.issues
+                        .iter()
+                        .any(|issue| issue == "invalid_protocol_compression_source_path")
+                }),
+                "check rejected canonical source_path for {repo_rel}: {check:?}"
+            );
+        }
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn active_canon_source_path_rejects_scoped_relative_and_wrong_repo_paths() {
+        let root = active_canon_source_path_root("active-canon-source-path-invalid");
+        let scope = root.join("vida/config/instructions");
+        let target = scope.join("synthetic-protocol.md");
+        let file = target.to_string_lossy().to_string();
+        let scope = scope.to_string_lossy().to_string();
+
+        for wrong_source_path in [
+            "synthetic-protocol.md",
+            "vida/config/instructions/other-protocol.md",
+        ] {
+            fs::write(&target, audited_protocol_doc(wrong_source_path))
+                .expect("wrong audited protocol");
+
+            let fastcheck = fastcheck_rows(Some(&scope), "", std::slice::from_ref(&file))
+                .expect("fastcheck rows");
+            assert!(
+                fastcheck
+                    .iter()
+                    .any(|issue| issue.code == "invalid_protocol_compression_source_path")
+            );
+
+            let readiness = readiness_rows(Some(&scope), "", std::slice::from_ref(&file))
+                .expect("readiness rows");
+            assert!(!readiness.is_empty());
+
+            let check =
+                check_rows(Some(&scope), "", std::slice::from_ref(&file)).expect("check rows");
+            assert!(check.iter().any(|row| {
+                row.issues
+                    .iter()
+                    .any(|issue| issue == "invalid_protocol_compression_source_path")
+            }));
+        }
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn active_canon_source_path_canonicalizes_activation_and_protocol_coverage_paths() {
+        let root = active_canon_source_path_root("active-canon-source-path-coverage");
+        let repo_rel = "vida/config/instructions/synthetic-protocol.md";
+        let scope = root.join("vida/config/instructions");
+        let target = root.join(repo_rel);
+        let footer_source_path = repo_rel.replace('/', "\\");
+        fs::write(&target, audited_protocol_doc(&footer_source_path)).expect("audited protocol");
+        let file = target.to_string_lossy().to_string();
+        let scope = scope.to_string_lossy().to_string();
+
+        let activation = activation_rows(Some(&scope), "", std::slice::from_ref(&file))
+            .expect("activation rows");
+        assert!(activation.iter().any(|row| row.path == repo_rel));
+
+        let coverage = protocol_coverage_rows(Some(&scope), "", std::slice::from_ref(&file))
+            .expect("protocol coverage rows");
+        assert!(coverage.iter().any(|row| row.path == repo_rel));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn active_canon_source_path_preserves_lexical_and_external_fallbacks() {
+        let root = active_canon_source_path_root("active-canon-source-path-fallback");
+        let lexical_target = root.join("docs/../vida/config/instructions/missing.md");
+        let (_, lexical_rel) = validation_coordinates(&lexical_target, &root.join("docs"));
+        assert_eq!(lexical_rel, "vida/config/instructions/missing.md");
+
+        let external = temp_dir("active-canon-source-path-external").join("outside.md");
+        let (external_root, external_rel) = validation_coordinates(&external, &root);
+        assert_eq!(external_root, root);
+        assert_eq!(external_rel, normalize_path_for_root(&external, &root));
+
+        let unresolvable_root = temp_dir("active-canon-source-path-unresolvable");
+        let missing = unresolvable_root.join("missing.md");
+        let (fallback_root, fallback_rel) = validation_coordinates(&missing, &unresolvable_root);
+        assert_eq!(fallback_root, unresolvable_root);
+        assert_eq!(fallback_rel, "missing.md");
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn active_canon_source_path_normalizer_preserves_windows_separator_and_case_contract() {
+        let root = temp_dir("active-canon-source-path-windows");
+        fs::create_dir_all(root.join("VIDA/Config/Instructions"))
+            .expect("instruction directory should exist");
+        fs::write(root.join("vida.config.yaml"), "version: 1\n").expect("root marker");
+        let target = root.join("VIDA/Config/Instructions/Synthetic.md");
+
+        let (_, rel) = validation_coordinates(&target, &root.join("VIDA/Config/Instructions"));
+        assert_eq!(rel, "VIDA/Config/Instructions/Synthetic.md");
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn active_canon_source_path_zombie_d_coordinate_matrix_rejects_unsafe_forms() {
+        let cases = [
+            ("zero", "", None),
+            (
+                "one",
+                "vida/config/instructions/synthetic-protocol.md",
+                Some("vida/config/instructions/synthetic-protocol.md"),
+            ),
+            (
+                "many",
+                "vida\\config\\instructions\\synthetic-protocol.md",
+                Some("vida/config/instructions/synthetic-protocol.md"),
+            ),
+            (
+                "boundary",
+                "./vida/config/instructions/synthetic-protocol.md",
+                None,
+            ),
+            (
+                "traversal",
+                "vida/config/../instructions/synthetic-protocol.md",
+                None,
+            ),
+            (
+                "interface",
+                "C:\\repo\\vida\\config\\instructions\\synthetic-protocol.md",
+                None,
+            ),
+            (
+                "exceptions",
+                "/repo/vida/config/instructions/synthetic-protocol.md",
+                None,
+            ),
+            (
+                "simple",
+                "docs/product/spec/synthetic.md",
+                Some("docs/product/spec/synthetic.md"),
+            ),
+        ];
+
+        for (category, value, expected) in cases {
+            assert_eq!(
+                normalize_source_path_coordinate(value).as_deref(),
+                expected,
+                "unexpected source_path normalization for ZOMBIE-D {category}"
+            );
+        }
+    }
+
+    #[test]
+    fn active_canon_source_path_profile_surfaces_keep_missing_malformed_and_traversal_blocking() {
+        let root = active_canon_source_path_root("active-canon-source-path-blockers");
+        let scope = root.join("vida/config/instructions");
+        let target = scope.join("synthetic-protocol.md");
+        let file = target.to_string_lossy().to_string();
+        let scope = scope.to_string_lossy().to_string();
+        let cases = [
+            ("missing-footer", "# missing footer\n".to_string()),
+            (
+                "malformed-footer",
+                protocol_doc_with_footer(
+                    "vida/config/instructions/synthetic-protocol.md",
+                    "protocol_compression_status: audit_passed\n",
+                )
+                .replace(
+                    "source_path: vida/config/instructions/synthetic-protocol.md\n",
+                    "",
+                ),
+            ),
+            (
+                "traversal",
+                audited_protocol_doc("vida/config/../instructions/synthetic-protocol.md"),
+            ),
+            (
+                "wrong-root",
+                audited_protocol_doc("C:\\wrong-root\\synthetic-protocol.md"),
+            ),
+        ];
+
+        for (case_name, content) in cases {
+            fs::write(&target, content).expect("blocking protocol fixture");
+            let fastcheck = fastcheck_rows(Some(&scope), "", std::slice::from_ref(&file))
+                .expect("fastcheck rows");
+            let readiness = readiness_rows(Some(&scope), "", std::slice::from_ref(&file))
+                .expect("readiness rows");
+            let check =
+                check_rows(Some(&scope), "", std::slice::from_ref(&file)).expect("check rows");
+
+            assert!(!fastcheck.is_empty(), "{case_name} fastcheck must block");
+            assert!(!readiness.is_empty(), "{case_name} readiness must block");
+            assert!(!check.is_empty(), "{case_name} check must block");
+            assert!(
+                fastcheck.iter().any(|issue| issue.code == "missing_footer"
+                    || issue.code == "invalid_protocol_compression_source_path"
+                    || issue.code == "missing_protocol_compression_metadata"),
+                "{case_name} fastcheck lacked an actionable blocker: {fastcheck:?}"
+            );
+            assert_eq!(
+                check[0].issues.iter().any(|issue| {
+                    issue == "missing_footer"
+                        || issue == "invalid_protocol_compression_source_path"
+                        || issue == "missing_protocol_compression_metadata"
+                }),
+                true,
+                "{case_name} check lacked an actionable blocker: {check:?}"
+            );
+        }
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
     }
 
     fn init_git_repo(root: &PathBuf) {
@@ -6642,6 +7195,57 @@ mod tests {
     }
 
     #[test]
+    fn project_doc_registration_requires_exact_link_or_code_span_target() {
+        let map = "docs/product/spec/current-spec-map.md";
+        let target = "docs/product/spec/flappy-bird-design.md";
+
+        assert!(project_doc_map_contains_registration(
+            map,
+            "- [Flappy Bird](flappy-bird-design.md)",
+            target
+        ));
+        assert!(project_doc_map_contains_registration(
+            map,
+            "- `docs/product/spec/flappy-bird-design.md`",
+            target
+        ));
+        assert!(!project_doc_map_contains_registration(
+            map,
+            "The file is docs/product/spec/flappy-bird-design.md.",
+            target
+        ));
+        assert!(!project_doc_map_contains_registration(
+            map,
+            "- [docs/product/spec/flappy-bird-design.md](other.md)",
+            target
+        ));
+        assert!(!project_doc_map_contains_registration(
+            map,
+            "- [Flappy Bird](flappy-bird-design.md.bak)",
+            target
+        ));
+        assert!(!project_doc_map_contains_registration(
+            map,
+            "- [Flappy Bird](../other/flappy-bird-design.md)",
+            target
+        ));
+        assert!(!project_doc_map_contains_registration(
+            map,
+            "- [map](current-spec-map.md)",
+            map
+        ));
+    }
+
+    #[test]
+    fn current_spec_catalog_is_a_spec_registry_without_self_reference() {
+        let owners = project_doc_owning_maps("docs/product/spec/flappy-bird-design.md");
+        assert!(owners.contains(&"docs/product/spec/current-spec-catalog.md"));
+
+        let catalog_owners = project_doc_owning_maps("docs/product/spec/current-spec-catalog.md");
+        assert!(!catalog_owners.contains(&"docs/product/spec/current-spec-catalog.md"));
+    }
+
+    #[test]
     fn check_file_blocks_when_sidecar_omits_documentation_tooling_map_pointer() {
         let root = temp_dir("sidecar-pointer-check");
         fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
@@ -6935,7 +7539,8 @@ mod tests {
     #[test]
     fn check_file_accepts_complete_protocol_compression_marker() {
         let path = temp_path("protocol-compression-metadata-valid");
-        fs::write(&path, audited_protocol_doc(&path)).expect("protocol doc should exist");
+        let (_, source_path) = resolve_validation_scope(&path);
+        fs::write(&path, audited_protocol_doc(&source_path)).expect("protocol doc should exist");
 
         let cli = Cli::parse_from(["docflow", "check-file", "--path", &path]);
         let rendered = run(cli);

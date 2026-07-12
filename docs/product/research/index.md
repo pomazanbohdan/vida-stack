@@ -27,6 +27,7 @@ Current state:
    - `docs/product/research/runtime-home-and-surface-migration-research.md`
    - `docs/product/research/derived-cache-delivery-and-invalidation-research.md`
    - `docs/product/research/embedded-runtime-bootstrap-and-projection-research.md`
+   - `docs/product/research/enterprise-requirements-control-plane-research.md`
    - `docs/product/research/execution-preparation-and-developer-handoff-survey.md`
    - `docs/product/research/vida-service-tui-wizard-architecture-research.md`
    - `docs/product/research/protocol-token-economy-baseline.md`

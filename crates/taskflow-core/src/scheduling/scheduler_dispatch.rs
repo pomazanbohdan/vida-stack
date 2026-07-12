@@ -84,17 +84,60 @@ pub fn parallel_blockers_against_current(
     blockers
 }
 
-fn normalized_owned_paths<'a>(owned_paths: &'a [&'a str]) -> Vec<&'a str> {
+fn normalized_owned_paths(owned_paths: &[&str]) -> Vec<String> {
     owned_paths
         .iter()
-        .map(|path| path.trim())
-        .filter(|path| !path.is_empty())
+        .filter_map(|path| normalize_owned_path(path))
         .collect()
 }
 
-fn owned_paths_overlap(left: &[&str], right: &[&str]) -> bool {
-    left.iter()
-        .any(|left_path| right.iter().any(|right_path| left_path == right_path))
+fn normalize_owned_path(path: &str) -> Option<String> {
+    let path = path.trim().replace('\\', "/");
+    if path.is_empty() {
+        return None;
+    }
+
+    let absolute = path.starts_with('/');
+    let mut segments = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." if segments.last().is_some_and(|segment| *segment != "..") => {
+                segments.pop();
+            }
+            ".." if absolute => {}
+            ".." => segments.push(segment),
+            _ => segments.push(segment),
+        }
+    }
+
+    let mut normalized = if segments.is_empty() {
+        if absolute { "/" } else { "." }.to_string()
+    } else {
+        format!("{}{}", if absolute { "/" } else { "" }, segments.join("/"))
+    };
+    if cfg!(windows) {
+        normalized = normalized.to_lowercase();
+    }
+    Some(normalized)
+}
+
+fn owned_paths_overlap(left: &[String], right: &[String]) -> bool {
+    left.iter().any(|left_path| {
+        right.iter().any(|right_path| {
+            path_is_same_or_ancestor(left_path, right_path)
+                || path_is_same_or_ancestor(right_path, left_path)
+        })
+    })
+}
+
+fn path_is_same_or_ancestor(ancestor: &str, path: &str) -> bool {
+    ancestor == path
+        || (ancestor == "." && !path.starts_with('/'))
+        || (ancestor == "/" && path.starts_with('/'))
+        || path
+            .strip_prefix(ancestor)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,14 +309,14 @@ mod tests {
         }
     }
 
-    fn parallel_input(
-        task_id: &'static str,
-        execution_mode: Option<&'static str>,
-        order_bucket: Option<&'static str>,
-        parallel_group: Option<&'static str>,
-        conflict_domain: Option<&'static str>,
-        owned_paths: &'static [&'static str],
-    ) -> ParallelSafetyInput<'static> {
+    fn parallel_input<'a>(
+        task_id: &'a str,
+        execution_mode: Option<&'a str>,
+        order_bucket: Option<&'a str>,
+        parallel_group: Option<&'a str>,
+        conflict_domain: Option<&'a str>,
+        owned_paths: &'a [&'a str],
+    ) -> ParallelSafetyInput<'a> {
         ParallelSafetyInput {
             task_id,
             execution_mode,
@@ -373,6 +416,92 @@ mod tests {
         );
 
         assert_eq!(blockers, vec![PARALLEL_BLOCKER_OWNED_PATH_COLLISION]);
+    }
+
+    #[test]
+    fn parallel_blockers_against_current_allows_disjoint_paths() {
+        let blockers = parallel_blockers_against_current(
+            parallel_input(
+                "candidate",
+                Some("parallel_safe"),
+                Some("wave-a"),
+                Some("writers"),
+                Some("candidate-domain"),
+                &["crates/frontend/src"],
+            ),
+            Some(parallel_input(
+                "current",
+                Some("parallel_safe"),
+                Some("wave-a"),
+                Some("writers"),
+                Some("current-domain"),
+                &["crates/backend/src"],
+            )),
+        );
+
+        assert!(blockers.is_empty());
+    }
+
+    #[test]
+    fn parallel_blockers_against_current_normalizes_aliases_and_prefixes() {
+        for current_path in [
+            "crates/shared/src",
+            "crates/shared/./src/",
+            "crates\\shared\\generated\\..\\src",
+        ] {
+            let blockers = parallel_blockers_against_current(
+                parallel_input(
+                    "candidate",
+                    Some("parallel_safe"),
+                    Some("wave-a"),
+                    Some("writers"),
+                    Some("candidate-domain"),
+                    &["crates/shared/src/lib.rs"],
+                ),
+                Some(parallel_input(
+                    "current",
+                    Some("parallel_safe"),
+                    Some("wave-a"),
+                    Some("writers"),
+                    Some("current-domain"),
+                    &[current_path],
+                )),
+            );
+
+            assert_eq!(
+                blockers,
+                vec![PARALLEL_BLOCKER_OWNED_PATH_COLLISION],
+                "alias {current_path} should overlap its descendant"
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_blockers_against_current_uses_platform_case_semantics() {
+        let blockers = parallel_blockers_against_current(
+            parallel_input(
+                "candidate",
+                Some("parallel_safe"),
+                Some("wave-a"),
+                Some("writers"),
+                Some("candidate-domain"),
+                &["Crates/Shared/src"],
+            ),
+            Some(parallel_input(
+                "current",
+                Some("parallel_safe"),
+                Some("wave-a"),
+                Some("writers"),
+                Some("current-domain"),
+                &["crates/shared/src/lib.rs"],
+            )),
+        );
+
+        if cfg!(windows) {
+            assert_eq!(blockers, vec![PARALLEL_BLOCKER_OWNED_PATH_COLLISION]);
+        } else {
+            assert!(blockers.is_empty());
+        }
     }
 
     #[test]

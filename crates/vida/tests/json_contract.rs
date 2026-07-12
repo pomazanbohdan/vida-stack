@@ -1,8 +1,11 @@
 use std::fs;
+use std::fs::OpenOptions;
+use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use fs2::FileExt;
 use serde_json::json;
 use vida_test_support::{self as support, CliContractCase};
 
@@ -137,6 +140,259 @@ fn json_contract_major_operator_surfaces_keep_release1_shape() {
     );
     let reset_value = parse_json_output(&["state", "reset", "--json"], &reset);
     support::assert_release1_operator_shape("vida state reset", &reset_value);
+}
+
+#[test]
+fn state_reset_corrupted_surrealkv_zombie_d_public_recovery_contract() {
+    let fixture_root = PathBuf::from(unique_state_dir());
+    let state_dir = fixture_root.join("nested").join("state");
+    let corrupt_wal = state_dir.join("wal").join("00000000000000000003.wal");
+    for directory in ["manifest", "sstables", "vlog", "wal"] {
+        fs::create_dir_all(state_dir.join(directory))
+            .expect("create corrupt SurrealKV fixture directory");
+    }
+    fs::write(&corrupt_wal, "not a valid wal").expect("seed corrupt WAL evidence");
+
+    let state_dir_text = state_dir.display().to_string();
+    let reset = vida()
+        .args([
+            "state",
+            "reset",
+            "--archive",
+            "--reinit",
+            "--state-dir",
+            &state_dir_text,
+            "--json",
+        ])
+        .output()
+        .expect("state reset should run against corrupt SurrealKV fixture");
+    assert!(
+        reset.status.success(),
+        "state reset should recover a corrupt fixture; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&reset.stdout),
+        String::from_utf8_lossy(&reset.stderr)
+    );
+    let reset_value = parse_json_output(
+        &["state", "reset", "--archive", "--reinit", "--json"],
+        &reset,
+    );
+    support::assert_release1_operator_shape("vida state reset", &reset_value);
+    assert_eq!(reset_value["status"], "pass");
+    let archive_path = reset_value["artifact_refs"]["archive_path"]
+        .as_str()
+        .map(PathBuf::from)
+        .expect("state reset JSON should expose archive path");
+    let receipt_path = reset_value["artifact_refs"]["recovery_receipt_path"]
+        .as_str()
+        .map(PathBuf::from)
+        .expect("state reset JSON should expose recovery receipt path");
+    assert!(
+        archive_path
+            .join("wal")
+            .join("00000000000000000003.wal")
+            .is_file()
+    );
+    assert!(receipt_path.is_file());
+    assert!(state_dir.join("manifest").is_dir());
+
+    let graph = vida()
+        .args([
+            "task",
+            "validate-graph",
+            "--state-dir",
+            &state_dir_text,
+            "--json",
+        ])
+        .output()
+        .expect("graph validation should run on reinitialized state");
+    assert!(
+        graph.status.success(),
+        "reinitialized state graph should validate; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&graph.stdout),
+        String::from_utf8_lossy(&graph.stderr)
+    );
+    let graph_value = parse_json_output(&["task", "validate-graph", "--json"], &graph);
+    assert_eq!(graph_value["status"], "pass");
+
+    let status = vida()
+        .args([
+            "status",
+            "--summary",
+            "--state-dir",
+            &state_dir_text,
+            "--json",
+        ])
+        .output()
+        .expect("status should run on reinitialized state");
+    assert!(
+        status.status.success(),
+        "reinitialized state should reopen; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&status.stdout),
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&fixture_root);
+}
+
+#[test]
+fn state_reset_without_archive_zombie_d_public_blocker_contract() {
+    let fixture_root = PathBuf::from(unique_state_dir());
+    let state_dir = fixture_root.join("nested").join("state");
+    let corrupt_wal = state_dir.join("wal").join("00000000000000000003.wal");
+    for directory in ["manifest", "sstables", "vlog", "wal"] {
+        fs::create_dir_all(state_dir.join(directory))
+            .expect("create corrupt SurrealKV fixture directory");
+    }
+    fs::write(&corrupt_wal, "not a valid wal").expect("seed corrupt WAL evidence");
+
+    let state_dir_text = state_dir.display().to_string();
+    let reset = vida()
+        .args([
+            "state",
+            "reset",
+            "--reinit",
+            "--state-dir",
+            &state_dir_text,
+            "--json",
+        ])
+        .output()
+        .expect("state reset refusal should run");
+    assert!(
+        !reset.status.success(),
+        "reset without archive must fail closed; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&reset.stdout),
+        String::from_utf8_lossy(&reset.stderr)
+    );
+    let reset_value = parse_json_output(&["state", "reset", "--reinit", "--json"], &reset);
+    support::assert_release1_operator_shape("vida state reset", &reset_value);
+    assert_eq!(reset_value["status"], "blocked");
+    assert!(
+        reset_value["blocker_codes"]
+            .as_array()
+            .expect("state reset blocker codes should be an array")
+            .iter()
+            .any(|code| code == "state_reset_failed")
+    );
+    assert!(
+        reset_value["next_actions"]
+            .as_array()
+            .expect("state reset next actions should be an array")
+            .iter()
+            .any(|action| action
+                .as_str()
+                .is_some_and(|action| action.contains("--archive --reinit")))
+    );
+    assert!(
+        corrupt_wal.is_file(),
+        "failed reset must preserve source WAL evidence"
+    );
+    assert!(
+        fs::read_dir(state_dir.parent().expect("state parent"))
+            .expect("read state parent")
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_name().to_string_lossy().contains(".archive.")),
+        "failed reset must not create an archive"
+    );
+
+    let _ = fs::remove_dir_all(&fixture_root);
+}
+
+#[test]
+fn state_reset_and_status_lock_contention_zombie_d_public_contract() {
+    let fixture_root = PathBuf::from(unique_state_dir());
+    let state_dir = fixture_root.join("nested").join("state");
+    let corrupt_wal = state_dir.join("wal").join("00000000000000000003.wal");
+    for directory in ["manifest", "sstables", "vlog", "wal"] {
+        fs::create_dir_all(state_dir.join(directory))
+            .expect("create corrupt SurrealKV fixture directory");
+    }
+    fs::write(&corrupt_wal, "not a valid wal").expect("seed corrupt WAL evidence");
+    let legacy_guard = state_dir.join(".vida-authoritative-open.guard");
+    let guard_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&legacy_guard)
+        .expect("open legacy guard");
+    guard_file
+        .lock_exclusive()
+        .expect("hold legacy guard for public contention contract");
+
+    let state_dir_text = state_dir.display().to_string();
+    let status = vida()
+        .args([
+            "status",
+            "--summary",
+            "--state-dir",
+            &state_dir_text,
+            "--json",
+        ])
+        .output()
+        .expect("status under lock should run");
+    assert!(
+        !status.status.success(),
+        "status must fail closed under lock; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&status.stdout),
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_value = parse_json_output(&["status", "--summary", "--json"], &status);
+    support::assert_release1_operator_shape("vida status", &status_value);
+    assert_eq!(status_value["status"], "blocked");
+    assert!(
+        status_value["blocker_codes"]
+            .as_array()
+            .expect("status blocker codes should be an array")
+            .iter()
+            .any(|code| code == "state_store_read_lock_contention")
+    );
+
+    let reset = vida()
+        .args([
+            "state",
+            "reset",
+            "--archive",
+            "--reinit",
+            "--state-dir",
+            &state_dir_text,
+            "--json",
+        ])
+        .output()
+        .expect("state reset under lock should run");
+    assert!(
+        !reset.status.success(),
+        "state reset must fail closed under lock; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&reset.stdout),
+        String::from_utf8_lossy(&reset.stderr)
+    );
+    let reset_value = parse_json_output(
+        &["state", "reset", "--archive", "--reinit", "--json"],
+        &reset,
+    );
+    support::assert_release1_operator_shape("vida state reset", &reset_value);
+    assert_eq!(reset_value["status"], "blocked");
+    assert!(
+        reset_value["blocker_codes"]
+            .as_array()
+            .expect("state reset blocker codes should be an array")
+            .iter()
+            .any(|code| code == "state_reset_failed")
+    );
+    assert!(
+        corrupt_wal.is_file(),
+        "locked reset must preserve WAL evidence"
+    );
+    assert!(
+        fs::read_dir(state_dir.parent().expect("state parent"))
+            .expect("read state parent")
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_name().to_string_lossy().contains(".archive.")),
+        "locked reset must not create an archive"
+    );
+
+    FileExt::unlock(&guard_file).expect("release legacy guard");
+    drop(guard_file);
+    let _ = fs::remove_dir_all(&fixture_root);
 }
 
 #[test]
@@ -353,20 +609,24 @@ fn requirement_analysis_source_file_is_project_bounded_and_redacted() {
         public_analysis_text.contains("Preserve requirement thirteen"),
         "redacted analysis should preserve requirements beyond the atom cap: {public_analysis_text}"
     );
-    assert!(artifact["requirement_atoms"]
-        .as_array()
-        .expect("atoms should render")
-        .iter()
-        .any(|atom| atom["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("Build the feature"))));
-    assert!(artifact["requirement_atoms"]
-        .as_array()
-        .expect("atoms should render")
-        .iter()
-        .any(|atom| atom["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("Keep readiness verdict stable"))));
+    assert!(
+        artifact["requirement_atoms"]
+            .as_array()
+            .expect("atoms should render")
+            .iter()
+            .any(|atom| atom["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Build the feature")))
+    );
+    assert!(
+        artifact["requirement_atoms"]
+            .as_array()
+            .expect("atoms should render")
+            .iter()
+            .any(|atom| atom["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Keep readiness verdict stable")))
+    );
     assert!(
         !artifact["requirement_atoms"]
             .as_array()

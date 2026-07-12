@@ -114,6 +114,13 @@ Project-routing rule:
 2. Framework-owned bootstrap may resolve that a downstream target belongs to the project layer, but the concrete project canonical map pointers must be carried by this sidecar.
 3. Preserved secondary project bundles are not the default project-doc target for this sidecar; they must be entered only by explicit task targeting.
 
+## Project-Owned Environment And Proof Scripts
+
+1. Use project-owned scripts as canonical entrypoints, when present, for Windows/MSVC environment initialization; Cargo/Rust builds and tests; build concurrency/locking; release builds; PATH, PowerShell, Git, and tool resolution; TEMP/TMP normalization; runtime/service startup; and repeatable diagnostics/proof.
+2. When an existing script needs to resolve an environment limit, ambiguity, shell drift, or path/tool discovery gap, extend or improve it in a bounded, tested way; prefer that extension over ad-hoc one-off commands or duplicated logic.
+3. Scripts must preserve visible failures and safety: never hide errors, weaken safety checks, bypass ownership/approval, or turn diagnostics into unsafe cleanup.
+4. Require focused tests or dry-runs, plus `git diff --check` and any applicable diff/diagnostic check, for script changes; preserve unrelated worktree edits.
+
 ## Working Rule
 
 1. Use `AGENTS.md` for lane routing and hard invariants.

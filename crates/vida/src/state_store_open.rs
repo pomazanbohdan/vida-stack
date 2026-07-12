@@ -39,6 +39,7 @@ const VIDA_SURREALKV_MAX_MEMTABLE_SIZE_BYTES: usize = 16 * 1024 * 1024;
 const VIDA_SURREALKV_BLOCK_CACHE_CAPACITY_BYTES: u64 = 16 * 1024 * 1024;
 const VIDA_SURREALKV_VLOG_MAX_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 
+#[derive(Debug)]
 pub(super) struct ExclusiveFileAcquireGuard {
     file: std::fs::File,
 }
@@ -74,7 +75,13 @@ impl ExclusiveFileAcquireGuard {
         root: &Path,
         spec: ExclusiveFileAcquireGuardSpec,
     ) -> Result<Self, StateStoreError> {
-        let guard_path = root.join(spec.guard_file_name);
+        Self::acquire_at_path(&root.join(spec.guard_file_name), spec).await
+    }
+
+    pub(super) async fn acquire_at_path(
+        guard_path: &Path,
+        spec: ExclusiveFileAcquireGuardSpec,
+    ) -> Result<Self, StateStoreError> {
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -129,8 +136,142 @@ fn exclusive_file_lock_contention_error(
     })
 }
 
-pub(super) struct AuthoritativeOpenGuard {
+#[derive(Debug)]
+pub(super) struct StateRootLifecycleGuard {
+    identity: StateRootLifecycleIdentity,
     _guard: ExclusiveFileAcquireGuard,
+    legacy_guard: std::sync::Mutex<Option<Arc<ExclusiveFileAcquireGuard>>>,
+}
+
+const STATE_ROOT_LIFECYCLE_GUARD_PREFIX: &str = ".vida-state-root-lifecycle-";
+const STATE_ROOT_LIFECYCLE_GUARD_SUFFIX: &str = ".guard";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StateRootLifecycleIdentity {
+    root: PathBuf,
+    guard_path: PathBuf,
+}
+
+fn normalize_state_root_lifecycle_identity_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
+}
+
+pub(crate) fn state_root_lifecycle_guard_path(root: &Path) -> Result<PathBuf, StateStoreError> {
+    Ok(resolve_state_root_lifecycle_identity(root)?.guard_path)
+}
+
+fn resolve_state_root_lifecycle_identity(
+    root: &Path,
+) -> Result<StateRootLifecycleIdentity, StateStoreError> {
+    let file_name = root.file_name().filter(|name| !name.is_empty()).ok_or_else(|| {
+        StateStoreError::InvalidStorageMetadata {
+            reason: format!(
+                "cannot derive state-root lifecycle guard identity for `{}`: state root has no file name",
+                root.display()
+            ),
+        }
+    })?;
+    let parent = root.parent().unwrap_or_else(|| Path::new("."));
+    let canonical_parent =
+        fs::canonicalize(parent).map_err(|error| StateStoreError::InvalidStorageMetadata {
+            reason: format!(
+                "cannot canonicalize state-root lifecycle guard parent `{}` for `{}`: {error}",
+                parent.display(),
+                root.display()
+            ),
+        })?;
+    let requested_root = canonical_parent.join(file_name);
+    let resolved_root = match fs::symlink_metadata(&requested_root) {
+        Ok(metadata) => {
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                return Err(StateStoreError::InvalidStorageMetadata {
+                    reason: format!(
+                        "cannot derive state-root lifecycle guard identity for `{}`: state roots must be plain directories, not symlinks or files",
+                        root.display()
+                    ),
+                });
+            }
+            let resolved_root = fs::canonicalize(&requested_root)?;
+            if resolved_root.parent() != Some(canonical_parent.as_path()) {
+                return Err(StateStoreError::InvalidStorageMetadata {
+                    reason: format!(
+                        "cannot derive state-root lifecycle guard identity for `{}`: canonical root escapes its canonical parent",
+                        root.display()
+                    ),
+                });
+            }
+            resolved_root
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => requested_root,
+        Err(error) => return Err(StateStoreError::Io(error)),
+    };
+
+    // Hash the single resolved identity, never a pre-check spelling of it. Rust's portable
+    // filesystem API cannot atomically create a no-follow directory and lock its sidecar, so
+    // callers validate this identity after acquiring the sidecar and immediately before opening.
+    // A symlink, escape, or replacement observed by either validation fails closed.
+    let guard_parent = resolved_root
+        .parent()
+        .ok_or_else(|| StateStoreError::InvalidStorageMetadata {
+            reason: format!(
+                "cannot derive state-root lifecycle guard identity for `{}`: resolved state root has no parent",
+                root.display()
+            ),
+        })?
+        .to_path_buf();
+    let identity_root = normalize_state_root_lifecycle_identity_path(&resolved_root);
+    let mut identity = 0xcbf29ce484222325u64;
+    for byte in identity_root.to_string_lossy().as_bytes() {
+        identity ^= u64::from(*byte);
+        identity = identity.wrapping_mul(0x100000001b3);
+    }
+    Ok(StateRootLifecycleIdentity {
+        root: identity_root,
+        guard_path: guard_parent.join(format!(
+            "{STATE_ROOT_LIFECYCLE_GUARD_PREFIX}{identity:016x}{STATE_ROOT_LIFECYCLE_GUARD_SUFFIX}"
+        )),
+    })
+}
+
+pub(super) async fn ensure_legacy_authoritative_open_guard_unlocked(
+    root: &Path,
+) -> Result<(), StateStoreError> {
+    let path = root.join(".vida-authoritative-open.guard");
+    let file = match OpenOptions::new().read(true).write(true).open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(StateStoreError::Io(error)),
+    };
+    for attempt in 0..AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT {
+        match file.try_lock_exclusive() {
+            Ok(()) => {
+                let _ = file.unlock();
+                return Ok(());
+            }
+            Err(error) if exclusive_file_lock_contention_error(&error, true) => {
+                if attempt + 1 < AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT {
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS,
+                    ))
+                    .await;
+                    continue;
+                }
+                return Err(StateStoreError::Io(error));
+            }
+            Err(error) => return Err(StateStoreError::Io(error)),
+        }
+    }
+    Err(StateStoreError::Io(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "timed out while probing legacy authoritative datastore guard",
+    )))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,25 +335,84 @@ fn local_process_liveness(process_id: u32) -> ProcessLiveness {
     }
 }
 
-impl AuthoritativeOpenGuard {
+impl StateRootLifecycleGuard {
     pub(super) async fn acquire(root: &Path) -> Result<Self, StateStoreError> {
-        Ok(Self {
-            _guard: ExclusiveFileAcquireGuard::acquire(
+        let parent = root.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).map_err(|error| StateStoreError::InvalidStorageMetadata {
+            reason: format!(
+                "cannot materialize state-root lifecycle guard parent `{}` for `{}`: {error}",
+                parent.display(),
+                root.display()
+            ),
+        })?;
+        let identity = resolve_state_root_lifecycle_identity(root)?;
+        let guard = Self {
+            _guard: ExclusiveFileAcquireGuard::acquire_at_path(
+                &identity.guard_path,
+                ExclusiveFileAcquireGuardSpec::new(
+                    ".vida-state-root-lifecycle.guard",
+                    AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT,
+                    AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS,
+                    "timed out while waiting for state-root lifecycle guard",
+                    true,
+                ),
+            )
+            .await?,
+            identity,
+            legacy_guard: std::sync::Mutex::new(None),
+        };
+        let _ = guard.validate_root_identity(root)?;
+        Ok(guard)
+    }
+
+    fn is_lock_contention_error(error: &std::io::Error) -> bool {
+        exclusive_file_lock_contention_error(error, true)
+    }
+
+    pub(super) fn validate_root_identity(&self, root: &Path) -> Result<(), StateStoreError> {
+        let identity = resolve_state_root_lifecycle_identity(root)?;
+        if identity == self.identity {
+            return Ok(());
+        }
+        Err(StateStoreError::InvalidStorageMetadata {
+            reason: format!(
+                "state-root lifecycle guard identity changed while opening `{}`",
+                root.display()
+            ),
+        })
+    }
+
+    pub(super) async fn acquire_legacy_guard(&self, root: &Path) -> Result<(), StateStoreError> {
+        if self
+            .legacy_guard
+            .lock()
+            .expect("lifecycle legacy guard mutex should not be poisoned")
+            .is_some()
+        {
+            return Ok(());
+        }
+        let guard = Arc::new(
+            ExclusiveFileAcquireGuard::acquire(
                 root,
                 ExclusiveFileAcquireGuardSpec::new(
                     ".vida-authoritative-open.guard",
                     AUTHORITATIVE_OPEN_GUARD_RETRY_COUNT,
                     AUTHORITATIVE_OPEN_GUARD_RETRY_DELAY_MS,
-                    "timed out while waiting for authoritative datastore access serialization guard",
+                    "timed out while waiting for legacy authoritative datastore guard",
                     true,
                 ),
             )
             .await?,
-        })
-    }
-
-    fn is_lock_contention_error(error: &std::io::Error) -> bool {
-        exclusive_file_lock_contention_error(error, true)
+        );
+        self.validate_root_identity(root)?;
+        let mut held = self
+            .legacy_guard
+            .lock()
+            .expect("lifecycle legacy guard mutex should not be poisoned");
+        if held.is_none() {
+            *held = Some(guard);
+        }
+        Ok(())
     }
 }
 
@@ -299,7 +499,7 @@ impl StateStore {
         let lock_text = match fs::read_to_string(&lock_path) {
             Ok(lock_text) => lock_text,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+            Err(error) if StateRootLifecycleGuard::is_lock_contention_error(&error) => {
                 return Ok(false);
             }
             Err(error) => return Err(StateStoreError::Io(error)),
@@ -315,7 +515,7 @@ impl StateStore {
             match fs::remove_file(&lock_path) {
                 Ok(()) => return Ok(true),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+                Err(error) if StateRootLifecycleGuard::is_lock_contention_error(&error) => {
                     if attempt + 1 < STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
                         std::thread::sleep(std::time::Duration::from_millis(
                             STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS,
@@ -351,7 +551,7 @@ impl StateStore {
                     break;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+                Err(error) if StateRootLifecycleGuard::is_lock_contention_error(&error) => {
                     if attempt + 1 < STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
                         std::thread::sleep(std::time::Duration::from_millis(
                             STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS,
@@ -376,7 +576,7 @@ impl StateStore {
             match fs::remove_file(&lock_path) {
                 Ok(()) => return Ok(true),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(error) if AuthoritativeOpenGuard::is_lock_contention_error(&error) => {
+                Err(error) if StateRootLifecycleGuard::is_lock_contention_error(&error) => {
                     if attempt + 1 < STALE_LOCK_MARKER_REMOVE_RETRY_COUNT {
                         std::thread::sleep(std::time::Duration::from_millis(
                             STALE_LOCK_MARKER_REMOVE_RETRY_DELAY_MS,
@@ -410,7 +610,7 @@ impl StateStore {
     pub(crate) fn error_is_lock_contention(error: &StateStoreError) -> bool {
         match error {
             StateStoreError::Io(io_error) => {
-                AuthoritativeOpenGuard::is_lock_contention_error(io_error)
+                StateRootLifecycleGuard::is_lock_contention_error(io_error)
             }
             StateStoreError::Db(db_error) => {
                 Self::message_is_lock_contention(&db_error.to_string())
@@ -469,14 +669,15 @@ impl StateStore {
 
     async fn open_with_authoritative_lock_retry<F, Fut>(
         root: PathBuf,
+        lifecycle_guard: Arc<StateRootLifecycleGuard>,
         mut open_once: F,
     ) -> Result<Self, StateStoreError>
     where
-        F: FnMut(PathBuf) -> Fut,
+        F: FnMut(PathBuf, Arc<StateRootLifecycleGuard>) -> Fut,
         Fut: std::future::Future<Output = Result<Self, StateStoreError>>,
     {
         for attempt in 0..AUTHORITATIVE_DATASTORE_LOCK_RETRY_COUNT {
-            match open_once(root.clone()).await {
+            match open_once(root.clone(), lifecycle_guard.clone()).await {
                 Ok(store) => return Ok(store),
                 Err(error) if Self::error_is_lock_contention(&error) => {
                     let _ =
@@ -495,7 +696,7 @@ impl StateStore {
             }
         }
 
-        open_once(root).await
+        open_once(root, lifecycle_guard).await
     }
 
     pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
@@ -503,9 +704,19 @@ impl StateStore {
     }
 
     async fn open_impl(root: PathBuf) -> Result<Self, StateStoreError> {
+        let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await?);
+        lifecycle_guard.validate_root_identity(&root)?;
+        Self::open_with_lifecycle_guard(root, lifecycle_guard).await
+    }
+
+    pub(super) async fn open_with_lifecycle_guard(
+        root: PathBuf,
+        lifecycle_guard: Arc<StateRootLifecycleGuard>,
+    ) -> Result<Self, StateStoreError> {
         fs::create_dir_all(&root)?;
-        let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
-        Self::open_with_authoritative_lock_retry(root, Self::open_once).await
+        lifecycle_guard.validate_root_identity(&root)?;
+        lifecycle_guard.acquire_legacy_guard(&root).await?;
+        Self::open_with_authoritative_lock_retry(root, lifecycle_guard, Self::open_once).await
     }
 
     pub async fn open_existing(root: PathBuf) -> Result<Self, StateStoreError> {
@@ -513,14 +724,17 @@ impl StateStore {
     }
 
     async fn open_existing_impl(root: PathBuf) -> Result<Self, StateStoreError> {
+        let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await?);
+        lifecycle_guard.validate_root_identity(&root)?;
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));
         }
+        lifecycle_guard.acquire_legacy_guard(&root).await?;
         if !Self::state_dir_has_existing_datastore_payload(&root)? {
-            return Self::open(root).await;
+            return Self::open_with_lifecycle_guard(root, lifecycle_guard).await;
         }
-        let _guard = AuthoritativeOpenGuard::acquire(&root).await?;
-        Self::open_with_authoritative_lock_retry(root, Self::open_existing_once).await
+        Self::open_with_authoritative_lock_retry(root, lifecycle_guard, Self::open_existing_once)
+            .await
     }
 
     pub async fn open_existing_with_timeout(
@@ -551,13 +765,16 @@ impl StateStore {
     }
 
     async fn open_existing_read_only_impl(root: PathBuf) -> Result<Self, StateStoreError> {
+        let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await?);
+        lifecycle_guard.validate_root_identity(&root)?;
         if !root.exists() {
             return Err(StateStoreError::MissingStateDir(root));
         }
+        lifecycle_guard.acquire_legacy_guard(&root).await?;
 
         for attempt in 0..READ_ONLY_OPEN_RETRY_COUNT {
             let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
-            match Self::open_existing_read_only_once(root.clone()).await {
+            match Self::open_existing_read_only_once(root.clone(), lifecycle_guard.clone()).await {
                 Ok(store) => return Ok(store),
                 Err(error) if Self::error_is_lock_contention(&error) => {
                     let _ =
@@ -576,7 +793,7 @@ impl StateStore {
             }
         }
 
-        Self::open_existing_read_only_once(root).await
+        Self::open_existing_read_only_once(root, lifecycle_guard).await
     }
 
     pub async fn open_existing_read_only_with_timeout(
@@ -634,8 +851,11 @@ impl StateStore {
         }
         let timeout = Self::strict_read_only_open_timeout(timeout);
         match tokio::time::timeout(timeout, async {
+            let lifecycle_guard = Arc::new(StateRootLifecycleGuard::acquire(&root).await?);
+            lifecycle_guard.validate_root_identity(&root)?;
+            lifecycle_guard.acquire_legacy_guard(&root).await?;
             let _ = Self::reclaim_recoverable_authoritative_datastore_lock_marker(&root)?;
-            Self::open_existing_structural_read_only_once(root.clone()).await
+            Self::open_existing_structural_read_only_once(root.clone(), lifecycle_guard).await
         })
         .await
         {
@@ -689,34 +909,64 @@ impl StateStore {
         Ok(false)
     }
 
-    async fn open_existing_once(root: PathBuf) -> Result<Self, StateStoreError> {
+    async fn open_existing_once(
+        root: PathBuf,
+        lifecycle_guard: Arc<StateRootLifecycleGuard>,
+    ) -> Result<Self, StateStoreError> {
+        lifecycle_guard.validate_root_identity(&root)?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
         db.query(state_schema_document()).await?;
-        Ok(Self { db, root })
+        Ok(Self {
+            db,
+            root,
+            _lifecycle_guard: lifecycle_guard,
+        })
     }
 
-    async fn open_existing_read_only_once(root: PathBuf) -> Result<Self, StateStoreError> {
+    async fn open_existing_read_only_once(
+        root: PathBuf,
+        lifecycle_guard: Arc<StateRootLifecycleGuard>,
+    ) -> Result<Self, StateStoreError> {
+        lifecycle_guard.validate_root_identity(&root)?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
         db.query(state_schema_document()).await?;
-        Ok(Self { db, root })
+        Ok(Self {
+            db,
+            root,
+            _lifecycle_guard: lifecycle_guard,
+        })
     }
 
     async fn open_existing_structural_read_only_once(
         root: PathBuf,
+        lifecycle_guard: Arc<StateRootLifecycleGuard>,
     ) -> Result<Self, StateStoreError> {
+        lifecycle_guard.validate_root_identity(&root)?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, false)).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
-        Ok(Self { db, root })
+        Ok(Self {
+            db,
+            root,
+            _lifecycle_guard: lifecycle_guard,
+        })
     }
 
-    async fn open_once(root: PathBuf) -> Result<Self, StateStoreError> {
+    async fn open_once(
+        root: PathBuf,
+        lifecycle_guard: Arc<StateRootLifecycleGuard>,
+    ) -> Result<Self, StateStoreError> {
+        lifecycle_guard.validate_root_identity(&root)?;
         let db: Surreal<Db> = Box::pin(Self::open_bounded_surrealkv(&root, true)).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
         db.query(state_schema_document()).await?;
 
-        let store = Self { db, root };
+        let store = Self {
+            db,
+            root,
+            _lifecycle_guard: lifecycle_guard,
+        };
         store.sanitize_legacy_task_execution_semantics().await?;
         store.sanitize_legacy_task_planner_metadata().await?;
         store.expire_stale_scheduler_dispatch_reservations().await?;
@@ -768,8 +1018,9 @@ mod tests {
         fs::create_dir_all(&root).expect("create acquire guard test root");
 
         let message = "timed out while waiting for test acquisition guard";
-        let error = match ExclusiveFileAcquireGuard::acquire(
-            &root,
+        let guard_path = root.join(".vida-test-acquire.guard");
+        let error = match ExclusiveFileAcquireGuard::acquire_at_path(
+            &guard_path,
             ExclusiveFileAcquireGuardSpec::new(".vida-test-acquire.guard", 0, 25, message, false),
         )
         .await
@@ -779,7 +1030,7 @@ mod tests {
         };
 
         assert!(error.to_string().contains(message));
-        assert!(root.join(".vida-test-acquire.guard").exists());
+        assert!(guard_path.exists());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -798,8 +1049,205 @@ mod tests {
         );
     }
 
+    #[test]
+    fn state_root_lifecycle_guard_path_uses_canonical_root_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-root-lifecycle-identity-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        let alias = root
+            .parent()
+            .expect("state root parent")
+            .join(".")
+            .join(root.file_name().expect("state root name"));
+
+        let guard_path = state_root_lifecycle_guard_path(&root).expect("derive guard path");
+        assert_eq!(
+            guard_path,
+            state_root_lifecycle_guard_path(&alias).expect("derive alias guard path")
+        );
+        let canonical_parent = fs::canonicalize(root.parent().expect("state root parent"))
+            .expect("canonical state root parent");
+        assert_eq!(guard_path.parent(), Some(canonical_parent.as_path()));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[tokio::test]
-    async fn read_only_open_bypasses_authoritative_open_guard() {
+    async fn open_materializes_missing_nested_parent_before_lifecycle_serialization() {
+        let container = std::env::temp_dir().join(format!(
+            "vida-state-root-lifecycle-nested-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let root = container.join("missing-parent").join("state");
+        assert!(!root.parent().expect("nested parent").exists());
+
+        let store = StateStore::open(root.clone())
+            .await
+            .expect("open should materialize the immediate parent before acquiring its guard");
+
+        assert!(root.is_dir());
+        assert!(
+            state_root_lifecycle_guard_path(&root)
+                .expect("derive lifecycle guard")
+                .exists()
+        );
+        store.close().await;
+        let _ = fs::remove_dir_all(&container);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn state_root_lifecycle_guard_path_normalizes_windows_case_aliases() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-root-lifecycle-case-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create state root");
+        let alias = root.parent().expect("state root parent").join(
+            root.file_name()
+                .expect("state root name")
+                .to_string_lossy()
+                .to_ascii_uppercase(),
+        );
+
+        assert_eq!(
+            state_root_lifecycle_guard_path(&root).expect("derive canonical guard"),
+            state_root_lifecycle_guard_path(&alias).expect("derive case-alias guard")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn state_root_lifecycle_guard_path_normalizes_absent_windows_case_aliases() {
+        let container = std::env::temp_dir().join(format!(
+            "vida-state-root-lifecycle-absent-case-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&container).expect("create state root parent");
+        let root = container.join("state");
+        let alias = container.join("STATE");
+
+        assert!(!root.exists());
+        assert_eq!(
+            state_root_lifecycle_guard_path(&root).expect("derive canonical guard"),
+            state_root_lifecycle_guard_path(&alias).expect("derive case-alias guard")
+        );
+
+        let _ = fs::remove_dir_all(&container);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn absent_windows_case_alias_waits_for_the_same_lifecycle_guard() {
+        let container = std::env::temp_dir().join(format!(
+            "vida-state-root-lifecycle-absent-case-lock-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&container).expect("create state root parent");
+        let root = container.join("state");
+        let alias = container.join("STATE");
+        let guard = StateRootLifecycleGuard::acquire(&root)
+            .await
+            .expect("acquire canonical lifecycle guard");
+
+        let blocked_alias = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            StateRootLifecycleGuard::acquire(&alias),
+        )
+        .await;
+        assert!(
+            blocked_alias.is_err(),
+            "an absent Windows case alias must wait for the canonical lifecycle guard"
+        );
+
+        drop(guard);
+        let alias_guard = StateRootLifecycleGuard::acquire(&alias)
+            .await
+            .expect("case alias should acquire after canonical guard release");
+        drop(alias_guard);
+        let _ = fs::remove_dir_all(&container);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_root_lifecycle_identity_rejects_symlinked_root() {
+        let container = std::env::temp_dir().join(format!(
+            "vida-state-root-lifecycle-symlink-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let target = container.join("target");
+        let alias = container.join("state");
+        fs::create_dir_all(&target).expect("create symlink target");
+        std::os::unix::fs::symlink(&target, &alias).expect("create state-root symlink");
+
+        let error = state_root_lifecycle_guard_path(&alias)
+            .expect_err("symlinked state root must fail closed");
+
+        assert!(error.to_string().contains("plain directories"));
+        let _ = fs::remove_dir_all(&container);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn state_root_lifecycle_guard_rejects_post_acquire_replacement() {
+        let container = std::env::temp_dir().join(format!(
+            "vida-state-root-lifecycle-replacement-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let root = container.join("state");
+        let archived = container.join("state.archived");
+        let replacement = container.join("replacement");
+        fs::create_dir_all(&root).expect("create state root");
+        fs::create_dir_all(&replacement).expect("create replacement root");
+        let guard = StateRootLifecycleGuard::acquire(&root)
+            .await
+            .expect("acquire lifecycle guard");
+        fs::rename(&root, &archived).expect("move state root after acquisition");
+        std::os::unix::fs::symlink(&replacement, &root).expect("replace state root with symlink");
+
+        let error = guard
+            .validate_root_identity(&root)
+            .expect_err("replacement must fail closed before datastore open");
+
+        assert!(error.to_string().contains("plain directories"));
+        drop(guard);
+        let _ = fs::remove_dir_all(&container);
+    }
+
+    #[tokio::test]
+    async fn read_only_open_waits_for_state_root_lifecycle_guard() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -812,17 +1260,93 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
         store.close().await;
 
-        let _guard = AuthoritativeOpenGuard::acquire(&root)
+        let guard = StateRootLifecycleGuard::acquire(&root)
             .await
-            .expect("hold authoritative guard");
-        let read_only_open = tokio::time::timeout(
-            std::time::Duration::from_millis(1500),
+            .expect("hold lifecycle guard");
+        let _read_only_wait = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
             StateStore::open_existing_read_only(root.clone()),
         )
         .await
-        .expect("read-only open should not wait for authoritative guard");
+        .expect_err("read-only open should wait for lifecycle guard");
+
+        drop(guard);
+        let read_only_open = StateStore::open_existing_read_only(root.clone()).await;
 
         assert!(read_only_open.is_ok());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn state_store_open_is_exclusive_for_the_store_lifetime() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-store-lifecycle-lifetime-{}-{nanos}",
+            std::process::id()
+        ));
+
+        let first = StateStore::open(root.clone())
+            .await
+            .expect("first store should acquire lifecycle guard");
+        let overlapping_open = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            StateStore::open(root.clone()),
+        )
+        .await;
+        assert!(
+            overlapping_open.is_err(),
+            "a second embedded datastore engine must wait until the first store closes"
+        );
+
+        first.close().await;
+        let second = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            StateStore::open(root.clone()),
+        )
+        .await
+        .expect("open should proceed after the owning store closes")
+        .expect("second store should open after lifecycle guard release");
+        second.close().await;
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn structural_read_only_open_waits_for_state_root_lifecycle_guard() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-structural-read-only-open-guard-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store.close().await;
+
+        let guard = StateRootLifecycleGuard::acquire(&root)
+            .await
+            .expect("hold lifecycle guard");
+        let error = StateStore::open_existing_structural_read_only_with_timeout(
+            root.clone(),
+            std::time::Duration::from_millis(100),
+        )
+        .await
+        .expect_err("structural read-only open should wait for lifecycle guard");
+        assert!(
+            matches!(error, StateStoreError::Io(error) if error.kind() == std::io::ErrorKind::TimedOut)
+        );
+
+        drop(guard);
+        let structural_open = StateStore::open_existing_structural_read_only_with_timeout(
+            root.clone(),
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(structural_open.is_ok());
         let _ = fs::remove_dir_all(&root);
     }
 

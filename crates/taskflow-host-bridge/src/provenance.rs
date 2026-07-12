@@ -58,7 +58,10 @@ pub fn validate_host_bridge_request_provenance(
 }
 
 fn host_bridge_request_status_is_admissible_for_provenance(request: &HostBridgeRequest) -> bool {
-    matches!(request.status.as_str(), "pending" | "pass" | "retryable_blocked")
+    matches!(
+        request.status.as_str(),
+        "pending" | "pass" | "retryable_blocked"
+    )
 }
 
 #[must_use]
@@ -72,6 +75,12 @@ pub fn host_bridge_provenance_public_blocker_code(blocker_code: &str) -> &str {
         }
         "request_status_not_admissible" => {
             taskflow_contracts::BlockerCode::HostBridgeRequestNotPending.as_str()
+        }
+        "authoritative_state_store_locked" => {
+            taskflow_contracts::BlockerCode::AuthoritativeStateStoreLocked.as_str()
+        }
+        "authoritative_state_store_open_failed" => {
+            taskflow_contracts::BlockerCode::AuthoritativeStateStoreOpenFailed.as_str()
         }
         "run_id_mismatch" | "task_id_mismatch" | "dispatch_target_mismatch" => {
             taskflow_contracts::BlockerCode::HostBridgeRequestIdentityMismatch.as_str()
@@ -132,6 +141,10 @@ mod tests {
             host_bridge_provenance_public_blocker_code("dispatch_target_mismatch"),
             "host_bridge_request_identity_mismatch"
         );
+        assert_eq!(
+            host_bridge_provenance_public_blocker_code("authoritative_state_store_locked"),
+            "authoritative_state_store_locked"
+        );
     }
 
     #[test]
@@ -156,8 +169,10 @@ mod tests {
         });
 
         assert!(!decision.accepted);
-        assert!(decision
-            .blocker_codes
-            .contains(&"request_status_not_admissible".to_string()));
+        assert!(
+            decision
+                .blocker_codes
+                .contains(&"request_status_not_admissible".to_string())
+        );
     }
 }

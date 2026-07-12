@@ -10,6 +10,9 @@
 /// Related ADR: docs/product/spec/adr-team-flow-state-machine-owner.md
 use serde_json::Value;
 
+pub const DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE: &str =
+    "dispatch_contract_lane_catalog_incomplete";
+
 /// Verdict for state-machine transition validation
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransitionVerdict {
@@ -42,14 +45,23 @@ impl TeamFlowStateMachine {
     /// Resolve the execution lane sequence from a dev_team flow configuration.
     /// This is the single source of truth for what lanes execute in order.
     pub fn resolve_execution_lane_sequence(&self) -> Vec<String> {
-        self.steps.iter().map(|s| s.role_id.clone()).collect()
+        self.steps
+            .iter()
+            .map(|step| normalize_step_ref(&step.role_id))
+            .collect()
     }
 
     /// Get the next lawful lane after a given role_id.
     /// Returns None if the current role is not in the state machine or is the last step.
     pub fn resolve_next_lane(&self, current_role: &str) -> Option<String> {
-        let current_index = self.steps.iter().position(|s| s.role_id == current_role);
-        current_index.and_then(|idx| self.steps.get(idx + 1).map(|next| next.role_id.clone()))
+        let current = normalize_step_ref(current_role);
+        let current_index = self
+            .steps
+            .iter()
+            .position(|step| normalize_step_ref(&step.role_id) == current);
+        current_index
+            .and_then(|idx| self.steps.get(idx + 1))
+            .map(|next| normalize_step_ref(&next.role_id))
     }
 
     /// Validate whether a requested next node is lawful after the current role.
@@ -58,21 +70,42 @@ impl TeamFlowStateMachine {
         current_role: &str,
         requested_next_node: &str,
     ) -> TransitionVerdict {
-        let expected_next = self.resolve_next_lane(current_role);
+        let current = normalize_step_ref(current_role);
+        let requested = normalize_step_ref(requested_next_node);
+        let Some(current_index) = self
+            .steps
+            .iter()
+            .position(|step| normalize_step_ref(&step.role_id) == current)
+        else {
+            return TransitionVerdict::Blocked {
+                blocker_code: "unknown_current_lane".to_string(),
+                allowed_next_node: self
+                    .steps
+                    .first()
+                    .map(|step| normalize_step_ref(&step.role_id))
+                    .unwrap_or_else(|| "configured_next_lane_unavailable".to_string()),
+            };
+        };
+        let expected_next = self
+            .steps
+            .get(current_index + 1)
+            .map(|step| step.role_id.clone());
 
         match expected_next {
-            Some(ref expected) if expected == requested_next_node => TransitionVerdict::Allowed {
-                next_lane: expected.clone(),
-            },
+            Some(ref expected) if normalize_step_ref(expected) == requested => {
+                TransitionVerdict::Allowed {
+                    next_lane: normalize_step_ref(expected),
+                }
+            }
             Some(expected) => TransitionVerdict::Blocked {
                 blocker_code: "invalid_allowed_next_node_for_execution_plan".to_string(),
-                allowed_next_node: expected,
+                allowed_next_node: normalize_step_ref(&expected),
             },
             None => {
                 // Current role is the last step — closure is expected
-                if is_terminal_closure_ref(requested_next_node) {
+                if is_terminal_closure_ref(&requested) {
                     TransitionVerdict::Allowed {
-                        next_lane: requested_next_node.trim().to_string(),
+                        next_lane: canonical_terminal_closure_ref(&requested),
                     }
                 } else {
                     TransitionVerdict::Blocked {
@@ -92,7 +125,7 @@ impl TeamFlowStateMachine {
     ) -> TransitionVerdict {
         let current = normalize_step_ref(current_role);
         let requested = normalize_step_ref(requested_next_node);
-        let rework = normalize_step_ref(rework_target);
+        let rework = normalize_rework_target(rework_target);
         let current_index = self
             .steps
             .iter()
@@ -108,7 +141,11 @@ impl TeamFlowStateMachine {
             let rework_alias = format!("{rework}_rework");
             if requested == rework || requested == rework_alias {
                 return TransitionVerdict::Allowed {
-                    next_lane: requested_next_node.trim().to_string(),
+                    next_lane: if requested == rework {
+                        rework.clone()
+                    } else {
+                        rework_alias
+                    },
                 };
             }
         }
@@ -122,14 +159,18 @@ impl TeamFlowStateMachine {
 
     /// Check if a role_id is a valid step in this state machine.
     pub fn is_valid_role(&self, role_id: &str) -> bool {
-        self.steps.iter().any(|s| s.role_id == role_id)
+        let role_id = normalize_step_ref(role_id);
+        self.steps
+            .iter()
+            .any(|s| normalize_step_ref(&s.role_id) == role_id)
     }
 
     /// Get the stage for a given role_id.
     pub fn get_stage_for_role(&self, role_id: &str) -> Option<&str> {
+        let role_id = normalize_step_ref(role_id);
         self.steps
             .iter()
-            .find(|s| s.role_id == role_id)
+            .find(|s| normalize_step_ref(&s.role_id) == role_id)
             .map(|s| s.stage.as_str())
     }
 
@@ -164,51 +205,55 @@ impl TeamFlowStateMachine {
     }
 
     pub fn from_dispatch_contract(dispatch_contract: &Value, sequence_field: &str) -> Option<Self> {
-        let sequence = dispatch_contract
-            .get(sequence_field)
-            .and_then(Value::as_array)
-            .or_else(|| {
-                dispatch_contract
-                    .get("lane_sequence")
-                    .and_then(Value::as_array)
-            })?;
+        let sequence_value = dispatch_contract.get(sequence_field).or_else(|| {
+            (sequence_field != "lane_sequence")
+                .then(|| dispatch_contract.get("lane_sequence"))
+                .flatten()
+        })?;
+        let sequence = normalize_dispatch_sequence(sequence_value)?;
+        let full_sequence = match dispatch_contract.get("lane_sequence") {
+            Some(value) => Some(normalize_dispatch_sequence(value)?),
+            None => None,
+        };
+        if let Some(full_sequence) = full_sequence.as_ref() {
+            if sequence_field != "lane_sequence"
+                && !is_ordered_subsequence(full_sequence, &sequence)
+            {
+                return None;
+            }
+        }
+        let catalog = dispatch_contract.get("lane_catalog")?.as_object()?;
         let steps = sequence
-            .iter()
-            .filter_map(Value::as_str)
-            .map(crate::runtime_assignment_policy::canonical_dispatch_target_name)
-            .filter(|role_id| !role_id.trim().is_empty())
+            .into_iter()
             .map(|role_id| {
-                let lane = dispatch_contract
-                    .get("lane_catalog")
-                    .and_then(|catalog| catalog.get(role_id.as_str()));
-                let activation = lane.and_then(|lane| lane.get("activation"));
-                let runtime_role = activation
-                    .and_then(|activation| activation.get("activation_runtime_role"))
-                    .and_then(Value::as_str)
-                    .or_else(|| {
-                        lane.and_then(|lane| lane.get("runtime_role"))
-                            .and_then(Value::as_str)
-                    })
-                    .unwrap_or(role_id.as_str())
-                    .to_string();
-                let task_class = lane
-                    .and_then(|lane| lane.get("task_class"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("implementation")
-                    .to_string();
-                let stage = lane
-                    .and_then(|lane| lane.get("stage"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("execution")
-                    .to_string();
-                StateMachineStep {
+                let lane = catalog.iter().find_map(|(catalog_role_id, lane)| {
+                    (normalize_step_ref(
+                        &crate::runtime_assignment_policy::canonical_dispatch_target_name(
+                            catalog_role_id,
+                        ),
+                    ) == role_id)
+                        .then_some(lane)
+                })?;
+                if !lane.is_object() {
+                    return None;
+                }
+                let activation = lane.get("activation").filter(|value| value.is_object());
+                let runtime_role = required_nonempty_string(
+                    activation
+                        .and_then(|activation| activation.get("activation_runtime_role"))
+                        .or_else(|| lane.get("activation_runtime_role"))
+                        .or_else(|| lane.get("runtime_role")),
+                )?;
+                let task_class = required_nonempty_string(lane.get("task_class"))?;
+                let stage = required_nonempty_string(lane.get("stage"))?;
+                Some(StateMachineStep {
                     role_id,
                     runtime_role,
                     task_class,
                     stage,
-                }
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Option<Vec<_>>>()?;
         if steps.is_empty() {
             None
         } else {
@@ -220,8 +265,71 @@ impl TeamFlowStateMachine {
     }
 }
 
+fn normalize_dispatch_sequence(value: &Value) -> Option<Vec<String>> {
+    let sequence = value
+        .as_array()?
+        .iter()
+        .map(Value::as_str)
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .map(|role_id| {
+            normalize_step_ref(
+                &crate::runtime_assignment_policy::canonical_dispatch_target_name(role_id),
+            )
+        })
+        .collect::<Vec<_>>();
+    if sequence.is_empty()
+        || sequence.iter().any(|role_id| role_id.trim().is_empty())
+        || sequence
+            .iter()
+            .enumerate()
+            .any(|(index, role_id)| sequence[..index].iter().any(|seen| seen == role_id))
+    {
+        return None;
+    }
+    Some(sequence)
+}
+
+fn is_ordered_subsequence(full_sequence: &[String], candidate: &[String]) -> bool {
+    let mut full_index = 0;
+    for candidate_role in candidate {
+        let Some(relative_index) = full_sequence[full_index..]
+            .iter()
+            .position(|role_id| role_id == candidate_role)
+        else {
+            return false;
+        };
+        full_index += relative_index + 1;
+    }
+    true
+}
+
+fn required_nonempty_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 fn normalize_step_ref(value: &str) -> String {
     value.trim().replace('-', "_")
+}
+
+fn normalize_rework_target(value: &str) -> String {
+    let normalized = normalize_step_ref(value);
+    normalized
+        .strip_suffix("_rework")
+        .unwrap_or(normalized.as_str())
+        .to_string()
+}
+
+fn canonical_terminal_closure_ref(value: &str) -> String {
+    match normalize_step_ref(value).as_str() {
+        "release_closure" => "release_closure".to_string(),
+        "terminal_closure" => "terminal_closure".to_string(),
+        _ => "closure".to_string(),
+    }
 }
 
 fn is_terminal_closure_ref(value: &str) -> bool {
@@ -287,6 +395,14 @@ pub fn resolve_dispatch_contract_lane_sequence(
 ) -> Option<Vec<String>> {
     TeamFlowStateMachine::from_dispatch_contract(dispatch_contract, sequence_field)
         .map(|sm| sm.resolve_execution_lane_sequence())
+}
+
+pub fn validate_dispatch_contract(
+    dispatch_contract: &Value,
+    sequence_field: &str,
+) -> Result<TeamFlowStateMachine, &'static str> {
+    TeamFlowStateMachine::from_dispatch_contract(dispatch_contract, sequence_field)
+        .ok_or(DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE)
 }
 
 pub fn validate_dispatch_contract_transition(
@@ -387,6 +503,46 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_next_lane_canonicalizes_current_and_next_refs() {
+        let sm = TeamFlowStateMachine {
+            flow_id: "hyphenated".to_string(),
+            steps: vec![
+                StateMachineStep {
+                    role_id: "alpha-spec".to_string(),
+                    runtime_role: "spec_runtime".to_string(),
+                    task_class: "specification".to_string(),
+                    stage: "design_gate".to_string(),
+                },
+                StateMachineStep {
+                    role_id: "beta-impl".to_string(),
+                    runtime_role: "impl_runtime".to_string(),
+                    task_class: "implementation".to_string(),
+                    stage: "execution".to_string(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            sm.resolve_next_lane("alpha-spec"),
+            Some("beta_impl".to_string())
+        );
+        assert_eq!(
+            sm.resolve_next_lane("alpha_spec"),
+            Some("beta_impl".to_string())
+        );
+        assert_eq!(
+            sm.resolve_execution_lane_sequence(),
+            vec!["alpha_spec", "beta_impl"]
+        );
+        assert_eq!(
+            sm.validate_transition("alpha-spec", "beta-impl"),
+            TransitionVerdict::Allowed {
+                next_lane: "beta_impl".to_string()
+            }
+        );
+    }
+
+    #[test]
     fn test_validate_transition_allowed() {
         let bundle = sample_activation_bundle();
         let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
@@ -395,6 +551,31 @@ mod tests {
             verdict,
             TransitionVerdict::Allowed {
                 next_lane: "beta_impl".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_validate_transition_canonicalizes_lane_refs() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        assert_eq!(
+            sm.validate_transition("alpha-spec", "beta-impl"),
+            TransitionVerdict::Allowed {
+                next_lane: "beta_impl".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_validate_transition_rejects_unknown_current_lane_even_for_closure() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        assert_eq!(
+            sm.validate_transition("missing", "closure"),
+            TransitionVerdict::Blocked {
+                blocker_code: "unknown_current_lane".to_string(),
+                allowed_next_node: "alpha_spec".to_string()
             }
         );
     }
@@ -449,6 +630,18 @@ mod tests {
         let verdict = sm.validate_rework_transition("gamma_gate", "beta_impl_rework", "beta_impl");
         assert_eq!(
             verdict,
+            TransitionVerdict::Allowed {
+                next_lane: "beta_impl_rework".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_validate_rework_transition_canonicalizes_refs() {
+        let bundle = sample_activation_bundle();
+        let sm = extract_team_flow_state_machine(&bundle, None).unwrap();
+        assert_eq!(
+            sm.validate_rework_transition("gamma-gate", "beta-impl-rework", "beta-impl"),
             TransitionVerdict::Allowed {
                 next_lane: "beta_impl_rework".to_string()
             }
@@ -534,9 +727,9 @@ mod tests {
         let contract = serde_json::json!({
             "lane_sequence": ["alpha_impl", "beta_gate", "gamma_verify"],
             "lane_catalog": {
-                "alpha_impl": {"dispatch_target": "alpha_impl", "task_class": "implementation"},
-                "beta_gate": {"dispatch_target": "beta_gate", "task_class": "quality_gate"},
-                "gamma_verify": {"dispatch_target": "gamma_verify", "task_class": "verification"}
+                "alpha_impl": {"dispatch_target": "alpha_impl", "runtime_role": "worker", "task_class": "implementation", "stage": "execution"},
+                "beta_gate": {"dispatch_target": "beta_gate", "runtime_role": "coach", "task_class": "quality_gate", "stage": "execution"},
+                "gamma_verify": {"dispatch_target": "gamma_verify", "runtime_role": "verifier", "task_class": "verification", "stage": "verification"}
             }
         });
 
@@ -551,5 +744,79 @@ mod tests {
                 next_lane: "alpha_impl_rework".to_string()
             })
         );
+    }
+
+    #[test]
+    fn test_dispatch_contract_rejects_missing_or_incomplete_lane_catalog() {
+        let missing_catalog = serde_json::json!({
+            "lane_sequence": ["alpha", "beta"]
+        });
+        assert!(
+            resolve_dispatch_contract_lane_sequence(&missing_catalog, "lane_sequence").is_none()
+        );
+
+        let incomplete_catalog = serde_json::json!({
+            "lane_sequence": ["alpha", "beta"],
+            "lane_catalog": {"alpha": {"task_class": "analysis"}}
+        });
+        assert!(
+            resolve_dispatch_contract_lane_sequence(&incomplete_catalog, "lane_sequence").is_none()
+        );
+    }
+
+    #[test]
+    fn test_dispatch_contract_rejects_missing_required_metadata_duplicates_and_mismatches() {
+        for (role_id, field) in [("alpha_spec", "task_class"), ("beta_design", "stage")] {
+            let mut contract = sample_dispatch_contract();
+            contract["lane_catalog"][role_id]
+                .as_object_mut()
+                .expect("sample lane should be an object")
+                .remove(field);
+            assert!(
+                resolve_dispatch_contract_lane_sequence(&contract, "lane_sequence").is_none(),
+                "missing {field} on {role_id} must fail closed"
+            );
+        }
+
+        let mut missing_runtime_role = sample_dispatch_contract();
+        missing_runtime_role["lane_catalog"]["alpha_spec"]["activation"]
+            .as_object_mut()
+            .expect("sample activation should be an object")
+            .remove("activation_runtime_role");
+        assert!(
+            resolve_dispatch_contract_lane_sequence(&missing_runtime_role, "lane_sequence")
+                .is_none(),
+            "missing runtime role must fail closed"
+        );
+
+        let mut duplicate_lanes = sample_dispatch_contract();
+        duplicate_lanes["lane_sequence"] =
+            serde_json::json!(["alpha_spec", "beta_design", "beta_design", "gamma_proof"]);
+        assert!(
+            resolve_dispatch_contract_lane_sequence(&duplicate_lanes, "lane_sequence").is_none(),
+            "duplicate lane refs must fail closed"
+        );
+
+        let mut sequence_mismatch = sample_dispatch_contract();
+        sequence_mismatch["execution_lane_sequence"] =
+            serde_json::json!(["gamma_proof", "alpha_spec"]);
+        assert!(
+            resolve_dispatch_contract_lane_sequence(&sequence_mismatch, "execution_lane_sequence")
+                .is_none(),
+            "execution sequence outside canonical order must fail closed"
+        );
+    }
+
+    #[test]
+    fn validate_dispatch_contract_returns_canonical_blocker_for_incomplete_catalog() {
+        let mut missing_catalog = sample_dispatch_contract();
+        missing_catalog
+            .as_object_mut()
+            .expect("sample contract should be an object")
+            .remove("lane_catalog");
+        assert!(matches!(
+            validate_dispatch_contract(&missing_catalog, "execution_lane_sequence"),
+            Err(DISPATCH_CONTRACT_LANE_CATALOG_INCOMPLETE)
+        ));
     }
 }

@@ -16,10 +16,10 @@ impl StateAccessErrorKind {
         }
     }
 
-    pub(crate) fn blocker_code(self) -> &'static str {
+    pub(crate) fn blocker_code(self) -> taskflow_contracts::BlockerCode {
         match self {
-            Self::LockContention => "authoritative_state_store_locked",
-            Self::OpenFailed => "authoritative_state_store_open_failed",
+            Self::LockContention => taskflow_contracts::BlockerCode::AuthoritativeStateStoreLocked,
+            Self::OpenFailed => taskflow_contracts::BlockerCode::AuthoritativeStateStoreOpenFailed,
         }
     }
 }
@@ -59,7 +59,7 @@ pub(crate) fn classify_state_access_error(error: &str) -> StateAccessErrorKind {
 }
 
 pub(crate) fn state_access_blocker_code(error: &str) -> &'static str {
-    classify_state_access_error(error).blocker_code()
+    classify_state_access_error(error).blocker_code().as_str()
 }
 
 pub(crate) fn lock_diagnostics(state_root: &Path) -> serde_json::Value {

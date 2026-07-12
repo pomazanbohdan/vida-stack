@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rstest::rstest;
+use sha2::{Digest, Sha256};
 
 fn unique_docflow_root(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -13,6 +14,57 @@ fn unique_docflow_root(label: &str) -> PathBuf {
         "vida-docflow-cli-{label}-{}-{nanos}",
         std::process::id()
     ))
+}
+
+fn protocol_compression_hash_content(content: &str) -> String {
+    let excluded = [
+        "updated_at:",
+        "protocol_compression_audit_at:",
+        "protocol_compression_before_tokens:",
+        "protocol_compression_after_tokens:",
+        "protocol_compression_content_sha256:",
+    ];
+    let mut stripped = content
+        .lines()
+        .filter(|line| {
+            !excluded
+                .iter()
+                .any(|prefix| line.trim_start().starts_with(prefix))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if content.ends_with('\n') {
+        stripped.push('\n');
+    }
+    stripped
+}
+
+fn write_active_canon_fixture(root: &std::path::Path, source_path: &str) -> PathBuf {
+    let directory = root.join("vida/config/instructions/instruction-contracts");
+    fs::create_dir_all(&directory).expect("instruction directory should be created");
+    fs::create_dir_all(root.join("vida/config/docflow")).expect("docflow config should be created");
+    fs::write(root.join("vida.config.yaml"), "version: 1\n").expect("root marker");
+    fs::write(
+        root.join("vida/config/docflow/docsys_policy.yaml"),
+        "schema_version: 1\nprofiles:\n  active-canon:\n    - vida/config/instructions\n  active-canon-strict:\n    - vida/config/instructions\n",
+    )
+    .expect("docflow policy");
+
+    let without_hash = format!(
+        "# Synthetic Protocol\n\n-----\nartifact_path: instruction-contracts/synthetic\nartifact_type: instruction_contract\nartifact_version: '1'\nartifact_revision: test\nschema_version: '1'\nstatus: canonical\nsource_path: {source_path}\ncreated_at: 2026-07-03T00:00:00+03:00\nupdated_at: 2026-07-03T00:00:00+03:00\nchangelog_ref: synthetic.changelog.jsonl\nprotocol_authoring_gate: enforced\nprotocol_compression_status: audit_passed\nprotocol_compression_algorithm: semantic-atom-coverage\nprotocol_compression_baseline_ref: test\nprotocol_compression_audit_at: 2026-07-03T00:00:00+03:00\nprotocol_compression_before_tokens: 100\nprotocol_compression_after_tokens: 80\n"
+    );
+    let hash = Sha256::digest(protocol_compression_hash_content(&without_hash).as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let path = directory.join("synthetic.md");
+    fs::write(
+        &path,
+        format!("{without_hash}protocol_compression_content_sha256: {hash}\n"),
+    )
+    .expect("protocol fixture");
+    fs::write(directory.join("synthetic.changelog.jsonl"), "{}\n").expect("protocol changelog");
+    path
 }
 
 #[test]
@@ -234,6 +286,201 @@ fn check_default_and_json_bind_relative_paths_to_root() {
     fs::remove_dir_all(root).expect("root should be removed");
 }
 
+#[test]
+fn active_canon_source_path_is_consistent_across_public_docflow_surfaces() {
+    let context = vida_test_support::CommandContext::empty();
+    let fixture = vida_test_support::temp_fixture_dir();
+    let root = fixture.path().to_path_buf();
+    let path = write_active_canon_fixture(
+        &root,
+        "vida/config/instructions/instruction-contracts/synthetic.md",
+    );
+    let root_arg = root.to_string_lossy().to_string();
+    let path_arg = path.to_string_lossy().to_string();
+
+    let check = run_docflow_owned_at_root(
+        &root,
+        vec![
+            "check",
+            "--root",
+            &root_arg,
+            "--profile",
+            "active-canon",
+            "--json",
+        ],
+    );
+    assert_docflow_success(&context, &check);
+    let check_json: serde_json::Value =
+        serde_json::from_slice(&check.stdout).expect("check json should parse");
+    assert_eq!(check_json["status"], "pass", "{check_json}");
+    assert_eq!(check_json["row_count"], 0, "{check_json}");
+
+    let fastcheck = run_docflow_owned_at_root(
+        &root,
+        vec![
+            "fastcheck",
+            "--root",
+            &root_arg,
+            "--profile",
+            "active-canon",
+        ],
+    );
+    assert_docflow_success(&context, &fastcheck);
+    assert!(
+        !String::from_utf8_lossy(&fastcheck.stdout)
+            .contains("invalid_protocol_compression_source_path")
+    );
+
+    let readiness = run_docflow_owned_at_root(
+        &root,
+        vec![
+            "readiness-check",
+            "--root",
+            &root_arg,
+            "--profile",
+            "active-canon",
+            "--json",
+        ],
+    );
+    assert_docflow_success(&context, &readiness);
+    let readiness_json: serde_json::Value =
+        serde_json::from_slice(&readiness.stdout).expect("readiness json should parse");
+    assert_eq!(readiness_json["status"], "pass", "{readiness_json}");
+    assert_eq!(readiness_json["row_count"], 0, "{readiness_json}");
+
+    let proofcheck = run_docflow_owned_at_root(
+        &root,
+        vec![
+            "proofcheck",
+            "--root",
+            &root_arg,
+            "--profile",
+            "active-canon",
+            "--json",
+        ],
+    );
+    assert_docflow_success(&context, &proofcheck);
+    let proofcheck_json: serde_json::Value =
+        serde_json::from_slice(&proofcheck.stdout).expect("proofcheck json should parse");
+    assert_eq!(proofcheck_json["verdict"], "ok", "{proofcheck_json}");
+    assert_eq!(proofcheck_json["fastcheck_rows"], 0, "{proofcheck_json}");
+    assert_eq!(proofcheck_json["readiness_rows"], 0, "{proofcheck_json}");
+
+    let check_file =
+        run_docflow_owned_at_root(&root, vec!["check-file", "--path", &path_arg, "--json"]);
+    assert_docflow_success(&context, &check_file);
+    let check_file_json: serde_json::Value =
+        serde_json::from_slice(&check_file.stdout).expect("check-file json should parse");
+    assert_eq!(
+        check_file_json["validation"]["verdict"], "ok",
+        "{check_file_json}"
+    );
+}
+
+#[test]
+fn active_canon_source_path_public_surfaces_block_lexical_traversal() {
+    let context = vida_test_support::CommandContext::empty();
+    let fixture = vida_test_support::temp_fixture_dir();
+    let root = fixture.path().to_path_buf();
+    let path = write_active_canon_fixture(
+        &root,
+        "vida/config/instructions/instruction-contracts/../synthetic.md",
+    );
+    let root_arg = root.to_string_lossy().to_string();
+    let path_arg = path.to_string_lossy().to_string();
+
+    let check = run_docflow_owned_at_root(
+        &root,
+        vec![
+            "check",
+            "--root",
+            &root_arg,
+            "--profile",
+            "active-canon",
+            "--json",
+        ],
+    );
+    assert_docflow_success(&context, &check);
+    let check_json: serde_json::Value =
+        serde_json::from_slice(&check.stdout).expect("check json should parse");
+    assert_eq!(check_json["status"], "blocked", "{check_json}");
+    assert!(
+        check_json["rows"][0]["issues"]
+            .as_array()
+            .expect("check issues")
+            .iter()
+            .any(|issue| issue == "invalid_protocol_compression_source_path")
+    );
+
+    let fastcheck = run_docflow_owned_at_root(
+        &root,
+        vec![
+            "fastcheck",
+            "--root",
+            &root_arg,
+            "--profile",
+            "active-canon",
+        ],
+    );
+    assert_docflow_success(&context, &fastcheck);
+    assert!(
+        String::from_utf8_lossy(&fastcheck.stdout)
+            .contains("invalid_protocol_compression_source_path")
+    );
+
+    let readiness = run_docflow_owned_at_root(
+        &root,
+        vec![
+            "readiness-check",
+            "--root",
+            &root_arg,
+            "--profile",
+            "active-canon",
+            "--json",
+        ],
+    );
+    assert_docflow_success(&context, &readiness);
+    let readiness_json: serde_json::Value =
+        serde_json::from_slice(&readiness.stdout).expect("readiness json should parse");
+    assert_eq!(readiness_json["status"], "blocked", "{readiness_json}");
+    assert!(readiness_json["row_count"].as_u64().unwrap_or(0) > 0);
+
+    let proofcheck = run_docflow_owned_at_root(
+        &root,
+        vec![
+            "proofcheck",
+            "--root",
+            &root_arg,
+            "--profile",
+            "active-canon",
+            "--json",
+        ],
+    );
+    assert!(
+        !proofcheck.status.success(),
+        "{}",
+        context.diagnostics(&proofcheck)
+    );
+    let proofcheck_json: serde_json::Value =
+        serde_json::from_slice(&proofcheck.stdout).expect("proofcheck json should parse");
+    assert_eq!(proofcheck_json["verdict"], "blocking", "{proofcheck_json}");
+    assert!(proofcheck_json["fastcheck_rows"].as_u64().unwrap_or(0) > 0);
+
+    let check_file =
+        run_docflow_owned_at_root(&root, vec!["check-file", "--path", &path_arg, "--json"]);
+    assert_docflow_success(&context, &check_file);
+    let check_file_json: serde_json::Value =
+        serde_json::from_slice(&check_file.stdout).expect("check-file json should parse");
+    assert_eq!(check_file_json["validation"]["verdict"], "blocking");
+    assert!(
+        check_file_json["validation"]["issues"]
+            .as_array()
+            .expect("validation issues")
+            .iter()
+            .any(|issue| issue["code"] == "invalid_protocol_compression_source_path")
+    );
+}
+
 fn write_task_doc(root: &std::path::Path, task_id: &str) {
     fs::create_dir_all(root.join("docs/process")).expect("process dir should be created");
     fs::write(
@@ -252,6 +499,14 @@ fn write_task_doc(root: &std::path::Path, task_id: &str) {
 
 fn run_docflow_owned(args: Vec<String>) -> std::process::Output {
     vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .args(args)
+        .output()
+        .expect("docflow binary should run")
+}
+
+fn run_docflow_owned_at_root(root: &std::path::Path, args: Vec<&str>) -> std::process::Output {
+    vida_test_support::bounded_binary_command(env!("CARGO_BIN_EXE_docflow"))
+        .env("VIDA_ROOT", root)
         .args(args)
         .output()
         .expect("docflow binary should run")

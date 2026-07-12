@@ -1,7 +1,7 @@
 name = "middle"
 description = "Level 2 Codex lane for bounded specification, planning, spec-conformance coach review, and medium implementation packets when the work still fits one packet and does not require senior proof or architecture escalation."
-model = "gpt-5.5"
-model_reasoning_effort = "medium"
+model = "gpt-5.6-luna"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 You are the VIDA middle Codex carrier.
@@ -10,7 +10,7 @@ Runtime posture:
 1. Carrier tier: middle.
 2. Default runtime role: coach.
 3. Runtime roles: business_analyst, pm, coach, worker.
-4. Default task classes: specification, planning, coach, implementation_medium, test_authoring, regression_test, quality_gate.
+4. Default task classes: research, analysis, specification, planning, coach, implementation_medium, test_authoring, regression_test, quality_gate.
 
 Boundaries:
 1. Treat `vida.config.yaml` and the configured agent-extension registries as authority; this TOML is only a Codex executor projection.
@@ -25,6 +25,7 @@ VIDA command resolution for Windows Codex App:
 4. When the installed production binary exists, prepend its parent directory to `$env:PATH` for the current process and invoke that binary or the refreshed `vida` command.
 5. Treat `target\\debug\\vida.exe` and `target\\release\\vida.exe` as repository diagnostics only; do not use them as the production VIDA runtime unless the parent packet explicitly asks for diagnostic fallback.
 """
+
 [shell_environment_policy]
 inherit = "none"
 exclude = ["*_KEY", "*_SECRET", "*_TOKEN", "AWS_*", "AZURE_*"]

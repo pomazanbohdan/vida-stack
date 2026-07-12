@@ -34,29 +34,85 @@ fn semantic_routing_enabled(compiled_bundle: &serde_json::Value) -> bool {
     .unwrap_or(false)
 }
 
-fn tier_score(raw: &str) -> f64 {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "minimal" => 15.0,
-        "low" => 35.0,
-        "medium" => 60.0,
-        "high" => 82.0,
-        "xhigh" | "very_high" => 95.0,
-        _ => 50.0,
-    }
+fn configured_model_selection_score(
+    compiled_bundle: &serde_json::Value,
+    carrier_runtime: &serde_json::Value,
+    score_kind: &str,
+    raw: &str,
+) -> Option<f64> {
+    let raw = raw.trim();
+    (!raw.is_empty())
+        .then(|| {
+            model_selection_policy_value(
+                compiled_bundle,
+                carrier_runtime,
+                &["semantic_scores", score_kind, raw],
+            )
+        })
+        .flatten()
+        .and_then(serde_json::Value::as_f64)
 }
 
-fn speed_score(raw: &str) -> f64 {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "instant" => 95.0,
-        "fast" => 82.0,
-        "medium" => 60.0,
-        "slow" => 35.0,
-        _ => 50.0,
-    }
+fn configured_model_selection_rank(
+    compiled_bundle: &serde_json::Value,
+    carrier_runtime: &serde_json::Value,
+    rank_kind: &str,
+    raw: &str,
+) -> Option<u8> {
+    let raw = raw.trim();
+    (!raw.is_empty())
+        .then(|| {
+            model_selection_policy_value(
+                compiled_bundle,
+                carrier_runtime,
+                &["ordinal_ranks", rank_kind, raw],
+            )
+        })
+        .flatten()
+        .and_then(|value| json_u64(Some(value)))
+        .and_then(|value| u8::try_from(value).ok())
+}
+
+fn model_selection_ranking_policy_is_complete(
+    compiled_bundle: &serde_json::Value,
+    carrier_runtime: &serde_json::Value,
+) -> bool {
+    ["reasoning_effort", "quality_tier", "speed_tier"]
+        .into_iter()
+        .all(|kind| {
+            model_selection_policy_value(
+                compiled_bundle,
+                carrier_runtime,
+                &["semantic_scores", kind],
+            )
+            .is_some_and(|value| {
+                value.is_object() && !value.as_object().is_some_and(|map| map.is_empty())
+            })
+        })
+        && ["reasoning_effort", "quality_tier"]
+            .into_iter()
+            .all(|kind| {
+                model_selection_policy_value(
+                    compiled_bundle,
+                    carrier_runtime,
+                    &["ordinal_ranks", kind],
+                )
+                .is_some_and(|value| {
+                    value.is_object() && !value.as_object().is_some_and(|map| map.is_empty())
+                })
+            })
+        && model_selection_policy_value(
+            compiled_bundle,
+            carrier_runtime,
+            &["missing_reasoning_effort_policy", "mode"],
+        )
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn insert_semantic_routing_diagnostics(
     assignment: &mut serde_json::Value,
+    compiled_bundle: &serde_json::Value,
     request_text: &str,
     task_class: &str,
     runtime_role: &str,
@@ -89,13 +145,32 @@ fn insert_semantic_routing_diagnostics(
     let selected_readiness = assignment["selected_model_profile_readiness_status"]
         .as_str()
         .unwrap_or_default();
+    let carrier_runtime = carrier_runtime_section(compiled_bundle);
     let score_breakdown = score_semantic_route(
         &feature_vector,
         SemanticScoreInputs {
-            quality: tier_score(selected_quality_tier),
-            reasoning: tier_score(selected_reasoning_effort),
+            quality: configured_model_selection_score(
+                compiled_bundle,
+                carrier_runtime,
+                "quality_tier",
+                selected_quality_tier,
+            )
+            .unwrap_or_default(),
+            reasoning: configured_model_selection_score(
+                compiled_bundle,
+                carrier_runtime,
+                "reasoning_effort",
+                selected_reasoning_effort,
+            )
+            .unwrap_or_default(),
             reliability: assignment["effective_score"].as_u64().unwrap_or(50) as f64,
-            speed: speed_score(selected_speed_tier),
+            speed: configured_model_selection_score(
+                compiled_bundle,
+                carrier_runtime,
+                "speed_tier",
+                selected_speed_tier,
+            )
+            .unwrap_or_default(),
             cost: assignment["normalized_cost_units"].as_u64().unwrap_or(0) as f64,
             domain_fit: if feature_vector.detected_domain == task_class {
                 85.0
@@ -134,7 +209,7 @@ fn insert_semantic_routing_diagnostics(
                 "feature_vector": serde_json::to_value(&feature_vector).unwrap_or(serde_json::Value::Null),
                 "score_applied": true,
                 "strategy": "semantic_balanced_cost_quality",
-                "config_source_path": "agent_system.semantic_routing",
+                "config_source_path": "agent_system.model_selection.semantic_scores",
                 "advisory_only": true
             }),
         );
@@ -623,29 +698,6 @@ fn selection_rule_for_runtime(carrier_runtime: &serde_json::Value) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or("role_task_then_readiness_then_score_then_cost_quality")
         .to_string()
-}
-
-fn quality_tier_rank(raw: &str) -> u8 {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "very_high" | "veryhigh" => 5,
-        "high" | "medium_high" | "mediumhigh" => 4,
-        "medium" => 3,
-        "medium_low" | "mediumlow" => 2,
-        "low" => 1,
-        _ => 0,
-    }
-}
-
-fn reasoning_effort_rank(raw: &str) -> u8 {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "xhigh" => 5,
-        "high" => 4,
-        "medium" => 3,
-        "low" => 2,
-        "minimal" => 1,
-        "provider_default" | "provider-configured" => 2,
-        _ => 0,
-    }
 }
 
 fn profile_runtime_roles(role: &serde_json::Value, profile: &serde_json::Value) -> Vec<String> {
@@ -1456,6 +1508,24 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             "rejected_candidates": [],
         });
     }
+    if !model_selection_ranking_policy_is_complete(compiled_bundle, carrier_runtime) {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "model_selection_ranking_policy_missing",
+            "task_class": task_class,
+            "runtime_role": execution_runtime_role,
+            "conversation_role": conversation_role,
+            "selection_rule": selection_rule,
+            "model_selection_enabled": true,
+            "candidate_scope": candidate_scope,
+            "blocker_codes": ["model_selection_ranking_policy_missing"],
+            "next_actions": [
+                "Configure non-empty semantic_scores and ordinal_ranks under agent_system.model_selection.",
+                "Configure missing_reasoning_effort_policy.mode before retrying runtime assignment."
+            ],
+            "rejected_candidates": [],
+        });
+    }
     if candidate_scope != "unified_carrier_model_profiles" {
         return serde_json::json!({
             "enabled": false,
@@ -1627,8 +1697,20 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
                         pricing_rejection_reasons,
                         effective_score,
                         lifecycle_state: lifecycle_state.clone(),
-                        quality_rank: quality_tier_rank(quality_tier),
-                        reasoning_rank: reasoning_effort_rank(reasoning_effort),
+                        quality_rank: configured_model_selection_rank(
+                            compiled_bundle,
+                            carrier_runtime,
+                            "quality_tier",
+                            quality_tier,
+                        )
+                        .unwrap_or_default(),
+                        reasoning_rank: configured_model_selection_rank(
+                            compiled_bundle,
+                            carrier_runtime,
+                            "reasoning_effort",
+                            reasoning_effort,
+                        )
+                        .unwrap_or_default(),
                         readiness_status: profile_readiness_status(&profile),
                         external_backend_readiness: None,
                         role: role.clone(),
@@ -1723,6 +1805,12 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
         if !candidate.supports_task_class {
             reasons.push("task_class_not_supported".to_string());
         }
+        if candidate.quality_rank == 0 {
+            reasons.push("quality_tier_rank_unconfigured".to_string());
+        }
+        if candidate.reasoning_rank == 0 {
+            reasons.push("reasoning_effort_rank_unconfigured".to_string());
+        }
         if candidate.effective_score < demotion_score || candidate.lifecycle_state == "retired" {
             reasons.push("carrier_score_or_lifecycle_blocked".to_string());
         }
@@ -1785,12 +1873,28 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             reasons.push("service_executor_guard_not_ready".to_string());
         }
         if let Some(floor) = quality_floor.as_deref() {
-            if candidate.quality_rank < quality_tier_rank(floor) {
+            if candidate.quality_rank
+                < configured_model_selection_rank(
+                    compiled_bundle,
+                    carrier_runtime,
+                    "quality_tier",
+                    floor,
+                )
+                .unwrap_or_default()
+            {
                 reasons.push("quality_floor_not_met".to_string());
             }
         }
         if let Some(floor) = reasoning_floor.as_deref() {
-            if candidate.reasoning_rank < reasoning_effort_rank(floor) {
+            if candidate.reasoning_rank
+                < configured_model_selection_rank(
+                    compiled_bundle,
+                    carrier_runtime,
+                    "reasoning_effort",
+                    floor,
+                )
+                .unwrap_or_default()
+            {
                 reasons.push("reasoning_floor_not_met".to_string());
             }
         }
@@ -2206,6 +2310,7 @@ pub(crate) fn build_runtime_assignment(
     if semantic_routing_enabled(compiled_bundle) {
         insert_semantic_routing_diagnostics(
             &mut assignment,
+            compiled_bundle,
             &selection.request,
             &task_class,
             &execution_runtime_role,
@@ -2474,6 +2579,16 @@ mod tests {
                     "default_strategy": "balanced_cost_quality",
                     "selection_rule": "role_task_then_readiness_then_score_then_cost_quality",
                     "free_profiles_allowed": true,
+                    "semantic_scores": {
+                        "reasoning_effort": {"minimal": 15.0, "low": 35.0, "provider_default": 50.0, "provider-configured": 50.0, "medium": 60.0, "high": 82.0, "xhigh": 95.0},
+                        "quality_tier": {"low": 35.0, "medium_low": 50.0, "medium": 60.0, "medium_high": 82.0, "high": 82.0, "very_high": 95.0},
+                        "speed_tier": {"slow": 35.0, "medium": 60.0, "fast": 82.0, "instant": 95.0}
+                    },
+                    "ordinal_ranks": {
+                        "reasoning_effort": {"minimal": 1, "low": 2, "provider_default": 2, "provider-configured": 2, "medium": 3, "high": 4, "xhigh": 5},
+                        "quality_tier": {"low": 1, "medium_low": 2, "medium": 3, "medium_high": 4, "high": 4, "very_high": 5}
+                    },
+                    "missing_reasoning_effort_policy": {"mode": "use_configured_default", "default": "medium"},
                     "quality_floor_by_runtime_role": {
                         "worker": "medium",
                         "coach": "medium",
@@ -5395,5 +5510,54 @@ mod tests {
                 .iter()
                 .any(|strategy| strategy == "balanced_cost_quality")
         );
+    }
+
+    #[test]
+    fn missing_ranking_policy_fail_closes_runtime_assignment() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "junior",
+            "tier": "junior",
+            "rate": 1,
+            "normalized_cost_units": 1,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation"],
+            "default_model_profile": "configured",
+            "model_profiles": {
+                "configured": {
+                    "profile_id": "configured",
+                    "model_ref": "config/model",
+                    "reasoning_effort": "medium",
+                    "quality_tier": "medium",
+                    "speed_tier": "fast",
+                    "normalized_cost_units": 1,
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["implementation"],
+                    "readiness": {"required": true, "ready": true}
+                }
+            }
+        })]);
+        compiled_bundle["carrier_runtime"]["model_selection"]
+            .as_object_mut()
+            .expect("test policy should be object")
+            .remove("ordinal_ranks");
+
+        let assignment = build_runtime_assignment_preview_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "implementation",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], false);
+        assert_eq!(
+            assignment["reason"],
+            "model_selection_ranking_policy_missing"
+        );
+        assert!(assignment["blocker_codes"].as_array().is_some_and(|codes| {
+            codes
+                .iter()
+                .any(|code| code == "model_selection_ranking_policy_missing")
+        }));
     }
 }

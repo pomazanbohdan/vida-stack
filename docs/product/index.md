@@ -8,8 +8,9 @@ Purpose: make current VIDA product law discoverable through bootstrap-tracked ma
 2. [spec/current-spec-map.md](spec/current-spec-map.md) is the short product/spec routing map.
 3. [spec/current-spec-catalog.md](spec/current-spec-catalog.md) is the detailed current product/spec artifact catalog.
 4. [research/index.md](research/index.md) contains product research sources until promoted into current spec canon.
-5. [../project-root-map.md](../project-root-map.md) is the active project documentation root map.
-6. [../../README.md](../../README.md) is the only repository README narrative surface.
+5. [control/index.md](control/index.md) is the product/control entrypoint for DB-backed control-plane projections.
+6. [../project-root-map.md](../project-root-map.md) is the active project documentation root map.
+7. [../../README.md](../../README.md) is the only repository README narrative surface.
 
 ## Bootstrap-Tracked Maps
 
@@ -36,6 +37,8 @@ Purpose: make current VIDA product law discoverable through bootstrap-tracked ma
 9. Runtime dependency decisions: [decisions/ldr-002-redb-operational-journal-adr.md](decisions/ldr-002-redb-operational-journal-adr.md)
 10. Runtime architecture decisions: [decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md](decisions/ldr-004-local-durable-runtime-kernel-architecture-adr.md)
 11. External runtime adapter decisions: [decisions/ldr-061-restate-adapter-mapping-adr.md](decisions/ldr-061-restate-adapter-mapping-adr.md)
+12. Requirements control-plane decisions: [control/decisions/enterprise-requirements-control-plane-decision-record.md](control/decisions/enterprise-requirements-control-plane-decision-record.md)
+13. Product wiki projection: [wiki/index.md](wiki/index.md)
 
 ## Repository Project Split
 

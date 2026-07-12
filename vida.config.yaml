@@ -50,16 +50,16 @@ host_environment:
         tier: junior
         description: Level 1 Codex lane for cheap bounded implementation packets that own one explicit write scope and return concrete delivery evidence without self-approving closure.
         rate: 1
-        reasoning_band: low
-        model: byteshape/qwen3.6-35b-a3b-mtp
-        model_reasoning_effort: low
+        reasoning_band: high
+        model: gpt-5.6-luna
+        model_reasoning_effort: high
         sandbox_mode: workspace-write
-        default_model_profile: codex_gpt55_low_write
+        default_model_profile: codex_gpt56_luna_high_write
         model_profiles:
-          codex_gpt55_low_write:
+          codex_gpt56_terra_medium_write:
             provider: openai-codex
-            model_ref: byteshape/qwen3.6-35b-a3b-mtp
-            reasoning_effort: low
+            model_ref: gpt-5.6-terra
+            reasoning_effort: medium
             plan_mode_reasoning_effort: medium
             sandbox_mode: workspace-write
             normalized_cost_units: 1
@@ -86,6 +86,25 @@ host_environment:
             readiness:
               mode: codex_profile
               required: true
+          codex_gpt56_luna_high_write:
+            provider: openai-codex
+            model_ref: gpt-5.6-luna
+            reasoning_effort: high
+            plan_mode_reasoning_effort: high
+            sandbox_mode: workspace-write
+            normalized_cost_units: 1
+            speed_tier: fast
+            quality_tier: medium
+            write_scope: workspace-write
+            runtime_roles:
+              - worker
+            task_classes:
+              - implementation
+              - delivery_task
+              - execution_block
+            readiness:
+              mode: codex_profile
+              required: true
         default_runtime_role: worker
         runtime_roles:
           - worker
@@ -97,16 +116,16 @@ host_environment:
         tier: middle
         description: Level 2 Codex lane for bounded specification, planning, spec-conformance coach review, and medium implementation packets when the work still fits one packet and does not require senior proof or architecture escalation.
         rate: 4
-        reasoning_band: medium
-        model: byteshape/qwen3.6-35b-a3b-mtp
-        model_reasoning_effort: medium
+        reasoning_band: xhigh
+        model: gpt-5.6-luna
+        model_reasoning_effort: xhigh
         sandbox_mode: workspace-write
-        default_model_profile: codex_gpt55_medium_write
+        default_model_profile: codex_gpt56_luna_xhigh_write
         model_profiles:
-          codex_gpt55_medium_write:
+          codex_gpt56_terra_high_write:
             provider: openai-codex
-            model_ref: byteshape/qwen3.6-35b-a3b-mtp
-            reasoning_effort: medium
+            model_ref: gpt-5.6-terra
+            reasoning_effort: high
             plan_mode_reasoning_effort: high
             sandbox_mode: workspace-write
             normalized_cost_units: 4
@@ -119,6 +138,8 @@ host_environment:
               - coach
               - worker
             task_classes:
+              - research
+              - analysis
               - specification
               - planning
               - coach
@@ -129,6 +150,54 @@ host_environment:
             readiness:
               mode: codex_profile
               required: true
+          codex_gpt56_luna_xhigh_write:
+            provider: openai-codex
+            model_ref: gpt-5.6-luna
+            reasoning_effort: xhigh
+            plan_mode_reasoning_effort: xhigh
+            sandbox_mode: workspace-write
+            normalized_cost_units: 4
+            speed_tier: fast
+            quality_tier: medium
+            write_scope: workspace-write
+            runtime_roles:
+              - business_analyst
+              - pm
+              - coach
+              - worker
+            task_classes:
+              - research
+              - analysis
+              - specification
+              - planning
+              - coach
+              - implementation_medium
+              - test_authoring
+              - regression_test
+              - quality_gate
+            readiness:
+              mode: codex_profile
+              required: true
+          codex_gpt56_terra_medium_analysis:
+            provider: openai-codex
+            model_ref: gpt-5.6-terra
+            reasoning_effort: medium
+            plan_mode_reasoning_effort: medium
+            sandbox_mode: read-only
+            normalized_cost_units: 2
+            speed_tier: fast
+            quality_tier: medium
+            write_scope: read-only
+            runtime_roles:
+              - business_analyst
+            task_classes:
+              - research
+              - analysis
+              - specification
+              - planning
+            readiness:
+              mode: codex_profile
+              required: true
         default_runtime_role: coach
         runtime_roles:
           - business_analyst
@@ -136,6 +205,8 @@ host_environment:
           - coach
           - worker
         task_classes:
+          - research
+          - analysis
           - specification
           - planning
           - coach
@@ -147,17 +218,17 @@ host_environment:
         tier: senior
         description: Level 3 Codex lane for independent verification, proof-strength review, and high-confidence closure gates that fail closed on missing evidence.
         rate: 16
-        reasoning_band: high
-        model: byteshape/qwen3.6-35b-a3b-mtp
-        model_reasoning_effort: high
+        reasoning_band: medium
+        model: gpt-5.6-sol
+        model_reasoning_effort: medium
         sandbox_mode: read-only
-        default_model_profile: codex_gpt55_high_readonly
+        default_model_profile: codex_gpt56_sol_medium_readonly
         model_profiles:
-          codex_gpt55_high_readonly:
+          codex_gpt56_sol_medium_readonly:
             provider: openai-codex
-            model_ref: byteshape/qwen3.6-35b-a3b-mtp
-            reasoning_effort: high
-            plan_mode_reasoning_effort: high
+            model_ref: gpt-5.6-sol
+            reasoning_effort: medium
+            plan_mode_reasoning_effort: medium
             sandbox_mode: read-only
             normalized_cost_units: 16
             speed_tier: medium
@@ -187,37 +258,17 @@ host_environment:
         tier: architect
         description: Level 4 Codex lane for architecture preparation, hard escalation, and cross-scope conflict resolution when the normal implementer-coach-verifier path cannot close lawfully.
         rate: 48
-        reasoning_band: xhigh
-        model: byteshape/qwen3.6-35b-a3b-mtp
-        model_reasoning_effort: xhigh
+        reasoning_band: high
+        model: gpt-5.6-sol
+        model_reasoning_effort: high
         sandbox_mode: read-only
-        default_model_profile: codex_gpt55_xhigh_arch
+        default_model_profile: codex_gpt56_sol_high_arch
         model_profiles:
-          codex_gpt55_high_arch:
+          codex_gpt56_sol_high_arch:
             provider: openai-codex
-            model_ref: byteshape/qwen3.6-35b-a3b-mtp
+            model_ref: gpt-5.6-sol
             reasoning_effort: high
             plan_mode_reasoning_effort: high
-            sandbox_mode: read-only
-            normalized_cost_units: 32
-            speed_tier: medium
-            quality_tier: high
-            write_scope: read-only
-            runtime_roles:
-              - solution_architect
-            task_classes:
-              - architecture
-              - execution_preparation
-              - hard_escalation
-              - meta_analysis
-            readiness:
-              mode: codex_profile
-              required: true
-          codex_gpt55_xhigh_arch:
-            provider: openai-codex
-            model_ref: byteshape/qwen3.6-35b-a3b-mtp
-            reasoning_effort: xhigh
-            plan_mode_reasoning_effort: xhigh
             sandbox_mode: read-only
             normalized_cost_units: 48
             speed_tier: slow
@@ -228,6 +279,7 @@ host_environment:
             task_classes:
               - hard_escalation
               - architecture
+              - execution_preparation
               - meta_analysis
             readiness:
               mode: codex_profile
@@ -307,56 +359,56 @@ party_chat:
   dei_enabled: true
   single_agent:
     backend: internal_subagents
-    model: codex_gpt55_low_write
+    model: codex_gpt56_terra_medium_write
   role_model_bindings:
     party_chat_facilitator:
       backend: internal_subagents
-      model: codex_gpt55_high_readonly
+      model: codex_gpt56_sol_medium_readonly
     party_chat_architect:
       backend: internal_subagents
-      model: codex_gpt55_xhigh_arch
+      model: codex_gpt56_sol_high_arch
     party_chat_runtime_systems:
       backend: internal_subagents
-      model: codex_gpt55_xhigh_arch
+      model: codex_gpt56_sol_high_arch
     party_chat_quality_verification:
       backend: internal_subagents
-      model: codex_gpt55_high_readonly
+      model: codex_gpt56_sol_medium_readonly
     party_chat_delivery_cost:
       backend: internal_subagents
-      model: codex_gpt55_high_readonly
+      model: codex_gpt56_sol_medium_readonly
     party_chat_product_scope:
       backend: internal_subagents
-      model: codex_gpt55_low_write
+      model: codex_gpt56_terra_medium_write
     party_chat_system_analyst:
       backend: internal_subagents
-      model: codex_gpt55_medium_write
+      model: codex_gpt56_terra_medium_analysis
     party_chat_product_designer:
       backend: internal_subagents
-      model: codex_gpt55_low_write
+      model: codex_gpt56_terra_medium_write
     party_chat_security_safety:
       backend: internal_subagents
-      model: codex_gpt55_high_readonly
+      model: codex_gpt56_sol_medium_readonly
     party_chat_sre_observability:
       backend: internal_subagents
-      model: codex_gpt55_high_readonly
+      model: codex_gpt56_sol_medium_readonly
     party_chat_qa_tester:
       backend: internal_subagents
-      model: codex_gpt55_high_readonly
+      model: codex_gpt56_sol_medium_readonly
     party_chat_accessibility_ux:
       backend: internal_subagents
-      model: codex_gpt55_high_readonly
+      model: codex_gpt56_sol_medium_readonly
     party_chat_data_contracts:
       backend: internal_subagents
-      model: codex_gpt55_xhigh_arch
+      model: codex_gpt56_sol_high_arch
     party_chat_dx_tooling:
       backend: internal_subagents
-      model: codex_gpt55_low_write
+      model: codex_gpt56_terra_medium_write
     party_chat_pm_process:
       backend: internal_subagents
-      model: codex_gpt55_medium_write
+      model: codex_gpt56_terra_high_write
     party_chat_release_manager:
       backend: internal_subagents
-      model: codex_gpt55_high_readonly
+      model: codex_gpt56_sol_medium_readonly
 
 requirement_analysis:
   party_chat_route:
@@ -538,7 +590,7 @@ dev_team:
   contract_doc: docs/process/team-development-and-orchestration-protocol.md
   preserve_existing_agent_extensions: true
   preserve_existing_flow_sets: true
-  default_flow_id: task_delivery_verified
+  default_flow_id: quick-two-pack-flow
   orchestrator_command_contract:
     canonical_surface: vida agent dispatch-next
     default_args:
@@ -553,22 +605,20 @@ dev_team:
     host_bridge_policy: materialize_packet_before_execute_dispatch
     root_orchestrator_role: orchestrator
     role_sequence_for_runtime_defect:
-      - specifier
       - coder
-      - refactorer
-      - architect
+      - cleaner
   work_item_flow_bindings:
-    epic: default_delivery
-    defect: defect_repair_verified
-    runtime_defect: runtime_defect_remediation
-    pull_request: pr_processing_team
-    pr_repair: pr_processing_team
-    architecture: architecture_design
-    release_readiness: release_readiness_gate
-    service_tui: service_tui_orchestration
-    internal_agent_development: hook_enabled_internal_agent_development
-    task: task_delivery_verified
-    debug: debug_fast
+    epic: quick-two-pack-flow
+    defect: quick-two-pack-flow
+    runtime_defect: quick-two-pack-flow
+    pull_request: quick-two-pack-flow
+    pr_repair: quick-two-pack-flow
+    architecture: quick-two-pack-flow
+    release_readiness: quick-two-pack-flow
+    service_tui: quick-two-pack-flow
+    internal_agent_development: quick-two-pack-flow
+    task: quick-two-pack-flow
+    debug: quick-two-pack-flow
   validation:
     require_role_contracts: true
     require_flow_definitions: true
@@ -590,6 +640,8 @@ dev_team:
       completion_blocker: pending_specification_evidence
       inclusion_rule: always
       default_carrier: middle
+      default_model: codex_gpt56_terra_medium_analysis
+      default_model_reasoning_effort: medium
       cost_policy:
         budget_units: 4
         selection_rule: cheapest_eligible_specification_carrier
@@ -615,6 +667,8 @@ dev_team:
       completion_blocker: pending_specification_evidence
       inclusion_rule: always
       default_carrier: middle
+      default_model: codex_gpt56_terra_medium_analysis
+      default_model_reasoning_effort: medium
       cost_policy:
         budget_units: 4
         selection_rule: cheapest_eligible_specification_carrier
@@ -642,7 +696,7 @@ dev_team:
       default_carrier: architect
       cost_policy:
         budget_units: 16
-        selection_rule: xhigh_architecture_carrier_for_execution_preparation
+        selection_rule: high_architecture_carrier_for_execution_preparation
       handoff:
         next_role: developer
         required_outputs:
@@ -671,6 +725,32 @@ dev_team:
         next_role: refactorer
         required_outputs:
           - changed_files
+          - verification_notes
+          - residual_risks
+          - explicit_blockers
+        fail_closed_on_missing_handoff: true
+    cleaner:
+      runtime_role: worker
+      task_classes:
+        - implementation
+        - delivery_task
+        - execution_block
+      packet_template_kind: delivery_task_packet
+      closure_class: implementation
+      stage: execution
+      completion_blocker: pending_implementation_evidence
+      inclusion_rule: always
+      default_carrier: middle
+      default_model: codex_gpt56_luna_xhigh_write
+      default_model_reasoning_effort: xhigh
+      cost_policy:
+        budget_units: 4
+        selection_rule: configured_cleaner_middle_write_carrier
+      handoff:
+        next_role: terminal_closure
+        required_outputs:
+          - changed_files
+          - cleanup_summary
           - verification_notes
           - residual_risks
           - explicit_blockers
@@ -939,6 +1019,52 @@ dev_team:
           - follow_up_actions
         fail_closed_on_missing_handoff: true
   flows:
+    quick-two-pack-flow:
+      enabled: true
+      description: Configured two-worker development flow for coder implementation followed by cleaner verification and cleanup.
+      flow_class: role_pack
+      work_item_bindings:
+        - epic
+        - defect
+        - runtime_defect
+        - pull_request
+        - pr_repair
+        - architecture
+        - release_readiness
+        - service_tui
+        - internal_agent_development
+        - task
+        - debug
+        - feature
+        - requirements_change
+        - review
+        - quality_gate
+        - small_patch
+      sequential: true
+      allow_parallel_handoffs: false
+      fail_closed_on_missing_step_contract: true
+      lifecycle_hook_templates:
+        - command_timing_summary
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      steps:
+        - role_id: coder
+          runtime_role: worker
+          task_class: implementation
+          command_ref: agent-init-worker
+          dispatch_alias: development_implementer
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [changed_files, verification_notes]
+        - role_id: cleaner
+          runtime_role: worker
+          task_class: implementation
+          command_ref: agent-init-worker
+          dispatch_alias: development_cleaner
+          lifecycle_hook_templates: [command_timing_summary]
+          proof_gates:
+            required_outputs: [changed_files, cleanup_summary, verification_notes]
     debug_fast:
       enabled: true
       description: Short diagnostic flow for read-heavy debug or route validation where implementation is not yet authorized.
@@ -1494,8 +1620,8 @@ agent_system:
     root_orchestrator_default_posture: synthesize_not_research
     default_readonly_prefetch: true
     prefer_internal_low_medium_for_write_carriers:
-      - internal_subagents:codex_gpt55_low_write
-      - internal_subagents:codex_gpt55_medium_write
+      - internal_subagents:codex_gpt56_terra_medium_write
+      - internal_subagents:codex_gpt56_terra_high_write
     high_cost_carriers_reserved_for:
       - architecture_boundary_decision
       - security_or_safety_review
@@ -1510,32 +1636,32 @@ agent_system:
       - batch_related_report_intake_into_one_taskflow_mutation_window
     task_class_carrier_preferences:
       research:
-        primary: internal_subagents:codex_gpt55_low_write
-        fallback: internal_subagents:codex_gpt55_medium_write
+        primary: internal_subagents:codex_gpt56_terra_medium_analysis
+        fallback: internal_subagents:codex_gpt56_terra_high_write
       analysis:
-        primary: internal_subagents:codex_gpt55_medium_write
-        fallback: internal_subagents:codex_gpt55_low_write
+        primary: internal_subagents:codex_gpt56_terra_medium_analysis
+        fallback: internal_subagents:codex_gpt56_terra_high_write
       specification:
-        primary: internal_subagents:codex_gpt55_medium_write
-        fallback: internal_subagents:codex_gpt55_high_readonly
+        primary: internal_subagents:codex_gpt56_terra_medium_analysis
+        fallback: internal_subagents:codex_gpt56_terra_high_write
       planning:
-        primary: internal_subagents:codex_gpt55_medium_write
-        fallback: internal_subagents:codex_gpt55_high_readonly
+        primary: internal_subagents:codex_gpt56_terra_medium_analysis
+        fallback: internal_subagents:codex_gpt56_terra_high_write
       review:
-        primary: internal_subagents:codex_gpt55_high_readonly
-        fallback: internal_subagents:codex_gpt55_medium_write
+        primary: internal_subagents:codex_gpt56_sol_medium_readonly
+        fallback: internal_subagents:codex_gpt56_terra_high_write
       coach:
-        primary: internal_subagents:codex_gpt55_medium_write
-        fallback: internal_subagents:codex_gpt55_medium_write
+        primary: internal_subagents:codex_gpt56_terra_high_write
+        fallback: internal_subagents:codex_gpt56_terra_high_write
       implementation:
-        primary: internal_subagents:codex_gpt55_low_write
-        fallback: internal_subagents:codex_gpt55_medium_write
+        primary: internal_subagents:codex_gpt56_terra_medium_write
+        fallback: internal_subagents:codex_gpt56_terra_high_write
       regression_test:
-        primary: internal_subagents:codex_gpt55_medium_write
-        fallback: internal_subagents:codex_gpt55_low_write
+        primary: internal_subagents:codex_gpt56_terra_high_write
+        fallback: internal_subagents:codex_gpt56_terra_medium_write
       verification:
-        primary: internal_subagents:codex_gpt55_medium_write
-        fallback: internal_subagents:codex_gpt55_high_readonly
+        primary: internal_subagents:codex_gpt56_sol_medium_readonly
+        fallback: internal_subagents:codex_gpt56_terra_high_write
     escalation_after:
       consecutive_low_medium_failures: 2
       repeated_runtime_blocker_count: 2
@@ -1627,13 +1753,63 @@ agent_system:
     selection_rule: role_task_then_readiness_then_score_then_cost_quality
     free_profiles_allowed: true
     zero_cost_profiles_allowed: true
+    semantic_scores:
+      reasoning_effort:
+        minimal: 15.0
+        low: 35.0
+        provider_default: 50.0
+        provider-configured: 50.0
+        medium: 60.0
+        high: 82.0
+        xhigh: 95.0
+        very_high: 95.0
+        max: 50.0
+      quality_tier:
+        minimal: 15.0
+        low: 35.0
+        medium_low: 50.0
+        mediumlow: 50.0
+        medium: 60.0
+        medium_high: 50.0
+        mediumhigh: 50.0
+        high: 82.0
+        xhigh: 95.0
+        very_high: 95.0
+        veryhigh: 95.0
+      speed_tier:
+        slow: 35.0
+        medium: 60.0
+        fast: 82.0
+        instant: 95.0
+    ordinal_ranks:
+      reasoning_effort:
+        minimal: 1
+        low: 2
+        provider_default: 2
+        provider-configured: 2
+        medium: 3
+        high: 4
+        xhigh: 5
+      quality_tier:
+        low: 1
+        medium_low: 2
+        mediumlow: 2
+        medium: 3
+        medium_high: 4
+        mediumhigh: 4
+        high: 4
+        very_high: 5
+        veryhigh: 5
+    missing_reasoning_effort_policy:
+      mode: use_configured_default
+      default: medium
     quality_floor_by_runtime_role:
       worker: medium
       business_analyst: medium
       pm: medium
       coach: medium
-      verifier: high
-      prover: high
+      verifier: medium
+      prover: medium
       solution_architect: high
     reasoning_floor_by_task_class:
       implementation: low
@@ -1645,13 +1821,13 @@ agent_system:
       regression_test: medium
       coach: medium
       implementation_medium: medium
-      verification: high
-      review: high
+      verification: medium
+      review: medium
       quality_gate: medium
-      release_readiness: high
+      release_readiness: medium
       architecture: high
       execution_preparation: high
-      hard_escalation: xhigh
+      hard_escalation: high
       meta_analysis: high
     budget_policy:
       enforce_max_budget_units: true
@@ -1665,7 +1841,7 @@ agent_system:
       attempts:
         - attempt_id: analysis-internal-medium-readonly
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt55_medium_write
+          model_profile_id: codex_gpt56_terra_medium_analysis
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: analysis
@@ -1673,7 +1849,7 @@ agent_system:
       consolidator:
         attempt_id: analysis-root-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt55_medium_write
+        model_profile_id: codex_gpt56_terra_medium_analysis
         conversation_role: analyst
         runtime_role: business_analyst
         task_class: analysis
@@ -1685,7 +1861,7 @@ agent_system:
       attempts:
         - attempt_id: specification-internal-medium-readonly
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt55_medium_write
+          model_profile_id: codex_gpt56_terra_medium_analysis
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: specification
@@ -1693,7 +1869,7 @@ agent_system:
       consolidator:
         attempt_id: specification-coach-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt55_high_readonly
+        model_profile_id: codex_gpt56_sol_medium_readonly
         conversation_role: coach
         runtime_role: coach
         task_class: review
@@ -1705,7 +1881,7 @@ agent_system:
       attempts:
         - attempt_id: implementation-internal-low-write
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt55_low_write
+          model_profile_id: codex_gpt56_terra_medium_write
           conversation_role: developer
           runtime_role: worker
           task_class: implementation
@@ -1713,7 +1889,7 @@ agent_system:
       consolidator:
         attempt_id: implementation-coach-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt55_high_readonly
+        model_profile_id: codex_gpt56_sol_medium_readonly
         conversation_role: coach
         runtime_role: coach
         task_class: review
@@ -1725,7 +1901,7 @@ agent_system:
       attempts:
         - attempt_id: regression-test-internal-medium
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt55_medium_write
+          model_profile_id: codex_gpt56_terra_high_write
           conversation_role: autotester
           runtime_role: worker
           task_class: regression_test
@@ -1733,7 +1909,7 @@ agent_system:
       consolidator:
         attempt_id: regression-test-coach-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt55_high_readonly
+        model_profile_id: codex_gpt56_sol_medium_readonly
         conversation_role: coach
         runtime_role: coach
         task_class: review
@@ -1745,7 +1921,7 @@ agent_system:
       attempts:
         - attempt_id: review-internal-high
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt55_high_readonly
+          model_profile_id: codex_gpt56_sol_medium_readonly
           conversation_role: coach
           runtime_role: verifier
           task_class: verification
@@ -1753,7 +1929,7 @@ agent_system:
       consolidator:
         attempt_id: review-root-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt55_high_readonly
+        model_profile_id: codex_gpt56_sol_medium_readonly
         conversation_role: coach
         runtime_role: coach
         task_class: review
@@ -1770,9 +1946,9 @@ agent_system:
       orchestration_tier: senior
       cost_priority: premium
       budget_cost_units: 10
-      profiles: codex_gpt55_low_write,codex_gpt55_medium_write,codex_gpt55_high_readonly,codex_gpt55_xhigh_arch
-      default_profile: codex_gpt55_low_write
-      default_model_profile: codex_gpt55_low_write
+      profiles: codex_gpt56_terra_medium_write,codex_gpt56_terra_medium_analysis,codex_gpt56_terra_high_write,codex_gpt56_sol_medium_readonly,codex_gpt56_sol_high_arch
+      default_profile: codex_gpt56_terra_medium_write
+      default_model_profile: codex_gpt56_terra_medium_write
       capability_band: implementation_safe,architecture_safe,review_safe
       default_runtime_role: worker
       write_scope: orchestrator_native
@@ -1788,6 +1964,7 @@ agent_system:
         - solution_architect
       task_classes:
         - implementation
+        - research
         - analysis
         - delivery_task
         - specification
@@ -1805,10 +1982,10 @@ agent_system:
         - test_authoring
         - regression_test
       model_profiles:
-        codex_gpt55_low_write:
+        codex_gpt56_terra_medium_write:
           provider: openai-codex
-          model_ref: byteshape/qwen3.6-35b-a3b-mtp
-          reasoning_effort: low
+          model_ref: gpt-5.6-terra
+          reasoning_effort: medium
           normalized_cost_units: 1
           pricing:
             price_source_kind: provider_catalog
@@ -1823,18 +2000,34 @@ agent_system:
           write_scope: orchestrator_native
           runtime_roles:
             - worker
-            - business_analyst
           task_classes:
             - implementation
-            - analysis
             - delivery_task
           readiness:
             mode: codex_profile
             required: true
-        codex_gpt55_medium_write:
+        codex_gpt56_terra_medium_analysis:
           provider: openai-codex
-          model_ref: byteshape/qwen3.6-35b-a3b-mtp
+          model_ref: gpt-5.6-terra
           reasoning_effort: medium
+          normalized_cost_units: 2
+          speed_tier: fast
+          quality_tier: medium
+          write_scope: read_or_analysis
+          runtime_roles:
+            - business_analyst
+          task_classes:
+            - research
+            - analysis
+            - specification
+            - planning
+          readiness:
+            mode: codex_profile
+            required: true
+        codex_gpt56_terra_high_write:
+          provider: openai-codex
+          model_ref: gpt-5.6-terra
+          reasoning_effort: high
           normalized_cost_units: 4
           pricing:
             price_source_kind: provider_catalog
@@ -1863,10 +2056,10 @@ agent_system:
           readiness:
             mode: codex_profile
             required: true
-        codex_gpt55_high_readonly:
+        codex_gpt56_sol_medium_readonly:
           provider: openai-codex
-          model_ref: byteshape/qwen3.6-35b-a3b-mtp
-          reasoning_effort: high
+          model_ref: gpt-5.6-sol
+          reasoning_effort: medium
           normalized_cost_units: 16
           speed_tier: medium
           quality_tier: high
@@ -1883,10 +2076,10 @@ agent_system:
           readiness:
             mode: codex_profile
             required: true
-        codex_gpt55_xhigh_arch:
+        codex_gpt56_sol_high_arch:
           provider: openai-codex
-          model_ref: byteshape/qwen3.6-35b-a3b-mtp
-          reasoning_effort: xhigh
+          model_ref: gpt-5.6-sol
+          reasoning_effort: high
           normalized_cost_units: 48
           speed_tier: medium
           quality_tier: very_high
@@ -2091,7 +2284,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_low_write
+        internal_subagents: codex_gpt56_terra_medium_analysis
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents
@@ -2121,7 +2314,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_low_write
+        internal_subagents: codex_gpt56_terra_medium_analysis
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents
@@ -2144,7 +2337,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_low_write
+        internal_subagents: codex_gpt56_terra_medium_analysis
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents
@@ -2167,7 +2360,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_xhigh_arch
+        internal_subagents: codex_gpt56_terra_medium_analysis
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents
@@ -2197,7 +2390,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_medium_write
+        internal_subagents: codex_gpt56_terra_medium_analysis
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents
@@ -2219,7 +2412,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_low_write
+        internal_subagents: codex_gpt56_terra_medium_write
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents
@@ -2251,7 +2444,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_high_readonly
+        internal_subagents: codex_gpt56_sol_medium_readonly
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents
@@ -2273,7 +2466,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_high_readonly
+        internal_subagents: codex_gpt56_sol_medium_readonly
       write_scope: none
       verification_gate: review_findings
       max_runtime_seconds: 180
@@ -2289,7 +2482,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_high_readonly
+        internal_subagents: codex_gpt56_sol_medium_readonly
       write_scope: none
       verification_gate: review_findings
       max_runtime_seconds: 180
@@ -2305,7 +2498,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_high_readonly
+        internal_subagents: codex_gpt56_sol_medium_readonly
       write_scope: none
       verification_gate: review_findings
       max_runtime_seconds: 180
@@ -2321,7 +2514,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_high_readonly
+        internal_subagents: codex_gpt56_sol_medium_readonly
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents
@@ -2359,7 +2552,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_high_readonly
+        internal_subagents: codex_gpt56_sol_medium_readonly
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents
@@ -2380,7 +2573,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_low_write
+        internal_subagents: codex_gpt56_terra_medium_write
       analysis_required: yes
       analysis_executor_backend: internal_subagents
       analysis_route_task_class: analysis
@@ -2418,7 +2611,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_low_write
+        internal_subagents: codex_gpt56_terra_medium_write
       analysis_required: yes
       analysis_executor_backend: internal_subagents
       analysis_route_task_class: analysis
@@ -2449,7 +2642,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_low_write
+        internal_subagents: codex_gpt56_terra_medium_write
       analysis_required: yes
       analysis_executor_backend: internal_subagents
       analysis_route_task_class: ui_review
@@ -2480,7 +2673,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_low_write
+        internal_subagents: codex_gpt56_terra_medium_write
       max_runtime_seconds: 420
       analysis_required: yes
       analysis_executor_backend: internal_subagents
@@ -2521,7 +2714,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_xhigh_arch
+        internal_subagents: codex_gpt56_sol_high_arch
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents
@@ -2539,7 +2732,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_high_readonly
+        internal_subagents: codex_gpt56_sol_medium_readonly
       write_scope: none
       verification_gate: verification_summary
       max_runtime_seconds: 180
@@ -2557,7 +2750,7 @@ agent_system:
       fanout_executor_backends:
         - internal_subagents
       profiles:
-        internal_subagents: codex_gpt55_high_readonly
+        internal_subagents: codex_gpt56_sol_medium_readonly
       fanout_subagents: internal_subagents
       fanout_min_results: 3
       merge_policy: consensus_with_conflict_flag

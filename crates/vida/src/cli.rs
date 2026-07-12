@@ -35,7 +35,7 @@ const DIAGNOSTICS_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida diag
 const LANE_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida lane` is a fixed lane/takeover diagnostic projection; it supports compact default output and `--json`, not ad-hoc `--fields`, `--view`, or `--details` selectors.\n  Use `vida taskflow run-graph status <run-id> --json` and `vida taskflow recovery status <run-id> --json` for full machine-readable run-graph detail.";
 const RECOVERY_AFTER_HELP: &str = "Field/view/detail selection:\n  `vida recovery` is a TaskFlow recovery alias with fixed diagnostic projections; use default output for operators and `--json` for full machine-readable recovery detail.\n  It does not support ad-hoc `--fields`, `--view`, or `--details` selectors; use `vida task show --view ...` or `vida status --json --fields ... --view ...` for selectable records.";
 const REQUIREMENT_AFTER_HELP: &str = "Requirement operations:\n  vida requirement analyze --input \"Need editable meeting event fields\" --json\n  vida requirement analyze --task-id task-1 --input \"Build feature\" --artifact-path artifacts/requirement-analysis.json\n\nAnalyze contract:\n  Inputs: --input <text>, --source-file <path>, --task-id <id>, --request-id <id>, --depth-mode quick|standard|critical, --artifact-path <path>, --codebase-inspected.\n  JSON output includes: task_id, request_id, source_inputs, requirement_classification, depth_mode, requirement_atoms, selected_methods, selected_roles, role_findings_summary, detected_conflicts, open_questions, working_assumptions, solution_options, recommended_option, readiness_verdict, downstream_routes, acceptance_criteria, test_matrix, output_contract, codebase_impact, developer_handoff.\n  Default output is compact TOON/plain with readiness, artifact path, required-field summary, output modes, routes, and developer handoff. Use --json for the full machine-readable artifact.";
-const PACK_AFTER_HELP: &str = "Pack operations:\n  vida pack list\n  vida pack list --json\n  vida pack show spec-four-pack\n  vida pack show spec-four-pack --json\n  vida pack validate\n  vida pack validate --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
+const PACK_AFTER_HELP: &str = "Pack operations:\n  vida pack list\n  vida pack list --json\n  vida pack show <pack-id>\n  vida pack show <pack-id> --json\n  vida pack validate\n  vida pack validate --json\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.";
 const STATE_AFTER_HELP: &str = "State operations:\n  vida state reset --archive --reinit\n  vida state reset --archive --reinit --json\n  vida state reset --archive --reinit --state-dir <path> --json\n\nOptions:\n  --archive             Rename the current state root to a timestamped sibling archive before reset\n  --reinit              Recreate the authoritative state spine after archive\n  --state-dir <path>    Override the TaskFlow state directory\n  --json                Emit machine-readable JSON output\n\nOutput:\n  Default output is compact plain text for operators.\n  Use --json for machine-readable automation.";
 const CODER_AFTER_HELP: &str = "Coder operations:\n  vida coder capabilities\n  vida coder provider-check --provider codex\n  vida coder run --request \"bounded implementation request\"\n\nOptions:\n  --provider <provider>   Provider id to inspect before execution\n  --request <request>     Bounded coder request text for future provider execution\n  --json                  Emit machine-readable JSON output\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n  `capabilities` is read-only and succeeds.\n  `provider-check` is a stub that reports provider execution is unavailable.\n  `run` fails closed before any provider execution until a provider adapter is implemented.";
 const AGENT_INIT_AFTER_HELP: &str = "Agent init operations:\n  vida agent-init\n  vida agent-init --dispatch-packet <packet-path> --execute-dispatch\n  vida agent-init --auto-dispatch-packet --execute-dispatch\n\nOutput:\n  Default blocked output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload or full blocked evidence is required.";
@@ -43,9 +43,9 @@ const AGENT_INIT_AFTER_HELP: &str = "Agent init operations:\n  vida agent-init\n
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--execution-mode container_only` marks a work-pool/container task as non-executable by the scheduler\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
 const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <title> --parent-id <parent-id>\n  vida task create <subtask-id> <title> --type subtask --parent-id <task-id>\n  vida task create <step-id> <title> --type step --parent-id <task-or-subtask-id>\n  vida task create <task-id> --title <title> --parent-id <parent-id> --description \"...\" --notes \"...\"\n  vida task create <task-id> <title> --parent-id <parent-id> --owned-path crates/vida/src/lib.rs --acceptance-target \"Default output shows the needed field\" --proof-target \"cargo test -p vida focused_test\"\n  vida task create <task-id> <title> --acceptance-target-literal \"One prose target, with commas preserved\" --proof-target-literal \"Manual proof, with punctuation preserved\"\n  vida task create <task-id> <title> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs\n\nOne-shot metadata:\n  When owned paths, acceptance targets, proof targets, labels, notes, or execution semantics are known, pass them on `vida task create` instead of creating the task and immediately updating it.\n  Comma-delimited list flags remain available for compact lists; use the `*-literal` variants or `vida task import --file` JSON/YAML arrays for long prose values that contain commas.\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json only when a machine-readable payload is required.\n\nNotes:\n  Provide exactly one title source: positional <title> or --title <title>.\n  `step` is the canonical execution-step type; `todo` remains accepted as a deprecated alias without rewriting existing records.\n  Missing execution semantics fail closed for parallel scheduling.\n  Use `vida taskflow graph-summary` to verify parallel-safe admission after mutation; use `--json` only for machine-readable automation.\n  For many task creates or long per-task metadata, write a JSONL/YAML file and use `vida task import --file tasks.jsonl --dry-run` instead of an oversized shell command.";
-const TASK_IMPORT_ABOUT: &str = "Create many tracked tasks from a structured file.";
-const TASK_IMPORT_LONG_ABOUT: &str = "Create many tracked tasks from a structured file without oversized shell payloads.\n\nUse this surface when a task batch is too large for a reliable shell command, when per-task descriptions or notes are long, or when operators need a reviewable file before mutating TaskFlow state.\n\nSupported input:\n- JSON or YAML array of task objects\n- JSON or YAML object with a `tasks` array\n- JSONL/NDJSON with one task object per line\n\nEach task object requires `id` (or `task_id`) and `title`. Optional fields include `display_id`, `description`, `type`/`issue_type`, `status`, `priority`, `parent_id`, `notes`, `labels`, execution semantics, and planner metadata. Command flags provide defaults for parent assignment, execution semantics, labels, owned paths, acceptance targets, and proof targets.";
-const TASK_IMPORT_AFTER_HELP: &str = "Examples:\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run --json\n  vida task import --file tasks.yaml --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task create-bulk --file tasks.json --labels operator-dx,taskflow --acceptance-target \"Tasks imported\" --proof-target \"cargo test -p vida task_bulk_import\" --json\n\nInput task object fields:\n  id | task_id, title, display_id, description, type | issue_type, status, priority, parent_id, notes\n  labels: [\"operator-dx\"] or \"operator-dx,taskflow\"\n  execution_semantics: { execution_mode, order_bucket, parallel_group, conflict_domain }\n  planner_metadata: { owned_paths, acceptance_targets, proof_targets, risk, estimate, lane_hint }\n\nLarge-batch transport:\n  Prefer JSONL/NDJSON for large batches because each task is one bounded line in a file.\n  If the shell reports a command line or payload is too large, move the task objects into a file and rerun `vida task import --file <path> --dry-run`.\n  Use JSON/YAML array entries for literal metadata values that contain commas; string fields and command defaults keep comma-delimited compatibility.\n  Use `vida task dep add-bulk --edge-file edges.txt --dry-run` for large dependency-edge batches.\n\nNotes:\n  `--dry-run` validates against the current graph and does not mutate TaskFlow state.\n  Per-task fields override command defaults; list defaults are appended and de-duplicated.\n  JSONL lets operators import large batches from a file instead of passing oversized command payloads.";
+const TASK_IMPORT_ABOUT: &str = "Create many tracked tasks from a structured file or stdin.";
+const TASK_IMPORT_LONG_ABOUT: &str = "Create many tracked tasks from a structured file or stdin without oversized shell payloads.\n\nSupported input includes JSON/YAML files, JSONL/NDJSON files, and stdin JSONL with `--file - --format jsonl`. Apply validates the complete batch before writing and restores the prior snapshot if a write fails.";
+const TASK_IMPORT_AFTER_HELP: &str = "Examples:\n  vida task import --file tasks.jsonl --parent-id <parent-id> --dry-run --json\n  producer | vida task import --file - --format jsonl --dry-run --json\n  producer | vida task import --file - --format jsonl --json\n\nInput task object fields:\n  id | task_id, title, display_id, description, type | issue_type, status, priority, parent_id, notes\n\nLarge-batch transport:\n  Use `--file - --format jsonl` to stream JSONL from stdin; stdin requires explicit JSONL format.\n  Validate with `--dry-run` before apply. Apply is all-or-nothing: validation or write failure leaves prior task rows intact.\n\nOutput:\n  Default output is compact TOON/plain for operators.\n  Use --json for the full machine-readable result, blocker codes, next actions, and artifact refs.";
 
 const TASK_UPDATE_ABOUT: &str = "Update one tracked task in the authoritative backlog store.";
 const TASK_UPDATE_LONG_ABOUT: &str = "Update one tracked task in the authoritative backlog store.\n\nUse execution-semantics flags to correct sequencing and parallelism truth without moving ordering back into notes:\n- `--execution-mode sequential|parallel_safe|exclusive|container_only`\n- `--order-bucket <id>`\n- `--parallel-group <id>`\n- `--conflict-domain <id>`\n- matching `--clear-*` flags remove one semantics field\n\nPlanner proof target updates are replacements, not appends. Use `--clear-proof-targets` to remove obsolete proof targets.";
@@ -1980,7 +1980,7 @@ pub(crate) struct TaskBulkImportArgs {
         long = "file",
         short = 'f',
         value_name = "PATH",
-        help = "Structured task batch file to import (JSON, YAML, or JSONL)"
+        help = "Structured task batch file to import (JSON, YAML, or JSONL); use - only with --format jsonl to read stdin"
     )]
     pub(crate) file: PathBuf,
 
@@ -2641,7 +2641,11 @@ pub(crate) struct TaskProofAttachReleaseBundleArgs {
     )]
     pub(crate) artifact_ref: Vec<String>,
 
-    #[arg(long = "result", default_value = "pass", help = "Proof result: pass, fail, or blocked")]
+    #[arg(
+        long = "result",
+        default_value = "pass",
+        help = "Proof result: pass, fail, or blocked"
+    )]
     pub(crate) result: String,
 
     #[arg(
@@ -4755,6 +4759,7 @@ mod tests {
             help.contains("export-jsonl"),
             "task help should list export-jsonl"
         );
+        assert!(help.contains("import"), "task help should list import");
     }
 
     #[test]
@@ -4837,6 +4842,21 @@ mod tests {
         assert!(help.contains("Default output is compact TOON/plain"));
         assert!(help.contains("vida task import --file tasks.jsonl --dry-run"));
         assert!(help.contains("oversized shell command"));
+    }
+
+    #[test]
+    fn task_import_help_exposes_stdin_jsonl_and_output_contracts() {
+        let error = Cli::try_parse_from(["vida", "task", "import", "--help"])
+            .expect_err("help should render clap display error");
+        let help = error.to_string();
+
+        assert!(help.contains("--file <PATH>"));
+        assert!(help.contains("--format <FORMAT>"));
+        assert!(help.contains("--dry-run"));
+        assert!(help.contains("--json"));
+        assert!(help.contains("--file - --format jsonl"));
+        assert!(help.contains("all-or-nothing"));
+        assert!(help.contains("blocker codes"));
     }
 
     #[test]
@@ -5484,7 +5504,9 @@ mod tests {
         assert!(coder_help.contains("provider-check"));
         assert!(coder_help.contains("run"));
         assert!(coder_help.contains("Default output is compact TOON/plain"));
-        assert!(coder_help.contains("Use --json only when a machine-readable payload is required."));
+        assert!(
+            coder_help.contains("Use --json only when a machine-readable payload is required.")
+        );
         assert!(coder_help.contains("vida coder capabilities\n"));
         assert!(!coder_help.contains("vida coder capabilities --json"));
 
@@ -5659,8 +5681,10 @@ mod tests {
         let agent_init_help = agent_init_error.to_string();
         assert_help_has_no_blank_description_rows("agent-init", &agent_init_help);
         assert!(agent_init_help.contains("Optional request text"));
-        assert!(agent_init_help
-            .contains("return receipt-backed execution or host-bridge handoff state"));
+        assert!(
+            agent_init_help
+                .contains("return receipt-backed execution or host-bridge handoff state")
+        );
         assert!(agent_init_help.contains("Default blocked output is compact TOON/plain"));
         assert!(agent_init_help.contains(
             "Use --json only when a machine-readable payload or full blocked evidence is required"

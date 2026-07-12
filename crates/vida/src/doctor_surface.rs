@@ -3,16 +3,16 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use crate::contract_profile_adapter::{
-    blocker_code_str, canonical_blocker_code_list, canonical_compatibility_class_str,
-    classify_compatibility_boundary, shared_operator_output_contract_parity_error, BlockerCode,
-    CompatibilityBoundary, CompatibilityClass,
+    BlockerCode, CompatibilityBoundary, CompatibilityClass, blocker_code_str,
+    canonical_blocker_code_list, canonical_compatibility_class_str,
+    classify_compatibility_boundary, shared_operator_output_contract_parity_error,
 };
 use crate::status_surface::{
-    current_runtime_projection as build_current_runtime_projection, first_non_empty_artifact_ref,
-    StatusRunGraphArtifactSource,
+    StatusRunGraphArtifactSource, current_runtime_projection as build_current_runtime_projection,
+    first_non_empty_artifact_ref,
 };
 use crate::status_surface_operator_contracts::{
-    latest_run_graph_artifact_refs, LatestRunGraphArtifactRefsInputs,
+    LatestRunGraphArtifactRefsInputs, latest_run_graph_artifact_refs,
 };
 
 fn migration_requires_action(migration_state: &str) -> bool {
@@ -159,6 +159,10 @@ fn terminal_task_active_run_matches_effective_run(
 fn trace_evidence_blocker_codes(
     latest_task_reconciliation: Option<&crate::state_store::TaskReconciliationSummary>,
     runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
+    selected_final_snapshot: Option<
+        &crate::runtime_consumption_state::SelectedFinalRuntimeConsumptionSnapshot,
+    >,
+    effective_run_id: Option<&str>,
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     protocol_binding: &crate::state_store::ProtocolBindingSummary,
     effective_instruction_bundle: &crate::state_store::EffectiveInstructionBundle,
@@ -166,12 +170,14 @@ fn trace_evidence_blocker_codes(
     idle_terminal_run: bool,
 ) -> Vec<String> {
     let mut blocker_codes = Vec::new();
+    let has_final_snapshot = selected_final_snapshot.is_some()
+        || (effective_run_id.is_none() && runtime_consumption.total_snapshots > 0);
 
     let missing_root_trace = if idle_terminal_run {
-        runtime_consumption.total_snapshots == 0 || protocol_binding.total_receipts == 0
+        !has_final_snapshot || protocol_binding.total_receipts == 0
     } else {
         latest_task_reconciliation.is_none()
-            || runtime_consumption.total_snapshots == 0
+            || !has_final_snapshot
             || latest_run_graph_dispatch_receipt.is_none()
             || protocol_binding.total_receipts == 0
     };
@@ -179,8 +185,13 @@ fn trace_evidence_blocker_codes(
         blocker_codes.push(blocker_code_str(BlockerCode::TraceMissing).to_string());
     }
 
-    if runtime_consumption.total_snapshots > 0 && runtime_consumption.latest_snapshot_path.is_none()
+    if effective_run_id.is_none()
+        && runtime_consumption.total_snapshots > 0
+        && runtime_consumption.latest_snapshot_path.is_none()
     {
+        blocker_codes.push(blocker_code_str(BlockerCode::TraceIncomplete).to_string());
+    }
+    if selected_final_snapshot.is_some_and(|snapshot| snapshot.payload.is_none()) {
         blocker_codes.push(blocker_code_str(BlockerCode::TraceIncomplete).to_string());
     }
     if protocol_binding.total_receipts > 0 && protocol_binding.latest_receipt_id.is_none() {
@@ -201,15 +212,29 @@ fn trace_evidence_blocker_codes(
 fn build_trace_evidence_summary(
     latest_task_reconciliation: Option<&crate::state_store::TaskReconciliationSummary>,
     runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
+    selected_final_snapshot: Option<
+        &crate::runtime_consumption_state::SelectedFinalRuntimeConsumptionSnapshot,
+    >,
+    effective_run_id: Option<&str>,
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     protocol_binding: &crate::state_store::ProtocolBindingSummary,
     effective_instruction_bundle: &crate::state_store::EffectiveInstructionBundle,
     effective_bundle_receipt_id: &str,
     idle_terminal_run: bool,
 ) -> (serde_json::Value, Vec<String>, Vec<String>) {
+    let selected_final_snapshot_path =
+        selected_final_snapshot.map(|snapshot| snapshot.path.as_str());
+    let trace_snapshot_path = selected_final_snapshot_path.or_else(|| {
+        effective_run_id
+            .is_none()
+            .then(|| runtime_consumption.latest_snapshot_path.as_deref())
+            .flatten()
+    });
     let blocker_codes = trace_evidence_blocker_codes(
         latest_task_reconciliation,
         runtime_consumption,
+        selected_final_snapshot,
+        effective_run_id,
         latest_run_graph_dispatch_receipt,
         protocol_binding,
         effective_instruction_bundle,
@@ -229,14 +254,14 @@ fn build_trace_evidence_summary(
         "next_actions": next_actions,
         "root_trace": {
             "trace_id": serde_json::Value::Null,
+            "effective_run_id": effective_run_id,
             "latest_task_reconciliation_receipt_id": latest_task_reconciliation
                 .map(|receipt| serde_json::Value::String(receipt.receipt_id.clone()))
                 .unwrap_or(serde_json::Value::Null),
-            "runtime_consumption_latest_snapshot_path": runtime_consumption
-                .latest_snapshot_path
-                .as_ref()
-                .map(|path| serde_json::Value::String(path.clone()))
+            "runtime_consumption_latest_snapshot_path": trace_snapshot_path
+                .map(serde_json::Value::from)
                 .unwrap_or(serde_json::Value::Null),
+            "runtime_consumption_selected_final_snapshot_path": selected_final_snapshot_path,
             "latest_run_graph_dispatch_receipt_id": latest_run_graph_dispatch_receipt
                 .map(|receipt| serde_json::Value::String(receipt.run_id.clone()))
                 .unwrap_or(serde_json::Value::Null),
@@ -276,10 +301,10 @@ fn trace_evidence_display(trace_evidence: &serde_json::Value) -> String {
     let dispatch_receipt = trace_evidence["root_trace"]["latest_run_graph_dispatch_receipt_id"]
         .as_str()
         .unwrap_or("none");
-    let runtime_consumption = trace_evidence["root_trace"]
-        ["runtime_consumption_latest_snapshot_path"]
-        .as_str()
-        .unwrap_or("none");
+    let runtime_consumption =
+        trace_evidence["root_trace"]["runtime_consumption_latest_snapshot_path"]
+            .as_str()
+            .unwrap_or("none");
     let protocol_binding = trace_evidence["root_trace"]["protocol_binding_latest_receipt_id"]
         .as_str()
         .unwrap_or("none");
@@ -300,6 +325,10 @@ fn doctor_operator_blocker_codes(
     latest_final_snapshot_path: Option<&str>,
     runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
     latest_recorded_final_snapshot_path: Option<&str>,
+    selected_final_snapshot: Option<
+        &crate::runtime_consumption_state::SelectedFinalRuntimeConsumptionSnapshot,
+    >,
+    effective_run_id: Option<&str>,
     root_session_write_guard: &serde_json::Value,
     latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
     latest_run_graph_gate: Option<&crate::state_store::RunGraphGateSummary>,
@@ -354,12 +383,18 @@ fn doctor_operator_blocker_codes(
         operator_blocker_codes
             .push(blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues).to_string());
     }
-    let retrieval_trust_signal =
+    let retrieval_trust_signal = if effective_run_id.is_some() {
+        super::runtime_consumption_state::retrieval_trust_signal_from_selected_final_snapshot(
+            selected_final_snapshot,
+            protocol_binding.latest_receipt_id.as_deref(),
+        )
+    } else {
         super::runtime_consumption_state::latest_admissible_retrieval_trust_signal(
             runtime_consumption,
             latest_final_snapshot_path,
             protocol_binding.latest_receipt_id.as_deref(),
-        );
+        )
+    };
     if retrieval_trust_signal.is_none() && !active_exception_takeover {
         operator_blocker_codes.push(
             blocker_code_str(BlockerCode::MissingRetrievalTrustSourceOperatorEvidence).to_string(),
@@ -371,8 +406,15 @@ fn doctor_operator_blocker_codes(
             .push(blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence).to_string());
     }
     if latest_final_snapshot_path.is_none()
-        && latest_recorded_final_snapshot_path
-            .is_some_and(final_snapshot_missing_release_admission_evidence)
+        && (effective_run_id.is_some()
+            || selected_final_snapshot.is_some_and(|_| {
+            !crate::release1_contracts::selected_final_snapshot_has_release_admission_operator_evidence(
+                selected_final_snapshot,
+            )
+        })
+            || (selected_final_snapshot.is_none()
+                && latest_recorded_final_snapshot_path
+                    .is_some_and(final_snapshot_missing_release_admission_evidence)))
         && !active_exception_takeover
     {
         operator_blocker_codes.push(
@@ -835,33 +877,10 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-            let latest_final_snapshot_path =
-                match crate::release1_contracts::latest_release_admission_operator_evidence_snapshot_path(store.root()) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        eprintln!("runtime consumption: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                };
-            let latest_recorded_final_snapshot_path =
-                match super::runtime_consumption_state::latest_recorded_final_runtime_consumption_snapshot_path(store.root()) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        eprintln!("runtime consumption: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                };
             let protocol_binding = match store.protocol_binding_summary().await {
                 Ok(summary) => summary,
                 Err(error) => {
                     eprintln!("protocol binding: failed ({error})");
-                    return ExitCode::from(1);
-                }
-            };
-            let latest_run_graph_status = match store.latest_run_graph_status().await {
-                Ok(summary) => summary,
-                Err(error) => {
-                    eprintln!("latest run graph status: failed ({error})");
                     return ExitCode::from(1);
                 }
             };
@@ -874,148 +893,90 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             };
             let crate::status_surface::CurrentRuntimeProjection {
                 current_session_status: current_session_run_graph_status,
-                current_session_dispatch_receipt: current_session_run_graph_status_dispatch_receipt,
+                terminal_task_active_status: latest_terminal_task_active_run_graph_status,
+                status: latest_run_graph_status,
+                recovery: latest_run_graph_recovery,
+                checkpoint: latest_run_graph_checkpoint,
+                gate: latest_run_graph_gate,
+                dispatch_receipt: latest_run_graph_dispatch_receipt,
+                effective_run_id: current_session_effective_run_graph_run_id,
                 dispatch_receipt_checkpoint_leakage:
                     current_session_run_graph_dispatch_receipt_checkpoint_leakage,
+                snapshot_inconsistent: latest_run_graph_snapshot_inconsistent,
                 ..
             } = current_runtime_projection;
-            let current_session_run_graph_run_id = current_session_run_graph_status
-                .as_ref()
-                .map(|status| status.run_id.as_str());
-            let latest_run_graph_dispatch_receipt =
-                match store.latest_run_graph_dispatch_receipt_summary().await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("latest run graph dispatch receipt: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                };
-            let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
-                match crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root())
-                {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!(
-                            "latest runtime-consumption dispatch receipt fallback: failed ({error})"
-                        );
-                        return ExitCode::from(1);
-                    }
-                }
-            } else {
-                latest_run_graph_dispatch_receipt
-            };
-            let active_exception_takeover_dispatch_receipt =
-                if current_session_run_graph_status_dispatch_receipt.is_none()
-                    && latest_run_graph_dispatch_receipt.is_none()
-                {
-                    match store
-                        .latest_active_exception_takeover_dispatch_receipt()
-                        .await
-                    {
-                        Ok(receipt) => receipt
-                            .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt),
-                        Err(error) => {
-                            eprintln!(
-                                "latest active exception takeover dispatch receipt: failed ({error})"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    }
-                } else {
-                    None
-                };
+            let current_session_effective_run_graph_run_id =
+                current_session_effective_run_graph_run_id.as_deref();
             let current_session_run_graph_dispatch_receipt =
-                select_current_session_run_graph_dispatch_receipt(
-                    current_session_run_graph_status_dispatch_receipt.as_ref(),
-                    latest_run_graph_dispatch_receipt.as_ref(),
-                    active_exception_takeover_dispatch_receipt.as_ref(),
-                );
-            let current_session_effective_run_graph_run_id = current_session_run_graph_run_id
-                .or_else(|| {
-                    current_session_run_graph_dispatch_receipt
-                        .map(|receipt| receipt.run_id.as_str())
+                latest_run_graph_dispatch_receipt.as_ref();
+            let current_session_uses_effective_run = current_session_run_graph_status
+                .as_ref()
+                .is_some_and(|status| {
+                    Some(status.run_id.as_str()) == current_session_effective_run_graph_run_id
                 });
-            let current_session_run_graph_checkpoint =
-                match current_session_effective_run_graph_run_id {
-                    Some(run_id) => match store.run_graph_checkpoint_summary(run_id).await {
-                        Ok(summary) => summary,
-                        Err(error) => {
-                            eprintln!("current-session run graph checkpoint: failed ({error})");
-                            return ExitCode::from(1);
-                        }
-                    }
-                    .into(),
-                    None => None,
-                };
-            let current_session_run_graph_gate = match current_session_effective_run_graph_run_id {
-                Some(run_id) => match store.run_graph_gate_summary(run_id).await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("current-session run graph gate: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                }
-                .into(),
-                None => None,
-            };
-            let current_session_run_graph_recovery =
-                match current_session_effective_run_graph_run_id {
-                    Some(run_id) => match store.run_graph_recovery_summary(run_id).await {
-                        Ok(summary) => summary,
-                        Err(error) => {
-                            eprintln!("current-session run graph recovery: failed ({error})");
-                            return ExitCode::from(1);
-                        }
-                    }
-                    .into(),
-                    None => None,
-                };
-            let latest_terminal_task_active_run_graph_status =
-                match store.latest_terminal_task_active_run_graph_status().await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("latest terminal-task run graph status: failed ({error})");
-                        return ExitCode::from(1);
-                    }
-                };
-            let latest_run_graph_recovery = match store.latest_run_graph_recovery_summary().await {
-                Ok(summary) => summary,
+            let current_session_run_graph_checkpoint = current_session_uses_effective_run
+                .then(|| latest_run_graph_checkpoint.as_ref())
+                .flatten();
+            let current_session_run_graph_gate = current_session_uses_effective_run
+                .then(|| latest_run_graph_gate.as_ref())
+                .flatten();
+            let current_session_run_graph_recovery = current_session_uses_effective_run
+                .then(|| latest_run_graph_recovery.as_ref())
+                .flatten();
+            let selected_final_runtime_consumption_snapshot = match super::runtime_consumption_state::selected_final_runtime_consumption_snapshot_for_run(
+                store.root(),
+                current_session_effective_run_graph_run_id,
+            ) {
+                Ok(snapshot) => snapshot,
                 Err(error) => {
-                    eprintln!("latest run graph recovery: failed ({error})");
+                    eprintln!("selected runtime-consumption snapshot: failed ({error})");
                     return ExitCode::from(1);
                 }
             };
-            let latest_run_graph_checkpoint =
-                match store.latest_run_graph_checkpoint_summary().await {
-                    Ok(summary) => summary,
+            let latest_final_snapshot_path = if current_session_effective_run_graph_run_id.is_some()
+            {
+                crate::release1_contracts::selected_final_snapshot_release_admission_operator_evidence_path(
+                    selected_final_runtime_consumption_snapshot.as_ref(),
+                )
+                .map(str::to_string)
+            } else {
+                match crate::release1_contracts::latest_release_admission_operator_evidence_snapshot_path(store.root()) {
+                    Ok(path) => path,
                     Err(error) => {
-                        eprintln!("latest run graph checkpoint: failed ({error})");
+                        eprintln!("runtime consumption: failed ({error})");
                         return ExitCode::from(1);
                     }
-                };
-            let latest_run_graph_gate = match store.latest_run_graph_gate_summary().await {
-                Ok(summary) => summary,
-                Err(error) => {
-                    eprintln!("latest run graph gate: failed ({error})");
-                    return ExitCode::from(1);
                 }
             };
-            let latest_run_graph_snapshot_inconsistent =
-                !current_session_run_graph_dispatch_receipt_checkpoint_leakage
-                    && !crate::state_store::latest_run_graph_evidence_snapshot_is_consistent(
-                        current_session_effective_run_graph_run_id,
-                        current_session_run_graph_recovery
-                            .as_ref()
-                            .map(|summary| summary.run_id.as_str()),
-                        current_session_run_graph_checkpoint
-                            .as_ref()
-                            .map(|summary| summary.run_id.as_str()),
-                        current_session_run_graph_gate
-                            .as_ref()
-                            .map(|summary| summary.run_id.as_str()),
-                        current_session_run_graph_dispatch_receipt
-                            .map(|receipt| receipt.run_id.as_str()),
-                    );
+            let latest_recorded_final_snapshot_path = if current_session_effective_run_graph_run_id
+                .is_some()
+            {
+                selected_final_runtime_consumption_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.path.clone())
+            } else {
+                match super::runtime_consumption_state::latest_recorded_final_runtime_consumption_snapshot_path(store.root()) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("runtime consumption: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                }
+            };
+            let runtime_consumption_evidence_snapshot_path =
+                selected_final_runtime_consumption_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.path.as_str())
+                    .or_else(|| {
+                        current_session_effective_run_graph_run_id
+                            .is_none()
+                            .then(|| {
+                                latest_final_snapshot_path
+                                    .as_deref()
+                                    .or(runtime_consumption.latest_snapshot_path.as_deref())
+                            })
+                            .flatten()
+                    });
             let (
                 mut latest_run_graph_task_missing,
                 mut latest_run_graph_task_closed,
@@ -1084,9 +1045,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             });
             let mut root_session_write_guard =
                 crate::status_surface_write_guard::root_session_write_guard_summary_from_snapshot_path(
-                    latest_final_snapshot_path
-                        .as_deref()
-                        .or(runtime_consumption.latest_snapshot_path.as_deref()),
+                    runtime_consumption_evidence_snapshot_path,
                 );
             root_session_write_guard =
                 crate::status_surface_write_guard::merge_live_exception_takeover_write_guard_with_task_authority(
@@ -1237,23 +1196,29 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 build_trace_evidence_summary(
                     latest_task_reconciliation.as_ref(),
                     &runtime_consumption,
+                    selected_final_runtime_consumption_snapshot.as_ref(),
+                    current_session_effective_run_graph_run_id,
                     latest_run_graph_dispatch_receipt.as_ref(),
                     &protocol_binding,
                     &effective_instruction_bundle,
                     effective_bundle_receipt_id.as_str(),
                     idle_terminal_run,
                 );
-            let retrieval_trust_signal =
+            let retrieval_trust_signal = if current_session_effective_run_graph_run_id.is_some() {
+                super::runtime_consumption_state::retrieval_trust_signal_from_selected_final_snapshot(
+                    selected_final_runtime_consumption_snapshot.as_ref(),
+                    protocol_binding.latest_receipt_id.as_deref(),
+                )
+            } else {
                 super::runtime_consumption_state::latest_admissible_retrieval_trust_signal(
                     &runtime_consumption,
                     latest_final_snapshot_path.as_deref(),
                     protocol_binding.latest_receipt_id.as_deref(),
-                );
+                )
+            };
 
             if as_json {
-                let evidence_snapshot_path = latest_final_snapshot_path
-                    .as_deref()
-                    .or(runtime_consumption.latest_snapshot_path.as_deref());
+                let evidence_snapshot_path = runtime_consumption_evidence_snapshot_path;
                 let operator_session_projection =
                     match crate::operator_session_projection::build_operator_session_projection(
                         &store,
@@ -1274,6 +1239,8 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     latest_final_snapshot_path.as_deref(),
                     &runtime_consumption,
                     latest_recorded_final_snapshot_path.as_deref(),
+                    selected_final_runtime_consumption_snapshot.as_ref(),
+                    current_session_effective_run_graph_run_id,
                     &root_session_write_guard,
                     latest_run_graph_recovery.as_ref(),
                     latest_run_graph_gate.as_ref(),
@@ -2484,6 +2451,8 @@ mod tests {
         let (trace_evidence, blocker_codes, next_actions) = build_trace_evidence_summary(
             latest_task_reconciliation.as_ref(),
             &runtime_consumption,
+            None,
+            None,
             latest_run_graph_dispatch_receipt.as_ref(),
             &protocol_binding,
             &effective_instruction_bundle,
@@ -2585,6 +2554,8 @@ mod tests {
             Some("snapshot.json"),
             &runtime_consumption,
             None,
+            None,
+            None,
             &root_session_write_guard,
             None,
             None,
@@ -2606,11 +2577,10 @@ mod tests {
 
     #[test]
     fn doctor_operator_contracts_block_on_latest_run_graph_snapshot_inconsistent() {
-        let blocker_codes =
-            vec![
-                crate::blocker_code_str(crate::BlockerCode::RunGraphLatestSnapshotInconsistent)
-                    .to_string(),
-            ];
+        let blocker_codes = vec![
+            crate::blocker_code_str(crate::BlockerCode::RunGraphLatestSnapshotInconsistent)
+                .to_string(),
+        ];
         let next_actions = super::doctor_operator_next_actions(
             &blocker_codes,
             &crate::state_store::BootCompatibilitySummary {
@@ -2632,9 +2602,11 @@ mod tests {
             None,
         );
 
-        assert!(next_actions
-            .iter()
-            .any(|action| action.contains("concrete run/task/packet")));
+        assert!(
+            next_actions
+                .iter()
+                .any(|action| action.contains("concrete run/task/packet"))
+        );
         assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
@@ -2686,10 +2658,12 @@ mod tests {
 
     #[test]
     fn doctor_operator_contracts_explain_latest_run_graph_checkpoint_leakage() {
-        let blocker_codes = vec![crate::blocker_code_str(
-            crate::BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage,
-        )
-        .to_string()];
+        let blocker_codes = vec![
+            crate::blocker_code_str(
+                crate::BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage,
+            )
+            .to_string(),
+        ];
         let next_actions = super::doctor_operator_next_actions(
             &blocker_codes,
             &crate::state_store::BootCompatibilitySummary {
@@ -2711,9 +2685,11 @@ mod tests {
             None,
         );
 
-        assert!(next_actions
-            .iter()
-            .any(|action| action.contains("checkpoint evidence")));
+        assert!(
+            next_actions
+                .iter()
+                .any(|action| action.contains("checkpoint evidence"))
+        );
         assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
@@ -2761,21 +2737,27 @@ mod tests {
             None,
         );
 
-        assert!(next_actions
-            .iter()
-            .any(|action| action.contains("vida taskflow protocol-binding check")));
-        assert!(next_actions
-            .iter()
-            .any(|action| action.contains("vida taskflow consume bundle check")));
+        assert!(
+            next_actions
+                .iter()
+                .any(|action| action.contains("vida taskflow protocol-binding check"))
+        );
+        assert!(
+            next_actions
+                .iter()
+                .any(|action| action.contains("vida taskflow consume bundle check"))
+        );
         let no_target_recovery_action = next_actions
             .iter()
             .find(|action| action.contains("no validated run_id"))
             .expect("recovery readiness without target should produce no-target action");
         assert!(!no_target_recovery_action.contains("vida taskflow recovery latest"));
         assert!(!no_target_recovery_action.contains("vida taskflow consume continue"));
-        assert!(next_actions
-            .iter()
-            .any(|action| action.contains("vida task reconcile-closed-runs --limit 25")));
+        assert!(
+            next_actions
+                .iter()
+                .any(|action| action.contains("vida task reconcile-closed-runs --limit 25"))
+        );
         assert!(next_actions.iter().all(|action| !action.contains("--json")));
         assert_eq!(
             operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
@@ -2831,9 +2813,11 @@ mod tests {
             None,
         );
 
-        assert!(next_actions
-            .iter()
-            .any(|action| action.contains("vida taskflow recovery status run-doctor")));
+        assert!(
+            next_actions
+                .iter()
+                .any(|action| action.contains("vida taskflow recovery status run-doctor"))
+        );
         assert!(next_actions
             .iter()
             .any(|action| action.contains("vida taskflow consume continue --run-id run-doctor")));
@@ -2847,10 +2831,12 @@ mod tests {
         assert_eq!(evidence["status"], "no_target");
         assert_eq!(evidence["run_id"], serde_json::Value::Null);
         assert_eq!(evidence["task_id"], serde_json::Value::Null);
-        assert!(evidence["reason"]
-            .as_str()
-            .expect("reason should be string")
-            .contains("no validated run_id"));
+        assert!(
+            evidence["reason"]
+                .as_str()
+                .expect("reason should be string")
+                .contains("no validated run_id")
+        );
     }
 
     #[test]
@@ -2909,6 +2895,8 @@ mod tests {
         let (trace_evidence, blocker_codes, next_actions) = build_trace_evidence_summary(
             latest_task_reconciliation.as_ref(),
             &runtime_consumption,
+            None,
+            None,
             latest_run_graph_dispatch_receipt.as_ref(),
             &protocol_binding,
             &effective_instruction_bundle,
@@ -2944,6 +2932,8 @@ mod tests {
         let (trace_evidence, blocker_codes, next_actions) = build_trace_evidence_summary(
             latest_task_reconciliation.as_ref(),
             &runtime_consumption,
+            None,
+            None,
             None,
             &protocol_binding,
             &effective_instruction_bundle,

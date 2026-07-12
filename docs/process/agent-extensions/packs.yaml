@@ -3,117 +3,19 @@ packs:
   - pack_id: quick-two-pack
     flow_id: quick-two-pack-flow
     enabled: true
-    default: false
-    description: Fast two-role implementation cleanup pack.
-    work_item_bindings: [task, small_patch]
-    ordered_steps:
-      - role_id: coder
-        task_class: implementation
-        command_ref: agent-init-worker
-      - role_id: cleaner
-        task_class: implementation
-        command_ref: agent-init-worker
-        proof_target: agent:quick-two-pack:cleaner
-  - pack_id: spec-four-pack
-    flow_id: spec-four-pack-flow
-    enabled: true
     default: true
-    description: Specification, coding, structural cleanup, and architecture review pack.
-    work_item_bindings: [feature, requirements_change, architecture]
+    description: Fast two-role implementation cleanup pack.
+    work_item_bindings: [epic, defect, runtime_defect, pull_request, pr_repair, architecture, release_readiness, service_tui, internal_agent_development, task, debug, feature, requirements_change, review, quality_gate, small_patch]
     ordered_steps:
-      - role_id: specifier
-        task_class: specification
-        dispatch_alias: development_specification
-        command_ref: agent-init-business-analyst
       - role_id: coder
         task_class: implementation
         dispatch_alias: development_implementer
         command_ref: agent-init-worker
-      - role_id: refactorer
-        task_class: implementation
-        dispatch_alias: development_refactorer
-        command_ref: agent-init-worker
-      - role_id: architect
-        task_class: architecture
-        dispatch_alias: development_execution_preparation
-        command_ref: agent-init-solution-architect
-        proof_target: agent:spec-four-pack:architect
-  - pack_id: full-six-pack
-    flow_id: full-six-pack-flow
-    enabled: true
-    default: false
-    description: Full six-lane delivery pack with VIDA prover closure as the terminal gate.
-    work_item_bindings: [feature, requirements_change]
-    ordered_steps:
-      - role_id: specifier
-        task_class: specification
-        command_ref: agent-init-business-analyst
-      - role_id: coder
-        task_class: implementation
-        command_ref: agent-init-worker
       - role_id: cleaner
         task_class: implementation
+        dispatch_alias: development_cleaner
         command_ref: agent-init-worker
-      - role_id: architect
-        task_class: architecture
-        command_ref: agent-init-solution-architect
-      - role_id: hardender
-        task_class: quality_gate
-        command_ref: agent-init-verifier
-        receive_mode: batch
-      - role_id: qa_tester
-        task_class: verification
-        command_ref: agent-init-verifier
-      - role_id: prover
-        task_class: release_readiness
-        command_ref: agent-init-prover
-        proof_target: agent:full-six-pack:prover
-  - pack_id: adversarial-review
-    flow_id: adversarial-review-flow
-    enabled: true
-    default: false
-    description: Implementation plus adversarial review and rework before QA and proof closure.
-    work_item_bindings: [review, quality_gate]
-    ordered_steps:
-      - role_id: coder
-        task_class: implementation
-        command_ref: agent-init-worker
-      - role_id: adversarial_reviewer
-        task_class: review
-        command_ref: agent-init-coach
-      - role_id: coder
-        task_class: implementation
-        command_ref: agent-init-worker
-        step_id: adversarial-review-rework
-      - role_id: qa_tester
-        task_class: verification
-        command_ref: agent-init-verifier
-      - role_id: prover
-        task_class: release_readiness
-        command_ref: agent-init-prover
-        proof_target: agent:adversarial-review:prover
-  - pack_id: runtime-defect-pack
-    flow_id: runtime_defect_remediation
-    enabled: true
-    default: false
-    description: Runtime-defect remediation pack with specification, implementation, structural cleanup, and architecture review.
-    work_item_bindings: [runtime_defect]
-    ordered_steps:
-      - role_id: specifier
-        task_class: specification
-        command_ref: agent-init-business-analyst
-      - role_id: coder
-        task_class: implementation
-        command_ref: agent-init-worker
-      - role_id: refactorer
-        task_class: implementation
-        dispatch_alias: development_refactorer
-        command_ref: agent-init-worker
-      - role_id: architect
-        task_class: architecture
-        dispatch_alias: development_execution_preparation
-        command_ref: agent-init-solution-architect
-        proof_target: agent:runtime-defect-pack:architect
+        proof_target: agent:quick-two-pack:cleaner
 
 # -----
 # artifact_path: process/agent-extensions/packs
