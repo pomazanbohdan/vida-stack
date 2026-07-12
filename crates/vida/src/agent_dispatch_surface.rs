@@ -193,6 +193,8 @@ struct AgentDispatchNextPreview {
     carrier_selection_api: serde_json::Value,
     fanout_guard: serde_json::Value,
     flow_projection: serde_json::Value,
+    #[serde(skip_serializing)]
+    dev_team_flow_sequential: bool,
     source_surfaces: Vec<String>,
 }
 
@@ -3453,6 +3455,7 @@ fn build_agent_dispatch_next_preview_standard(
             ),
             fanout_guard,
             flow_projection,
+            dev_team_flow_sequential: false,
             source_surfaces: agent_dispatch_source_surfaces(),
         };
     };
@@ -3665,6 +3668,7 @@ fn build_agent_dispatch_next_preview_standard(
         } else {
             compact_diagnostics_omitted("flow_projection")
         },
+        dev_team_flow_sequential: false,
         source_surfaces: agent_dispatch_source_surfaces(),
     }
 }
@@ -4133,6 +4137,7 @@ fn build_agent_dispatch_next_preview_dev_team(
         ),
         fanout_guard,
         flow_projection,
+        dev_team_flow_sequential: flow_is_sequential,
         source_surfaces: agent_dispatch_source_surfaces(),
     }
 }
@@ -4376,6 +4381,7 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan_with_diagnostics(
         } else {
             compact_diagnostics_omitted("flow_projection")
         },
+        dev_team_flow_sequential: false,
         source_surfaces: agent_dispatch_source_surfaces(),
     }
 }
@@ -4992,7 +4998,7 @@ async fn materialize_agent_dispatch_next_packets(
             "selected_lane_count": preview.selected_lanes.len(),
             "materialized_lane_count": artifacts.len(),
             "sequential_dev_team_first_packet_only": preview.mode == "materialized-dev-team"
-                && preview.flow_projection["sequential"].as_bool() == Some(true),
+                && preview.dev_team_flow_sequential,
             "artifacts": artifacts,
         });
     } else {
@@ -5011,9 +5017,7 @@ async fn materialize_agent_dispatch_next_packets(
 fn agent_dispatch_materialization_lanes(
     preview: &AgentDispatchNextPreview,
 ) -> Vec<AgentDispatchLanePreview> {
-    let lane_limit = if preview.mode == "preview-dev-team"
-        && preview.flow_projection["sequential"].as_bool() == Some(true)
-    {
+    let lane_limit = if preview.mode == "preview-dev-team" && preview.dev_team_flow_sequential {
         1
     } else {
         preview.selected_lanes.len()
@@ -7300,6 +7304,7 @@ mod tests {
                     "status": "packet_ready"
                 }
             }),
+            dev_team_flow_sequential: false,
             source_surfaces: vec!["vida agent dispatch-next".to_string()],
         }
     }
@@ -7308,7 +7313,8 @@ mod tests {
     fn dev_team_materialization_lanes_are_limited_to_first_sequential_packet() {
         let mut preview = sample_agent_dispatch_next_preview();
         preview.mode = "preview-dev-team".to_string();
-        preview.flow_projection["sequential"] = serde_json::json!(true);
+        preview.flow_projection = compact_diagnostics_omitted("flow_projection");
+        preview.dev_team_flow_sequential = true;
         preview.selected_lanes = vec![
             analyst_dispatch_lane_preview("task-a"),
             coach_dispatch_lane_preview("developer", "task-a"),
@@ -7326,7 +7332,8 @@ mod tests {
     fn explicit_parallel_dev_team_materialization_keeps_all_selected_lanes() {
         let mut preview = sample_agent_dispatch_next_preview();
         preview.mode = "preview-dev-team".to_string();
-        preview.flow_projection["sequential"] = serde_json::json!(false);
+        preview.flow_projection = compact_diagnostics_omitted("flow_projection");
+        preview.dev_team_flow_sequential = false;
         preview.selected_lanes = vec![
             analyst_dispatch_lane_preview("task-a"),
             coach_dispatch_lane_preview("developer", "task-a"),
