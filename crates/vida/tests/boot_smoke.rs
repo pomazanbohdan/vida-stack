@@ -18336,6 +18336,29 @@ fn zombie_d_prepare_bridge_pending_task(
 }
 
 fn zombie_d_close_task(project_root: &str, state_dir: &str, task_id: &str, reason: &str) {
+    let (proof, proof_success) = zombie_d_json_command(
+        project_root,
+        state_dir,
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            task_id,
+            "--proof-target",
+            "zombie_d_matrix",
+            "--result",
+            "pass",
+            "--evidence",
+            "{\"matrix\":\"zombie_d_public_matrix\",\"scenarios\":[\"zero\",\"simple\",\"one\",\"many\"]}",
+            "--json",
+        ],
+        "ZOMBIE-D proof attach",
+    );
+    assert!(
+        proof_success,
+        "ZOMBIE-D proof attach should succeed before close: {proof}"
+    );
+
     let (closed, success) = zombie_d_json_command(
         project_root,
         state_dir,
