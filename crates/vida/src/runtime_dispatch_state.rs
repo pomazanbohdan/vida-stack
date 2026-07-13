@@ -22727,6 +22727,15 @@ agent_system: {}
         if let Some(provider_error) = parsed["provider_error"].as_str() {
             assert!(provider_error.contains("receipt-backed completion"));
         }
+
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should reopen");
+        let projected_status = runtime
+            .block_on(store.run_graph_status("run-activation-view-only-fast-block"))
+            .expect("blocked run-graph status should persist");
+        assert_eq!(projected_status.status, "blocked");
+        assert!(!projected_status.recovery_ready);
     }
 
     #[test]
@@ -28416,7 +28425,13 @@ pub(crate) fn apply_first_handoff_execution_to_run_graph_status(
     } else {
         "_lane"
     };
-    let (handoff_state, resume_target) = if let Some(next_target) = next_node.as_deref() {
+    let blocked_dispatch = matches!(
+        receipt.dispatch_status.as_str(),
+        "blocked" | "bridge_request_pending"
+    ) || canonical_lane_status_str(&receipt.lane_status) == Some("lane_blocked");
+    let (handoff_state, resume_target) = if blocked_dispatch {
+        ("blocked".to_string(), "none".to_string())
+    } else if let Some(next_target) = next_node.as_deref() {
         (
             format!("awaiting_{next_target}"),
             format!("dispatch.{next_target}{downstream_lane_suffix}"),
@@ -28430,7 +28445,11 @@ pub(crate) fn apply_first_handoff_execution_to_run_graph_status(
         task_class: status.task_class.clone(),
         active_node: receipt.dispatch_target.clone(),
         next_node,
-        status: "ready".to_string(),
+        status: if blocked_dispatch {
+            "blocked".to_string()
+        } else {
+            "ready".to_string()
+        },
         route_task_class: status.route_task_class.clone(),
         selected_backend: receipt
             .selected_backend
@@ -28447,7 +28466,7 @@ pub(crate) fn apply_first_handoff_execution_to_run_graph_status(
         context_state: "sealed".to_string(),
         checkpoint_kind: status.checkpoint_kind.clone(),
         resume_target,
-        recovery_ready: true,
+        recovery_ready: !blocked_dispatch,
     };
     if receipt.dispatch_kind == "taskflow_pack" {
         updated.selected_backend = "taskflow_state_store".to_string();

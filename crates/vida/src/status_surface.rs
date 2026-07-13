@@ -156,24 +156,17 @@ pub(crate) fn non_empty_str(value: &str) -> Option<&str> {
 fn effective_latest_run_graph_status(
     current_session_status: Option<crate::state_store::RunGraphStatus>,
     global_status: Option<&crate::state_store::RunGraphStatus>,
-    session_identity_ambiguous: bool,
+    current_session_identity_present: bool,
 ) -> Option<crate::state_store::RunGraphStatus> {
-    if current_session_status.is_some() || session_identity_ambiguous {
+    if current_session_status.is_some() || current_session_identity_present {
         return current_session_status;
-    }
-    if std::env::var("VIDA_SESSION_ID")
-        .ok()
-        .as_deref()
-        .and_then(non_empty_str)
-        .is_some()
-    {
-        return None;
     }
     global_status.cloned()
 }
 
 pub(crate) struct CurrentRuntimeProjection {
     pub(crate) current_session_status: Option<crate::state_store::RunGraphStatus>,
+    pub(crate) session_identity_ambiguous: bool,
     pub(crate) global_status: Option<crate::state_store::RunGraphStatus>,
     pub(crate) terminal_task_active_status: Option<crate::state_store::RunGraphStatus>,
     pub(crate) status: Option<crate::state_store::RunGraphStatus>,
@@ -188,16 +181,15 @@ pub(crate) struct CurrentRuntimeProjection {
     pub(crate) dispatch_receipt_matches_status: bool,
     pub(crate) dispatch_receipt_summary_inconsistent: bool,
     pub(crate) snapshot_inconsistent: bool,
-    pub(crate) session_identity_ambiguous: bool,
 }
 
 pub(crate) async fn current_runtime_projection(
     store: &StateStore,
 ) -> Result<CurrentRuntimeProjection, state_store::StateStoreError> {
     let current_session_status = store.latest_run_graph_status_for_current_session().await?;
+    let current_session_identity_present = store.current_session_identity_is_present()?;
     let global_status = store.latest_run_graph_status().await?;
-    let session_identity_ambiguous = store.current_session_identity_is_present()?
-        && std::env::var_os("VIDA_SESSION_ID").is_some()
+    let session_identity_ambiguous = current_session_identity_present
         && current_session_status.is_none()
         && global_status.is_some();
     let terminal_task_active_status = store.latest_terminal_task_active_run_graph_status().await?;
@@ -224,7 +216,7 @@ pub(crate) async fn current_runtime_projection(
         effective_latest_run_graph_status(
             current_session_status.clone(),
             global_status.as_ref(),
-            session_identity_ambiguous,
+            current_session_identity_present,
         );
     let status_run_id = status.as_ref().map(|status| status.run_id.as_str());
     let mut recovery = match status_run_id {
@@ -314,6 +306,7 @@ pub(crate) async fn current_runtime_projection(
 
     Ok(CurrentRuntimeProjection {
         current_session_status,
+        session_identity_ambiguous,
         global_status,
         terminal_task_active_status,
         status,
@@ -327,7 +320,6 @@ pub(crate) async fn current_runtime_projection(
         dispatch_receipt_matches_status,
         dispatch_receipt_summary_inconsistent,
         snapshot_inconsistent,
-        session_identity_ambiguous,
     })
 }
 
@@ -3456,6 +3448,8 @@ mod tests {
                 .run_id,
             "current-run"
         );
+
+        assert!(super::effective_latest_run_graph_status(None, Some(&global), true).is_none());
     }
 
     #[test]

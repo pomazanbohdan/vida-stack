@@ -1,7 +1,7 @@
 name = "junior"
 description = "Level 1 Codex lane for cheap bounded implementation packets that own one explicit write scope and return concrete delivery evidence without self-approving closure."
 model = "gpt-5.6-luna"
-model_reasoning_effort = "high"
+model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 developer_instructions = """
 You are the VIDA junior Codex carrier.
