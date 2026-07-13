@@ -3,9 +3,10 @@ use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    RenderMode, print_surface_header, print_surface_line,
+    print_surface_header, print_surface_line,
     state_store::{RunGraphContinuationBinding, RunGraphStatus, StateStore, TaskRecord},
     taskflow_task_bridge::proxy_state_dir,
+    RenderMode,
 };
 
 pub(crate) const CONSUME_CONTINUE_AFTER_DOWNSTREAM_CHAIN_BINDING_SOURCE: &str =
@@ -332,6 +333,21 @@ pub(crate) async fn sync_run_graph_continuation_binding_with_request_text(
         if explicit_task_graph_bound_task_id(&existing).is_some() {
             return Ok(Some(existing));
         }
+    }
+    if store
+        .run_graph_status_is_stale_for_task_continuation_binding(status)
+        .await
+        .map_err(|error| {
+            format!("Failed to classify stale run-graph continuation binding: {error}")
+        })?
+    {
+        store
+            .clear_run_graph_continuation_binding(&status.run_id)
+            .await
+            .map_err(|error| {
+                format!("Failed to clear stale run-graph continuation binding: {error}")
+            })?;
+        return Ok(None);
     }
     let request_text = if let Some(request_text) = request_text_override
         .map(str::trim)
@@ -935,8 +951,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_for_stale_status()
-     {
+    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_for_stale_status(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1009,8 +1025,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_after_automatic_dispatch_start()
-     {
+    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_after_automatic_dispatch_start(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1039,9 +1055,11 @@ mod tests {
                         "orchestrator_session_id": "session-current"
                     }),
                     binding_source: "explicit_continuation_bind_task".to_string(),
-                    why_this_unit: "user-directed task must survive automatic dispatch start".to_string(),
+                    why_this_unit: "user-directed task must survive automatic dispatch start"
+                        .to_string(),
                     primary_path: "normal_delivery_path".to_string(),
-                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
                     request_text: Some("continue the requested task".to_string()),
                     recorded_at: "2026-04-21T00:00:00Z".to_string(),
                 },
@@ -1049,12 +1067,11 @@ mod tests {
             .await
             .expect("persist explicit task binding");
 
-        let mut dispatch_started_status =
-            crate::taskflow_run_graph::default_run_graph_status(
-                "run-dispatch-start",
-                "coder",
-                "coder",
-            );
+        let mut dispatch_started_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-dispatch-start",
+            "coder",
+            "coder",
+        );
         dispatch_started_status.task_id = "task-same".to_string();
         dispatch_started_status.status = "blocked".to_string();
         dispatch_started_status.lifecycle_stage = "coder_blocked".to_string();
@@ -1076,6 +1093,73 @@ mod tests {
             binding.active_bounded_unit["orchestrator_session_id"],
             "session-current"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn sync_run_graph_continuation_binding_does_not_bind_closed_task_stale_run() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-continuation-sync-closed-task-stale-run-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+
+        store
+            .persist_task_record(crate::state_store::TaskRecord {
+                id: "task-closed-stale".to_string(),
+                title: "Closed stale task".to_string(),
+                status: "closed".to_string(),
+                priority: 1,
+                issue_type: "task".to_string(),
+                created_at: "2026-07-14T00:00:00Z".to_string(),
+                created_by: "test".to_string(),
+                updated_at: "2026-07-14T00:00:00Z".to_string(),
+                closed_at: Some("2026-07-14T00:01:00Z".to_string()),
+                close_reason: Some("completed".to_string()),
+                source_repo: String::new(),
+                compaction_level: 0,
+                original_size: 0,
+                description: String::new(),
+                notes: None,
+                labels: Vec::new(),
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                provider_mapping: None,
+                dependencies: Vec::new(),
+                display_id: None,
+            })
+            .await
+            .expect("persist closed stale task");
+
+        let mut stale_status = crate::taskflow_run_graph::default_run_graph_status(
+            "task-closed-stale",
+            "implementation",
+            "implementation",
+        );
+        stale_status.run_id = "run-closed-stale".to_string();
+
+        let binding =
+            sync_run_graph_continuation_binding(&store, &stale_status, "global_latest_projection")
+                .await
+                .expect("closed stale run should classify");
+
+        assert!(
+            binding.is_none(),
+            "closed stale run must not bind continuation"
+        );
+        assert!(store
+            .run_graph_continuation_binding("run-closed-stale")
+            .await
+            .expect("read closed stale binding")
+            .is_none());
 
         let _ = fs::remove_dir_all(&root);
     }

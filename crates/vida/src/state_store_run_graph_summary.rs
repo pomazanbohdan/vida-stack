@@ -1,5 +1,4 @@
 use super::*;
-use crate::RuntimeConsumptionLaneSelection;
 use crate::release1_contracts::lane_status_has_required_evidence;
 use crate::state_store::state_store_task_models::{
     task_has_label, task_is_spec_pack_child, task_is_work_pool_pack_child,
@@ -8,15 +7,15 @@ use crate::taskflow_run_graph::{
     approval_delegation_transition_kind, clear_run_graph_dispatch_init_fast_cache,
     is_dispatch_resume_handoff_done,
 };
+use crate::RuntimeConsumptionLaneSelection;
 use taskflow_authority::run_graph_evidence::{
-    RunGraphBlockedSourceLane, RunGraphCompletionEvidence, RunGraphDownstreamPacketEvidence,
-    RunGraphReworkEvidence, blocked_source_lane_from_packet_evidence,
-    downstream_handoff_ready_from_completion_evidence, normalize_run_graph_node,
-    rework_route_from_completion_evidence,
+    blocked_source_lane_from_packet_evidence, downstream_handoff_ready_from_completion_evidence,
+    normalize_run_graph_node, rework_route_from_completion_evidence, RunGraphBlockedSourceLane,
+    RunGraphCompletionEvidence, RunGraphDownstreamPacketEvidence, RunGraphReworkEvidence,
 };
 use taskflow_authority::run_graph_transition::{
-    ReadyRunGraphTransitionInput, RunGraphAuthorityInput, RunGraphDispatchTargetFormat,
-    admit_run_graph_transition, ready_run_graph_transition,
+    admit_run_graph_transition, ready_run_graph_transition, ReadyRunGraphTransitionInput,
+    RunGraphAuthorityInput, RunGraphDispatchTargetFormat,
 };
 use taskflow_core::run_graph::model::{
     DispatchReceiptSnapshot as CoreDispatchReceiptSnapshot,
@@ -2086,12 +2085,12 @@ impl StateStore {
         else {
             return Ok(None);
         };
-        let current_stable_fallback =
-            evidence["current_session"]["fallback_replaces_legacy_stable_worktree_state_hash"]
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
+        let current_stable_fallback = evidence["current_session"]
+            ["fallback_replaces_legacy_stable_worktree_state_hash"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
         let mut scope = CurrentSessionRunGraphClaimScope {
             run_ids: Vec::new(),
             task_ids: Vec::new(),
@@ -2234,12 +2233,12 @@ impl StateStore {
             .ok_or_else(|| StateStoreError::InvalidTaskRecord {
                 reason: "test run-graph claim requires current session id".to_string(),
             })?;
-        let claim_session_id =
-            current_session["fallback_replaces_legacy_stable_worktree_state_hash"]
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(current_session_id);
+        let claim_session_id = current_session
+            ["fallback_replaces_legacy_stable_worktree_state_hash"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(current_session_id);
         let worktree_environment_id = current_session["worktree_environment_id"]
             .as_str()
             .unwrap_or_else(|| self.root().to_str().unwrap_or_default())
@@ -2371,11 +2370,11 @@ impl StateStore {
             .ok_or_else(|| StateStoreError::InvalidTaskRecord {
                 reason: "run-graph mutation requires an active current session id".to_string(),
             })?;
-        let current_stable_fallback =
-            evidence["current_session"]["fallback_replaces_legacy_stable_worktree_state_hash"]
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
+        let current_stable_fallback = evidence["current_session"]
+            ["fallback_replaces_legacy_stable_worktree_state_hash"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
 
         let active_claims = self.active_orchestrator_claims().await?;
         let run_task_id = self
@@ -3976,7 +3975,10 @@ impl StateStore {
                     .run_graph_latest_receipt_row_supersedes_current_session_lane(bound_run_id)
                     .await?
             {
-                match self.run_graph_status_from_task_rows(bound_run_id, &[]).await {
+                match self
+                    .run_graph_status_from_task_rows(bound_run_id, &[])
+                    .await
+                {
                     Ok(status)
                         if !self
                             .run_graph_status_has_completed_exception_takeover_supersession(&status)
@@ -4093,15 +4095,11 @@ impl StateStore {
             )
             .await?;
         let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
-        let mut latest_terminal_task_active_run_id = None;
         for latest in rows {
             let terminal_task_active = self
                 .run_graph_latest_row_points_to_terminal_task_active(&latest)
                 .await?;
             if terminal_task_active {
-                if latest_terminal_task_active_run_id.is_none() {
-                    latest_terminal_task_active_run_id = Some(latest.run_id.clone());
-                }
                 continue;
             }
             if self
@@ -4111,9 +4109,6 @@ impl StateStore {
                 continue;
             }
             return Ok(Some(latest.run_id));
-        }
-        if let Some(run_id) = latest_terminal_task_active_run_id {
-            return Ok(Some(run_id));
         }
         let mut receipt_query = self
             .db
@@ -4134,12 +4129,17 @@ impl StateStore {
             {
                 continue;
             }
-            if self
-                .run_graph_status_from_task_rows(run_id, &[])
-                .await
-                .is_ok()
-            {
-                return Ok(Some(run_id.to_string()));
+            match self.run_graph_status_from_task_rows(run_id, &[]).await {
+                Ok(status) => {
+                    if !self
+                        .run_graph_status_points_to_terminal_task_active(&status)
+                        .await?
+                    {
+                        return Ok(Some(run_id.to_string()));
+                    }
+                }
+                Err(StateStoreError::MissingTask { .. }) => continue,
+                Err(error) => return Err(error),
             }
         }
         Ok(None)
@@ -4861,6 +4861,12 @@ impl StateStore {
         if Self::run_graph_status_is_reconciled_terminal_closure(status) {
             return Ok(true);
         }
+        if self
+            .run_graph_status_points_to_terminal_task_active(status)
+            .await?
+        {
+            return Ok(true);
+        }
         self.run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
             status, task_rows,
         )
@@ -5445,14 +5451,12 @@ mod tests {
         );
 
         let rows = vec![test_task_record("alias-task", "merged")];
-        assert!(
-            store
-                .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
-                    &status, &rows,
-                )
-                .await
-                .expect("task row lookup should succeed")
-        );
+        assert!(store
+            .run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
+                &status, &rows,
+            )
+            .await
+            .expect("task row lookup should succeed"));
 
         close_store_and_remove_root(store, root).await;
     }
@@ -5475,12 +5479,10 @@ mod tests {
         status.recovery_ready = false;
         status.policy_gate = "historical_closed_task_stale_run_retired".to_string();
 
-        assert!(
-            store
-                .run_graph_status_is_stale_for_task_continuation_binding(&status)
-                .await
-                .expect("terminal closure classifier should succeed")
-        );
+        assert!(store
+            .run_graph_status_is_stale_for_task_continuation_binding(&status)
+            .await
+            .expect("terminal closure classifier should succeed"));
 
         let mut malicious_status = status.clone();
         malicious_status.run_id = "malicious-retired-run".to_string();
@@ -5491,22 +5493,18 @@ mod tests {
         malicious_status.checkpoint_kind = "execution_cursor".to_string();
         malicious_status.recovery_ready = true;
 
-        assert!(
-            !store
-                .run_graph_status_is_stale_for_task_continuation_binding(&malicious_status)
-                .await
-                .expect("contradictory retired closure classifier should fail closed")
-        );
+        assert!(!store
+            .run_graph_status_is_stale_for_task_continuation_binding(&malicious_status)
+            .await
+            .expect("contradictory retired closure classifier should fail closed"));
 
         let mut open_status = sample_run_graph_status();
         open_status.run_id = "active-run".to_string();
         open_status.task_id = "active-runtime-task".to_string();
-        assert!(
-            !store
-                .run_graph_status_is_stale_for_task_continuation_binding(&open_status)
-                .await
-                .expect("active status classifier should succeed")
-        );
+        assert!(!store
+            .run_graph_status_is_stale_for_task_continuation_binding(&open_status)
+            .await
+            .expect("active status classifier should succeed"));
 
         close_store_and_remove_root(store, root).await;
     }
@@ -7077,13 +7075,11 @@ mod tests {
             .await
             .expect("read run graph status");
         assert_eq!(loaded.run_id, "run-read-only-owner-evidence");
-        assert!(
-            store
-                .run_graph_owner_evidence_record("run-read-only-owner-evidence", "run_graph_status")
-                .await
-                .expect("read owner evidence")
-                .is_none()
-        );
+        assert!(store
+            .run_graph_owner_evidence_record("run-read-only-owner-evidence", "run_graph_status")
+            .await
+            .expect("read owner evidence")
+            .is_none());
 
         close_store_and_remove_root(store, root).await;
     }
@@ -7108,23 +7104,19 @@ mod tests {
             .record_run_graph_status(&ownerless)
             .await
             .expect("persist ownerless run graph status");
-        assert!(
-            store
-                .run_graph_legacy_ownerless("legacy-ownerless-run")
-                .await
-                .expect("classify ownerless run")
-        );
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-ownerless-run")
+            .await
+            .expect("classify ownerless run"));
 
         store
             .record_run_graph_owner_evidence("legacy-ownerless-run", "dispatch_context")
             .await
             .expect("record owner evidence");
-        assert!(
-            !store
-                .run_graph_legacy_ownerless("legacy-ownerless-run")
-                .await
-                .expect("owner evidence should make run non-ownerless")
-        );
+        assert!(!store
+            .run_graph_legacy_ownerless("legacy-ownerless-run")
+            .await
+            .expect("owner evidence should make run non-ownerless"));
 
         let mut claimed = sample_run_graph_status();
         claimed.run_id = "legacy-claimed-run".to_string();
@@ -7133,12 +7125,10 @@ mod tests {
             .record_run_graph_status(&claimed)
             .await
             .expect("persist claim-backed run graph status");
-        assert!(
-            store
-                .run_graph_legacy_ownerless("legacy-claimed-run")
-                .await
-                .expect("classify pre-claim run")
-        );
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-claimed-run")
+            .await
+            .expect("classify pre-claim run"));
         let claim = store
             .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
                 claim_id: "legacy-claimed-run-write".to_string(),
@@ -7158,22 +7148,18 @@ mod tests {
             })
             .await
             .expect("acquire claim");
-        assert!(
-            !store
-                .run_graph_legacy_ownerless("legacy-claimed-run")
-                .await
-                .expect("claim should make run non-ownerless")
-        );
+        assert!(!store
+            .run_graph_legacy_ownerless("legacy-claimed-run")
+            .await
+            .expect("claim should make run non-ownerless"));
         store
             .release_orchestrator_claim(&claim.claim_id, claim.resource_revision, "test release")
             .await
             .expect("release claim");
-        assert!(
-            store
-                .run_graph_legacy_ownerless("legacy-claimed-run")
-                .await
-                .expect("released claim should not block ownerless classification")
-        );
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-claimed-run")
+            .await
+            .expect("released claim should not block ownerless classification"));
 
         let mut expired = sample_run_graph_status();
         expired.run_id = "legacy-expired-claim-run".to_string();
@@ -7208,12 +7194,10 @@ mod tests {
                 .expect("expire stale claims"),
             1
         );
-        assert!(
-            store
-                .run_graph_legacy_ownerless("legacy-expired-claim-run")
-                .await
-                .expect("expired claim should not block ownerless classification")
-        );
+        assert!(store
+            .run_graph_legacy_ownerless("legacy-expired-claim-run")
+            .await
+            .expect("expired claim should not block ownerless classification"));
 
         close_store_and_remove_root(store, root).await;
     }
@@ -7531,11 +7515,8 @@ mod tests {
             })
             .await
             .expect("acquire current session claim");
-        let mut binding = sample_explicit_binding(
-            "run-bound",
-            "task-bound",
-            "2026-05-21T01:00:00Z",
-        );
+        let mut binding =
+            sample_explicit_binding("run-bound", "task-bound", "2026-05-21T01:00:00Z");
         binding.binding_source = "explicit_continuation_bind_task".to_string();
         binding.active_bounded_unit = serde_json::json!({
             "kind": "task_graph_task",
@@ -7728,13 +7709,11 @@ mod tests {
                 .run_id,
             "run-foreign"
         );
-        assert!(
-            store
-                .latest_run_graph_status_for_current_session()
-                .await
-                .expect("read scoped latest")
-                .is_none()
-        );
+        assert!(store
+            .latest_run_graph_status_for_current_session()
+            .await
+            .expect("read scoped latest")
+            .is_none());
 
         let mut current_status = sample_run_graph_status();
         current_status.run_id = "run-current".to_string();
@@ -8436,8 +8415,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_explicit_continuation_binding_for_current_session_uses_current_owner_evidence_without_claim()
-     {
+    async fn latest_explicit_continuation_binding_for_current_session_uses_current_owner_evidence_without_claim(
+    ) {
         let _guard = env_lock().lock().expect("env lock should be available");
         let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
         unsafe {
@@ -8455,13 +8434,11 @@ mod tests {
             .await
             .expect("persist owner-evidence binding");
 
-        assert!(
-            store
-                .active_orchestrator_claims()
-                .await
-                .expect("read claims")
-                .is_empty()
-        );
+        assert!(store
+            .active_orchestrator_claims()
+            .await
+            .expect("read claims")
+            .is_empty());
         assert_eq!(
             store
                 .latest_explicit_run_graph_continuation_binding_for_current_session()
@@ -8521,13 +8498,11 @@ mod tests {
             .await
             .expect("persist owner-evidence binding");
 
-        assert!(
-            store
-                .active_orchestrator_claims()
-                .await
-                .expect("read claims")
-                .is_empty()
-        );
+        assert!(store
+            .active_orchestrator_claims()
+            .await
+            .expect("read claims")
+            .is_empty());
         assert_eq!(
             store
                 .latest_run_graph_status_for_current_session()
@@ -8689,8 +8664,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -9387,6 +9362,8 @@ mod tests {
 
     #[tokio::test]
     async fn latest_run_graph_status_skips_active_run_for_closed_task() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -9400,7 +9377,7 @@ mod tests {
         let labels = Vec::new();
         store
             .create_task_with_fixture_parent(CreateTaskRequest {
-                task_id: "run-active-open-task",
+                task_id: "task-active-open",
                 title: "Active open task",
                 display_id: None,
                 description: "",
@@ -9417,9 +9394,22 @@ mod tests {
             .await
             .expect("create active open task");
         store
-            .show_task("run-active-open-task")
+            .show_task("task-active-open")
             .await
             .expect("active open task should be readable");
+
+        let active = crate::taskflow_run_graph::default_run_graph_status(
+            "task-active-open",
+            "implementation",
+            "implementation",
+        );
+        let mut active = active;
+        active.run_id = "run-active-open-task".to_string();
+        store
+            .record_run_graph_status(&active)
+            .await
+            .expect("persist active open status");
+
         store
             .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "task-closed-active-run",
@@ -9439,21 +9429,12 @@ mod tests {
             .await
             .expect("create closed task");
 
-        let active = crate::taskflow_run_graph::default_run_graph_status(
-            "run-active-open-task",
-            "task-active-open",
-            "implementation",
-        );
-        store
-            .record_run_graph_status(&active)
-            .await
-            .expect("persist active open status");
-
         let mut stale = crate::taskflow_run_graph::default_run_graph_status(
-            "run-closed-active-task",
             "task-closed-active-run",
             "implementation",
+            "implementation",
         );
+        stale.run_id = "run-closed-active-task".to_string();
         stale.task_id = "task-closed-active-run".to_string();
         stale.status = "ready".to_string();
         stale.lifecycle_stage = "implementation_dispatch_ready".to_string();
@@ -9462,6 +9443,37 @@ mod tests {
             .await
             .expect("persist stale closed-task status");
 
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-requested-active-run");
+        }
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "requested-active-run-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-requested-active-run".to_string(),
+                process_id: None,
+                task_id: Some("task-active-open".to_string()),
+                run_id: Some("run-active-open-task".to_string()),
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some("task:task-active-open".to_string()),
+                owned_paths: Vec::new(),
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Observe,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire requested active run claim");
+        store
+            .record_run_graph_continuation_binding(&sample_explicit_binding(
+                "run-active-open-task",
+                "task-active-open",
+                "2026-07-14T00:00:00Z",
+            ))
+            .await
+            .expect("persist requested active run binding");
+
         let latest = store
             .latest_run_graph_status()
             .await
@@ -9469,7 +9481,56 @@ mod tests {
             .expect("open-task run should remain latest after stale closed-task run is skipped");
         assert_eq!(latest.run_id, "run-active-open-task");
 
+        let recovery = store
+            .latest_run_graph_recovery_summary()
+            .await
+            .expect("latest recovery should load")
+            .expect("latest recovery should remain on active run");
+        assert_eq!(recovery.run_id, "run-active-open-task");
+
+        let scoped = store
+            .latest_run_graph_status_for_task("task-active-open")
+            .await
+            .expect("scoped latest status should load")
+            .expect("scoped latest status should remain on active run");
+        assert_eq!(scoped.run_id, "run-active-open-task");
+
+        let current_session = store
+            .latest_run_graph_status_for_current_session()
+            .await
+            .expect("current-session latest status should load")
+            .expect("explicit requested active run should win current-session selection");
+        assert_eq!(current_session.run_id, "run-active-open-task");
+
+        let current_session_recovery = store
+            .latest_run_graph_recovery_summary_for_current_session()
+            .await
+            .expect("current-session recovery should load")
+            .expect("current-session recovery should remain on active run");
+        assert_eq!(current_session_recovery.run_id, "run-active-open-task");
+
+        let binding = store
+            .latest_explicit_run_graph_continuation_binding_for_current_session()
+            .await
+            .expect("current-session binding should load")
+            .expect("requested active run binding should remain present");
+        assert_eq!(binding.run_id, "run-active-open-task");
+
+        let terminal_evidence = store
+            .latest_terminal_task_active_run_graph_status()
+            .await
+            .expect("terminal-task-active evidence should load")
+            .expect("closed-task stale run should remain explicit evidence");
+        assert_eq!(terminal_evidence.run_id, "run-closed-active-task");
+
+        let graph_summary = store
+            .run_graph_summary()
+            .await
+            .expect("graph summary should load");
+        assert_eq!(graph_summary.execution_plan_count, 2);
+
         close_store_and_remove_root(store, root).await;
+        restore_vida_session_id(saved_session_id);
     }
 
     #[tokio::test]
@@ -9724,8 +9785,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active()
-     {
+    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10764,20 +10825,18 @@ mod tests {
             .await
             .expect("record completed explicit binding");
 
-        assert!(
-            store
-                .latest_explicit_run_graph_continuation_binding()
-                .await
-                .expect("read latest explicit binding")
-                .is_none()
-        );
+        assert!(store
+            .latest_explicit_run_graph_continuation_binding()
+            .await
+            .expect("read latest explicit binding")
+            .is_none());
 
         close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
-    async fn active_exception_takeover_reconciles_stale_continuation_binding_for_next_lawful_sources()
-     {
+    async fn active_exception_takeover_reconciles_stale_continuation_binding_for_next_lawful_sources(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -11100,8 +11159,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open()
-     {
+    async fn run_graph_continuation_binding_keeps_task_close_reconcile_fail_closed_when_run_is_open(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -11624,8 +11683,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none()
-     {
+    async fn record_run_graph_status_skips_projection_checkpoint_record_when_checkpoint_kind_is_none(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -11658,5 +11717,4 @@ mod tests {
 
         close_store_and_remove_root(store, root).await;
     }
-
 }
