@@ -451,6 +451,83 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
 }
 
 #[test]
+fn taking_epic_admits_first_ready_child_once() {
+    let fixture = PersistentRuntimeFixture::project_shell("epic-first-child-admission");
+
+    run_json_success(
+        &fixture,
+        None,
+        &[
+            "task",
+            "create",
+            "epic-admission",
+            "Epic admission",
+            "--type",
+            "epic",
+            "--priority",
+            "99",
+            "--json",
+        ],
+    );
+    for (task_id, title, priority) in [
+        ("epic-child-a", "First ready child", "1"),
+        ("epic-child-b", "Second ready child", "2"),
+    ] {
+        run_json_success(
+            &fixture,
+            None,
+            &[
+                "task",
+                "create",
+                task_id,
+                title,
+                "--parent-id",
+                "epic-admission",
+                "--priority",
+                priority,
+                "--json",
+            ],
+        );
+    }
+
+    let updated = run_json_success(
+        &fixture,
+        None,
+        &[
+            "task",
+            "update",
+            "epic-admission",
+            "--status",
+            "in_progress",
+            "--json",
+        ],
+    );
+    assert_eq!(updated["task"]["id"], "epic-admission");
+    assert_eq!(updated["task"]["status"], "in_progress");
+
+    let first_child = run_json_success(&fixture, None, &["task", "show", "epic-child-a", "--json"]);
+    let second_child = run_json_success(&fixture, None, &["task", "show", "epic-child-b", "--json"]);
+    assert_eq!(first_child["task"]["status"], "in_progress");
+    assert_eq!(second_child["task"]["status"], "open");
+
+    run_json_success(
+        &fixture,
+        None,
+        &[
+            "task",
+            "update",
+            "epic-admission",
+            "--status",
+            "in_progress",
+            "--json",
+        ],
+    );
+    let second_child_after_repeat =
+        run_json_success(&fixture, None, &["task", "show", "epic-child-b", "--json"]);
+    assert_eq!(second_child_after_repeat["task"]["status"], "open");
+}
+
+#[test]
 fn surrealkv_backup_restore_persists_rows_after_reopen() {
     let fixture = PersistentRuntimeFixture::state_only("surrealkv-backup-restore");
     let state_dir = fixture.state_dir().to_path_buf();

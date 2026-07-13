@@ -6,6 +6,26 @@ pub struct ReadyTaskSelection<'a> {
     pub active_critical_path: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EpicAdmissionChild<'a> {
+    pub task_id: &'a str,
+    pub priority: u32,
+    pub eligible: bool,
+}
+
+pub fn select_first_eligible_epic_child(children: &[EpicAdmissionChild<'_>]) -> Option<usize> {
+    children
+        .iter()
+        .enumerate()
+        .filter(|(_, child)| child.eligible)
+        .min_by(|(_, left), (_, right)| {
+            left.priority
+                .cmp(&right.priority)
+                .then_with(|| left.task_id.cmp(right.task_id))
+        })
+        .map(|(index, _)| index)
+}
+
 pub const PARALLEL_BLOCKER_NO_CURRENT_TASK_REFERENCE: &str = "no_current_task_reference";
 pub const PARALLEL_BLOCKER_CURRENT_TASK_REFERENCE: &str = "current_task_reference";
 pub const PARALLEL_BLOCKER_EXECUTION_MODE_NOT_PARALLEL_SAFE: &str =
@@ -307,6 +327,43 @@ mod tests {
             task_id,
             active_critical_path,
         }
+    }
+
+    fn admission_child(
+        task_id: &'static str,
+        priority: u32,
+        eligible: bool,
+    ) -> EpicAdmissionChild<'static> {
+        EpicAdmissionChild {
+            task_id,
+            priority,
+            eligible,
+        }
+    }
+
+    #[test]
+    fn select_first_eligible_epic_child_handles_empty_and_single_candidates() {
+        assert_eq!(select_first_eligible_epic_child(&[]), None);
+        assert_eq!(
+            select_first_eligible_epic_child(&[admission_child("child", 1, true)]),
+            Some(0)
+        );
+        assert_eq!(
+            select_first_eligible_epic_child(&[admission_child("child", 1, false)]),
+            None
+        );
+    }
+
+    #[test]
+    fn select_first_eligible_epic_child_orders_many_by_priority_then_id() {
+        let children = [
+            admission_child("z-child", 1, true),
+            admission_child("blocked-child", 0, false),
+            admission_child("a-child", 1, true),
+            admission_child("boundary-child", u32::MAX, true),
+        ];
+
+        assert_eq!(select_first_eligible_epic_child(&children), Some(2));
     }
 
     fn parallel_input<'a>(

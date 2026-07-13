@@ -8,6 +8,7 @@ use crate::task_cli_render::{
 };
 use crate::taskflow_proxy::paths_intersect;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use taskflow_core::scheduling::scheduler_dispatch::{self, EpicAdmissionChild};
 use taskflow_core::task::block::{append_task_block_note, normalize_task_block_list};
 use taskflow_core::task::dependencies::{
     parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines, TaskDependencyBulkEdge,
@@ -5945,6 +5946,63 @@ fn append_release_proof_template_targets(mut proof_targets: Vec<String>) -> Vec<
 
 fn parse_optional_label_value(value: Option<&str>) -> Option<Vec<String>> {
     taskflow_core::task::update::parse_optional_label_value(value)
+}
+
+async fn admit_first_eligible_epic_child(
+    store: &StateStore,
+    previous_task: &state_store::TaskRecord,
+    admitted_task: &state_store::TaskRecord,
+) -> Result<Option<state_store::TaskRecord>, StateStoreError> {
+    if previous_task.status == "in_progress"
+        || admitted_task.status != "in_progress"
+        || !state_store::work_item_is_program_container(&admitted_task.issue_type)
+    {
+        return Ok(None);
+    }
+
+    let rows = store.all_tasks().await?;
+    let ready_tasks = StateStore::ready_tasks_scoped_from_rows(&rows, Some(&admitted_task.id))?;
+    let ready_ids = ready_tasks
+        .iter()
+        .map(|task| task.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let children = rows
+        .iter()
+        .filter(|task| {
+            StateStore::parent_id_for_task(task).as_deref() == Some(admitted_task.id.as_str())
+        })
+        .map(|task| EpicAdmissionChild {
+            task_id: task.id.as_str(),
+            priority: task.priority,
+            eligible: task.status == "open" && ready_ids.contains(task.id.as_str()),
+        })
+        .collect::<Vec<_>>();
+    let Some(selected_index) = scheduler_dispatch::select_first_eligible_epic_child(&children)
+    else {
+        return Ok(None);
+    };
+
+    let selected_task_id = children[selected_index].task_id;
+    store
+        .update_task(state_store::UpdateTaskRequest {
+            task_id: selected_task_id,
+            title: None,
+            status: Some("in_progress"),
+            priority: None,
+            notes: None,
+            description: None,
+            parent_id: None,
+            add_labels: &[],
+            remove_labels: &[],
+            set_labels: None,
+            execution_mode: None,
+            order_bucket: None,
+            parallel_group: None,
+            conflict_domain: None,
+            planner_metadata: None,
+        })
+        .await
+        .map(Some)
 }
 
 fn task_update_planner_metadata_requested(command: &crate::TaskUpdateArgs) -> bool {
@@ -15234,23 +15292,22 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 };
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => {
+                    let previous_task = match store.show_task(&command.task_id).await {
+                        Ok(task) => task,
+                        Err(error) => {
+                            eprintln!("Failed to read task before update: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
                     let planner_metadata = if task_update_planner_metadata_requested(&command) {
-                        match store.show_task(&command.task_id).await {
-                            Ok(existing) => match task_update_planner_metadata_arg(
-                                &existing.planner_metadata,
-                                &command,
-                            ) {
-                                Ok(planner_metadata) => planner_metadata,
-                                Err(error) => {
-                                    eprintln!("{error}");
-                                    return ExitCode::from(2);
-                                }
-                            },
+                        match task_update_planner_metadata_arg(
+                            &previous_task.planner_metadata,
+                            &command,
+                        ) {
+                            Ok(planner_metadata) => planner_metadata,
                             Err(error) => {
-                                eprintln!(
-                                    "Failed to read task before planner metadata update: {error}"
-                                );
-                                return ExitCode::from(1);
+                                eprintln!("{error}");
+                                return ExitCode::from(2);
                             }
                         }
                     } else {
@@ -15277,6 +15334,13 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         .await
                     {
                         Ok(task) => {
+                            if let Err(error) =
+                                admit_first_eligible_epic_child(&store, &previous_task, &task)
+                                    .await
+                            {
+                                eprintln!("Failed to admit first eligible epic child: {error}");
+                                return ExitCode::from(1);
+                            }
                             if let Err(code) =
                                 refresh_task_snapshot_after_mutation(&store, "vida task update")
                                     .await
