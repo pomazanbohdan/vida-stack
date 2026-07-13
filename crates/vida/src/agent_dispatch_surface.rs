@@ -192,6 +192,7 @@ struct AgentDispatchNextPreview {
     packet_materialization: serde_json::Value,
     carrier_selection_api: serde_json::Value,
     fanout_guard: serde_json::Value,
+    dev_team_flow_sequential: bool,
     flow_projection: serde_json::Value,
     source_surfaces: Vec<String>,
 }
@@ -2547,6 +2548,18 @@ fn compact_diagnostics_omitted(diagnostic: &str) -> serde_json::Value {
     })
 }
 
+fn with_canonical_dev_team_sequential_truth(
+    mut flow_projection: serde_json::Value,
+    sequential: bool,
+) -> serde_json::Value {
+    if let Some(object) = flow_projection.as_object_mut() {
+        object.insert("sequential".to_string(), serde_json::json!(sequential));
+    } else {
+        flow_projection = serde_json::json!({"sequential": sequential});
+    }
+    flow_projection
+}
+
 fn maybe_build_parallelization_planner(
     include_diagnostics: bool,
     projection: &state_store::TaskSchedulingProjection,
@@ -3452,6 +3465,7 @@ fn build_agent_dispatch_next_preview_standard(
                 activation_bundle,
             ),
             fanout_guard,
+            dev_team_flow_sequential: false,
             flow_projection,
             source_surfaces: agent_dispatch_source_surfaces(),
         };
@@ -3660,6 +3674,7 @@ fn build_agent_dispatch_next_preview_standard(
             activation_bundle,
         ),
         fanout_guard,
+        dev_team_flow_sequential: false,
         flow_projection: if include_diagnostics {
             non_dev_team_flow_projection()
         } else {
@@ -4024,19 +4039,22 @@ fn build_agent_dispatch_next_preview_dev_team(
                 vec!["graph_blocked".to_string()],
             ));
         }
-        let flow_projection = if include_diagnostics && current_task_absent_from_scheduler {
-            suppressed_current_task_flow_projection(&blocker_codes)
-        } else if include_diagnostics {
-            build_dev_team_flow_projection(
-                activation_bundle,
-                selected_flow_id,
-                &sequence,
-                &selected_lanes,
-                &blocker_codes,
-            )
-        } else {
-            compact_diagnostics_omitted("flow_projection")
-        };
+        let flow_projection = with_canonical_dev_team_sequential_truth(
+            if include_diagnostics && current_task_absent_from_scheduler {
+                suppressed_current_task_flow_projection(&blocker_codes)
+            } else if include_diagnostics {
+                build_dev_team_flow_projection(
+                    activation_bundle,
+                    selected_flow_id,
+                    &sequence,
+                    &selected_lanes,
+                    &blocker_codes,
+                )
+            } else {
+                compact_diagnostics_omitted("flow_projection")
+            },
+            flow_is_sequential,
+        );
         let fanout_guard = maybe_build_fanout_guard_from_projection(
             include_diagnostics,
             projection,
@@ -4071,6 +4089,7 @@ fn build_agent_dispatch_next_preview_dev_team(
                 activation_bundle,
             ),
             fanout_guard,
+            dev_team_flow_sequential: flow_is_sequential,
             flow_projection,
             source_surfaces: agent_dispatch_source_surfaces(),
         };
@@ -4250,19 +4269,22 @@ fn build_agent_dispatch_next_preview_dev_team(
     }
 
     let status = agent_dispatch_status_from_blockers(&blocker_codes);
-    let mut flow_projection = if include_diagnostics && current_task_absent_from_scheduler {
-        suppressed_current_task_flow_projection(&blocker_codes)
-    } else if include_diagnostics {
-        build_dev_team_flow_projection(
-            activation_bundle,
-            selected_flow_id,
-            &sequence,
-            &selected_lanes,
-            &blocker_codes,
-        )
-    } else {
-        compact_diagnostics_omitted("flow_projection")
-    };
+    let mut flow_projection = with_canonical_dev_team_sequential_truth(
+        if include_diagnostics && current_task_absent_from_scheduler {
+            suppressed_current_task_flow_projection(&blocker_codes)
+        } else if include_diagnostics {
+            build_dev_team_flow_projection(
+                activation_bundle,
+                selected_flow_id,
+                &sequence,
+                &selected_lanes,
+                &blocker_codes,
+            )
+        } else {
+            compact_diagnostics_omitted("flow_projection")
+        },
+        flow_is_sequential,
+    );
     if let Some(result) = zombie_d_gate_result {
         if let Some(flow_projection) = flow_projection.as_object_mut() {
             flow_projection.insert("zombie_d_gate".to_string(), result);
@@ -4326,6 +4348,7 @@ fn build_agent_dispatch_next_preview_dev_team(
             activation_bundle,
         ),
         fanout_guard,
+        dev_team_flow_sequential: flow_is_sequential,
         flow_projection,
         source_surfaces: agent_dispatch_source_surfaces(),
     }
@@ -4565,6 +4588,7 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan_with_diagnostics(
             activation_bundle,
         ),
         fanout_guard,
+        dev_team_flow_sequential: false,
         flow_projection: if include_diagnostics {
             non_dev_team_flow_projection()
         } else {
@@ -5186,7 +5210,7 @@ async fn materialize_agent_dispatch_next_packets(
             "selected_lane_count": preview.selected_lanes.len(),
             "materialized_lane_count": artifacts.len(),
             "sequential_dev_team_first_packet_only": preview.mode == "materialized-dev-team"
-                && preview.flow_projection["sequential"].as_bool() == Some(true),
+                && preview.dev_team_flow_sequential,
             "artifacts": artifacts,
         });
     } else {
@@ -5206,7 +5230,7 @@ fn agent_dispatch_materialization_lanes(
     preview: &AgentDispatchNextPreview,
 ) -> Vec<AgentDispatchLanePreview> {
     let lane_limit = if preview.mode == "preview-dev-team"
-        && preview.flow_projection["sequential"].as_bool() == Some(true)
+        && preview.dev_team_flow_sequential
     {
         1
     } else {
@@ -5452,6 +5476,7 @@ fn agent_dispatch_next_compact_payload(preview: &AgentDispatchNextPreview) -> se
         "execute_supported": preview.execute_supported,
         "execution_attempted": preview.execution_attempted,
         "flow_projection": {
+            "sequential": preview.dev_team_flow_sequential,
             "current_step": preview.flow_projection
                 .get("current_step")
                 .cloned()
@@ -7484,6 +7509,7 @@ mod tests {
             }),
             carrier_selection_api: serde_json::json!({"large_diagnostic": "carrier"}),
             fanout_guard: serde_json::json!({"large_diagnostic": "fanout"}),
+            dev_team_flow_sequential: true,
             flow_projection: serde_json::json!({
                 "large_diagnostic": "flow",
                 "current_step": {
@@ -7502,7 +7528,8 @@ mod tests {
     fn dev_team_materialization_lanes_are_limited_to_first_sequential_packet() {
         let mut preview = sample_agent_dispatch_next_preview();
         preview.mode = "preview-dev-team".to_string();
-        preview.flow_projection["sequential"] = serde_json::json!(true);
+        preview.dev_team_flow_sequential = true;
+        preview.flow_projection["sequential"] = serde_json::json!(false);
         preview.selected_lanes = vec![
             analyst_dispatch_lane_preview("task-a"),
             coach_dispatch_lane_preview("developer", "task-a"),
@@ -7520,7 +7547,8 @@ mod tests {
     fn explicit_parallel_dev_team_materialization_keeps_all_selected_lanes() {
         let mut preview = sample_agent_dispatch_next_preview();
         preview.mode = "preview-dev-team".to_string();
-        preview.flow_projection["sequential"] = serde_json::json!(false);
+        preview.dev_team_flow_sequential = false;
+        preview.flow_projection["sequential"] = serde_json::json!(true);
         preview.selected_lanes = vec![
             analyst_dispatch_lane_preview("task-a"),
             coach_dispatch_lane_preview("developer", "task-a"),
@@ -7559,6 +7587,7 @@ mod tests {
         assert_eq!(payload["output_contract"]["view"], "compact");
         assert_eq!(payload["output_contract"]["full_output_flag"], "--full");
         assert_eq!(payload["blocked_candidate_count"], 1);
+        assert_eq!(payload["flow_projection"]["sequential"], true);
         assert!(payload.get("blocked_candidates").is_none());
         assert!(payload.get("parallelization_planner").is_none());
         assert!(payload.get("carrier_selection_api").is_none());
