@@ -2089,6 +2089,26 @@ fn scheduler_reservation_acquire_requests(
         .collect()
 }
 
+async fn scheduler_reservation_lease_credentials(
+    store: &crate::state_store::StateStore,
+    reservation_id: &str,
+) -> Result<(String, String), String> {
+    let reservation = store
+        .scheduler_dispatch_reservation(reservation_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to read persisted scheduler reservation `{reservation_id}` credentials: {error}"
+            )
+        })?
+        .ok_or_else(|| {
+            format!(
+                "persisted scheduler reservation `{reservation_id}` is missing before lifecycle mutation"
+            )
+        })?;
+    Ok((reservation.lease_owner, reservation.lease_token))
+}
+
 struct SchedulerPacketDispatchResult {
     run_id: String,
     command: String,
@@ -2132,9 +2152,13 @@ async fn scheduler_execute_packet_backed_dispatch(
             ));
         }
     }
+    let (lease_owner, lease_token) =
+        scheduler_reservation_lease_credentials(&store, reservation_id).await?;
     store
-        .mark_scheduler_dispatch_reservation_executing(
+        .mark_scheduler_dispatch_reservation_executing_checked(
             reservation_id,
+            &lease_owner,
+            &lease_token,
             Some(run_id.as_str()),
             "packet_dispatch_launching",
         )
@@ -2186,9 +2210,13 @@ async fn scheduler_execute_packet_backed_dispatch(
         .map_err(|error| {
             format!("failed to open scheduler packet dispatch store after launch: {error}")
         })?;
+    let (lease_owner, lease_token) =
+        scheduler_reservation_lease_credentials(&store, reservation_id).await?;
     store
-        .release_scheduler_dispatch_reservation_with_blockers(
+        .release_scheduler_dispatch_reservation_with_blockers_checked(
             reservation_id,
+            &lease_owner,
+            &lease_token,
             &execute_status,
             &blocker_codes,
         )
@@ -2378,9 +2406,14 @@ async fn persist_scheduler_execute_receipt(
                         .map_err(|error| {
                             format!("failed to open scheduler reservation store after packet dispatch failure: {error}")
                         })?;
+                    let (lease_owner, lease_token) =
+                        scheduler_reservation_lease_credentials(&store, &reservation.reservation_id)
+                            .await?;
                     store
-                        .release_scheduler_dispatch_reservation_with_blockers(
+                        .release_scheduler_dispatch_reservation_with_blockers_checked(
                             &reservation.reservation_id,
+                            &lease_owner,
+                            &lease_token,
                             "packet_dispatch_failed",
                             &reservation.activation_blocker_codes,
                         )
@@ -2420,9 +2453,14 @@ async fn persist_scheduler_execute_receipt(
                 "worker_execution_evidence_status": "not_received",
                 "worker_completion_claimed": false,
             }));
+            let (lease_owner, lease_token) =
+                scheduler_reservation_lease_credentials(&store, &reservation.reservation_id)
+                    .await?;
             store
-                .release_scheduler_dispatch_reservation_with_blockers(
+                .release_scheduler_dispatch_reservation_with_blockers_checked(
                     &reservation.reservation_id,
+                    &lease_owner,
+                    &lease_token,
                     &blocked_status,
                     &reservation.activation_blocker_codes,
                 )
@@ -10986,6 +11024,111 @@ mod tests {
             .next_actions
             .iter()
             .any(|action| { action.contains("execution is not attempted") }));
+    }
+
+    #[tokio::test]
+    async fn scheduler_execute_releases_persisted_reservation_after_dispatch_preparation_failure()
+    {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-scheduler-lease-regression-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open scheduler lease regression store");
+        let task_id = "scheduler-lease-regression-task";
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Scheduler lease regression task",
+                display_id: None,
+                description: "Exercise scheduler dispatch preparation cleanup.",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("create scheduler lease regression task");
+
+        let scheduling = store
+            .scheduling_projection_scoped(None, Some(task_id))
+            .await
+            .expect("build scheduler lease regression projection");
+        let mut plan = super::build_taskflow_scheduler_dispatch_plan(
+            scheduling,
+            1,
+            None,
+            None,
+            Some(task_id),
+            None,
+            &root,
+            false,
+            true,
+        );
+        let reservation_id = plan.reservations[0].reservation_id.clone();
+        drop(store);
+        super::persist_scheduler_execute_receipt(&mut plan, &root)
+            .await
+            .expect("scheduler dispatch preparation should release its reservation");
+
+        let store = crate::state_store::StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen scheduler lease regression store");
+        let reservation = store
+            .scheduler_dispatch_reservation(&reservation_id)
+            .await
+            .expect("read released scheduler reservation")
+            .expect("released scheduler reservation should remain persisted");
+        assert_eq!(reservation.lease_status, "released");
+        assert_eq!(
+            reservation.release_reason.as_deref(),
+            Some(reservation.execute_status.as_str())
+        );
+        assert!(
+            store
+                .active_scheduler_dispatch_reservations()
+                .await
+                .expect("read active scheduler reservations")
+                .is_empty(),
+            "dispatch-preparation cleanup must leave no stale active reservation"
+        );
+
+        for error in [
+            store
+                .mark_scheduler_dispatch_reservation_executing(
+                    &reservation_id,
+                    Some("run-unauthenticated"),
+                    "executing",
+                )
+                .await
+                .expect_err("legacy execute mutator should fail closed"),
+            store
+                .heartbeat_scheduler_dispatch_reservation(&reservation_id)
+                .await
+                .expect_err("legacy heartbeat mutator should fail closed"),
+            store
+                .release_scheduler_dispatch_reservation(&reservation_id, "retry")
+                .await
+                .expect_err("legacy release mutator should fail closed"),
+        ] {
+            assert!(error
+                .to_string()
+                .contains("scheduler_reservation_lease_credentials_required"));
+        }
+
+        drop(store);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
