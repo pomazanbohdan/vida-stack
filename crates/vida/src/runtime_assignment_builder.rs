@@ -1109,10 +1109,7 @@ fn write_scope_allows_write_task_class(
     external_backend_readiness: Option<&serde_json::Value>,
 ) -> bool {
     let normalized = write_scope.trim().to_ascii_lowercase();
-    if matches!(
-        normalized.as_str(),
-        "" | "none" | "read-only" | "read_only" | "readonly" | "readorreview" | "read_or_review"
-    ) {
+    if write_scope_is_readonly(&normalized) {
         return false;
     }
 
@@ -1145,10 +1142,12 @@ fn isolation_requires_readonly_scope(isolation: &str) -> bool {
 
 fn write_scope_is_readonly(write_scope: &str) -> bool {
     let normalized = write_scope.trim().to_ascii_lowercase();
-    matches!(
-        normalized.as_str(),
-        "" | "none" | "read-only" | "read_only" | "readonly" | "readorreview" | "read_or_review"
-    )
+    normalized.is_empty()
+        || matches!(
+            normalized.as_str(),
+            "none" | "read-only" | "read_only" | "readonly" | "readorreview"
+        )
+        || normalized.starts_with("read_or_")
 }
 
 fn isolation_allows_write_scope(isolation: &str, write_scope: &str) -> bool {
