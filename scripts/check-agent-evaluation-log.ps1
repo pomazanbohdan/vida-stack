@@ -81,6 +81,17 @@ function Get-ScorecardSections {
     return $sections
 }
 
+function Get-SourceCalendarDate {
+    param([string]$Timestamp)
+
+    $match = [regex]::Match($Timestamp, "^(?<date>\d{4}-\d{2}-\d{2})(?:T|\s|$)")
+    if (-not $match.Success) {
+        throw "updated_at '$Timestamp' must start with an ISO calendar date."
+    }
+
+    return [datetime]::ParseExact($match.Groups["date"].Value, "yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture).Date
+}
+
 function Test-ScorecardSection {
     param([object]$Section)
 
@@ -197,7 +208,7 @@ if (-not (Test-Path -LiteralPath $fullPath)) {
         } else {
             $latestSectionDate = [datetime]::ParseExact($sections[-1].date, "yyyy-MM-dd", [System.Globalization.CultureInfo]::InvariantCulture)
             $updatedDateText = $updatedAtMatch.Groups["value"].Value
-            $updatedDate = [datetime]::Parse($updatedDateText, [System.Globalization.CultureInfo]::InvariantCulture)
+            $updatedDate = Get-SourceCalendarDate $updatedDateText
             if ($updatedDate.Date -lt $latestSectionDate.Date) {
                 $issues.Add((New-CheckIssue "stale_updated_at" "updated_at '$updatedDateText' is older than latest scorecard date '$($sections[-1].date)'."))
             }
