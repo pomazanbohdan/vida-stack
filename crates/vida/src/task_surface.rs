@@ -10,22 +10,23 @@ use crate::taskflow_proxy::paths_intersect;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use taskflow_core::task::block::{append_task_block_note, normalize_task_block_list};
 use taskflow_core::task::dependencies::{
-    TaskDependencyBulkEdge, parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines,
+    parse_task_dependency_bulk_edges, task_dependency_bulk_edge_lines, TaskDependencyBulkEdge,
 };
 use taskflow_core::task::import_export::{
-    TaskImportJsonlSummary, TaskReplaceJsonlSummary, task_import_jsonl_success_fields,
-    task_replace_jsonl_success_fields,
+    task_import_jsonl_success_fields, task_replace_jsonl_success_fields, TaskImportJsonlSummary,
+    TaskReplaceJsonlSummary,
 };
 use taskflow_core::task::progress::{
-    TaskProgressRow, TaskProgressSummary as CoreTaskProgressSummary, parse_task_progress_basis,
-    task_progress_summary_from_rows as core_task_progress_summary_from_rows,
+    parse_task_progress_basis,
+    task_progress_summary_from_rows as core_task_progress_summary_from_rows, TaskProgressRow,
+    TaskProgressSummary as CoreTaskProgressSummary,
 };
 use taskflow_core::task::verify::{
-    TaskBrowserProofArtifact, all_structured_task_proof_targets_satisfied,
-    append_task_browser_proof_note, append_task_proof_evidence_note, append_task_verify_note,
-    canonical_task_proof_result, normalized_task_verify_evidence,
-    structured_task_proof_evidence_match, task_browser_proof_target,
-    task_reports_runtime_proof_blocker, task_verify_labels,
+    all_structured_task_proof_targets_satisfied, append_task_browser_proof_note,
+    append_task_proof_evidence_note, append_task_verify_note, canonical_task_proof_result,
+    normalized_task_verify_evidence, structured_task_proof_evidence_match,
+    task_browser_proof_target, task_reports_runtime_proof_blocker, task_verify_labels,
+    TaskBrowserProofArtifact,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -34,6 +35,125 @@ struct TaskReplaceJsonlContinuationSummary {
     run_id: Option<String>,
     task_id: Option<String>,
     binding_source: Option<String>,
+}
+
+#[cfg(test)]
+mod task_tree_repeat_provenance_tests {
+    use super::*;
+
+    #[test]
+    fn classifies_repeat_kinds_by_edge_provenance() {
+        assert_eq!(
+            task_tree_repeat_kind("blocks", false, true, false),
+            Some("dependency_revisit")
+        );
+        assert_eq!(
+            task_tree_repeat_kind("parent-child", false, true, false),
+            Some("parent_revisit")
+        );
+        assert_eq!(
+            task_tree_repeat_kind("blocks", true, false, false),
+            Some("cycle")
+        );
+        assert_eq!(
+            task_tree_repeat_kind("blocks", false, true, true),
+            Some("duplicate_record")
+        );
+    }
+
+    #[test]
+    fn repeat_count_excludes_harmless_dependency_revisits() {
+        let entries = vec![
+            task_tree_repeat_entry("dependency_revisit", "dependency", "blocks", "root"),
+            task_tree_repeat_entry("parent_revisit", "child", "parent-child", "root"),
+            task_tree_repeat_entry("duplicate_record", "duplicate", "blocks", "root"),
+        ];
+        let provenance = task_tree_repeat_provenance_value(&entries);
+
+        assert_eq!(provenance["repeat_count"], 2);
+        assert_eq!(provenance["traversal_repeat_count"], 3);
+        assert_eq!(provenance["harmless_dependency_revisit_count"], 1);
+        assert!(provenance["explanation"]
+            .as_str()
+            .expect("repeat explanation")
+            .contains("dependency_revisit_excluded=1"));
+    }
+}
+
+#[cfg(test)]
+mod task_query_batch_tests {
+    use super::*;
+
+    fn task(id: &str, title: &str, status: &str, issue_type: &str) -> state_store::TaskRecord {
+        state_store::TaskRecord {
+            id: id.to_string(),
+            display_id: None,
+            title: title.to_string(),
+            description: String::new(),
+            status: status.to_string(),
+            priority: 2,
+            issue_type: issue_type.to_string(),
+            created_at: "1".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "1".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: String::new(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: vec!["searchable".to_string()],
+            execution_semantics: state_store::TaskExecutionSemantics::default(),
+            planner_metadata: state_store::TaskPlannerMetadata::default(),
+            provider_mapping: None,
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn multi_query_deduplicates_rows_and_keeps_match_reasons() {
+        let result = filter_task_rows_for_query_batch(
+            vec![
+                task("task-1", "alpha", "open", "defect"),
+                task("task-1", "beta", "open", "defect"),
+                task("task-2", "gamma", "open", "task"),
+            ],
+            None,
+            false,
+            "alpha||beta",
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(result.tasks.len(), 1);
+        assert_eq!(result.tasks[0].id, "task-1");
+        assert_eq!(result.matched_query_ids.len(), 2);
+        assert_eq!(result.match_reasons["task-1"].len(), 2);
+    }
+
+    #[test]
+    fn structured_query_clauses_match_as_one_predicate() {
+        let result = filter_task_rows_for_query_batch(
+            vec![task("task-1", "alpha", "open", "defect")],
+            None,
+            false,
+            "status:open;issue_type:defect",
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(result.tasks.len(), 1);
+        assert_eq!(result.query_specs.len(), 1);
+        assert_eq!(
+            result.match_reasons["task-1"],
+            vec![
+                "query[1]:status".to_string(),
+                "query[1]:issue_type".to_string()
+            ]
+        );
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -985,6 +1105,7 @@ struct TaskPackFinalizeReceipt {
     tasks: Vec<TaskPackFinalizeTaskResult>,
     reconcile_summary: Option<serde_json::Value>,
     orchestrator_init: serde_json::Value,
+    post_close_diagnostics: serde_json::Value,
     blocker_codes: Vec<String>,
     next_actions: Vec<String>,
     artifact_refs: serde_json::Value,
@@ -2652,6 +2773,22 @@ async fn run_task_pack_finalize(command: TaskPackFinalizeArgs) -> ExitCode {
     };
 
     let orchestrator_init = task_pack_finalize_orchestrator_init(&state_dir, explicit_state_dir);
+    let post_close_diagnostics = match crate::diagnostics_surface::build_post_commit_diagnostics(
+        state_dir.clone(),
+    )
+    .await
+    {
+        Ok(payload) => payload,
+        Err(error) => serde_json::json!({
+            "surface": "vida diagnostics post-commit",
+            "status": "blocked",
+            "blocker_codes": ["post_close_diagnostic_failed"],
+            "next_actions": [
+                "Rerun `vida diagnostics post-commit --json` and resolve the reported diagnostic error before treating pack-finalize as complete."
+            ],
+            "error": error,
+        }),
+    };
     let mut blocker_codes = task_results
         .iter()
         .flat_map(|task| task.blocker_codes.iter().cloned())
@@ -2667,6 +2804,22 @@ async fn run_task_pack_finalize(command: TaskPackFinalizeArgs) -> ExitCode {
     }
     if orchestrator_init["status"].as_str() == Some("blocked") {
         blocker_codes.insert("orchestrator_init_blocked".to_string());
+    }
+    if post_close_diagnostics["status"].as_str() != Some("pass") {
+        if let Some(codes) = post_close_diagnostics["blocker_codes"].as_array() {
+            blocker_codes.extend(
+                codes
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string),
+            );
+        }
+        if post_close_diagnostics["blocker_codes"]
+            .as_array()
+            .is_none_or(Vec::is_empty)
+        {
+            blocker_codes.insert("post_close_diagnostic_blocked".to_string());
+        }
     }
     let blocker_codes = blocker_codes.into_iter().collect::<Vec<_>>();
     let finalized_count = task_results.iter().filter(|task| task.closed).count();
@@ -2686,6 +2839,14 @@ async fn run_task_pack_finalize(command: TaskPackFinalizeArgs) -> ExitCode {
                 .to_string(),
         );
     }
+    if let Some(actions) = post_close_diagnostics["next_actions"].as_array() {
+        next_actions.extend(
+            actions
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string),
+        );
+    }
     let status = if blocker_codes.is_empty() {
         task_json_success_status().to_string()
     } else {
@@ -2702,6 +2863,7 @@ async fn run_task_pack_finalize(command: TaskPackFinalizeArgs) -> ExitCode {
         tasks: task_results,
         reconcile_summary,
         orchestrator_init,
+        post_close_diagnostics,
         blocker_codes,
         next_actions,
         artifact_refs: serde_json::json!({
@@ -2950,12 +3112,10 @@ async fn run_task_export_jsonl(command: TaskExportJsonlArgs) -> ExitCode {
 }
 
 fn task_import_jsonl_error_payload(path: &str, error: &str) -> serde_json::Value {
-    let blocker_codes = vec![
-        crate::release1_contracts::blocker_code_value(
-            crate::release1_contracts::BlockerCode::DependencyGraphIssues,
-        )
-        .unwrap_or_else(|| "dependency_graph_issues".to_string()),
-    ];
+    let blocker_codes = vec![crate::release1_contracts::blocker_code_value(
+        crate::release1_contracts::BlockerCode::DependencyGraphIssues,
+    )
+    .unwrap_or_else(|| "dependency_graph_issues".to_string())];
     let retry_command =
         operator_output::command_text::human_command("vida task import-jsonl <path> --json");
     let next_actions = vec![format!(
@@ -3475,6 +3635,286 @@ pub(crate) async fn task_dependency_tree_read_only(
     }
 }
 
+fn task_tree_repeat_kind(
+    edge_type: &str,
+    cycle: bool,
+    repeated: bool,
+    duplicate_record: bool,
+) -> Option<&'static str> {
+    if cycle {
+        Some("cycle")
+    } else if duplicate_record {
+        Some("duplicate_record")
+    } else if repeated {
+        if edge_type == "parent-child" {
+            Some("parent_revisit")
+        } else {
+            Some("dependency_revisit")
+        }
+    } else {
+        None
+    }
+}
+
+fn task_tree_repeat_entry(
+    repeat_kind: &str,
+    item_id: &str,
+    edge_type: &str,
+    path: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "repeat_kind": repeat_kind,
+        "id": item_id,
+        "edge_type": edge_type,
+        "path": path,
+        "drill_down": format!("vida task tree {item_id} --json"),
+    })
+}
+
+fn task_tree_work_item_kind_value(issue_type: &str) -> serde_json::Value {
+    serde_json::to_value(crate::state_store::task_work_item_kind(issue_type))
+        .expect("work item kind should serialize")
+}
+
+fn task_tree_optional_work_item_kind_value(issue_type: Option<&str>) -> serde_json::Value {
+    issue_type.map_or(serde_json::Value::Null, task_tree_work_item_kind_value)
+}
+
+fn task_tree_json_value(
+    tree: &state_store::TaskDependencyTreeNode,
+    include_full: bool,
+    progress: Option<&state_store::TaskProgressSummary>,
+    entries: &mut Vec<serde_json::Value>,
+    path: &str,
+    include_provenance: bool,
+) -> serde_json::Value {
+    let mut dependency_seen = BTreeSet::new();
+    let dependencies = tree
+        .dependencies
+        .iter()
+        .enumerate()
+        .map(|(index, edge)| {
+            let duplicate_record = !dependency_seen.insert((
+                edge.edge_type.clone(),
+                edge.depends_on_id.clone(),
+            ));
+            let repeat_kind = task_tree_repeat_kind(
+                &edge.edge_type,
+                edge.cycle,
+                edge.repeated,
+                duplicate_record,
+            );
+            if let Some(repeat_kind) = repeat_kind {
+                entries.push(task_tree_repeat_entry(
+                    repeat_kind,
+                    &edge.depends_on_id,
+                    &edge.edge_type,
+                    &format!("{path}.dependencies[{index}]"),
+                ));
+            }
+            let mut value = serde_json::json!({
+                "id": edge.depends_on_id,
+                "status": edge.dependency_status,
+                "issue_type": edge.dependency_issue_type,
+                "work_item_kind": task_tree_optional_work_item_kind_value(edge.dependency_issue_type.as_deref()),
+                "edge_type": edge.edge_type,
+                "missing": edge.missing,
+                "cycle": edge.cycle,
+                "repeated": edge.repeated,
+                "repeat_kind": repeat_kind,
+            });
+            if include_full {
+                if let Some(node) = edge.node.as_deref() {
+                    value["node"] = task_tree_json_value(
+                        node,
+                        true,
+                        None,
+                        entries,
+                        &format!("{path}.dependencies[{index}].node"),
+                        false,
+                    );
+                } else {
+                    value["node"] = serde_json::Value::Null;
+                }
+            }
+            value
+        })
+        .collect::<Vec<_>>();
+
+    let mut child_seen = BTreeSet::new();
+    let children = tree
+        .children
+        .iter()
+        .enumerate()
+        .map(|(index, child)| {
+            let duplicate_record = !child_seen.insert(child.child_id.clone());
+            let repeat_kind = task_tree_repeat_kind(
+                "parent-child",
+                child.cycle,
+                child.repeated,
+                duplicate_record,
+            );
+            if let Some(repeat_kind) = repeat_kind {
+                entries.push(task_tree_repeat_entry(
+                    repeat_kind,
+                    &child.child_id,
+                    "parent-child",
+                    &format!("{path}.children[{index}]"),
+                ));
+            }
+            let mut value = serde_json::json!({
+                "id": child.child_id,
+                "display_id": child.child_display_id,
+                "title": child.child_title,
+                "status": child.child_status,
+                "priority": child.child_priority,
+                "issue_type": child.child_issue_type,
+                "work_item_kind": task_tree_optional_work_item_kind_value(child.child_issue_type.as_deref()),
+                "labels": child.child_labels,
+                "missing": child.missing,
+                "cycle": child.cycle,
+                "repeated": child.repeated,
+                "repeat_kind": repeat_kind,
+            });
+            if include_full {
+                if let Some(node) = child.node.as_deref() {
+                    value["node"] = task_tree_json_value(
+                        node,
+                        true,
+                        None,
+                        entries,
+                        &format!("{path}.children[{index}].node"),
+                        false,
+                    );
+                } else {
+                    value["node"] = serde_json::Value::Null;
+                }
+            }
+            value
+        })
+        .collect::<Vec<_>>();
+
+    let mut tree_value = serde_json::json!({
+        "root": {
+            "id": tree.task.id,
+            "status": tree.task.status,
+            "title": tree.task.title,
+            "priority": tree.task.priority,
+            "issue_type": tree.task.issue_type,
+            "work_item_kind": task_tree_work_item_kind_value(&tree.task.issue_type),
+        },
+        "root_task_id": tree.task.id,
+        "dependency_count": tree.dependencies.len(),
+        "child_count": tree.children.len(),
+        "dependencies": dependencies,
+        "children": children,
+        "tree_depth": if include_full { "recursive_full" } else { "immediate_edges_only" },
+        "view": if include_full { "full" } else { "summary" },
+        "diagnostics": {
+            "cycle_count": tree.dependencies.iter().filter(|edge| edge.cycle).count()
+                + tree.children.iter().filter(|child| child.cycle).count(),
+            "missing_count": tree.dependencies.iter().filter(|edge| edge.missing).count()
+                + tree.children.iter().filter(|child| child.missing).count(),
+            "repeated_count": tree.dependencies.iter().filter(|edge| edge.repeated).count()
+                + tree.children.iter().filter(|child| child.repeated).count(),
+            "bounded": true,
+        },
+        "drill_down": "run vida task tree <task-id> on a listed dependency or child for the next bounded slice",
+    });
+    if include_provenance {
+        tree_value["repeat_provenance"] = task_tree_repeat_provenance_value(entries);
+    }
+    if let Some(summary) = progress {
+        tree_value["progress"] = serde_json::json!({
+            "progress_basis": summary.progress_basis,
+            "direct_child_count": summary.direct_child_count,
+            "descendant_count": summary.descendant_count,
+            "closed_count": summary.closed_count,
+            "open_count": summary.open_count,
+            "in_progress_count": summary.in_progress_count,
+            "remaining_count": summary.open_count + summary.in_progress_count,
+            "percent_closed": summary.percent_closed,
+        });
+    }
+    tree_value
+}
+
+fn task_tree_repeat_provenance_value(entries: &[serde_json::Value]) -> serde_json::Value {
+    let mut counts = BTreeMap::<String, usize>::new();
+    let mut refs = Vec::new();
+    let mut dependency_revisit_count = 0usize;
+    let mut counted_repeat_count = 0usize;
+    for entry in entries {
+        if let Some(kind) = entry.get("repeat_kind").and_then(serde_json::Value::as_str) {
+            *counts.entry(kind.to_string()).or_default() += 1;
+            if kind == "dependency_revisit" {
+                dependency_revisit_count += 1;
+            } else {
+                counted_repeat_count += 1;
+            }
+        }
+        if let Some(drill_down) = entry.get("drill_down").and_then(serde_json::Value::as_str) {
+            refs.push(drill_down.to_string());
+        }
+    }
+    let summary = counts
+        .iter()
+        .map(|(kind, count)| format!("{kind}={count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let explanation = if entries.is_empty() {
+        "No repeat nodes detected in this bounded tree view.".to_string()
+    } else {
+        format!(
+            "repeat_count={counted_repeat_count}; dependency_revisit_excluded={dependency_revisit_count}; kinds={summary}; drill-down refs: {}",
+            refs.join(", ")
+        )
+    };
+    serde_json::json!({
+        "repeat_count": counted_repeat_count,
+        "traversal_repeat_count": entries.len(),
+        "harmless_dependency_revisit_count": dependency_revisit_count,
+        "repeat_kinds": counts,
+        "explanation": explanation,
+        "drill_down_refs": refs,
+        "entries": entries,
+    })
+}
+
+fn print_task_tree_with_repeat_provenance(
+    tree: &state_store::TaskDependencyTreeNode,
+    include_full: bool,
+    progress: Option<&state_store::TaskProgressSummary>,
+) {
+    let mut entries = Vec::new();
+    let tree_value = task_tree_json_value(tree, include_full, progress, &mut entries, "root", true);
+    let repeat_provenance = task_tree_repeat_provenance_value(&entries);
+    let mut tree_value = tree_value;
+    tree_value["repeat_provenance"] = repeat_provenance.clone();
+    tree_value["diagnostics"]["repeated_count"] = repeat_provenance["repeat_count"].clone();
+    tree_value["diagnostics"]["traversal_repeat_count"] =
+        repeat_provenance["traversal_repeat_count"].clone();
+    let payload =
+        crate::task_cli_render::build_pass_operator_surface_payload("vida task tree", tree_value);
+    crate::print_json_pretty(&payload);
+}
+
+fn print_task_tree_repeat_provenance_line(
+    tree: &state_store::TaskDependencyTreeNode,
+    include_full: bool,
+) {
+    let mut entries = Vec::new();
+    task_tree_json_value(tree, include_full, None, &mut entries, "root", false);
+    let provenance = task_tree_repeat_provenance_value(&entries);
+    println!(
+        "repeat_summary\t{}",
+        provenance
+            .get("explanation")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("No repeat nodes detected in this bounded tree view.")
+    );
+}
+
 async fn task_progress_summary_read_only(
     state_dir: &std::path::Path,
     task_id: &str,
@@ -3640,6 +4080,358 @@ fn task_query_filter_matches(task: &state_store::TaskRecord, query: Option<&str>
     .any(|value| value.to_ascii_lowercase().contains(&query))
 }
 
+#[derive(Debug, Clone)]
+struct TaskQueryClause {
+    raw: String,
+    field: Option<String>,
+    value: String,
+}
+
+#[derive(Debug, Clone)]
+struct TaskQuerySpec {
+    raw: String,
+    clauses: Vec<TaskQueryClause>,
+}
+
+#[derive(Debug, Clone)]
+struct TaskQueryBatchResult {
+    tasks: Vec<state_store::TaskRecord>,
+    match_reasons: BTreeMap<String, Vec<String>>,
+    matched_query_ids: BTreeMap<usize, Vec<String>>,
+    query_specs: Vec<TaskQuerySpec>,
+}
+
+fn parse_task_query_batch(query: &str) -> Vec<TaskQuerySpec> {
+    let mut specs = Vec::new();
+    for group in query.split("||") {
+        let group = group.trim();
+        if group.is_empty() {
+            continue;
+        }
+        let groups = if !group.contains(':') && group.contains(',') {
+            group.split(',').map(str::trim).collect::<Vec<_>>()
+        } else {
+            vec![group]
+        };
+        for raw_spec in groups {
+            let raw_spec = raw_spec.trim();
+            if raw_spec.is_empty() {
+                continue;
+            }
+            let clauses = raw_spec
+                .split(';')
+                .map(str::trim)
+                .filter(|clause| !clause.is_empty())
+                .map(|clause| {
+                    let (field, value) = clause
+                        .split_once(':')
+                        .map(|(field, value)| {
+                            (Some(field.trim().to_ascii_lowercase()), value.trim())
+                        })
+                        .unwrap_or((None, clause));
+                    TaskQueryClause {
+                        raw: clause.to_string(),
+                        field,
+                        value: value.to_string(),
+                    }
+                })
+                .collect::<Vec<_>>();
+            if !clauses.is_empty() {
+                specs.push(TaskQuerySpec {
+                    raw: raw_spec.to_string(),
+                    clauses,
+                });
+            }
+        }
+    }
+    specs
+}
+
+fn task_query_batch_needs_compact_projection(query: Option<&str>) -> bool {
+    let Some(query) = query.map(str::trim).filter(|query| !query.is_empty()) else {
+        return false;
+    };
+    let specs = parse_task_query_batch(query);
+    specs.len() > 1
+        || specs
+            .iter()
+            .any(|spec| spec.clauses.iter().any(|clause| clause.field.is_some()))
+}
+
+fn task_query_text_match_reason(task: &state_store::TaskRecord, value: &str) -> Option<String> {
+    let value = value.to_ascii_lowercase();
+    [
+        ("id", task.id.as_str()),
+        ("title", task.title.as_str()),
+        ("description", task.description.as_str()),
+        ("notes", task.notes.as_deref().unwrap_or("")),
+    ]
+    .into_iter()
+    .find(|(_, field_value)| field_value.to_ascii_lowercase().contains(&value))
+    .map(|(field, _)| format!("text:{field}"))
+}
+
+fn task_query_clause_match_reason(
+    task: &state_store::TaskRecord,
+    clause: &TaskQueryClause,
+) -> Option<String> {
+    let value = clause.value.trim();
+    let value_lower = value.to_ascii_lowercase();
+    match clause.field.as_deref() {
+        None => task_query_text_match_reason(task, value),
+        Some("id") => task
+            .id
+            .to_ascii_lowercase()
+            .contains(&value_lower)
+            .then(|| "id".to_string()),
+        Some("title") => task
+            .title
+            .to_ascii_lowercase()
+            .contains(&value_lower)
+            .then(|| "title".to_string()),
+        Some("description") => task
+            .description
+            .to_ascii_lowercase()
+            .contains(&value_lower)
+            .then(|| "description".to_string()),
+        Some("notes") => task
+            .notes
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .contains(&value_lower)
+            .then(|| "notes".to_string()),
+        Some("status") => task
+            .status
+            .eq_ignore_ascii_case(value)
+            .then(|| "status".to_string()),
+        Some("issue_type") | Some("type") => {
+            (state_store::canonical_work_item_issue_type(&task.issue_type)
+                == state_store::canonical_work_item_issue_type(value))
+            .then(|| "issue_type".to_string())
+        }
+        Some("parent") | Some("parent_id") => {
+            task_parent_filter_matches(task, Some(value)).then(|| "parent_id".to_string())
+        }
+        Some("label") | Some("labels") => task
+            .labels
+            .iter()
+            .any(|label| label.eq_ignore_ascii_case(value))
+            .then(|| "label".to_string()),
+        Some("closed") => {
+            let expected = matches!(value_lower.as_str(), "1" | "true" | "yes" | "closed");
+            (StateStore::task_status_is_closed_like(&task.status) == expected)
+                .then(|| "closed".to_string())
+        }
+        Some(_) => task_query_text_match_reason(task, &clause.raw),
+    }
+}
+
+fn task_query_spec_match_reasons(
+    task: &state_store::TaskRecord,
+    spec: &TaskQuerySpec,
+) -> Option<Vec<String>> {
+    let mut reasons = Vec::new();
+    for clause in &spec.clauses {
+        reasons.push(task_query_clause_match_reason(task, clause)?);
+    }
+    Some(reasons)
+}
+
+fn filter_task_rows_for_query_batch(
+    rows: Vec<state_store::TaskRecord>,
+    status: Option<&str>,
+    include_all: bool,
+    query: &str,
+    issue_type: Option<&str>,
+    parent_id: Option<&str>,
+    limit: Option<usize>,
+) -> TaskQueryBatchResult {
+    let query_specs = parse_task_query_batch(query);
+    let mut tasks = Vec::new();
+    let mut match_reasons = BTreeMap::<String, Vec<String>>::new();
+    let mut matched_query_ids = BTreeMap::<usize, Vec<String>>::new();
+    let mut seen_ids = BTreeSet::new();
+    for task in rows.into_iter().filter(|task| {
+        task_row_visible_by_closed_policy(task, status, include_all)
+            && task_status_filter_matches(task, status)
+            && task_issue_type_filter_matches(task, issue_type)
+            && task_parent_filter_matches(task, parent_id)
+    }) {
+        let mut reasons = Vec::new();
+        for (query_index, spec) in query_specs.iter().enumerate() {
+            if let Some(spec_reasons) = task_query_spec_match_reasons(&task, spec) {
+                reasons.extend(
+                    spec_reasons
+                        .into_iter()
+                        .map(|reason| format!("query[{}]:{reason}", query_index + 1)),
+                );
+                matched_query_ids
+                    .entry(query_index)
+                    .or_default()
+                    .push(task.id.clone());
+            }
+        }
+        if reasons.is_empty() || !seen_ids.insert(task.id.clone()) {
+            if !reasons.is_empty() {
+                let entry = match_reasons.entry(task.id.clone()).or_default();
+                entry.extend(reasons);
+            }
+            continue;
+        }
+        match_reasons.insert(task.id.clone(), reasons);
+        tasks.push(task);
+        if let Some(limit) = limit {
+            if tasks.len() >= limit {
+                break;
+            }
+        }
+    }
+    TaskQueryBatchResult {
+        tasks,
+        match_reasons,
+        matched_query_ids,
+        query_specs,
+    }
+}
+
+fn task_query_parent_id(task: &state_store::TaskRecord) -> Option<String> {
+    task.dependencies
+        .iter()
+        .find(|dependency| dependency.edge_type == "parent-child")
+        .map(|dependency| dependency.depends_on_id.clone())
+}
+
+fn task_query_compact_row(
+    task: &state_store::TaskRecord,
+    full: bool,
+    fields: Option<&str>,
+    match_reasons: &[String],
+) -> serde_json::Value {
+    let mut row = if full {
+        serde_json::to_value(task).expect("task row should serialize")
+    } else {
+        serde_json::json!({
+            "id": task.id,
+            "display_id": task.display_id,
+            "status": task.status,
+            "title": task.title,
+            "priority": task.priority,
+            "issue_type": task.issue_type,
+            "work_item_kind": serde_json::to_value(state_store::task_work_item_kind(&task.issue_type)).expect("work item kind should serialize"),
+            "parent_id": task_query_parent_id(task),
+        })
+    };
+    row["match_reasons"] = serde_json::json!(match_reasons);
+    operator_output::toon_report::select_fields(row, fields)
+}
+
+fn print_task_query_batch(
+    command: &TaskListLikeInput<'_>,
+    tasks: &TaskQueryBatchResult,
+    metadata: &TaskReadMetadata,
+) {
+    let full = command.view == "full";
+    let rows = tasks
+        .tasks
+        .iter()
+        .map(|task| {
+            task_query_compact_row(
+                task,
+                full,
+                command.fields,
+                tasks.match_reasons.get(&task.id).map_or(&[], Vec::as_slice),
+            )
+        })
+        .collect::<Vec<_>>();
+    let diagnostics_opt_in = full
+        || command.fields.is_some_and(|fields| {
+            fields
+                .split(',')
+                .any(|field| field.trim() == "query_diagnostics")
+        });
+    let diagnostics = tasks
+        .query_specs
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            let matched_ids = tasks
+                .matched_query_ids
+                .get(&index)
+                .cloned()
+                .unwrap_or_default();
+            serde_json::json!({
+                "query": spec.raw,
+                "match_count": matched_ids.len(),
+                "matched_task_ids": matched_ids,
+            })
+        })
+        .collect::<Vec<_>>();
+    let overlap_count = tasks
+        .matched_query_ids
+        .values()
+        .flatten()
+        .fold(BTreeMap::<&str, usize>::new(), |mut counts, task_id| {
+            *counts.entry(task_id.as_str()).or_default() += 1;
+            counts
+        })
+        .values()
+        .filter(|count| **count > 1)
+        .count();
+    let mut extra = serde_json::json!({
+        "state_access": task_read_metadata_value(Some(metadata)),
+        "query_mode": "multi",
+        "query_count": tasks.query_specs.len(),
+        "task_count": rows.len(),
+        "deduplicated_task_count": rows.len(),
+        "overlap_count": overlap_count,
+        "tasks": rows,
+    });
+    if diagnostics_opt_in {
+        extra["query_diagnostics"] = serde_json::json!(diagnostics);
+    }
+    let payload =
+        crate::task_cli_render::build_pass_operator_surface_payload(command.surface, extra.clone());
+    if crate::surface_render::print_surface_json(
+        &payload,
+        command.json,
+        "multi-query task list should render as json",
+    ) {
+        return;
+    }
+    if matches!(command.render, crate::RenderMode::Plain) {
+        println!(
+            "{}",
+            taskflow_format_toon::render_value_section(command.surface, &extra)
+        );
+        return;
+    }
+    print_surface_header(command.render, command.surface);
+    print_surface_line(command.render, "state access", metadata.mode);
+    if metadata.degraded {
+        print_surface_line(command.render, "degraded read", "yes");
+    }
+    print_surface_line(
+        command.render,
+        "query count",
+        &tasks.query_specs.len().to_string(),
+    );
+    print_surface_line(command.render, "task count", &rows.len().to_string());
+    for task in &tasks.tasks {
+        println!(
+            "{}\t{}\t{}\t{}",
+            task.id,
+            task.status,
+            task.title,
+            tasks
+                .match_reasons
+                .get(&task.id)
+                .map(|reasons| reasons.join(","))
+                .unwrap_or_default()
+        );
+    }
+}
+
 fn task_issue_type_filter_matches(
     task: &state_store::TaskRecord,
     issue_type: Option<&str>,
@@ -3688,8 +4480,26 @@ struct TaskListLikeInput<'a> {
 }
 
 async fn run_task_list_like(command: TaskListLikeInput<'_>) -> ExitCode {
-    match task_list_authoritative_first(command.state_dir, command.status, command.all).await {
+    match task_list_authoritative_first(command.state_dir.clone(), command.status, command.all)
+        .await
+    {
         Ok((tasks, metadata)) => {
+            if let Some(query) = command
+                .query
+                .filter(|query| task_query_batch_needs_compact_projection(Some(*query)))
+            {
+                let query_batch = filter_task_rows_for_query_batch(
+                    tasks,
+                    command.status,
+                    command.all,
+                    query,
+                    command.issue_type,
+                    command.parent_id,
+                    command.limit,
+                );
+                print_task_query_batch(&command, &query_batch, &metadata);
+                return ExitCode::SUCCESS;
+            }
             let tasks = filter_task_rows_for_operator(
                 tasks,
                 command.status,
@@ -4629,9 +5439,30 @@ fn task_close_result_payload(
     } else {
         "pass"
     };
+    let next_action = next_actions.first().cloned();
+    let epic_progress_summary = epic_progress_summary.map(|summary| {
+        let mut value = serde_json::to_value(summary)
+            .expect("task close epic progress summary should serialize");
+        if summary.scope != "all_epics" {
+            if let Some(epics) = value
+                .get_mut("epics")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for epic in epics {
+                    if let Some(object) = epic.as_object_mut() {
+                        object.remove("tasks");
+                    }
+                }
+            }
+        }
+        value
+    });
     serde_json::json!({
         "status": status,
         "closed": true,
+        "closed_task_id": task.id,
+        "proof_verdict": if task.status == "closed" { "pass" } else { "blocked" },
+        "next_action": next_action,
         "continuation_blocked": continuation_blocked,
         "automation_blocked": automation_blocked,
         "feedback_blocked": feedback_blocked,
@@ -4641,7 +5472,7 @@ fn task_close_result_payload(
         "host_agent_telemetry": telemetry,
         "automation": automation,
         "epic_progress_summary": epic_progress_summary,
-        "parent_epic_progress": epic_progress_summary,
+        "parent_epic_progress": epic_progress_summary.clone(),
     })
 }
 
@@ -4666,6 +5497,47 @@ fn print_task_close_epic_progress_summary(
                 epic.closed_count, epic.total_count, epic.percent_closed
             ),
         );
+    }
+}
+
+fn print_task_close_compact_default(
+    render: RenderMode,
+    task: &state_store::TaskRecord,
+    automation: Option<&TaskCloseAutomationReceipt>,
+    telemetry_feedback_blocker: Option<&(Vec<String>, Vec<String>)>,
+    epic_progress_summary: Option<&TaskCloseEpicProgressSummary>,
+) {
+    let automation_blocked = task_close_automation_is_blocked(automation);
+    let next_action = telemetry_feedback_blocker
+        .and_then(|(_, actions)| actions.first())
+        .or_else(|| automation.and_then(|receipt| receipt.next_actions.first()));
+    print_surface_header(render, "vida task close");
+    print_surface_line(
+        render,
+        "status",
+        if automation_blocked {
+            "blocked"
+        } else {
+            "pass"
+        },
+    );
+    print_surface_line(render, "closed task", &task.id);
+    print_surface_line(
+        render,
+        "proof",
+        if task.status == "closed" {
+            "pass"
+        } else {
+            "blocked"
+        },
+    );
+    print_surface_line(
+        render,
+        "next",
+        next_action.map(String::as_str).unwrap_or("No next action."),
+    );
+    if let Some(summary) = epic_progress_summary {
+        print_task_close_epic_progress_summary(render, summary);
     }
 }
 
@@ -4904,6 +5776,45 @@ fn resolve_optional_text_arg(
     file_path: Option<&std::path::Path>,
 ) -> Result<Option<String>, String> {
     taskflow_core::task::note::resolve_optional_text_arg(label, direct, file_path)
+}
+
+fn task_note_append_input_error(
+    task_id: &str,
+    reason: impl Into<String>,
+    as_json: bool,
+) -> ExitCode {
+    let corrected_command = format!(
+        "vida task note append {} --message <MESSAGE>",
+        crate::shell_quote(task_id)
+    );
+    let reason = reason.into();
+    let next_action = format!(
+        "Use the canonical form `{corrected_command}` and provide one non-empty message source."
+    );
+    let payload = crate::release1_operator_output::Release1OperatorOutputBuilder::new(
+        "vida task note append",
+    )
+    .blocker_codes(vec!["tool_contract_incomplete".to_string()])
+    .next_actions(vec![next_action.clone()])
+    .artifact_refs(serde_json::json!({
+        "surface": "vida task note append",
+        "task_id": task_id,
+        "corrected_command": corrected_command,
+    }))
+    .extra_fields(serde_json::json!({
+        "task_id": task_id,
+        "reason": reason,
+        "corrected_command": corrected_command,
+    }))
+    .build()
+    .expect("task note append input error should satisfy operator contract");
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        eprintln!("Task note append input error: {reason}");
+        eprintln!("Next action: {next_action}");
+    }
+    ExitCode::from(2)
 }
 
 fn task_execution_semantics_from_create_args(
@@ -12054,12 +12965,10 @@ fn task_attempt_store_error_payload(
 ) -> serde_json::Value {
     task_attempt_operator_payload(
         surface,
-        vec![
-            crate::release1_contracts::blocker_code_str(
-                crate::release1_contracts::BlockerCode::ProjectActivationUnknown,
-            )
-            .to_string(),
-        ],
+        vec![crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::ProjectActivationUnknown,
+        )
+        .to_string()],
         vec![
             "Run `vida project-activator` or `vida boot` before recording task attempts."
                 .to_string(),
@@ -12146,12 +13055,10 @@ fn task_attempt_artifact_error_payload(
     }
     task_attempt_operator_payload(
         surface,
-        vec![
-            crate::release1_contracts::blocker_code_str(
-                crate::release1_contracts::BlockerCode::DispatchPacketContractInvalid,
-            )
-            .to_string(),
-        ],
+        vec![crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::DispatchPacketContractInvalid,
+        )
+        .to_string()],
         vec![next_action],
         artifact_refs,
         serde_json::json!({
@@ -12842,44 +13749,43 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         let task_id_was_requested = requested_task_id
                             .as_ref()
                             .is_some_and(|value| !value.trim().is_empty());
-                        let (status_override, lane_source) = if let Some(run_id) =
-                            command.run_id.as_deref()
-                        {
-                            match store.run_graph_status(run_id).await {
-                                Ok(status) => (Some(status), Some("run_id")),
-                                Err(error) => {
-                                    eprintln!("Failed to inspect run graph status: {error}");
-                                    return ExitCode::from(1);
+                        let (status_override, lane_source) =
+                            if let Some(run_id) = command.run_id.as_deref() {
+                                match store.run_graph_status(run_id).await {
+                                    Ok(status) => (Some(status), Some("run_id")),
+                                    Err(error) => {
+                                        eprintln!("Failed to inspect run graph status: {error}");
+                                        return ExitCode::from(1);
+                                    }
                                 }
-                            }
-                        } else if let Some(task_id) = requested_task_id
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                        {
-                            match store.latest_run_graph_status_for_task(task_id).await {
-                                Ok(status) => (status, Some("task_id")),
-                                Err(error) => {
-                                    eprintln!(
+                            } else if let Some(task_id) = requested_task_id
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                            {
+                                match store.latest_run_graph_status_for_task(task_id).await {
+                                    Ok(status) => (status, Some("task_id")),
+                                    Err(error) => {
+                                        eprintln!(
                                         "Failed to inspect task-scoped run graph status: {error}"
                                     );
-                                    return ExitCode::from(1);
+                                        return ExitCode::from(1);
+                                    }
                                 }
-                            }
-                        } else {
-                            let current = store
-                                .latest_run_graph_status_for_current_session()
-                                .await
-                                .ok()
-                                .flatten();
-                            match current {
-                                Some(status) => (Some(status), Some("current_session")),
-                                None => (
-                                    store.latest_run_graph_status().await.ok().flatten(),
-                                    Some("latest"),
-                                ),
-                            }
-                        };
+                            } else {
+                                let current = store
+                                    .latest_run_graph_status_for_current_session()
+                                    .await
+                                    .ok()
+                                    .flatten();
+                                match current {
+                                    Some(status) => (Some(status), Some("current_session")),
+                                    None => (
+                                        store.latest_run_graph_status().await.ok().flatten(),
+                                        Some("latest"),
+                                    ),
+                                }
+                            };
                         let Some(task_id) = requested_task_id
                             .filter(|value| !value.trim().is_empty())
                             .or_else(|| {
@@ -14430,23 +15336,40 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
         }
         TaskCommand::Note(command) => match command.command {
             TaskNoteCommand::Append(command) => {
+                let message_sources = usize::from(command.positional_message.is_some())
+                    + usize::from(command.message.is_some())
+                    + usize::from(command.message_file.is_some());
+                if message_sources > 1 {
+                    return task_note_append_input_error(
+                        &command.task_id,
+                        "provide exactly one of a positional message, --message, or --message-file",
+                        command.json,
+                    );
+                }
                 let state_dir = command
                     .state_dir
                     .clone()
                     .unwrap_or_else(state_store::default_state_dir);
-                let message = match resolve_optional_text_arg(
-                    "message",
-                    command.message.as_deref(),
-                    command.message_file.as_deref(),
-                ) {
+                let message_result = if let Some(message) = command.positional_message {
+                    Ok(Some(message))
+                } else {
+                    resolve_optional_text_arg(
+                        "message",
+                        command.message.as_deref(),
+                        command.message_file.as_deref(),
+                    )
+                };
+                let message = match message_result {
                     Ok(Some(message)) if !message.trim().is_empty() => message.trim().to_string(),
                     Ok(_) => {
-                        eprintln!("A non-empty --message or --message-file value is required");
-                        return ExitCode::from(2);
+                        return task_note_append_input_error(
+                            &command.task_id,
+                            "a non-empty message source is required",
+                            command.json,
+                        );
                     }
                     Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(2);
+                        return task_note_append_input_error(&command.task_id, error, command.json);
                     }
                 };
                 match StateStore::open_existing(state_dir).await {
@@ -14792,6 +15715,42 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         }
                     };
                     let inheritance_rows = store.list_tasks(None, true).await.ok();
+                    if let Some(project_root) = project_root.as_deref() {
+                        let zombie_d_result = crate::zombie_d_gate::evaluate_from_project_root(
+                            Some(project_root),
+                            &preclose_task,
+                            "closure",
+                        );
+                        if let Some(payload) = crate::zombie_d_gate::close_block_payload(
+                            &preclose_task,
+                            &zombie_d_result,
+                        ) {
+                            if command.json {
+                                crate::print_json_pretty(&payload);
+                            } else {
+                                print_surface_header(command.render, "vida task close");
+                                print_surface_line(command.render, "status", "blocked");
+                                print_surface_line(command.render, "task", &preclose_task.id);
+                                for blocker in payload["blocker_codes"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(serde_json::Value::as_str)
+                                {
+                                    print_surface_line(command.render, "blocker", blocker);
+                                }
+                                for action in payload["next_actions"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(serde_json::Value::as_str)
+                                {
+                                    print_surface_line(command.render, "next", action);
+                                }
+                            }
+                            return ExitCode::from(1);
+                        }
+                    }
                     if let Some(payload) = task_close_structured_proof_gate_payload(
                         &preclose_task,
                         inheritance_rows.as_deref(),
@@ -14946,59 +15905,13 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                 );
                                 crate::print_json_pretty(&payload);
                             } else {
-                                print_task_mutation(
+                                print_task_close_compact_default(
                                     command.render,
-                                    "vida task close",
                                     &task,
-                                    false,
+                                    automation.as_ref(),
+                                    telemetry_feedback_blocker.as_ref(),
+                                    epic_progress_summary.as_ref(),
                                 );
-                                let telemetry_status = telemetry
-                                    .get("status")
-                                    .and_then(serde_json::Value::as_str)
-                                    .unwrap_or("unknown");
-                                let telemetry_reason = telemetry
-                                    .get("reason")
-                                    .and_then(serde_json::Value::as_str)
-                                    .unwrap_or("");
-                                let telemetry_summary = if telemetry_reason.is_empty() {
-                                    telemetry_status.to_string()
-                                } else {
-                                    format!("{telemetry_status}: {telemetry_reason}")
-                                };
-                                print_surface_line(
-                                    command.render,
-                                    "host agent telemetry",
-                                    &telemetry_summary,
-                                );
-                                if let Some((blocker_codes, _)) = &telemetry_feedback_blocker {
-                                    print_surface_line(
-                                        command.render,
-                                        "telemetry blockers",
-                                        &blocker_codes.join(", "),
-                                    );
-                                }
-                                if let Some((_, next_actions)) = &telemetry_feedback_blocker {
-                                    for action in next_actions {
-                                        print_surface_line(command.render, "next", action);
-                                    }
-                                }
-                                if let Some(automation) = &automation {
-                                    print_surface_line(
-                                        command.render,
-                                        "automation",
-                                        &automation.status,
-                                    );
-                                    if !automation.blocker_codes.is_empty() {
-                                        print_surface_line(
-                                            command.render,
-                                            "automation blockers",
-                                            &automation.blocker_codes.join(", "),
-                                        );
-                                    }
-                                }
-                                if let Some(summary) = &epic_progress_summary {
-                                    print_task_close_epic_progress_summary(command.render, summary);
-                                }
                             }
                             if task_close_automation_is_blocked(automation.as_ref()) {
                                 ExitCode::from(1)
@@ -15369,13 +16282,22 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     } else {
                         None
                     };
-                    print_task_dependency_tree(
-                        command.render,
-                        &tree,
-                        command.full,
-                        progress.as_ref(),
-                        command.json,
-                    );
+                    if command.json {
+                        print_task_tree_with_repeat_provenance(
+                            &tree,
+                            command.full,
+                            progress.as_ref(),
+                        );
+                    } else {
+                        print_task_dependency_tree(
+                            command.render,
+                            &tree,
+                            command.full,
+                            progress.as_ref(),
+                            false,
+                        );
+                        print_task_tree_repeat_provenance_line(&tree, command.full);
+                    }
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -15738,8 +16660,6 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        ADAPTIVE_REPLAN_FINDING_KINDS, TaskCloseAutomationReceipt, TaskContinuationCandidate,
-        TaskProofAttachBrowserReceipt, TaskProofAttachEvidenceReceipt,
         blocked_runtime_recovery_task_next_lawful_receipt, blocked_task_next_lawful_receipt,
         build_adaptive_replan_finding_preview, build_spawn_blocker_preview,
         build_split_mutation_preview, canonical_json_string_array_entries,
@@ -15770,19 +16690,21 @@ mod tests {
         task_owned_status_receipt, task_parent_id, task_progress_summary_for_basis,
         task_ready_authoritative_first, task_takeover_status_default_lines,
         task_takeover_status_receipt, task_update_planner_metadata_arg,
-        validate_task_handoff_accept_receipt,
+        validate_task_handoff_accept_receipt, TaskCloseAutomationReceipt,
+        TaskContinuationCandidate, TaskProofAttachBrowserReceipt, TaskProofAttachEvidenceReceipt,
+        ADAPTIVE_REPLAN_FINDING_KINDS,
     };
     use crate::state_store;
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::EnvVarGuard;
     use crate::test_cli_support::cli;
     use crate::test_cli_support::guard_current_dir;
+    use crate::test_cli_support::EnvVarGuard;
     use std::fs;
     use std::process::Command;
     use std::process::ExitCode;
     use taskflow_core::task::verify::{
+        append_task_browser_proof_note, task_browser_proof_target, TaskBrowserProofArtifact,
         TASK_BROWSER_PROOF_ARTIFACT_SCHEMA_VERSION, TASK_BROWSER_PROOF_NOTE_SCHEMA_VERSION,
-        TaskBrowserProofArtifact, append_task_browser_proof_note, task_browser_proof_target,
     };
 
     #[test]
@@ -16508,11 +17430,9 @@ mod tests {
             plan.result.validation_errors[0].field.as_deref(),
             Some("parent_id")
         );
-        assert!(
-            plan.result.validation_errors[0]
-                .reason
-                .contains("requires parent_id")
-        );
+        assert!(plan.result.validation_errors[0]
+            .reason
+            .contains("requires parent_id"));
         assert_eq!(plan.result.planned_count, 0);
         let payload = super::task_bulk_import_result_payload(&plan.result);
         assert_eq!(payload["status"], "blocked");
@@ -16520,12 +17440,10 @@ mod tests {
             payload["blocker_codes"],
             serde_json::json!(["schema_contract_missing"])
         );
-        assert!(
-            payload["next_actions"][0]
-                .as_str()
-                .expect("blocked import should include an action")
-                .contains("--dry-run")
-        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("blocked import should include an action")
+            .contains("--dry-run"));
         assert_eq!(payload["artifact_refs"]["surface"], "vida task import");
     }
 
@@ -16741,12 +17659,10 @@ mod tests {
                     .await
                     .expect("reconcile should inspect legacy state");
                 assert_eq!(dry_run.progress_basis, "descendants_excluding_root");
-                assert!(
-                    dry_run
-                        .closed_epics
-                        .iter()
-                        .all(|row| row.epic_id != "legacy-epic")
-                );
+                assert!(dry_run
+                    .closed_epics
+                    .iter()
+                    .all(|row| row.epic_id != "legacy-epic"));
                 let blocked = dry_run
                     .blocked_epics
                     .iter()
@@ -16763,12 +17679,10 @@ mod tests {
                     reconcile_epics_from_descendant_progress(&store, true, false)
                         .await
                         .expect("close-if-complete should still block legacy state");
-                assert!(
-                    close_if_complete
-                        .closed_epics
-                        .iter()
-                        .all(|row| row.epic_id != "legacy-epic")
-                );
+                assert!(close_if_complete
+                    .closed_epics
+                    .iter()
+                    .all(|row| row.epic_id != "legacy-epic"));
                 let epic = store
                     .show_task("legacy-epic")
                     .await
@@ -17297,11 +18211,9 @@ mod tests {
                 receipt.blocker_codes,
                 vec!["missing_lane_receipt".to_string()]
             );
-            assert!(
-                !receipt
-                    .blocker_codes
-                    .contains(&"latest_lane_task_mismatch".to_string())
-            );
+            assert!(!receipt
+                .blocker_codes
+                .contains(&"latest_lane_task_mismatch".to_string()));
             assert_ne!(receipt.lane["task_id"], "foreign-latest-task");
         });
     }
@@ -17380,11 +18292,9 @@ mod tests {
             assert!(lines.iter().any(|(label, value)| *label == "next action"
                 && value.contains("vida lane show")
                 && value.contains("--latest")));
-            assert!(
-                !lines
-                    .iter()
-                    .any(|(_, value)| value.contains("vida lane show requested-task-without-lane"))
-            );
+            assert!(!lines
+                .iter()
+                .any(|(_, value)| value.contains("vida lane show requested-task-without-lane")));
         });
     }
 
@@ -17538,10 +18448,9 @@ mod tests {
             assert_eq!(task.close_reason, None);
             assert!(task.labels.contains(&"source-fixed".to_string()));
             assert!(task.labels.contains(&"tests-green".to_string()));
-            assert!(
-                task.labels
-                    .contains(&"proof-blocked-by-runtime".to_string())
-            );
+            assert!(task
+                .labels
+                .contains(&"proof-blocked-by-runtime".to_string()));
             assert!(!task.labels.contains(&"runtime-proof-blocked".to_string()));
             assert_eq!(
                 task.planner_metadata.proof_targets,
@@ -18038,7 +18947,7 @@ mod tests {
     fn task_update_proof_target_replacement_contract() {
         let existing = crate::state_store::TaskPlannerMetadata {
             proof_targets: vec![
-                "cargo test -p vida --lib stale_contract -- --nocapture".to_string(),
+                "cargo test -p vida --lib stale_contract -- --nocapture".to_string()
             ],
             risk: Some("medium".to_string()),
             ..Default::default()
@@ -18111,12 +19020,10 @@ mod tests {
             state_store::StateStore::TASK_UPDATE_CLOSE_AUTHORITY_BLOCKER_CODE
         );
         assert_eq!(payload["task_id"], "proof-child");
-        assert!(
-            payload["next_actions"][0]
-                .as_str()
-                .expect("next action")
-                .contains("vida task close proof-child --reason <closure-evidence>")
-        );
+        assert!(payload["next_actions"][0]
+            .as_str()
+            .expect("next action")
+            .contains("vida task close proof-child --reason <closure-evidence>"));
     }
 
     #[test]
@@ -18151,27 +19058,19 @@ mod tests {
 
         let metadata = task_create_planner_metadata_arg(&command);
 
-        assert!(
-            metadata.proof_targets.contains(
-                &"cargo test -p vida --test task_smoke focused_release_template -- --nocapture"
-                    .to_string()
-            )
-        );
-        assert!(
-            metadata
-                .proof_targets
-                .contains(&"cargo check -p vida --tests".to_string())
-        );
-        assert!(
-            metadata
-                .proof_targets
-                .contains(&"vida release install --json".to_string())
-        );
-        assert!(
-            metadata
-                .proof_targets
-                .contains(&"vida doctor --json".to_string())
-        );
+        assert!(metadata.proof_targets.contains(
+            &"cargo test -p vida --test task_smoke focused_release_template -- --nocapture"
+                .to_string()
+        ));
+        assert!(metadata
+            .proof_targets
+            .contains(&"cargo check -p vida --tests".to_string()));
+        assert!(metadata
+            .proof_targets
+            .contains(&"vida release install --json".to_string()));
+        assert!(metadata
+            .proof_targets
+            .contains(&"vida doctor --json".to_string()));
     }
 
     #[test]
@@ -18191,26 +19090,18 @@ mod tests {
             .expect("release proof template update should pass")
             .expect("release proof template should request metadata");
 
-        assert!(
-            metadata
-                .proof_targets
-                .contains(&"cargo test -p vida existing_focus -- --nocapture".to_string())
-        );
-        assert!(
-            metadata
-                .proof_targets
-                .contains(&"cargo test -p vida new_focus -- --nocapture".to_string())
-        );
-        assert!(
-            metadata
-                .proof_targets
-                .contains(&"vida task validate-graph --json".to_string())
-        );
-        assert!(
-            metadata
-                .proof_targets
-                .contains(&"vida release install --json".to_string())
-        );
+        assert!(metadata
+            .proof_targets
+            .contains(&"cargo test -p vida existing_focus -- --nocapture".to_string()));
+        assert!(metadata
+            .proof_targets
+            .contains(&"cargo test -p vida new_focus -- --nocapture".to_string()));
+        assert!(metadata
+            .proof_targets
+            .contains(&"vida task validate-graph --json".to_string()));
+        assert!(metadata
+            .proof_targets
+            .contains(&"vida release install --json".to_string()));
 
         let clear_conflict = crate::TaskUpdateArgs {
             task_id: "runtime-defect".to_string(),
@@ -18537,8 +19428,14 @@ mod tests {
 
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["closed"], true);
+        assert_eq!(payload["closed_task_id"], "child-closed");
+        assert_eq!(payload["proof_verdict"], "pass");
         assert_eq!(payload["continuation_blocked"], false);
         assert_eq!(payload["task"]["id"], "child-closed");
+        assert_eq!(
+            payload["parent_epic_progress"],
+            payload["epic_progress_summary"]
+        );
         assert_eq!(
             payload["epic_progress_summary"]["epics"][0]["epic_id"],
             "epic-a"
@@ -18547,6 +19444,9 @@ mod tests {
             payload["epic_progress_summary"]["epics"][0]["closed_count"],
             1
         );
+        assert!(payload["epic_progress_summary"]["epics"][0]
+            .get("tasks")
+            .is_none());
     }
 
     #[test]
@@ -18573,25 +19473,19 @@ mod tests {
             payload["proof_targets"][0]["legacy_close_reason_match"],
             true
         );
-        assert!(
-            payload["proof_targets"][0]["evidence_detail"]
-                .as_str()
-                .expect("evidence detail should render")
-                .contains("structured proof evidence is required")
-        );
+        assert!(payload["proof_targets"][0]["evidence_detail"]
+            .as_str()
+            .expect("evidence detail should render")
+            .contains("structured proof evidence is required"));
         assert_eq!(payload["proof_targets"][1]["status"], "missing_evidence");
-        assert!(
-            payload["proof_targets"][1]["next_action"]
-                .as_str()
-                .expect("closed missing target next action should render")
-                .contains("already closed task")
-        );
-        assert!(
-            payload["next_required_command"]
-                .as_str()
-                .expect("closed missing next required command should render")
-                .contains("already closed task")
-        );
+        assert!(payload["proof_targets"][1]["next_action"]
+            .as_str()
+            .expect("closed missing target next action should render")
+            .contains("already closed task"));
+        assert!(payload["next_required_command"]
+            .as_str()
+            .expect("closed missing next required command should render")
+            .contains("already closed task"));
         assert_eq!(
             payload["missing_targets"],
             serde_json::json!([
@@ -18683,12 +19577,10 @@ mod tests {
             payload["proof_targets"][0]["evidence_source"],
             "inherited_child_task_proof_evidence"
         );
-        assert!(
-            payload["proof_targets"][0]["evidence_detail"]
-                .as_str()
-                .expect("inherited detail should render")
-                .contains("closed-child-proof-task")
-        );
+        assert!(payload["proof_targets"][0]["evidence_detail"]
+            .as_str()
+            .expect("inherited detail should render")
+            .contains("closed-child-proof-task"));
     }
 
     #[test]
@@ -19154,12 +20046,10 @@ mod tests {
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["configured_proof_target_count"], 0);
         assert_eq!(payload["missing_proof"], false);
-        assert!(
-            payload["next_required_command"]
-                .as_str()
-                .expect("next command should render")
-                .contains("vida task update proofless-task --proof-target")
-        );
+        assert!(payload["next_required_command"]
+            .as_str()
+            .expect("next command should render")
+            .contains("vida task update proofless-task --proof-target"));
     }
 
     #[test]
@@ -19171,10 +20061,8 @@ mod tests {
             .as_str()
             .expect("next command should render");
 
-        assert!(
-            next_required_command
-                .contains("vida task update 'safe; touch /tmp/vida_pwned #' --proof-target")
-        );
+        assert!(next_required_command
+            .contains("vida task update 'safe; touch /tmp/vida_pwned #' --proof-target"));
         assert!(!next_required_command.contains("vida task update safe; touch"));
     }
 
@@ -19311,11 +20199,9 @@ mod tests {
                 .status
                 .success()
         );
-        assert!(
-            run_git(&["config", "user.name", "VIDA Test"])
-                .status
-                .success()
-        );
+        assert!(run_git(&["config", "user.name", "VIDA Test"])
+            .status
+            .success());
         std::fs::write(repo_root.join("secret.txt"), "old\n").expect("write secret");
         assert!(run_git(&["add", "."]).status.success());
         assert!(run_git(&["commit", "-m", "initial"]).status.success());
@@ -19383,11 +20269,9 @@ mod tests {
                 .status
                 .success()
         );
-        assert!(
-            run_git(&["config", "user.name", "VIDA Test"])
-                .status
-                .success()
-        );
+        assert!(run_git(&["config", "user.name", "VIDA Test"])
+            .status
+            .success());
         std::fs::write(repo_root.join("src/owned.txt"), "old\n").expect("write owned");
         std::fs::write(repo_root.join("unrelated.txt"), "old\n").expect("write unrelated");
         assert!(run_git(&["add", "."]).status.success());
@@ -19565,12 +20449,10 @@ mod tests {
                 "cargo check -p vida --bin vida"
             ]
         );
-        assert!(
-            receipt
-                .receipt_path
-                .replace('\\', "/")
-                .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json")
-        );
+        assert!(receipt
+            .receipt_path
+            .replace('\\', "/")
+            .ends_with(".vida/receipts/task-handoffs/task-handoff-123.json"));
         assert_eq!(receipt.receipt_root, receipt_root.display().to_string());
         assert_eq!(receipt.isolation, "project_state_dir");
         validate_task_handoff_accept_receipt(&receipt)
@@ -19743,19 +20625,17 @@ mod tests {
                     receipt["receipt_root"],
                     isolated_state_dir.join("receipts").display().to_string()
                 );
-                assert!(
-                    receipt["receipt_path"]
-                        .as_str()
-                        .expect("receipt path should be string")
-                        .replace('\\', "/")
-                        .starts_with(
-                            isolated_handoff_receipts
-                                .to_str()
-                                .expect("receipt dir should be utf8")
-                                .replace('\\', "/")
-                                .as_str()
-                        )
-                );
+                assert!(receipt["receipt_path"]
+                    .as_str()
+                    .expect("receipt path should be string")
+                    .replace('\\', "/")
+                    .starts_with(
+                        isolated_handoff_receipts
+                            .to_str()
+                            .expect("receipt dir should be utf8")
+                            .replace('\\', "/")
+                            .as_str()
+                    ));
             })
             .expect("high-stack receipt test thread should spawn")
             .join()
@@ -19783,12 +20663,10 @@ mod tests {
         );
         assert_eq!(receipt.binding_source, None);
         assert!(receipt.blocker_codes.is_empty());
-        assert!(
-            receipt
-                .source_surfaces
-                .iter()
-                .any(|surface| surface == "vida task next-lawful")
-        );
+        assert!(receipt
+            .source_surfaces
+            .iter()
+            .any(|surface| surface == "vida task next-lawful"));
     }
 
     #[test]
@@ -19856,12 +20734,10 @@ mod tests {
             receipt.bind_command.as_deref(),
             Some("vida taskflow run-graph dispatch-init task-a --json")
         );
-        assert!(
-            receipt
-                .why_not_auto_bound
-                .as_deref()
-                .is_some_and(|reason| reason.contains("multiple ready candidates"))
-        );
+        assert!(receipt
+            .why_not_auto_bound
+            .as_deref()
+            .is_some_and(|reason| reason.contains("multiple ready candidates")));
     }
 
     #[test]
@@ -19885,12 +20761,10 @@ mod tests {
             receipt.blocker_codes,
             vec!["ambiguous_ready_task_candidates"]
         );
-        assert!(
-            receipt
-                .ambiguity_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("multiple ready candidates"))
-        );
+        assert!(receipt
+            .ambiguity_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("multiple ready candidates")));
         assert_eq!(receipt.artifact_refs["surface"], "vida task next-lawful");
         assert_eq!(
             receipt.artifact_refs["active_bounded_unit"],
@@ -20060,12 +20934,10 @@ mod tests {
             vec!["select_conflicts_with_active_taskflow_task"]
         );
         assert_eq!(receipt.active_bounded_unit["task_id"], "task-active");
-        assert!(
-            receipt
-                .next_action
-                .as_deref()
-                .is_some_and(|action| action.contains("task-active"))
-        );
+        assert!(receipt
+            .next_action
+            .as_deref()
+            .is_some_and(|action| action.contains("task-active")));
     }
 
     #[test]
@@ -20533,12 +21405,10 @@ mod tests {
 
         assert_eq!(receipt.status, "blocked");
         assert_eq!(receipt.blocker_codes, vec!["continuation_source_drift"]);
-        assert!(
-            receipt
-                .next_actions
-                .iter()
-                .any(|action| action.contains("consume_continue_after_downstream_chain"))
-        );
+        assert!(receipt
+            .next_actions
+            .iter()
+            .any(|action| action.contains("consume_continue_after_downstream_chain")));
         assert!(receipt.next_action.as_deref().is_some_and(|action| {
             action.contains("vida taskflow recovery status current-run")
                 && !action.contains("--json")
@@ -21260,10 +22130,8 @@ mod tests {
             .next_action
             .as_deref()
             .expect("ready downstream handoff should return a next action");
-        assert!(
-            next_action
-                .contains("vida agent-init --downstream-packet packet.json --execute-dispatch")
-        );
+        assert!(next_action
+            .contains("vida agent-init --downstream-packet packet.json --execute-dispatch"));
         assert!(
             !next_action.contains("--json"),
             "human next-action guidance should prefer the default output mode"
@@ -21631,12 +22499,10 @@ mod tests {
             "taskflow-case-11-actual-agent-autonomy"
         );
         assert_eq!(projection["binding_source"], serde_json::Value::Null);
-        assert!(
-            projection["blocker_codes"]
-                .as_array()
-                .expect("blockers should be an array")
-                .is_empty()
-        );
+        assert!(projection["blocker_codes"]
+            .as_array()
+            .expect("blockers should be an array")
+            .is_empty());
     }
 
     #[test]
@@ -21734,12 +22600,10 @@ mod tests {
             "task-ready-after-stale-closure"
         );
         assert_eq!(projection["binding_source"], serde_json::Value::Null);
-        assert!(
-            projection["blocker_codes"]
-                .as_array()
-                .expect("blockers should be an array")
-                .is_empty()
-        );
+        assert!(projection["blocker_codes"]
+            .as_array()
+            .expect("blockers should be an array")
+            .is_empty());
     }
 
     #[test]
@@ -21870,19 +22734,15 @@ mod tests {
             serde_json::json!(["open_delegated_cycle", "timeout_without_takeover_authority"])
         );
         assert_eq!(projection["bind_command"], serde_json::Value::Null);
-        assert!(
-            projection["ready_task_candidates"]
-                .as_array()
-                .expect("ready candidates should be an array")
-                .iter()
-                .any(|candidate| candidate["task_id"] == "unrelated-ready-task")
-        );
-        assert!(
-            projection["next_action"]
-                .as_str()
-                .is_some_and(|action| action.contains("vida lane show running-run")
-                    && !action.contains("--json"))
-        );
+        assert!(projection["ready_task_candidates"]
+            .as_array()
+            .expect("ready candidates should be an array")
+            .iter()
+            .any(|candidate| candidate["task_id"] == "unrelated-ready-task"));
+        assert!(projection["next_action"]
+            .as_str()
+            .is_some_and(|action| action.contains("vida lane show running-run")
+                && !action.contains("--json")));
     }
 
     #[test]
@@ -21964,11 +22824,9 @@ mod tests {
             isolated_state_dir.display().to_string()
         );
         assert_eq!(telemetry["feedback_store"], "not_recorded");
-        assert!(
-            !project_root
-                .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
-                .exists()
-        );
+        assert!(!project_root
+            .join(crate::HOST_AGENT_OBSERVABILITY_STATE)
+            .exists());
         assert!(!project_root.join(crate::WORKER_STRATEGY_STATE).exists());
         let _ = fs::remove_dir_all(outside_root);
     }
@@ -22321,18 +23179,14 @@ mod tests {
             state_dir.display().to_string()
         );
         assert_eq!(payload["state_access"]["silent_delete_allowed"], false);
-        assert!(
-            payload["state_access"]["suspected_wal_or_sst_hint"]
-                .as_str()
-                .expect("hint should be text")
-                .contains("WAL/SST files are suspects")
-        );
-        assert!(
-            payload["state_access"]["recovery_guidance"]
-                .as_str()
-                .expect("guidance should be text")
-                .contains("Create a backup copy of the whole state directory first")
-        );
+        assert!(payload["state_access"]["suspected_wal_or_sst_hint"]
+            .as_str()
+            .expect("hint should be text")
+            .contains("WAL/SST files are suspects"));
+        assert!(payload["state_access"]["recovery_guidance"]
+            .as_str()
+            .expect("guidance should be text")
+            .contains("Create a backup copy of the whole state directory first"));
     }
 
     #[test]
@@ -22453,12 +23307,10 @@ mod tests {
             vec!["invalid_adaptive_replan_finding_input".to_string()]
         );
         assert_eq!(error.field.as_deref(), Some("finding_kind"));
-        assert!(
-            error
-                .supported_finding_kinds
-                .iter()
-                .any(|kind| kind == "verification_finding")
-        );
+        assert!(error
+            .supported_finding_kinds
+            .iter()
+            .any(|kind| kind == "verification_finding"));
         assert_eq!(error.operator_truth["parsing_and_validation_only"], true);
     }
 
@@ -22937,13 +23789,11 @@ mod tests {
             assert!(first_child.dependencies.iter().any(|dependency| {
                 dependency.depends_on_id == "source-task" && dependency.edge_type == "parent-child"
             }));
-            assert!(
-                store
-                    .validate_task_graph()
-                    .await
-                    .expect("validate")
-                    .is_empty()
-            );
+            assert!(store
+                .validate_task_graph()
+                .await
+                .expect("validate")
+                .is_empty());
         });
     }
 

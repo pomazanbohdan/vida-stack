@@ -4807,6 +4807,21 @@ pub(crate) fn write_runtime_agent_extension_projections(project_root: &Path) -> 
     Ok(())
 }
 
+pub(crate) fn refresh_runtime_agent_extension_projections(
+    project_root: &Path,
+) -> Result<(), String> {
+    let config_path = project_root.join("vida.config.yaml");
+    if !config_path.is_file() {
+        return Ok(());
+    }
+    let config = super::project_activator_surface::read_yaml_file_checked(&config_path)?;
+    crate::agent_extension_registry_projection::refresh_runtime_agent_extension_projections_from_configured_sources(
+        &config,
+        project_root,
+    )
+    .map(|_| ())
+}
+
 pub(crate) async fn run_init(args: super::BootArgs) -> ExitCode {
     if let Some(arg) = args.extra_args.first() {
         eprintln!("Unsupported `vida init` argument `{arg}` in Binary Foundation.");
@@ -4875,6 +4890,7 @@ pub(crate) async fn run_init(args: super::BootArgs) -> ExitCode {
     .and_then(|()| materialize_project_docs_scaffold(&project_root))
     .and_then(|()| ensure_runtime_home(&project_root))
     .and_then(|()| write_runtime_agent_extension_projections(&project_root))
+    .and_then(|()| refresh_runtime_agent_extension_projections(&project_root))
     {
         eprintln!("{error}");
         return ExitCode::from(1);

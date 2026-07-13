@@ -6446,6 +6446,25 @@ pub(crate) fn is_dispatch_resume_handoff_done(status: &RunGraphStatus) -> bool {
         && status.handoff_state != "none"
 }
 
+fn is_receipt_backed_materialized_dispatch_ready(status: &RunGraphStatus) -> bool {
+    let Some(next_node) = status.next_node.as_deref().map(str::trim) else {
+        return false;
+    };
+    if next_node.is_empty() || next_node == "none" || next_node == "unknown" {
+        return false;
+    }
+    status.status == "ready"
+        && status.active_node == next_node
+        && status.lane_id == format!("{next_node}_lane")
+        && status.lifecycle_stage == format!("{next_node}_dispatch_ready")
+        && status.policy_gate == "not_required"
+        && status.handoff_state == format!("awaiting_{next_node}")
+        && status.context_state == "sealed"
+        && status.checkpoint_kind == "execution_cursor"
+        && status.resume_target == format!("dispatch.{next_node}_lane")
+        && status.recovery_ready
+}
+
 pub(crate) fn validate_run_graph_resume_gate(status: &RunGraphStatus) -> Result<(), String> {
     if !status.recovery_ready {
         return Err(format!(
@@ -6475,7 +6494,9 @@ pub(crate) fn validate_run_graph_resume_gate(status: &RunGraphStatus) -> Result<
             status.handoff_state
         ));
     }
-    if !status.delegation_gate().delegated_cycle_open {
+    if !status.delegation_gate().delegated_cycle_open
+        && !is_receipt_backed_materialized_dispatch_ready(status)
+    {
         return Err(format!(
             "Run-graph resume gate denied for `{}`: delegated cycle is not open",
             status.run_id
@@ -9115,6 +9136,8 @@ fn apply_configured_dev_team_route_to_state(
     selection: &RuntimeConsumptionLaneSelection,
     route: &crate::dev_team_sequence_contract::ConfiguredDevTeamTaskRoute,
 ) {
+    status.status = "ready".to_string();
+    status.context_state = "ready".to_string();
     status.task_class = route.task_class.clone();
     status.route_task_class = route.task_class.clone();
     status.next_node = Some(route.dispatch_target.clone());
@@ -10993,6 +11016,34 @@ mod tests {
 
     fn blocker_codes(codes: &[&str]) -> Vec<String> {
         codes.iter().map(|code| (*code).to_string()).collect()
+    }
+
+    #[test]
+    fn run_graph_specification_dispatch_convergence() {
+        let mut status = default_run_graph_state(
+            "task-specification-dispatch",
+            "defect",
+            "defect",
+        );
+        status.active_node = "reviewer".to_string();
+        status.next_node = Some("coder".to_string());
+        status.status = "ready".to_string();
+        status.lane_id = "coder_lane".to_string();
+        status.lifecycle_stage = "coder_dispatch_ready".to_string();
+        status.handoff_state = "awaiting_coder".to_string();
+        status.context_state = "ready".to_string();
+        status.checkpoint_kind = "dispatch_ready".to_string();
+        status.resume_target = "dispatch.coder".to_string();
+        status.recovery_ready = true;
+
+        assert!(validate_run_graph_resume_gate(&status).is_ok());
+
+        status.lane_id = "reviewer_lane".to_string();
+        assert!(validate_run_graph_resume_gate(&status).is_err());
+
+        status.lane_id = "coder_lane".to_string();
+        status.context_state = "sealed".to_string();
+        assert!(validate_run_graph_resume_gate(&status).is_err());
     }
 
     #[test]
@@ -15608,7 +15659,11 @@ agent_system:
             .expect("read receipt")
             .expect("receipt present");
 
-        assert_eq!(receipt.dispatch_target, "implementer");
+        assert_eq!(
+            receipt.dispatch_target,
+            "junior",
+            "dispatch target follows the current configured worker lane mapping"
+        );
         assert!(receipt.dispatch_packet_path.is_some());
         assert!(payload["dispatch_packet_path"].as_str().is_some());
         let identity = store

@@ -4,6 +4,56 @@ Purpose: define the project-owned operating protocol for recording timing and ou
 
 This document is a process protocol. It does not replace product/runtime law, release admission, TaskFlow ownership, DocFlow proof law, or CI branch protection. It defines how operators and agents must collect timing and output economy evidence, diagnose slow or noisy work, and decide whether a gate should stay blocking, become faster, move to a later admission point, become diagnostic-only for PR iteration, or get a compact-output/runtime defect.
 
+## Purpose
+
+Define a compact, evidence-backed contract for timing, output economy, script selection, and gate admission across local development, delegated lanes, CI, release, and runtime operations.
+
+## Trigger
+
+Apply this protocol when a command, script, test, build, release, delegated lane, or runtime surface affects proof acceptance, continuation, operator time, model-visible output, or gate placement.
+
+## Authority
+
+1. This document owns project timing/output-economy and local gate-selection procedure.
+2. TaskFlow owns tracked execution and closure; DocFlow owns documentation validation; runtime/release owners retain their domain law.
+3. `docs/process/vida-runtime-development-environment.md` owns the project script inventory and proof-mode table referenced here.
+
+## Inputs
+
+Each timing or gate decision must identify the operation/surface, context, command or script mode, start/end or duration, exit state, blocking scope, output shape, artifact refs, Cargo target-dir policy when applicable, and the current task/proof target.
+
+## Outputs
+
+Produce a compact timing envelope, a gate decision, preserved stdout/stderr or receipt refs when output is compacted, and the next smaller or stronger proof command. Record the evidence in the active TaskFlow item or linked process artifact before closure.
+
+## Rules
+
+1. Prefer the smallest proof mode that preserves the required invariant.
+2. Use project-owned wrappers, deterministic target-dir policy, JSON/selector-bounded output, and artifact-backed full logs.
+3. Keep Cargo-like work serialized per shared target directory and classify repeated friction as a TaskFlow/operator-surface item.
+
+## Forbidden
+
+1. Do not hide failures, drop artifact refs, bypass ownership/approval, or replace a blocking invariant with a timing-only workaround.
+2. Do not run concurrent Cargo gates against one shared target directory or repeatedly rerun a noisy command to recover hidden fields.
+3. Do not treat eventual success as proof that a slow or ambiguous operator surface is healthy.
+
+## Escalation
+
+Escalate to a runtime/operator-efficiency TaskFlow defect when the script inventory, wrapper path, shell/tool resolution, output selector, timing envelope, or gate decision is missing, contradictory, repeatedly slow, or unsafe to operate.
+
+## Validation
+
+Minimum local validation for script/process changes is `scripts/vida-dev-gate.ps1 -Mode script-check -Json`, the relevant script help/parse or dry-run proof, `git diff --check`, and `vida task validate-graph --json`; add DocFlow checks when a canonical process document changes.
+
+## Token Budget
+
+No fixed token target applies to this process owner. Keep default operator output compact, normally below 120 lines/12 KiB, and preserve exact commands, paths, blockers, and artifact refs even when that exceeds a soft size target.
+
+## Metadata
+
+Artifact family: project process protocol. Loading posture: bootstrap-linked and task-selected. Primary audience: orchestrator, worker lane, operator, verifier, and CI/release maintainer. Canonical script inventory: `docs/process/vida-runtime-development-environment.md`.
+
 ## Scope
 
 This protocol applies to:
@@ -129,6 +179,17 @@ Use this ladder before starting a Rust proof, runtime smoke, release install, or
 6. `release_packaging_gate`: run full release/installer/package smoke after the coherent batch is complete, not while more related code edits are still expected.
 
 When a release install is considered, first record why `debug_source_proof` and, when applicable, `debug_runtime_smoke` are insufficient. A closed wave parent is sufficient reason because the operator-facing system binary must advance to the closed wave state. If the reason is only "the code changed" inside an unfinished task or micro-edit, use the debug proof class instead.
+
+## Script Discovery And Gate Selection
+
+1. Before direct Cargo or ad-hoc environment commands, inventory `scripts/**` and run `pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Help` so the selected proof mode is visible and reusable.
+2. Treat `docs/process/vida-runtime-development-environment.md` as the project-owned inventory/mode owner and keep this protocol focused on timing, output, safety, and admission decisions.
+3. Use `script-check` for docs/script-only edits; it is the no-Cargo proof for diff whitespace, PowerShell/Bash parsing when applicable, runtime-boundary lint, and artifact-backed diagnostics.
+4. Use `quick` for compile-aware source proof; `focused-nextest` for one bounded filter; `package-nextest` or `workspace-nextest` for broader Rust proof; `doc-test` for workspace Rust docs; `build-debug` and `runtime-smoke` for debug runtime acceptance; `release-package` and `release-install` only for package or installed-runtime acceptance.
+5. On Windows, `scripts/vida-cargo-msvc.ps1` is the canonical Cargo/MSVC wrapper. Record its resolved environment and target-dir policy; direct Cargo is fallback-only when the wrapper cannot represent the bounded command.
+6. Script proof must include help/parse evidence and a safe dry-run or explicit no-build/artifact-path check where the script mutates, packages, cleans, or invokes a long gate. Preserve nonzero exits, stdout/stderr artifact refs, and compact JSON status.
+7. Do not run concurrent Cargo modes against one shared target directory. Use the project build-concurrency guard, serialized Cargo shards, or an isolated `CARGO_TARGET_DIR` with the policy recorded in the timing envelope.
+8. If the inventory, wrapper ladder, or shell/tool resolution is missing or ambiguous, classify it as a runtime/operator-surface defect and create or update a bounded TaskFlow item instead of adding an opaque command recipe.
 
 ## System Binary Update Policy
 
@@ -259,10 +320,10 @@ These observations do not prove one root cause. They prove that timing diagnosti
 artifact_path: process/command-timing-and-gate-optimization-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: 2026-06-02
+artifact_revision: 2026-07-12
 schema_version: '1'
 status: canonical
 source_path: docs/process/command-timing-and-gate-optimization-protocol.md
 created_at: 2026-05-26T00:00:00+03:00
-updated_at: 2026-06-02T04:22:00+03:00
+updated_at: 2026-07-12T16:24:00+03:00
 changelog_ref: command-timing-and-gate-optimization-protocol.changelog.jsonl

@@ -892,6 +892,7 @@ pub(crate) fn build_dev_team_readiness(
     let configured_hook_templates = configured_lifecycle_hook_templates(&overlay);
     let roles = dev_team_roles(dev_team, &carrier_catalog, pricing_catalog, &mut blockers);
     let flows = dev_team_flows(dev_team, &roles, &configured_hook_templates, &mut blockers);
+    let zombie_d_gate = crate::zombie_d_gate::project_policy(dev_team, &mut blockers);
     let orchestrator_command_contract = serde_json::to_value(
         crate::yaml_lookup(dev_team, &["orchestrator_command_contract"])
             .cloned()
@@ -931,6 +932,7 @@ pub(crate) fn build_dev_team_readiness(
         "roles": roles,
         "sequence": sequence,
         "flows": flows,
+        "zombie_d_gate": zombie_d_gate,
         "blockers": blockers,
         "source_paths": source_paths,
     })

@@ -106,6 +106,7 @@ Registry boundary: discovery registry, not owner-layer taxonomy; row text routes
 | Bug-fix unified flow | `command-instructions/execution.bug-fix-protocol` | `command-instructions/operator.vida-bug-fix-guide`, `command-instructions/routing.use-case-packs-protocol` |
 | Issue contract bridge | `runtime-instructions/bridge.issue-contract-protocol` | `command-instructions/execution.bug-fix-protocol`, `command-instructions/execution.implement-execution-protocol`, `system-maps/runtime-family.taskflow-map` |
 | Requirement analysis owner | `runtime-instructions/work.requirement-analysis-protocol` | `runtime-instructions/work.spec-intake-protocol`, `runtime-instructions/work.spec-contract-protocol`, `runtime-instructions/bridge.issue-contract-protocol`, `runtime-instructions/work.taskflow-protocol`, `runtime-instructions/work.problem-party-protocol` |
+| Requirement analysis artifact contract | `runtime-instructions/work.requirement-analysis-artifact-protocol` | `runtime-instructions/work.requirement-analysis-protocol`, `runtime-instructions/work.spec-contract-protocol`, `runtime-instructions/work.taskflow-protocol` |
 | Web/internet validation | `runtime-instructions/work.web-validation-protocol` | `instruction-contracts/overlay.step-thinking-protocol#section-web-search`, `runtime-instructions/work.spec-contract-protocol` |
 | Spec intake normalization | `runtime-instructions/work.spec-intake-protocol` | `runtime-instructions/work.spec-contract-protocol`, `runtime-instructions/bridge.issue-contract-protocol`, `command-instructions/planning.form-task-protocol` |
 | Spec delta reconciliation | `runtime-instructions/work.spec-delta-protocol` | `runtime-instructions/bridge.issue-contract-protocol`, `command-instructions/execution.bug-fix-protocol`, `command-instructions/planning.form-task-protocol` |
@@ -153,4 +154,4 @@ protocol_compression_baseline_ref: 062a45c3d:vida/config/instructions/system-map
 protocol_compression_audit_at: 2026-07-03T13:08:00+03:00
 protocol_compression_before_tokens: 7202
 protocol_compression_after_tokens: 7200
-protocol_compression_content_sha256: cd7adbcc0249d02a48e6b3b232b27c452aaada49c575a8c1eb91299cf2691080
+protocol_compression_content_sha256: 712d4e26291b10f80d8c31217d8d0d2f5c1768d28e0a74005b5747b1db4d99d7

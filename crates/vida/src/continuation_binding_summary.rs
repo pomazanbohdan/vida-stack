@@ -17,8 +17,22 @@ fn explicit_binding_is_admissible_for_status(
             && (status.status == "completed" || binding.task_id != status.task_id);
     }
     if status.status != "completed" {
-        return binding.binding_source != "explicit_continuation_bind_task"
-            && binding_kind != Some("task_graph_task");
+        let bound_task_id = binding
+            .active_bounded_unit
+            .get("task_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim);
+        let bound_run_id = binding
+            .active_bounded_unit
+            .get("run_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim);
+        return binding.status == "bound"
+            && binding.binding_source == "explicit_continuation_bind_task"
+            && binding_kind == Some("task_graph_task")
+            && binding.task_id == status.task_id
+            && bound_task_id == Some(status.task_id.as_str())
+            && bound_run_id == Some(status.run_id.as_str());
     }
 
     let terminal_completed_without_next_unit = status.lifecycle_stage == "closure_complete"
@@ -699,13 +713,7 @@ pub(crate) fn build_continuation_binding_summary_with_task_authority(
                         pause_boundary_gate,
                     );
                 }
-                if explicit_binding_is_admissible_for_status(binding, status)
-                    && active_exception_takeover_evidence_matches_status(
-                        status,
-                        latest_run_graph_dispatch_receipt,
-                        None,
-                    )
-                {
+                if explicit_binding_is_admissible_for_status(binding, status) {
                     return binding_summary_json(
                         binding,
                         continuation_required_now,
@@ -3777,12 +3785,60 @@ mod tests {
             None,
             None,
             None,
-            true,
+            false,
         );
 
         assert_eq!(summary["status"], "bound");
         assert_eq!(summary["binding_source"], "explicit_continuation_bind_task");
         assert_eq!(summary["active_bounded_unit"]["task_id"], "task-next");
+        assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn blocked_same_run_explicit_task_binding_is_admissible() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-blocked-explicit-task",
+            "task-blocked-explicit-task",
+            "coder",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coder_blocked".to_string();
+        let expected_task_id = status.task_id.clone();
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: status.run_id.clone(),
+            task_id: status.task_id.clone(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": status.task_id,
+                "run_id": status.run_id,
+                "task_status": "in_progress",
+                "issue_type": "defect"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "operator explicitly bound the blocked task".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: Some("continue blocked task".to_string()),
+            recorded_at: "2026-07-13T00:00:00Z".to_string(),
+        };
+
+        let summary = build_continuation_binding_summary(
+            Some(&binding),
+            Some(&status),
+            None,
+            None,
+            None,
+            true,
+        );
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["continuation_allowed"], true);
+        assert_eq!(summary["binding_source"], "explicit_continuation_bind_task");
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            expected_task_id
+        );
         assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
     }
 

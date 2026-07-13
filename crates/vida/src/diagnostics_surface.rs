@@ -534,7 +534,7 @@ fn compact_host_dispatch_preflight_for_diagnostics(
     })
 }
 
-async fn build_post_commit_diagnostics(
+pub(crate) async fn build_post_commit_diagnostics(
     state_dir: std::path::PathBuf,
 ) -> Result<serde_json::Value, String> {
     let git_status = git_status_summary();

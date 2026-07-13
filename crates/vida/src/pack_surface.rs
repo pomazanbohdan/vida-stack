@@ -346,6 +346,37 @@ mod tests {
     }
 
     #[test]
+    fn pack_catalog_rejects_multiple_defaults() {
+        let root = TempStateHarness::new().expect("temp state harness");
+        write_registry_fixture(
+            &root,
+            concat!(
+                "version: 1\npacks:\n",
+                "  - pack_id: first-pack\n",
+                "    flow_id: quick-two-pack-flow\n",
+                "    default: true\n",
+                "    ordered_steps:\n",
+                "      - { role_id: coder, command_ref: agent-init-worker, proof_target: 'agent:first-pack:coder' }\n",
+                "  - pack_id: second-pack\n",
+                "    flow_id: quick-two-pack-flow\n",
+                "    default: true\n",
+                "    ordered_steps:\n",
+                "      - { role_id: coder, command_ref: agent-init-worker, proof_target: 'agent:second-pack:coder' }\n",
+            ),
+        );
+        let _cwd = guard_current_dir(root.path());
+
+        let payload = pack_payload(None).expect("payload");
+
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
+            codes
+                .iter()
+                .any(|code| code == "pack_catalog_default_count_mismatch:expected=1:actual=2")
+        }));
+    }
+
+    #[test]
     fn project_catalog_exposes_configured_packs_and_one_default() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")

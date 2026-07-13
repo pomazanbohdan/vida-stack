@@ -121,6 +121,112 @@ fn registry_ids(
         .collect()
 }
 
+fn validate_registry_source_path(
+    root: &Path,
+    configured_path: &str,
+    spec: RegistryProjectionSpec,
+) -> Result<PathBuf, String> {
+    let configured = Path::new(configured_path);
+    if configured_path.trim().is_empty()
+        || configured.is_absolute()
+        || configured.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err(format!(
+            "refusing configured {} source `{configured_path}`: source path must be a project-relative safe path",
+            spec.label
+        ));
+    }
+    let source_path = root.join(configured);
+    let metadata = std::fs::symlink_metadata(&source_path).map_err(|error| {
+        format!(
+            "failed to inspect configured {} source `{}`: {error}",
+            spec.label, configured_path
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "refusing configured {} source `{configured_path}`: source must be a regular file",
+            spec.label
+        ));
+    }
+    let canonical_root = root.canonicalize().map_err(|error| {
+        format!("failed to canonicalize project root `{}`: {error}", root.display())
+    })?;
+    let canonical_source = source_path.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize configured {} source `{configured_path}`: {error}",
+            spec.label
+        )
+    })?;
+    if !canonical_source.starts_with(&canonical_root) {
+        return Err(format!(
+            "refusing configured {} source `{configured_path}`: source resolves outside project root",
+            spec.label
+        ));
+    }
+    Ok(source_path)
+}
+
+fn validate_registry_document(
+    registry: &serde_yaml::Value,
+    spec: RegistryProjectionSpec,
+    path: &Path,
+) -> Result<(), String> {
+    let Some(mapping) = registry.as_mapping() else {
+        return Err(format!(
+            "malformed {} registry `{}`: expected a YAML mapping",
+            spec.label,
+            path.display()
+        ));
+    };
+    let key = serde_yaml::Value::String(spec.registry_key.to_string());
+    let Some(serde_yaml::Value::Sequence(rows)) = mapping.get(&key) else {
+        return Err(format!(
+            "malformed {} registry `{}`: `{}` must be a YAML sequence",
+            spec.label,
+            path.display(),
+            spec.registry_key
+        ));
+    };
+    let mut ids = BTreeSet::new();
+    for (index, row) in rows.iter().enumerate() {
+        let Some(row_mapping) = row.as_mapping() else {
+            return Err(format!(
+                "malformed {} registry `{}`: row {index} must be a YAML mapping",
+                spec.label,
+                path.display()
+            ));
+        };
+        let id = row_mapping
+            .get(serde_yaml::Value::String(spec.id_field.to_string()))
+            .and_then(|value| crate::yaml_string(Some(value)))
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "malformed {} registry `{}`: row {index} requires non-empty `{}`",
+                    spec.label,
+                    path.display(),
+                    spec.id_field
+                )
+            })?;
+        if !ids.insert(id.clone()) {
+            return Err(format!(
+                "duplicate {} id `{id}` in registry `{}`",
+                spec.label,
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn same_configured_registry_projection_path(
     configured_path: &str,
     resolved_path: &Path,
@@ -145,8 +251,7 @@ fn registry_projection_parity(
     )) else {
         return Ok(None);
     };
-    let source_path =
-        crate::project_activator_surface::resolve_overlay_path(root, &configured_source_path);
+    let source_path = validate_registry_source_path(root, &configured_source_path, spec)?;
     if same_configured_registry_projection_path(
         &configured_source_path,
         &source_path,
@@ -164,6 +269,7 @@ fn registry_projection_parity(
                 spec.label, configured_source_path
             )
         })?;
+    validate_registry_document(&source_registry, spec, &source_path)?;
     let (runtime_registry, runtime_raw) = match std::fs::read_to_string(&runtime_projection_path) {
         Ok(raw) => {
             let registry = serde_yaml::from_str(&raw).map_err(|error| {
@@ -172,6 +278,7 @@ fn registry_projection_parity(
                     spec.label, spec.runtime_projection_path
                 )
             })?;
+            validate_registry_document(&registry, spec, &runtime_projection_path)?;
             (registry, raw)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -248,7 +355,18 @@ pub(crate) fn agent_extension_registry_projection_parities(
     Ok(parities)
 }
 
-fn write_runtime_projection_file(path: &Path, contents: &str, label: &str) -> Result<(), String> {
+struct StagedProjectionFile {
+    path: PathBuf,
+    temporary_path: PathBuf,
+    backup_path: Option<PathBuf>,
+    committed: bool,
+}
+
+fn stage_runtime_projection_file(
+    path: &Path,
+    contents: &str,
+    label: &str,
+) -> Result<StagedProjectionFile, String> {
     if let Some(parent) = path.parent() {
         crate::ensure_dir(parent)?;
     }
@@ -285,7 +403,7 @@ fn write_runtime_projection_file(path: &Path, contents: &str, label: &str) -> Re
             .unwrap_or(0)
     ));
 
-    let write_result = (|| -> Result<(), String> {
+    let write_result = (|| -> Result<StagedProjectionFile, String> {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -308,12 +426,11 @@ fn write_runtime_projection_file(path: &Path, contents: &str, label: &str) -> Re
                 temp_path.display()
             )
         })?;
-        drop(file);
-        std::fs::rename(&temp_path, path).map_err(|error| {
-            format!(
-                "failed to replace runtime {label} projection `{}`: {error}",
-                path.display()
-            )
+        Ok(StagedProjectionFile {
+            path: path.to_path_buf(),
+            temporary_path: temp_path.clone(),
+            backup_path: None,
+            committed: false,
         })
     })();
 
@@ -321,6 +438,80 @@ fn write_runtime_projection_file(path: &Path, contents: &str, label: &str) -> Re
         let _ = std::fs::remove_file(&temp_path);
     }
     write_result
+}
+
+fn rollback_staged_projection_files(staged: &[StagedProjectionFile]) {
+    for item in staged.iter().rev() {
+        if item.committed {
+            let _ = std::fs::remove_file(&item.path);
+        }
+        if let Some(backup_path) = &item.backup_path {
+            let _ = std::fs::rename(backup_path, &item.path);
+        }
+        let _ = std::fs::remove_file(&item.temporary_path);
+    }
+}
+
+fn atomic_replace_runtime_projection_files(
+    pending: &[(PathBuf, String, String)],
+) -> Result<(), String> {
+    let mut staged = Vec::new();
+    for (path, contents, label) in pending {
+        match stage_runtime_projection_file(path, contents, label) {
+            Ok(file) => staged.push(file),
+            Err(error) => {
+                rollback_staged_projection_files(&staged);
+                return Err(error);
+            }
+        }
+    }
+
+    for index in 0..staged.len() {
+        let path = staged[index].path.clone();
+        if std::fs::symlink_metadata(&path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            rollback_staged_projection_files(&staged);
+            return Err(format!(
+                "refusing to refresh runtime projection `{}` because it became a symlink",
+                path.display()
+            ));
+        }
+        if path.exists() {
+            let backup_path = path.with_file_name(format!(
+                ".{}.{}.backup",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("projection"),
+                std::process::id()
+            ));
+            if let Err(error) = std::fs::rename(&path, &backup_path) {
+                rollback_staged_projection_files(&staged);
+                return Err(format!(
+                    "failed to stage rollback backup for runtime projection `{}`: {error}",
+                    path.display()
+                ));
+            }
+            staged[index].backup_path = Some(backup_path);
+        }
+        let temporary_path = staged[index].temporary_path.clone();
+        if let Err(error) = std::fs::rename(&temporary_path, &path) {
+            rollback_staged_projection_files(&staged);
+            return Err(format!(
+                "failed to replace runtime projection `{}`: {error}",
+                path.display()
+            ));
+        }
+        staged[index].committed = true;
+    }
+
+    for item in &staged {
+        if let Some(backup_path) = &item.backup_path {
+            let _ = std::fs::remove_file(backup_path);
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn refresh_runtime_dispatch_alias_projection_from_configured_source(
@@ -340,7 +531,11 @@ pub(crate) fn refresh_runtime_dispatch_alias_projection_from_configured_source(
             parity.source_path.display()
         )
     })?;
-    write_runtime_projection_file(&parity.runtime_projection_path, &source, "dispatch alias")?;
+    atomic_replace_runtime_projection_files(&[(
+        parity.runtime_projection_path.clone(),
+        source,
+        "dispatch alias".to_string(),
+    )])?;
     dispatch_alias_projection_parity(config, root)
 }
 
@@ -348,6 +543,7 @@ pub(crate) fn refresh_runtime_agent_extension_projections_from_configured_source
     config: &serde_yaml::Value,
     root: &Path,
 ) -> Result<Vec<DispatchAliasProjectionParity>, String> {
+    let mut pending = Vec::new();
     for spec in REGISTRY_PROJECTION_SPECS {
         let Some(parity) = registry_projection_parity(config, root, *spec)? else {
             continue;
@@ -362,11 +558,14 @@ pub(crate) fn refresh_runtime_agent_extension_projections_from_configured_source
                 parity.source_path.display()
             )
         })?;
-        write_runtime_projection_file(
-            &parity.runtime_projection_path,
-            &source,
-            &parity.registry_label,
-        )?;
+        pending.push((
+            parity.runtime_projection_path.clone(),
+            source,
+            parity.registry_label.clone(),
+        ));
+    }
+    if !pending.is_empty() {
+        atomic_replace_runtime_projection_files(&pending)?;
     }
     agent_extension_registry_projection_parities(config, root)
 }
@@ -704,6 +903,22 @@ agent_extensions:
         )
         .expect("runtime projection should be readable");
         assert!(refreshed.contains("alias_id: development_test_author"));
+
+        let repeated = refresh_runtime_agent_extension_projections_from_configured_sources(
+            &config,
+            harness.path(),
+        )
+        .expect("repeated projection refresh should be deterministic");
+        assert!(repeated.iter().all(|parity| parity.in_sync));
+        assert_eq!(
+            refreshed,
+            fs::read_to_string(
+                harness
+                    .path()
+                    .join(".vida/project/agent-extensions/dispatch-aliases.yaml")
+            )
+            .expect("repeated runtime projection should be readable")
+        );
     }
 
     #[test]
@@ -734,6 +949,130 @@ agent_extensions:
             fs::read_to_string(runtime_projection)
                 .expect("runtime command projection should be readable")
                 .contains("command_id: agent-init-worker")
+        );
+    }
+
+    #[test]
+    fn agent_extension_projection_fails_closed_on_duplicate_source_ids_without_writes() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        fs::create_dir_all(harness.path().join("docs/process/agent-extensions"))
+            .expect("source registry dir should exist");
+        fs::create_dir_all(harness.path().join(".vida/project/agent-extensions"))
+            .expect("runtime registry dir should exist");
+        fs::write(
+            harness
+                .path()
+                .join("docs/process/agent-extensions/roles.yaml"),
+            "version: 1\nroles:\n  - role_id: duplicate\n  - role_id: duplicate\n",
+        )
+        .expect("duplicate source registry should be written");
+        let runtime_path = harness.path().join(".vida/project/agent-extensions/roles.yaml");
+        fs::write(&runtime_path, "version: 1\nroles:\n  - role_id: stable\n")
+            .expect("runtime registry should be written");
+        let config = serde_yaml::from_str(
+            r#"
+agent_extensions:
+  registries:
+    roles: docs/process/agent-extensions/roles.yaml
+"#,
+        )
+        .expect("config should parse");
+
+        let error = refresh_runtime_agent_extension_projections_from_configured_sources(
+            &config,
+            harness.path(),
+        )
+        .expect_err("duplicate ids should fail closed");
+
+        assert!(error.contains("duplicate role id `duplicate`"));
+        assert_eq!(
+            fs::read_to_string(runtime_path).expect("runtime registry should remain readable"),
+            "version: 1\nroles:\n  - role_id: stable\n"
+        );
+    }
+
+    #[test]
+    fn agent_extension_projection_rejects_unsafe_source_path_without_writes() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime_path = harness.path().join(".vida/project/agent-extensions/roles.yaml");
+        fs::create_dir_all(runtime_path.parent().expect("runtime parent should exist"))
+            .expect("runtime registry dir should exist");
+        fs::write(&runtime_path, "version: 1\nroles: []\n")
+            .expect("runtime registry should be written");
+        let config = serde_yaml::from_str(
+            r#"
+agent_extensions:
+  registries:
+    roles: ../outside-roles.yaml
+"#,
+        )
+        .expect("config should parse");
+
+        let error = refresh_runtime_agent_extension_projections_from_configured_sources(
+            &config,
+            harness.path(),
+        )
+        .expect_err("unsafe source path should fail closed");
+
+        assert!(error.contains("project-relative safe path"));
+        assert_eq!(
+            fs::read_to_string(runtime_path).expect("runtime registry should remain readable"),
+            "version: 1\nroles: []\n"
+        );
+    }
+
+    #[test]
+    fn agent_extension_projection_validates_all_families_before_any_write() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        fs::create_dir_all(harness.path().join("docs/process/agent-extensions"))
+            .expect("source registry dir should exist");
+        fs::create_dir_all(harness.path().join(".vida/project/agent-extensions"))
+            .expect("runtime registry dir should exist");
+        fs::write(
+            harness
+                .path()
+                .join("docs/process/agent-extensions/roles.yaml"),
+            "version: 1\nroles:\n  - role_id: refreshed\n",
+        )
+        .expect("valid roles source should be written");
+        fs::write(
+            harness
+                .path()
+                .join("docs/process/agent-extensions/skills.yaml"),
+            "version: 1\nskills: malformed\n",
+        )
+        .expect("malformed skills source should be written");
+        let roles_runtime = harness.path().join(".vida/project/agent-extensions/roles.yaml");
+        let skills_runtime = harness.path().join(".vida/project/agent-extensions/skills.yaml");
+        fs::write(&roles_runtime, "version: 1\nroles:\n  - role_id: stable\n")
+            .expect("roles runtime should be written");
+        fs::write(&skills_runtime, "version: 1\nskills: []\n")
+            .expect("skills runtime should be written");
+        let config = serde_yaml::from_str(
+            r#"
+agent_extensions:
+  registries:
+    roles: docs/process/agent-extensions/roles.yaml
+    skills: docs/process/agent-extensions/skills.yaml
+"#,
+        )
+        .expect("config should parse");
+
+        let error = refresh_runtime_agent_extension_projections_from_configured_sources(
+            &config,
+            harness.path(),
+        )
+        .expect_err("malformed later family should fail closed");
+
+        assert!(error.contains("malformed skill registry"));
+        assert!(
+            fs::read_to_string(roles_runtime)
+                .expect("roles runtime should remain readable")
+                .contains("role_id: stable")
+        );
+        assert_eq!(
+            fs::read_to_string(skills_runtime).expect("skills runtime should remain readable"),
+            "version: 1\nskills: []\n"
         );
     }
 

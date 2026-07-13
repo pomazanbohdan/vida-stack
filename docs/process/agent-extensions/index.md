@@ -75,8 +75,18 @@ Project-local Codex skill note:
 2. `agent_extensions`
 3. configured registry paths in this map
 4. optional `.vida/project/agent-extensions/**` runtime projection/materialization
-5. explicit export/import/sync when root bridge files are used
-6. `vida project-activator --json`
+5. `vida project-activator --repair` performs the canonical atomic source-to-runtime refresh
+6. explicit export/import/sync when root bridge files are used
+7. `vida project-activator --json`
+
+## Projection Refresh Contract
+
+1. `vida project-activator --repair` is the public mutation surface for refreshing configured registry families before activation.
+2. `vida project-activator --json` reports per-family `in_sync` or `stale` parity without mutating projections.
+3. unchanged sources are deterministic no-ops; missing runtime projections are created only by explicit repair.
+4. malformed registries, duplicate ids, unsafe source paths, symlinked runtime targets, and failed staging fail closed before any family is replaced.
+5. refresh stages every changed family in the same runtime projection directory and rolls back replaced files when a later replacement fails.
+6. runtime bundle and dispatch consumers must use the refreshed `.vida/project/agent-extensions/**` projection; they do not become a second source authority.
 
 ## Project Operating Rule
 

@@ -227,9 +227,23 @@ fn orchestrator_claim_authority_input(
 }
 
 impl StateStore {
+    async fn orchestrator_claims_with_active_status(
+        &self,
+    ) -> Result<Vec<OrchestratorClaim>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT * FROM orchestrator_claim \
+                 WHERE status IN ['active', 'renewed', 'blocked'] \
+                 ORDER BY created_at DESC, claim_id DESC;",
+            )
+            .await?;
+        Ok(query.take(0)?)
+    }
+
     pub(crate) async fn expire_stale_orchestrator_claims(&self) -> Result<usize, StateStoreError> {
         let now = claim_timestamp(claim_time());
-        let active = self.active_orchestrator_claims().await?;
+        let active = self.orchestrator_claims_with_active_status().await?;
         let stale = active
             .into_iter()
             .filter(|claim| claim_is_expired(claim, &now))
@@ -251,16 +265,13 @@ impl StateStore {
     pub(crate) async fn active_orchestrator_claims(
         &self,
     ) -> Result<Vec<OrchestratorClaim>, StateStoreError> {
-        let mut query = self
-            .db
-            .query(
-                "SELECT * FROM orchestrator_claim \
-                 WHERE status IN ['active', 'renewed', 'blocked'] \
-                 ORDER BY created_at DESC, claim_id DESC;",
-            )
-            .await?;
-        let rows: Vec<OrchestratorClaim> = query.take(0)?;
-        Ok(rows)
+        let now = claim_timestamp(claim_time());
+        Ok(self
+            .orchestrator_claims_with_active_status()
+            .await?
+            .into_iter()
+            .filter(|claim| !claim_is_expired(claim, &now))
+            .collect())
     }
 
     /// Returns active orchestrator claims from OTHER sessions (not the current one).

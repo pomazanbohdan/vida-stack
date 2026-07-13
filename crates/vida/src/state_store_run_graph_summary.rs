@@ -211,12 +211,18 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         rework_route_from_completion_evidence(&run_graph_completion_evidence(&receipt))
     {
         let rework_target = normalize_run_graph_node(&rework_route.allowed_next_node);
+        let rework_policy_gate = rework_route
+            .blocker_code
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| receipt.blocker_code.clone())
+            .unwrap_or_else(|| "not_required".to_string());
         let transition = ready_transition_input(
             &status,
-            rework_target.clone(),
+            receipt.dispatch_target.clone(),
             Some(rework_target.clone()),
             format!("{rework_target}_dispatch_ready"),
-            "not_required".to_string(),
+            rework_policy_gate,
             "execution_cursor".to_string(),
             RunGraphDispatchTargetFormat::Direct,
             true,
@@ -264,12 +270,18 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             rework_route_from_completion_evidence(&run_graph_completion_evidence(&receipt))
         {
             let rework_target = normalize_run_graph_node(&rework_route.allowed_next_node);
+            let rework_policy_gate = rework_route
+                .blocker_code
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| receipt.blocker_code.clone())
+                .unwrap_or_else(|| "not_required".to_string());
             let transition = ready_transition_input(
                 &status,
-                rework_target.clone(),
+                receipt.dispatch_target.clone(),
                 Some(rework_target.clone()),
                 format!("{rework_target}_dispatch_ready"),
-                "not_required".to_string(),
+                rework_policy_gate,
                 "execution_cursor".to_string(),
                 RunGraphDispatchTargetFormat::Direct,
                 true,
@@ -330,7 +342,7 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.selected_backend = selected_backend.to_string();
         }
         let dispatch_target = normalize_run_graph_node(&receipt.dispatch_target);
-        let transition = ready_transition_input(
+        let mut transition = ready_transition_input(
             &status,
             dispatch_target.clone(),
             Some(dispatch_target.clone()),
@@ -340,6 +352,7 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             RunGraphDispatchTargetFormat::Lane,
             true,
         );
+        transition.lane_id = format!("{dispatch_target}_lane");
         apply_ready_run_graph_transition(&mut status, transition);
         return Ok(status);
     }
@@ -2001,6 +2014,19 @@ impl CurrentSessionRunGraphClaimScope {
 }
 
 impl StateStore {
+    pub(crate) fn current_session_id(&self) -> Result<Option<String>, StateStoreError> {
+        let evidence = self.current_runtime_owner_evidence()?;
+        Ok(evidence["current_session"]["session_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned))
+    }
+
+    pub(crate) fn current_session_identity_is_present(&self) -> Result<bool, StateStoreError> {
+        Ok(self.current_session_id()?.is_some())
+    }
+
     fn run_graph_owner_evidence_record_id(run_id: &str, artifact_kind: &str) -> String {
         sanitize_record_id(&format!("{run_id}::{artifact_kind}"))
     }
@@ -2121,7 +2147,21 @@ impl StateStore {
             .await?;
         let rows: Vec<RunGraphContinuationBinding> = binding_query.take(0)?;
         for binding in rows {
-            if !scope.matches_binding(&binding) {
+            let binding_session_id = binding
+                .active_bounded_unit
+                .get("orchestrator_session_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let binding_matches_current_session = binding_session_id.is_some_and(|session_id| {
+                session_id == current_session_id
+                    || current_stable_fallback
+                        .as_deref()
+                        .is_some_and(|fallback| fallback == session_id)
+            });
+            if (binding_session_id.is_some() && !binding_matches_current_session)
+                || (binding_session_id.is_none() && !scope.matches_binding(&binding))
+            {
                 continue;
             }
             scope.push_run_id(binding.run_id.clone());
@@ -3920,6 +3960,38 @@ impl StateStore {
     pub async fn latest_run_graph_status_for_current_session(
         &self,
     ) -> Result<Option<RunGraphStatus>, StateStoreError> {
+        if let Some(binding) = self
+            .latest_explicit_run_graph_continuation_binding_for_current_session()
+            .await?
+        {
+            let bound_run_id = binding
+                .active_bounded_unit
+                .get("run_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(binding.run_id.as_str());
+            if !bound_run_id.is_empty()
+                && !self
+                    .run_graph_latest_receipt_row_supersedes_current_session_lane(bound_run_id)
+                    .await?
+            {
+                match self.run_graph_status_from_task_rows(bound_run_id, &[]).await {
+                    Ok(status)
+                        if !self
+                            .run_graph_status_has_completed_exception_takeover_supersession(&status)
+                            .await?
+                            && !self
+                                .run_graph_status_points_to_terminal_task_active(&status)
+                                .await? =>
+                    {
+                        return Ok(Some(status));
+                    }
+                    Ok(_) | Err(StateStoreError::MissingTask { .. }) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
         let Some(scope) = self.current_session_run_graph_claim_scope().await? else {
             return Ok(None);
         };
@@ -7403,6 +7475,86 @@ mod tests {
 
         assert_eq!(binding.run_id, "run-scope-from-task");
         assert_eq!(binding.task_id, "next-bound-task");
+
+        close_store_and_remove_root(store, root).await;
+        restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_status_prefers_explicit_binding_over_current_session_claim() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-explicit-priority");
+        }
+        let root = temp_run_graph_root("vida-explicit-binding-status-priority");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("task-claimed", "in_progress"))
+            .await
+            .expect("persist claimed task");
+        store
+            .persist_task_record(test_task_record("task-bound", "in_progress"))
+            .await
+            .expect("persist explicitly bound task");
+
+        let mut claimed_status = sample_run_graph_status();
+        claimed_status.run_id = "run-claimed".to_string();
+        claimed_status.task_id = "task-claimed".to_string();
+        store
+            .record_run_graph_status(&claimed_status)
+            .await
+            .expect("persist claimed status");
+        let mut bound_status = sample_run_graph_status();
+        bound_status.run_id = "run-bound".to_string();
+        bound_status.task_id = "task-bound".to_string();
+        store
+            .record_run_graph_status(&bound_status)
+            .await
+            .expect("persist bound status");
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "claimed-run-session-claim".to_string(),
+                state_root_id: root.display().to_string(),
+                worktree_environment_id: root.display().to_string(),
+                orchestrator_session_id: "session-explicit-priority".to_string(),
+                process_id: Some(std::process::id()),
+                task_id: Some("task-claimed".to_string()),
+                run_id: Some("run-claimed".to_string()),
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some("task:task-claimed".to_string()),
+                owned_paths: Vec::new(),
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Observe,
+                lease_seconds: 3600,
+            })
+            .await
+            .expect("acquire current session claim");
+        let mut binding = sample_explicit_binding(
+            "run-bound",
+            "task-bound",
+            "2026-05-21T01:00:00Z",
+        );
+        binding.binding_source = "explicit_continuation_bind_task".to_string();
+        binding.active_bounded_unit = serde_json::json!({
+            "kind": "task_graph_task",
+            "run_id": "run-bound",
+            "task_id": "task-bound",
+            "orchestrator_session_id": "session-explicit-priority",
+        });
+        store
+            .record_run_graph_continuation_binding(&binding)
+            .await
+            .expect("record explicit binding");
+
+        let status = store
+            .latest_run_graph_status_for_current_session()
+            .await
+            .expect("read current-session status")
+            .expect("explicit binding should resolve a status");
+        assert_eq!(status.run_id, "run-bound");
+        assert_eq!(status.task_id, "task-bound");
 
         close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
@@ -11506,4 +11658,5 @@ mod tests {
 
         close_store_and_remove_root(store, root).await;
     }
+
 }

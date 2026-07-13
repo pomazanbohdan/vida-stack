@@ -3785,6 +3785,28 @@ fn build_agent_dispatch_next_preview_dev_team(
             })
         })
         .flatten();
+    let zombie_d_gate_result = selected_ready_candidates
+        .first()
+        .and_then(|candidate| {
+            sequence.first().map(|step| {
+                crate::zombie_d_gate::evaluate_from_readiness(
+                    &activation_bundle["dev_team_readiness"],
+                    &candidate.task,
+                    Some(&step.task_class),
+                    "dispatch",
+                )
+            })
+        });
+    if let Some(result) = zombie_d_gate_result.as_ref() {
+        if result["status"].as_str() == Some("blocked") {
+            blocker_codes.extend(crate::zombie_d_gate::string_array_for_operator(
+                result.get("blocker_codes"),
+            ));
+            next_actions.extend(crate::zombie_d_gate::string_array_for_operator(
+                result.get("next_actions"),
+            ));
+        }
+    }
     if let Some(gate) = receipt_gate.as_ref() {
         if let Some(blocker_code) = gate.blocker_code.as_ref() {
             blocker_codes.push(blocker_code.clone());
@@ -3936,6 +3958,21 @@ fn build_agent_dispatch_next_preview_dev_team(
             ));
             break;
         };
+        let zombie_d_gate = crate::zombie_d_gate::evaluate_from_readiness(
+            &activation_bundle["dev_team_readiness"],
+            &candidate.task,
+            Some(&step.task_class),
+            "dispatch",
+        );
+        if zombie_d_gate["status"].as_str() == Some("blocked") {
+            blocked_candidates.push(blocked_candidate(
+                candidate,
+                crate::zombie_d_gate::string_array_for_operator(
+                    zombie_d_gate.get("blocker_codes"),
+                ),
+            ));
+            continue;
+        }
         if !candidate.ready_now {
             blocked_candidates.push(blocked_candidate(
                 candidate,
@@ -4074,6 +4111,11 @@ fn build_agent_dispatch_next_preview_dev_team(
     } else {
         compact_diagnostics_omitted("flow_projection")
     };
+    if let Some(result) = zombie_d_gate_result {
+        if let Some(flow_projection) = flow_projection.as_object_mut() {
+            flow_projection.insert("zombie_d_gate".to_string(), result);
+        }
+    }
     if let (Some(gate), Some(flow_projection)) =
         (receipt_gate.as_ref(), flow_projection.as_object_mut())
     {
@@ -15525,6 +15567,22 @@ mod tests {
             &serde_json::json!({
                 "agent_system": {"max_parallel_agents": 1},
                 "carrier_runtime": {
+                    "model_selection": {
+                        "default_strategy": "balanced_cost_quality",
+                        "semantic_scores": {
+                            "reasoning_effort": {"medium": 60.0},
+                            "quality_tier": {"medium": 60.0},
+                            "speed_tier": {"medium": 60.0}
+                        },
+                        "ordinal_ranks": {
+                            "reasoning_effort": {"medium": 3},
+                            "quality_tier": {"medium": 3}
+                        },
+                        "missing_reasoning_effort_policy": {
+                            "mode": "use_configured_default",
+                            "default": "medium"
+                        }
+                    },
                     "roles": [{
                         "role_id": "middle",
                         "tier": "middle",
@@ -15536,6 +15594,19 @@ mod tests {
                         "model_provider": "openai",
                         "model_reasoning_effort": "medium",
                         "normalized_cost_units": 4,
+                        "model_profiles": {
+                            "approval-profile": {
+                                "profile_id": "approval-profile",
+                                "model_ref": "gpt-5.5",
+                                "provider": "openai",
+                                "reasoning_effort": "medium",
+                                "quality_tier": "medium",
+                                "speed_tier": "medium",
+                                "runtime_roles": ["business_analyst"],
+                                "task_classes": ["specification"],
+                                "normalized_cost_units": 4
+                            }
+                        },
                         "readiness": {"status": "ready"},
                         "lifecycle": {"state": "ready"}
                     }]

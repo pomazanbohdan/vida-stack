@@ -13,13 +13,13 @@ config_file = "agents/junior.toml"
 description = "Level 2 Codex lane for bounded specification, planning, spec-conformance coach review, and medium implementation packets when the work still fits one packet and does not require senior proof or architecture escalation."
 config_file = "agents/middle.toml"
 
-[agents.senior]
-description = "Level 3 Codex lane for independent verification, proof-strength review, and high-confidence closure gates that fail closed on missing evidence."
-config_file = "agents/senior.toml"
-
 [agents.architect]
 description = "Level 4 Codex lane for architecture preparation, hard escalation, and cross-scope conflict resolution when the normal implementer-coach-verifier path cannot close lawfully."
 config_file = "agents/architect.toml"
+
+[agents.senior]
+description = "Level 3 Codex lane for independent verification, proof-strength review, and high-confidence closure gates that fail closed on missing evidence."
+config_file = "agents/senior.toml"
 
 [shell_environment_policy]
 inherit = "none"

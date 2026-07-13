@@ -108,6 +108,18 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 29. For protocol authoring, instruction compression, token-budget gates, quality-versus-size block routing, or bootstrap-visible protocol registration, continue early to:
    - `docs/product/spec/protocol-authoring-and-token-economy-law.md`
 
+## Project Script Discovery Before Implementation
+
+1. After reading `AGENTS.md` and this sidecar, inventory project-owned scripts before running direct Cargo or ad-hoc environment commands:
+   - `rg --files scripts | Sort-Object`
+2. Run the first no-Cargo help surface before choosing a proof mode:
+   - `pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Help`
+3. Use `docs/process/vida-runtime-development-environment.md` as the canonical script inventory and mode-selection table, and use `docs/process/command-timing-and-gate-optimization-protocol.md` for timing, output, and gate-admission rules.
+4. Use the canonical ladder: `script-check` for docs/scripts, `quick` for compile-aware source proof, `focused-nextest` for one bounded test filter, `package-nextest`/`workspace-nextest` for broader Rust proof, `doc-test` for Rust docs, `build-debug`/`runtime-smoke` for debug runtime proof, and `release-package`/`release-install` only for package or installed-runtime acceptance.
+5. On Windows, route Cargo/MSVC work through `scripts/vida-cargo-msvc.ps1`; it owns `scripts/vida-windows-env.ps1`, MSVC/tool resolution, and PowerShell-to-Cargo test-argument forwarding.
+6. Prefer `-Json`, help, parser checks, dry-run or `-SkipBuild`/explicit artifact-path options, `-Mode target-dir-policy -Json`, and artifact references that preserve stdout/stderr. Never hide failures, bypass ownership/safety checks, or run concurrent Cargo gates in one shared target directory.
+7. A recurring script or environment ambiguity is a bounded script-improvement TaskFlow item; do not solve it with an unrecorded one-off command.
+
 Project-routing rule:
 
 1. Project/product document pointers belong here, not in framework-owned map/index surfaces addressed by shorthand framework ids.
@@ -280,5 +292,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-07-03T06:54:51.0040348Z
+updated_at: 2026-07-12T16:24:00.0000000Z
 changelog_ref: AGENTS.sidecar.changelog.jsonl

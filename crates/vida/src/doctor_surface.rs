@@ -905,6 +905,232 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 snapshot_inconsistent: latest_run_graph_snapshot_inconsistent,
                 ..
             } = current_runtime_projection;
+            let current_session_run_graph_task_stale = match current_session_run_graph_status.as_ref()
+            {
+                Some(status) => match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
+                    Ok(verdict) => verdict.task_missing() || verdict.task_closed_stale_run(),
+                    Err(error) => {
+                        eprintln!("current session run graph task authority: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                },
+                None => false,
+            };
+            let taskflow_active_run_graph_status = match store.list_tasks(None, true).await {
+                Ok(tasks) => {
+                    let active_candidates =
+                        crate::continuation_binding_summary::taskflow_active_candidates_from_tasks(
+                            &tasks,
+                        );
+                    if active_candidates.len() == 1 {
+                        match active_candidates[0]["task_id"].as_str() {
+                            Some(task_id) => {
+                                match store.latest_run_graph_run_id_for_task(task_id).await {
+                                    Ok(Some(run_id)) => match store.run_graph_status(&run_id).await
+                                    {
+                                        Ok(status) => Some(status),
+                                        Err(crate::state_store::StateStoreError::MissingTask {
+                                            ..
+                                        }) => None,
+                                        Err(error) => {
+                                            eprintln!(
+                                                "TaskFlow active run graph status: failed ({error})"
+                                            );
+                                            return ExitCode::from(1);
+                                        }
+                                    },
+                                    Ok(None) => None,
+                                    Err(error) => {
+                                        eprintln!("TaskFlow active run graph id: failed ({error})");
+                                        return ExitCode::from(1);
+                                    }
+                                }
+                            }
+                            None => None,
+                        }
+                    } else {
+                        None
+                    }
+                }
+                Err(error) => {
+                    eprintln!("TaskFlow active candidates: failed ({error})");
+                    return ExitCode::from(1);
+                }
+            };
+            let taskflow_active_dispatch_receipt = match taskflow_active_run_graph_status.as_ref() {
+                Some(status) => match store
+                    .run_graph_dispatch_receipt_summary_for_status(status)
+                    .await
+                {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        eprintln!("TaskFlow active dispatch receipt: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                },
+                None => None,
+            };
+            let active_exception_takeover_dispatch_receipt = match store
+                .latest_active_exception_takeover_dispatch_receipt()
+                .await
+            {
+                Ok(receipt) => {
+                    receipt.map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt)
+                }
+                Err(error) => {
+                    eprintln!("active exception takeover dispatch receipt: failed ({error})");
+                    return ExitCode::from(1);
+                }
+            };
+            let active_exception_takeover_status = match active_exception_takeover_dispatch_receipt
+                .as_ref()
+            {
+                Some(receipt) => match store.run_graph_status(&receipt.run_id).await {
+                    Ok(status) => Some(status),
+                    Err(crate::state_store::StateStoreError::MissingTask { .. }) => None,
+                    Err(error) => {
+                        eprintln!("active exception takeover run graph status: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                },
+                None => None,
+            };
+            let replacement_run_graph_status =
+                taskflow_active_run_graph_status.or(active_exception_takeover_status);
+            let replacement_dispatch_receipt =
+                taskflow_active_dispatch_receipt.or(active_exception_takeover_dispatch_receipt);
+            let use_active_run_graph_projection = replacement_run_graph_status
+                .as_ref()
+                .zip(replacement_dispatch_receipt.as_ref())
+                .is_some_and(|(status, receipt)| {
+                    current_session_run_graph_status.is_none()
+                        || current_session_run_graph_task_stale
+                        || current_session_run_graph_status
+                            .as_ref()
+                            .is_some_and(|current| current.run_id != status.run_id)
+                        || latest_run_graph_status
+                            .as_ref()
+                            .is_none_or(|latest| latest.run_id != receipt.run_id)
+                });
+            let current_session_run_graph_status = if use_active_run_graph_projection {
+                replacement_run_graph_status.clone()
+            } else {
+                current_session_run_graph_status
+            };
+            let latest_run_graph_status = if use_active_run_graph_projection {
+                replacement_run_graph_status.clone()
+            } else {
+                latest_run_graph_status
+            };
+            let latest_run_graph_dispatch_receipt = if use_active_run_graph_projection {
+                replacement_dispatch_receipt
+            } else {
+                latest_run_graph_dispatch_receipt
+            };
+            let latest_run_graph_recovery = if use_active_run_graph_projection {
+                match latest_run_graph_status.as_ref() {
+                    Some(status) => match store.run_graph_recovery_summary(&status.run_id).await {
+                        Ok(summary) => Some(summary),
+                        Err(error) => {
+                            eprintln!("active exception takeover recovery: failed ({error})");
+                            return ExitCode::from(1);
+                        }
+                    },
+                    None => None,
+                }
+            } else {
+                latest_run_graph_recovery
+            };
+            let latest_run_graph_checkpoint = if use_active_run_graph_projection {
+                match latest_run_graph_status.as_ref() {
+                    Some(status) => {
+                        match store.run_graph_checkpoint_summary(&status.run_id).await {
+                            Ok(summary) => Some(summary),
+                            Err(error) => {
+                                eprintln!("active exception takeover checkpoint: failed ({error})");
+                                return ExitCode::from(1);
+                            }
+                        }
+                    }
+                    None => None,
+                }
+            } else {
+                latest_run_graph_checkpoint
+            };
+            let latest_run_graph_gate = if use_active_run_graph_projection {
+                match latest_run_graph_status.as_ref() {
+                    Some(status) => match store.run_graph_gate_summary(&status.run_id).await {
+                        Ok(summary) => Some(summary),
+                        Err(error) => {
+                            eprintln!("active exception takeover gate: failed ({error})");
+                            return ExitCode::from(1);
+                        }
+                    },
+                    None => None,
+                }
+            } else {
+                latest_run_graph_gate
+            };
+            let idle_terminal_run_projection = replacement_run_graph_status.is_none()
+                && latest_run_graph_status.as_ref().is_some_and(|status| {
+                    status.status == "completed"
+                        && status.lifecycle_stage == "closure_complete"
+                        && status
+                            .next_node
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .is_none()
+                });
+            let current_session_run_graph_status = if idle_terminal_run_projection {
+                None
+            } else {
+                current_session_run_graph_status
+            };
+            let latest_terminal_task_active_run_graph_status = if idle_terminal_run_projection {
+                None
+            } else {
+                latest_terminal_task_active_run_graph_status
+            };
+            let latest_run_graph_status = if idle_terminal_run_projection {
+                None
+            } else {
+                latest_run_graph_status
+            };
+            let latest_run_graph_dispatch_receipt = if idle_terminal_run_projection {
+                None
+            } else {
+                latest_run_graph_dispatch_receipt
+            };
+            let latest_run_graph_recovery = if idle_terminal_run_projection {
+                None
+            } else {
+                latest_run_graph_recovery
+            };
+            let latest_run_graph_checkpoint = if idle_terminal_run_projection {
+                None
+            } else {
+                latest_run_graph_checkpoint
+            };
+            let latest_run_graph_gate = if idle_terminal_run_projection {
+                None
+            } else {
+                latest_run_graph_gate
+            };
+            let latest_run_graph_snapshot_inconsistent =
+                latest_run_graph_snapshot_inconsistent && !idle_terminal_run_projection;
+            let current_session_run_graph_dispatch_receipt_checkpoint_leakage =
+                current_session_run_graph_dispatch_receipt_checkpoint_leakage
+                    && !idle_terminal_run_projection;
+            let current_session_effective_run_graph_run_id = if use_active_run_graph_projection {
+                latest_run_graph_dispatch_receipt
+                    .as_ref()
+                    .map(|receipt| receipt.run_id.clone())
+            } else if idle_terminal_run_projection {
+                None
+            } else {
+                current_session_effective_run_graph_run_id
+            };
             let current_session_effective_run_graph_run_id =
                 current_session_effective_run_graph_run_id.as_deref();
             let current_session_run_graph_dispatch_receipt =
@@ -1089,17 +1315,18 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             let no_active_taskflow_work = task_store.open_count == 0
                 && task_store.in_progress_count == 0
                 && task_store.ready_count == 0;
-            let idle_terminal_run = no_active_taskflow_work
-                && latest_run_graph_status.as_ref().is_some_and(|status| {
-                    status.status == "completed"
-                        && status.lifecycle_stage == "closure_complete"
-                        && status
-                            .next_node
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .is_none()
-                });
+            let idle_terminal_run = idle_terminal_run_projection
+                || no_active_taskflow_work
+                    && latest_run_graph_status.as_ref().is_some_and(|status| {
+                        status.status == "completed"
+                            && status.lifecycle_stage == "closure_complete"
+                            && status
+                                .next_node
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .is_none()
+                    });
             let latest_run_graph_terminal_closure = match latest_run_graph_status.as_ref() {
                 Some(status)
                     if crate::taskflow_run_graph_task_authority::run_graph_status_is_terminal_closure(

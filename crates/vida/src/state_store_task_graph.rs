@@ -2229,6 +2229,35 @@ mod tests {
         assert!(back_edge.node.is_none());
     }
 
+    #[test]
+    fn task_dependency_tree_preserves_duplicate_dependency_records_as_repeated_refs() {
+        let mut root = task_record("root-task", "open");
+        let dependency = task_record("dependency-task", "open");
+        for _ in 0..2 {
+            root.dependencies.push(TaskDependencyRecord {
+                issue_id: "root-task".to_string(),
+                depends_on_id: "dependency-task".to_string(),
+                edge_type: "blocks".to_string(),
+                created_at: "1".to_string(),
+                created_by: "test".to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            });
+        }
+
+        let tree = StateStore::task_dependency_tree_from_rows(&[root, dependency], "root-task")
+            .expect("duplicate dependency records should remain inspectable");
+
+        assert_eq!(tree.dependencies.len(), 2);
+        assert_eq!(
+            tree.dependencies
+                .iter()
+                .filter(|edge| edge.repeated)
+                .count(),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn scheduling_projection_fail_closes_when_semantics_are_missing() {
         let root = temp_root("task-scheduling-fail-closed");

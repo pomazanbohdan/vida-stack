@@ -156,8 +156,9 @@ pub(crate) fn non_empty_str(value: &str) -> Option<&str> {
 fn effective_latest_run_graph_status(
     current_session_status: Option<crate::state_store::RunGraphStatus>,
     global_status: Option<&crate::state_store::RunGraphStatus>,
+    session_identity_ambiguous: bool,
 ) -> Option<crate::state_store::RunGraphStatus> {
-    if current_session_status.is_some() {
+    if current_session_status.is_some() || session_identity_ambiguous {
         return current_session_status;
     }
     if std::env::var("VIDA_SESSION_ID")
@@ -187,6 +188,7 @@ pub(crate) struct CurrentRuntimeProjection {
     pub(crate) dispatch_receipt_matches_status: bool,
     pub(crate) dispatch_receipt_summary_inconsistent: bool,
     pub(crate) snapshot_inconsistent: bool,
+    pub(crate) session_identity_ambiguous: bool,
 }
 
 pub(crate) async fn current_runtime_projection(
@@ -194,6 +196,10 @@ pub(crate) async fn current_runtime_projection(
 ) -> Result<CurrentRuntimeProjection, state_store::StateStoreError> {
     let current_session_status = store.latest_run_graph_status_for_current_session().await?;
     let global_status = store.latest_run_graph_status().await?;
+    let session_identity_ambiguous = store.current_session_identity_is_present()?
+        && std::env::var_os("VIDA_SESSION_ID").is_some()
+        && current_session_status.is_none()
+        && global_status.is_some();
     let terminal_task_active_status = store.latest_terminal_task_active_run_graph_status().await?;
     let mut current_session_dispatch_receipt_checkpoint_leakage = false;
     let current_session_dispatch_receipt = match current_session_status.as_ref() {
@@ -215,7 +221,11 @@ pub(crate) async fn current_runtime_projection(
         None => None,
     };
     let status =
-        effective_latest_run_graph_status(current_session_status.clone(), global_status.as_ref());
+        effective_latest_run_graph_status(
+            current_session_status.clone(),
+            global_status.as_ref(),
+            session_identity_ambiguous,
+        );
     let status_run_id = status.as_ref().map(|status| status.run_id.as_str());
     let mut recovery = match status_run_id {
         Some(run_id) => Some(store.run_graph_recovery_summary(run_id).await?),
@@ -317,6 +327,7 @@ pub(crate) async fn current_runtime_projection(
         dispatch_receipt_matches_status,
         dispatch_receipt_summary_inconsistent,
         snapshot_inconsistent,
+        session_identity_ambiguous,
     })
 }
 
@@ -2069,6 +2080,7 @@ fn refresh_cached_run_graph_operator_contracts(
     latest_run_graph_dispatch_receipt_signal_ambiguous: bool,
     latest_run_graph_dispatch_receipt_summary_inconsistent: bool,
     latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
+    session_identity_ambiguous: bool,
 ) -> Option<()> {
     let signals = [
         (
@@ -2095,6 +2107,11 @@ fn refresh_cached_run_graph_operator_contracts(
             "run_graph_latest_dispatch_receipt_checkpoint_leakage",
             crate::status_surface_signals::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action(),
             latest_run_graph_dispatch_receipt_checkpoint_leakage,
+        ),
+        (
+            "session_identity_ambiguous",
+            "Bind the requested task/run explicitly before continuation; the current session has no scoped active run.".to_string(),
+            session_identity_ambiguous,
         ),
     ];
 
@@ -2341,6 +2358,7 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         gate: latest_run_graph_gate,
         dispatch_receipt: latest_run_graph_dispatch_receipt,
         dispatch_receipt_checkpoint_leakage,
+        session_identity_ambiguous,
         ..
     } = current_runtime_projection;
     let explicit_continuation_binding = match store
@@ -2712,6 +2730,7 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         latest_run_graph_dispatch_receipt_signal_ambiguous,
         latest_run_graph_dispatch_receipt_summary_inconsistent,
         dispatch_receipt_checkpoint_leakage,
+        session_identity_ambiguous,
     )?;
     let latest_run_graph_surface_truth =
         latest_run_graph_dispatch_receipt
@@ -3408,7 +3427,7 @@ mod tests {
             "implementation",
         );
 
-        assert!(super::effective_latest_run_graph_status(None, None).is_none());
+        assert!(super::effective_latest_run_graph_status(None, None, false).is_none());
 
         let global = crate::taskflow_run_graph::default_run_graph_status(
             "global-run",
@@ -3416,10 +3435,14 @@ mod tests {
             "implementation",
         );
         assert_eq!(
-            super::effective_latest_run_graph_status(None, Some(&global))
+            super::effective_latest_run_graph_status(None, Some(&global), false)
                 .expect("global status should be used")
                 .run_id,
             "global-run"
+        );
+        assert!(
+            super::effective_latest_run_graph_status(None, Some(&global), true).is_none(),
+            "an identified session without a scoped run must not inherit global latest"
         );
 
         let current = crate::taskflow_run_graph::default_run_graph_status(
@@ -3428,7 +3451,7 @@ mod tests {
             "implementation",
         );
         assert_eq!(
-            super::effective_latest_run_graph_status(Some(current), Some(&terminal))
+            super::effective_latest_run_graph_status(Some(current), Some(&terminal), false)
                 .expect("current status should win")
                 .run_id,
             "current-run"
@@ -5719,6 +5742,7 @@ host_environment:
             false,
             false,
             false,
+            false,
         )
         .expect("cached overlay should update run-graph blockers");
         assert_eq!(payload["status"], "blocked");
@@ -5742,6 +5766,7 @@ host_environment:
 
         super::refresh_cached_run_graph_operator_contracts(
             &mut payload,
+            false,
             false,
             false,
             false,

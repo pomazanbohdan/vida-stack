@@ -1636,7 +1636,7 @@ fn repair_project_activation_assets(project_root: &Path) -> Result<(), String> {
     )
     .and_then(|()| super::init_surfaces::ensure_runtime_home(project_root))
     .and_then(|()| super::init_surfaces::write_runtime_agent_extension_projections(project_root))
-    .and_then(|()| repair_runtime_agent_extension_projections(project_root))
+    .and_then(|()| super::init_surfaces::refresh_runtime_agent_extension_projections(project_root))
     .and_then(|()| super::init_surfaces::materialize_project_docs_scaffold(project_root))
 }
 
@@ -1649,19 +1649,6 @@ fn repair_project_activation_assets_with_report(
         || repair_project_activation_assets(project_root),
     )?;
     Ok(report)
-}
-
-fn repair_runtime_agent_extension_projections(project_root: &Path) -> Result<(), String> {
-    let config_path = project_root.join("vida.config.yaml");
-    if !config_path.is_file() {
-        return Ok(());
-    }
-    let config = read_yaml_file_checked(&config_path)?;
-    crate::agent_extension_registry_projection::refresh_runtime_agent_extension_projections_from_configured_sources(
-        &config,
-        project_root,
-    )
-    .map(|_| ())
 }
 
 pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> ExitCode {

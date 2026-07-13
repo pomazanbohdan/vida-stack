@@ -205,6 +205,21 @@ impl TeamFlowStateMachine {
     }
 
     pub fn from_dispatch_contract(dispatch_contract: &Value, sequence_field: &str) -> Option<Self> {
+        Self::from_dispatch_contract_impl(dispatch_contract, sequence_field, true)
+    }
+
+    fn from_dispatch_contract_for_rework(
+        dispatch_contract: &Value,
+        sequence_field: &str,
+    ) -> Option<Self> {
+        Self::from_dispatch_contract_impl(dispatch_contract, sequence_field, false)
+    }
+
+    fn from_dispatch_contract_impl(
+        dispatch_contract: &Value,
+        sequence_field: &str,
+        require_stage: bool,
+    ) -> Option<Self> {
         let sequence_value = dispatch_contract.get(sequence_field).or_else(|| {
             (sequence_field != "lane_sequence")
                 .then(|| dispatch_contract.get("lane_sequence"))
@@ -243,9 +258,11 @@ impl TeamFlowStateMachine {
                         .and_then(|activation| activation.get("activation_runtime_role"))
                         .or_else(|| lane.get("activation_runtime_role"))
                         .or_else(|| lane.get("runtime_role")),
-                )?;
+                )
+                .or_else(|| (!require_stage).then_some(role_id.clone()))?;
                 let task_class = required_nonempty_string(lane.get("task_class"))?;
-                let stage = required_nonempty_string(lane.get("stage"))?;
+                let stage = required_nonempty_string(lane.get("stage"))
+                    .or_else(|| (!require_stage).then_some("execution".to_string()))?;
                 Some(StateMachineStep {
                     role_id,
                     runtime_role,
@@ -420,7 +437,10 @@ pub fn validate_dispatch_contract_rework_transition(
     requested_next_node: &str,
     rework_target: &str,
 ) -> Option<TransitionVerdict> {
-    TeamFlowStateMachine::from_dispatch_contract(dispatch_contract, "execution_lane_sequence")
+    TeamFlowStateMachine::from_dispatch_contract_for_rework(
+        dispatch_contract,
+        "execution_lane_sequence",
+    )
         .map(|sm| sm.validate_rework_transition(current_role, requested_next_node, rework_target))
 }
 
@@ -742,6 +762,31 @@ mod tests {
             ),
             Some(TransitionVerdict::Allowed {
                 next_lane: "alpha_impl_rework".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn test_dispatch_contract_rework_transition_allows_legacy_lane_catalog_without_stage() {
+        let contract = serde_json::json!({
+            "execution_lane_sequence": ["developer", "coach_implementation_gate", "tester"],
+            "lane_catalog": {
+                "developer": {"dispatch_target": "developer", "task_class": "implementation"},
+                "coach_implementation_gate": {"dispatch_target": "coach_implementation_gate", "task_class": "coach"},
+                "tester": {"dispatch_target": "tester", "task_class": "verification"},
+                "developer_rework": {"dispatch_target": "developer_rework", "task_class": "implementation"}
+            }
+        });
+
+        assert_eq!(
+            validate_dispatch_contract_rework_transition(
+                &contract,
+                "coach_implementation_gate",
+                "developer_rework",
+                "developer",
+            ),
+            Some(TransitionVerdict::Allowed {
+                next_lane: "developer_rework".to_string()
             })
         );
     }

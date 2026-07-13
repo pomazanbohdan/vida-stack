@@ -2338,7 +2338,10 @@ pub(crate) struct TaskNoteArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum TaskNoteCommand {
-    #[command(about = "append one message to a task's existing notes")]
+    #[command(
+        about = "append one message to a task's existing notes",
+        after_help = "Canonical form:\n  vida task note append <TASK_ID> --message <MESSAGE> [--json]\nA positional message is accepted for compatibility; do not combine it with --message or --message-file."
+    )]
     Append(TaskNoteAppendArgs),
 }
 
@@ -2346,6 +2349,12 @@ pub(crate) enum TaskNoteCommand {
 pub(crate) struct TaskNoteAppendArgs {
     #[arg(help = "Task id whose notes should receive the appended message")]
     pub(crate) task_id: String,
+
+    #[arg(
+        value_name = "MESSAGE",
+        help = "Optional positional message; prefer the canonical --message form"
+    )]
+    pub(crate) positional_message: Option<String>,
 
     #[arg(long = "message", help = "Message to append to the task notes")]
     pub(crate) message: Option<String>,
@@ -5504,9 +5513,7 @@ mod tests {
         assert!(coder_help.contains("provider-check"));
         assert!(coder_help.contains("run"));
         assert!(coder_help.contains("Default output is compact TOON/plain"));
-        assert!(
-            coder_help.contains("Use --json only when a machine-readable payload is required.")
-        );
+        assert!(coder_help.contains("Use --json only when a machine-readable payload is required."));
         assert!(coder_help.contains("vida coder capabilities\n"));
         assert!(!coder_help.contains("vida coder capabilities --json"));
 
@@ -5681,10 +5688,8 @@ mod tests {
         let agent_init_help = agent_init_error.to_string();
         assert_help_has_no_blank_description_rows("agent-init", &agent_init_help);
         assert!(agent_init_help.contains("Optional request text"));
-        assert!(
-            agent_init_help
-                .contains("return receipt-backed execution or host-bridge handoff state")
-        );
+        assert!(agent_init_help
+            .contains("return receipt-backed execution or host-bridge handoff state"));
         assert!(agent_init_help.contains("Default blocked output is compact TOON/plain"));
         assert!(agent_init_help.contains(
             "Use --json only when a machine-readable payload or full blocked evidence is required"

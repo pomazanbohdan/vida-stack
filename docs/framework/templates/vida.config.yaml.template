@@ -42,17 +42,17 @@ host_environment:
       junior:
         tier: junior
         rate: 1
-        reasoning_band: medium
-        model: gpt-5.6-terra
-        model_reasoning_effort: medium
+        reasoning_band: high
+        model: gpt-5.6-luna
+        model_reasoning_effort: high
         sandbox_mode: workspace-write
-        default_model_profile: codex_gpt56_terra_medium_write
+        default_model_profile: codex_gpt56_luna_high_write
         model_profiles:
-          codex_gpt56_terra_medium_write:
+          codex_gpt56_luna_high_write:
             provider: openai-codex
-            model_ref: gpt-5.6-terra
-            reasoning_effort: medium
-            plan_mode_reasoning_effort: medium
+            model_ref: gpt-5.6-luna
+            reasoning_effort: high
+            plan_mode_reasoning_effort: high
             sandbox_mode: workspace-write
             normalized_cost_units: 1
             pricing:
@@ -88,17 +88,17 @@ host_environment:
       middle:
         tier: middle
         rate: 4
-        reasoning_band: high
-        model: gpt-5.6-terra
-        model_reasoning_effort: high
+        reasoning_band: xhigh
+        model: gpt-5.6-luna
+        model_reasoning_effort: xhigh
         sandbox_mode: workspace-write
-        default_model_profile: codex_gpt56_terra_high_write
+        default_model_profile: codex_gpt56_luna_xhigh_write
         model_profiles:
-          codex_gpt56_terra_high_write:
+          codex_gpt56_luna_xhigh_write:
             provider: openai-codex
-            model_ref: gpt-5.6-terra
-            reasoning_effort: high
-            plan_mode_reasoning_effort: high
+            model_ref: gpt-5.6-luna
+            reasoning_effort: xhigh
+            plan_mode_reasoning_effort: xhigh
             sandbox_mode: workspace-write
             normalized_cost_units: 4
             speed_tier: fast
@@ -119,11 +119,11 @@ host_environment:
             readiness:
               mode: codex_profile
               required: true
-          codex_gpt56_terra_medium_analysis:
+          codex_gpt56_luna_xhigh_analysis_legacy:
             provider: openai-codex
-            model_ref: gpt-5.6-terra
-            reasoning_effort: medium
-            plan_mode_reasoning_effort: medium
+            model_ref: gpt-5.6-luna
+            reasoning_effort: xhigh
+            plan_mode_reasoning_effort: xhigh
             sandbox_mode: read-only
             normalized_cost_units: 2
             speed_tier: fast
@@ -155,17 +155,17 @@ host_environment:
       senior:
         tier: senior
         rate: 16
-        reasoning_band: medium
-        model: gpt-5.6-sol
-        model_reasoning_effort: medium
+        reasoning_band: max
+        model: gpt-5.6-luna
+        model_reasoning_effort: max
         sandbox_mode: read-only
-        default_model_profile: codex_gpt56_sol_medium_readonly
+        default_model_profile: codex_gpt56_luna_max_readonly
         model_profiles:
-          codex_gpt56_sol_medium_readonly:
+          codex_gpt56_luna_max_readonly:
             provider: openai-codex
-            model_ref: gpt-5.6-sol
-            reasoning_effort: medium
-            plan_mode_reasoning_effort: medium
+            model_ref: gpt-5.6-luna
+            reasoning_effort: max
+            plan_mode_reasoning_effort: max
             sandbox_mode: read-only
             normalized_cost_units: 16
             speed_tier: medium
@@ -193,22 +193,22 @@ host_environment:
           - release_readiness
       architect:
         tier: architect
-        rate: 48
-        reasoning_band: high
+        rate: 16
+        reasoning_band: medium
         model: gpt-5.6-sol
-        model_reasoning_effort: high
+        model_reasoning_effort: medium
         sandbox_mode: read-only
-        default_model_profile: codex_gpt56_sol_high_arch
+        default_model_profile: codex_gpt56_sol_medium_arch
         model_profiles:
-          codex_gpt56_sol_high_arch:
+          codex_gpt56_sol_medium_arch:
             provider: openai-codex
             model_ref: gpt-5.6-sol
-            reasoning_effort: high
-            plan_mode_reasoning_effort: high
+            reasoning_effort: medium
+            plan_mode_reasoning_effort: medium
             sandbox_mode: read-only
-            normalized_cost_units: 48
-            speed_tier: slow
-            quality_tier: very_high
+            normalized_cost_units: 16
+            speed_tier: medium
+            quality_tier: high
             write_scope: read-only
             runtime_roles:
               - solution_architect
@@ -376,6 +376,7 @@ protocol_activation:
 
 agent_extensions:
   enabled: false
+  worktree_root: .worktrees
   map_doc: .vida/project/agent-extensions/index.md
   registries:
     roles: .vida/project/agent-extensions/roles.yaml
@@ -471,8 +472,8 @@ dev_team:
       completion_blocker: pending_specification_evidence
       inclusion_rule: always
       default_carrier: middle
-      default_model: gpt-5.6-terra
-      default_model_reasoning_effort: medium
+      default_model: gpt-5.6-luna
+      default_model_reasoning_effort: xhigh
       cost_policy:
         budget_units: 4
         selection_rule: cheapest_eligible_specification_carrier
@@ -499,7 +500,7 @@ dev_team:
       inclusion_rule: always
       default_carrier: architect
       default_model: gpt-5.6-sol
-      default_model_reasoning_effort: high
+      default_model_reasoning_effort: medium
       cost_policy:
         budget_units: 16
         selection_rule: high_architecture_carrier_for_execution_preparation
@@ -523,8 +524,8 @@ dev_team:
       completion_blocker: pending_implementation_evidence
       inclusion_rule: always
       default_carrier: junior
-      default_model: gpt-5.6-terra
-      default_model_reasoning_effort: medium
+      default_model: gpt-5.6-luna
+      default_model_reasoning_effort: high
       cost_policy:
         budget_units: 1
         fallback_carrier: middle
@@ -549,8 +550,8 @@ dev_team:
       completion_blocker: pending_review_clean_evidence
       inclusion_rule: always
       default_carrier: senior
-      default_model: gpt-5.6-sol
-      default_model_reasoning_effort: medium
+      default_model: gpt-5.6-luna
+      default_model_reasoning_effort: max
       cost_policy:
         budget_units: 16
         selection_rule: independent_duplication_and_architecture_reuse_review
@@ -583,8 +584,8 @@ dev_team:
       completion_blocker: pending_review_clean_evidence
       inclusion_rule: always
       default_carrier: middle
-      default_model: gpt-5.6-terra
-      default_model_reasoning_effort: high
+      default_model: gpt-5.6-luna
+      default_model_reasoning_effort: xhigh
       cost_policy:
         budget_units: 4
         selection_rule: final_spec_conformance_review_after_duplication_clearance
@@ -608,8 +609,8 @@ dev_team:
       completion_blocker: pending_verification_evidence
       inclusion_rule: always
       default_carrier: senior
-      default_model: gpt-5.6-sol
-      default_model_reasoning_effort: medium
+      default_model: gpt-5.6-luna
+      default_model_reasoning_effort: max
       cost_policy:
         budget_units: 16
         selection_rule: independent_verification_before_closure
@@ -632,8 +633,8 @@ dev_team:
       completion_blocker: pending_verification_evidence
       inclusion_rule: always
       default_carrier: senior
-      default_model: gpt-5.6-sol
-      default_model_reasoning_effort: medium
+      default_model: gpt-5.6-luna
+      default_model_reasoning_effort: max
       cost_policy:
         budget_units: 16
         selection_rule: proof_strength_before_release
@@ -655,8 +656,8 @@ dev_team:
       completion_blocker: pending_verification_evidence
       inclusion_rule: always
       default_carrier: senior
-      default_model: gpt-5.6-sol
-      default_model_reasoning_effort: medium
+      default_model: gpt-5.6-luna
+      default_model_reasoning_effort: max
       cost_policy:
         budget_units: 16
         selection_rule: fail_closed_until_release_receipt
@@ -1300,7 +1301,7 @@ agent_system:
       attempts:
         - attempt_id: analysis-internal-medium
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_terra_medium_analysis
+          model_profile_id: codex_gpt56_luna_xhigh_write
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: analysis
@@ -1315,7 +1316,7 @@ agent_system:
       consolidator:
         attempt_id: analysis-root-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt56_terra_medium_analysis
+        model_profile_id: codex_gpt56_luna_xhigh_write
         conversation_role: analyst
         runtime_role: business_analyst
         task_class: analysis
@@ -1327,7 +1328,7 @@ agent_system:
       attempts:
         - attempt_id: specification-internal-medium
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_terra_medium_analysis
+          model_profile_id: codex_gpt56_luna_xhigh_write
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: specification
@@ -1342,7 +1343,7 @@ agent_system:
       consolidator:
         attempt_id: specification-coach-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt56_sol_medium_readonly
+        model_profile_id: codex_gpt56_luna_max_readonly
         conversation_role: coach
         runtime_role: coach
         task_class: review
@@ -1354,7 +1355,7 @@ agent_system:
       attempts:
         - attempt_id: implementation-internal-low-write
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_terra_medium_write
+          model_profile_id: codex_gpt56_luna_high_write
           conversation_role: developer
           runtime_role: worker
           task_class: implementation
@@ -1362,7 +1363,7 @@ agent_system:
       consolidator:
         attempt_id: implementation-coach-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt56_sol_medium_readonly
+        model_profile_id: codex_gpt56_luna_max_readonly
         conversation_role: coach
         runtime_role: coach
         task_class: review
@@ -1381,7 +1382,7 @@ agent_system:
           isolation: external_readonly_complete
         - attempt_id: review-internal-high
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_sol_medium_readonly
+          model_profile_id: codex_gpt56_luna_max_readonly
           conversation_role: reviewer
           runtime_role: verifier
           task_class: verification
@@ -1389,7 +1390,7 @@ agent_system:
       consolidator:
         attempt_id: review-root-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt56_sol_medium_readonly
+        model_profile_id: codex_gpt56_luna_max_readonly
         conversation_role: coach
         runtime_role: coach
         task_class: review
@@ -1405,9 +1406,9 @@ agent_system:
       orchestration_tier: senior
       cost_priority: premium
       budget_cost_units: 10
-      profiles: codex_gpt56_terra_medium_write,codex_gpt56_terra_medium_analysis,codex_gpt56_terra_high_write,codex_gpt56_sol_medium_readonly,codex_gpt56_sol_high_arch
-      default_profile: codex_gpt56_terra_medium_write
-      default_model_profile: codex_gpt56_terra_medium_write
+      profiles: codex_gpt56_luna_high_write,codex_gpt56_luna_xhigh_write,codex_gpt56_luna_max_readonly,codex_gpt56_sol_medium_arch
+      default_profile: codex_gpt56_luna_xhigh_write
+      default_model_profile: codex_gpt56_luna_xhigh_write
       capability_band: implementation_safe,architecture_safe,review_safe
       default_runtime_role: worker
       write_scope: orchestrator_native
@@ -1440,10 +1441,10 @@ agent_system:
         - hard_escalation
         - meta_analysis
       model_profiles:
-        codex_gpt56_terra_medium_write:
+        codex_gpt56_luna_high_legacy:
           provider: openai-codex
-          model_ref: gpt-5.6-terra
-          reasoning_effort: medium
+          model_ref: gpt-5.6-luna
+          reasoning_effort: high
           normalized_cost_units: 1
           speed_tier: fast
           quality_tier: medium_high
@@ -1456,10 +1457,10 @@ agent_system:
           readiness:
             mode: codex_profile
             required: true
-        codex_gpt56_terra_medium_analysis:
+        codex_gpt56_luna_xhigh_analysis_legacy:
           provider: openai-codex
-          model_ref: gpt-5.6-terra
-          reasoning_effort: medium
+          model_ref: gpt-5.6-luna
+          reasoning_effort: xhigh
           normalized_cost_units: 2
           speed_tier: fast
           quality_tier: medium
@@ -1474,10 +1475,10 @@ agent_system:
           readiness:
             mode: codex_profile
             required: true
-        codex_gpt56_terra_high_write:
+        codex_gpt56_luna_xhigh_legacy:
           provider: openai-codex
-          model_ref: gpt-5.6-terra
-          reasoning_effort: high
+          model_ref: gpt-5.6-luna
+          reasoning_effort: xhigh
           normalized_cost_units: 4
           speed_tier: fast
           quality_tier: medium
@@ -1496,10 +1497,10 @@ agent_system:
           readiness:
             mode: codex_profile
             required: true
-        codex_gpt56_sol_medium_readonly:
+        codex_gpt56_luna_max_readonly_legacy:
           provider: openai-codex
-          model_ref: gpt-5.6-sol
-          reasoning_effort: medium
+          model_ref: gpt-5.6-luna
+          reasoning_effort: max
           normalized_cost_units: 16
           speed_tier: medium
           quality_tier: high
@@ -1516,10 +1517,10 @@ agent_system:
           readiness:
             mode: codex_profile
             required: true
-        codex_gpt56_sol_high_arch:
+        codex_gpt56_sol_medium_arch_legacy:
           provider: openai-codex
           model_ref: gpt-5.6-sol
-          reasoning_effort: high
+          reasoning_effort: medium
           normalized_cost_units: 48
           speed_tier: medium
           quality_tier: very_high
@@ -1545,9 +1546,9 @@ agent_system:
       orchestration_tier: external_process
       cost_priority: fallback_only
       budget_cost_units: 10
-      models_hint: openai-codex/gpt-5.6-terra
-      default_model: openai-codex/gpt-5.6-terra
-      default_model_profile: codex_cli_gpt56_terra_medium_write
+      models_hint: openai-codex/gpt-5.6-luna
+      default_model: openai-codex/gpt-5.6-luna
+      default_model_profile: codex_cli_gpt56_luna_high_write
       capability_band: implementation_safe,review_safe
       default_runtime_role: worker
       write_scope: workspace-write
@@ -1571,10 +1572,10 @@ agent_system:
         - coach
         - verification
       model_profiles:
-        codex_cli_gpt56_terra_medium_write:
+        codex_cli_gpt56_luna_high_write:
           provider: openai-codex
-          model_ref: openai-codex/gpt-5.6-terra
-          reasoning_effort: medium
+          model_ref: openai-codex/gpt-5.6-luna
+          reasoning_effort: high
           normalized_cost_units: 10
           speed_tier: medium
           quality_tier: high
@@ -1895,7 +1896,7 @@ agent_system:
       subagents: internal_subagents
       fallback_executor_backend: internal_subagents
       profiles:
-        internal_subagents: codex_gpt56_terra_medium_write
+        internal_subagents: codex_gpt56_luna_high_write
       max_runtime_seconds: 420
       verification_gate: targeted_verification
       coach_required: yes
@@ -1996,8 +1997,8 @@ agent_system:
 #       orchestration_tier: senior
 #       cost_priority: premium
 #       budget_cost_units: 10
-#       profiles: codex_gpt56_terra_medium_write,codex_gpt56_sol_high_arch,codex_gpt56_sol_medium_readonly
-#       default_profile: codex_gpt56_terra_medium_write
+#       profiles: codex_gpt56_luna_high_write,codex_gpt56_sol_medium_arch,codex_gpt56_luna_max_readonly
+#       default_profile: codex_gpt56_luna_high_write
 #       capability_band: implementation_safe,architecture_safe
 #       write_scope: orchestrator_native
 #       billing_tier: internal
@@ -2063,7 +2064,7 @@ agent_system:
 #       executor_backend: internal_subagents
 #       fallback_executor_backend: internal_subagents
 #       profiles:
-#         internal_subagents: codex_gpt56_terra_medium_write
+#         internal_subagents: codex_gpt56_luna_high_write
 #       budget_policy: balanced
 #       max_budget_units: 4
 #       max_runtime_seconds: 420
@@ -2076,7 +2077,7 @@ agent_system:
 #       fanout_executor_backends:
 #         - internal_subagents
 #       profiles:
-#         internal_subagents: codex_gpt56_terra_medium_analysis
+#         internal_subagents: codex_gpt56_luna_xhigh_write
 #       max_runtime_seconds: 180
 #       verification_gate: source_backed_summary
 #       verification_route_task_class: verification_ensemble
@@ -2089,7 +2090,7 @@ agent_system:
 #       executor_backend: internal_subagents
 #       fallback_executor_backend: internal_subagents
 #       profiles:
-#         internal_subagents: codex_gpt56_terra_medium_write
+#         internal_subagents: codex_gpt56_luna_high_write
 #       max_runtime_seconds: 420
 #       verification_gate: targeted_verification
 #       coach_required: yes
@@ -2114,7 +2115,7 @@ agent_system:
 #       executor_backend: internal_subagents
 #       fallback_executor_backend: internal_subagents
 #       profiles:
-#         internal_subagents: codex_gpt56_sol_medium_readonly
+#         internal_subagents: codex_gpt56_luna_max_readonly
 #       max_runtime_seconds: 180
 #       verification_gate: verification_summary
 #       dispatch_required: diagnostic_only_internal_first_review

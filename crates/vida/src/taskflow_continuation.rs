@@ -329,10 +329,8 @@ pub(crate) async fn sync_run_graph_continuation_binding_with_request_text(
             format!("Failed to read existing run-graph continuation binding: {error}")
         })?
     {
-        if let Some(bound_task_id) = explicit_task_graph_bound_task_id(&existing) {
-            if bound_task_id != status.task_id.trim() {
-                return Ok(Some(existing));
-            }
+        if explicit_task_graph_bound_task_id(&existing).is_some() {
+            return Ok(Some(existing));
         }
     }
     let request_text = if let Some(request_text) = request_text_override
@@ -496,7 +494,7 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
             );
         }
     };
-    let binding = if let Some(task_id) = task_id.as_deref() {
+    let mut binding = if let Some(task_id) = task_id.as_deref() {
         if !explicit_task_bind_allowed_for_status(&status, task_id) {
             return emit_continuation_bind_error(
                 as_json,
@@ -576,6 +574,35 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
         };
         binding
     };
+    let session_id = match store.current_session_id() {
+        Ok(Some(session_id)) => session_id,
+        Ok(None) => {
+            return emit_continuation_bind_error(
+                as_json,
+                Some(&run_id),
+                Some(&binding.task_id),
+                "Current orchestrator session identity is missing; refusing an unscoped continuation binding.".to_string(),
+                "session_identity_ambiguous",
+                1,
+            );
+        }
+        Err(error) => {
+            return emit_continuation_bind_error(
+                as_json,
+                Some(&run_id),
+                Some(&binding.task_id),
+                format!("Failed to resolve current orchestrator session identity: {error}"),
+                "session_identity_ambiguous",
+                1,
+            );
+        }
+    };
+    if let Some(active_bounded_unit) = binding.active_bounded_unit.as_object_mut() {
+        active_bounded_unit.insert(
+            "orchestrator_session_id".to_string(),
+            serde_json::Value::String(session_id),
+        );
+    }
     if let Err(error) = store.record_run_graph_continuation_binding(&binding).await {
         return emit_continuation_bind_error(
             as_json,
@@ -977,6 +1004,78 @@ mod tests {
         assert_eq!(persisted.binding_source, "explicit_continuation_bind_task");
         assert_eq!(persisted.task_id, "task-new");
         assert_eq!(persisted.active_bounded_unit["task_id"], "task-new");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn sync_run_graph_continuation_binding_preserves_explicit_task_graph_binding_after_automatic_dispatch_start()
+     {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-continuation-sync-preserve-explicit-task-after-dispatch-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: "run-dispatch-start".to_string(),
+                    task_id: "task-same".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": "task-same",
+                        "run_id": "run-dispatch-start",
+                        "task_status": "in_progress",
+                        "issue_type": "task",
+                        "orchestrator_session_id": "session-current"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "user-directed task must survive automatic dispatch start".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+                    request_text: Some("continue the requested task".to_string()),
+                    recorded_at: "2026-04-21T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist explicit task binding");
+
+        let mut dispatch_started_status =
+            crate::taskflow_run_graph::default_run_graph_status(
+                "run-dispatch-start",
+                "coder",
+                "coder",
+            );
+        dispatch_started_status.task_id = "task-same".to_string();
+        dispatch_started_status.status = "blocked".to_string();
+        dispatch_started_status.lifecycle_stage = "coder_blocked".to_string();
+        dispatch_started_status.resume_target = "dispatch.coder".to_string();
+
+        let binding = sync_run_graph_continuation_binding(
+            &store,
+            &dispatch_started_status,
+            "dispatch_execution_started",
+        )
+        .await
+        .expect("automatic dispatch start should preserve explicit binding")
+        .expect("explicit binding should remain present");
+
+        assert_eq!(binding.binding_source, "explicit_continuation_bind_task");
+        assert_eq!(binding.task_id, "task-same");
+        assert_eq!(binding.active_bounded_unit["kind"], "task_graph_task");
+        assert_eq!(
+            binding.active_bounded_unit["orchestrator_session_id"],
+            "session-current"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

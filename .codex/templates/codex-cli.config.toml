@@ -25,25 +25,20 @@ model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 config_file = "agents/middle.toml"
 
-[profiles.middle_analysis]
-model = "gpt-5.6-terra"
-model_reasoning_effort = "medium"
-sandbox_mode = "read-only"
-
 [profiles.senior]
-model = "gpt-5.6-sol"
-model_reasoning_effort = "medium"
+model = "gpt-5.6-luna"
+model_reasoning_effort = "max"
 sandbox_mode = "read-only"
 config_file = "agents/senior.toml"
 
 [profiles.architect]
 model = "gpt-5.6-sol"
-model_reasoning_effort = "high"
+model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 config_file = "agents/architect.toml"
 
 [aliases.development_specification]
-profile = "middle_analysis"
+profile = "middle"
 runtime_role = "business_analyst"
 task_classes = ["specification"]
 

@@ -403,7 +403,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Purpose:");
             println!(
-                "  Inspect and actualize explicit scheduling metadata for open TaskFlow work."
+                "  Inspect and actualize scheduling metadata for an active bounded epic or an explicit scope."
             );
             println!(
                 "  Actualization is conservative: it makes implicit serial work explicit and never infers parallel-safe execution."
@@ -411,7 +411,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Canonical command:");
             println!(
-                "  vida taskflow scheduling actualize [--scope open-epics|<task-id>] [--dry-run|--apply] [--json]"
+                "  vida taskflow scheduling actualize [--scope <epic-or-task-id>] [--dry-run|--apply] [--json]"
             );
             println!();
             println!("Options:");

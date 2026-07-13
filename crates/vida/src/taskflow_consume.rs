@@ -862,8 +862,33 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 eprintln!("{error}");
                                 return ExitCode::from(1);
                             }
-                            let taskflow_handoff_plan =
+                            let mut taskflow_handoff_plan =
                                 super::build_taskflow_handoff_plan(&role_selection);
+                            let zombie_d_handoff_gate = if let Some(task_id) = explicit_task_id {
+                                match store.show_task(task_id).await {
+                                    Ok(task) => Some(
+                                        crate::zombie_d_gate::evaluate_from_project_root(
+                                            super::taskflow_task_bridge::infer_project_root_from_state_root(
+                                                store.root(),
+                                            )
+                                            .as_deref(),
+                                            &task,
+                                            "handoff",
+                                        ),
+                                    ),
+                                    Err(_) => None,
+                                }
+                            } else {
+                                None
+                            };
+                            if let Some(gate) = zombie_d_handoff_gate.as_ref() {
+                                taskflow_handoff_plan["zombie_d_gate"] = gate.clone();
+                                if gate["status"].as_str() == Some("blocked") {
+                                    taskflow_handoff_plan["status"] = serde_json::json!("blocked");
+                                    taskflow_handoff_plan["handoff_ready"] =
+                                        serde_json::json!(false);
+                                }
+                            }
                             let mut closure_admission = super::build_runtime_closure_admission(
                                 &bundle_check,
                                 &docflow_verdict,
@@ -873,6 +898,24 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 &mut docflow_verdict,
                                 &mut closure_admission,
                             );
+                            if let Some(gate) = zombie_d_handoff_gate.as_ref() {
+                                if gate["status"].as_str() == Some("blocked") {
+                                    for blocker in crate::zombie_d_gate::string_array_for_operator(
+                                        gate.get("blocker_codes"),
+                                    ) {
+                                        if !closure_admission.blockers.contains(&blocker) {
+                                            closure_admission.blockers.push(blocker);
+                                        }
+                                    }
+                                    closure_admission.blockers.sort();
+                                    closure_admission.blockers.dedup();
+                                    closure_admission.status = "blocked".to_string();
+                                    closure_admission.admitted = false;
+                                    closure_admission
+                                        .proof_surfaces
+                                        .push("vida task proof attach-evidence".to_string());
+                                }
+                            }
                             let execution_preparation_gate =
                                 build_execution_preparation_evidence_gate(
                                     &role_selection,

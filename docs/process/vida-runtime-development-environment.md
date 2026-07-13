@@ -41,6 +41,46 @@ For every runtime development session:
 6. use `docs/process/agent-skill-learning-protocol.md` before shaping skill update or skill-learning runtime work,
 7. validate TaskFlow graph after mutations.
 
+## Project Script Inventory And Canonical Proof Ladder
+
+Run this inventory before direct Cargo or ad-hoc environment commands:
+
+```powershell
+rg --files scripts | Sort-Object
+pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/vida-dev-gate.ps1 -Help
+```
+
+The project-owned script surface is the reusable operator contract. Select the smallest mode that proves the current task:
+
+| Mode | Use | Required boundary |
+| --- | --- | --- |
+| `script-check` | Docs/script changes, syntax, diff, runtime-boundary, and no-Cargo proof | Run first for this document family; preserve JSON artifact refs. |
+| `target-dir-policy` | Cheap Cargo cache/target-dir preflight | Run before a new linked-worktree or shell Cargo gate; record the returned policy. |
+| `quick` | Compile-aware source proof | Runs diff check, scoped formatting checks, and `cargo check`; use after the docs/script-only class no longer applies. |
+| `focused-nextest` | One bounded regression filter | Pass `-Package` and `-TestFilter`; keep the filter auditable and the Cargo shard serialized. |
+| `package-nextest` | Full `vida` package proof | Use after the focused batch is complete. |
+| `workspace-nextest` | Workspace CI-profile proof | Use as batch/CI proof, not after every micro-edit. |
+| `doc-test` | Rust workspace documentation tests | Keep separate from package nextest because it proves a different contract. |
+| `build-debug` | Debug runtime entrypoint build | Use for changed runtime entrypoints before smoke. |
+| `runtime-smoke` | Debug binary + authoritative `status --json` | Resolves the binary from the effective `.vida/cargo-target` directory. |
+| `release-package` | Release archive/package assembly | Use `-SkipBuild -Windows -ReleaseBinDir <dir>` only when an existing release binary is the explicit input. |
+| `release-install` | Installed launcher acceptance | Use for installed-runtime, release admission, closed-wave, or explicitly required system-binary proof; it is not a per-micro-edit gate. |
+
+Windows/MSVC ownership is explicit:
+
+1. `scripts/vida-windows-env.ps1` owns Windows variables, writable TEMP/TMP, PowerShell/Cargo/Git resolution, MSVC environment import, and `cl.exe`/`link.exe`/SDK checks.
+2. `scripts/vida-cargo-msvc.ps1` dot-sources that helper and forwards Cargo arguments, including harness flags after the required test delimiter.
+3. `scripts/vida-dev-gate.ps1` owns the proof ladder, target-dir policy, build-concurrency guard, timing records, compact JSON, and stdout/stderr artifact paths.
+4. `scripts/cleanup-project-artifacts.ps1` is dry-run by default; `-Apply` is the explicit mutation switch and must retain its path allowlist/protected-path checks.
+
+Safety and parity checks:
+
+1. Use `-Help` and PowerShell parser checks before relying on a changed script.
+2. Use `-Json` for machine-readable proof and retain artifact refs; use `-SkipBuild`, `-ReleaseBinDir`, or default dry-run modes to avoid hidden side effects.
+3. Verify a fresh PowerShell shell and the activated project shell resolve the same approved `vida`, `pwsh`, `cargo`, `rustup`, and `git` paths before treating PATH/toolchain work as complete.
+4. Never bypass ownership/approval, hide a nonzero exit, or run concurrent Cargo gates against one shared target directory.
+5. A recurring missing script, wrapper ambiguity, or shell mismatch becomes a bounded TaskFlow script/operator-efficiency item with a tested improvement; it is not patched with an undocumented one-off command.
+
 ## Current Installed Runtime Environment
 
 The current Windows operator environment uses the canonical release-install gate:
@@ -333,10 +373,10 @@ Before reporting a runtime environment/docs/skill update as complete:
 artifact_path: process/vida-runtime-development-environment
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-19'
+artifact_revision: '2026-07-12'
 schema_version: '1'
 status: canonical
 source_path: docs/process/vida-runtime-development-environment.md
 created_at: 2026-06-04T00:00:00+03:00
-updated_at: 2026-06-19T14:15:00+03:00
+updated_at: 2026-07-12T16:24:00+03:00
 changelog_ref: vida-runtime-development-environment.changelog.jsonl

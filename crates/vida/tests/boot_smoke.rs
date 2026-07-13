@@ -10753,14 +10753,16 @@ fn project_activator_materializes_configured_codex_profiles_for_read_only_codex_
     let architect = fs::read_to_string(format!("{project_root}/.codex/agents/architect.toml"))
         .expect("architect codex carrier should materialize");
 
-    assert!(junior.contains("model = \"gpt-5.6-terra\""));
-    assert!(middle.contains("model = \"gpt-5.6-terra\""));
-    assert!(senior.contains("model = \"gpt-5.6-sol\""));
+    assert!(junior.contains("model = \"gpt-5.6-luna\""));
+    assert!(middle.contains("model = \"gpt-5.6-luna\""));
+    assert!(senior.contains("model = \"gpt-5.6-luna\""));
     assert!(architect.contains("model = \"gpt-5.6-sol\""));
     assert!(senior.contains("sandbox_mode = \"read-only\""));
     assert!(architect.contains("sandbox_mode = \"read-only\""));
-    assert!(senior.contains("model_reasoning_effort = \"medium\""));
-    assert!(architect.contains("model_reasoning_effort = \"high\""));
+    assert!(junior.contains("model_reasoning_effort = \"high\""));
+    assert!(middle.contains("model_reasoning_effort = \"xhigh\""));
+    assert!(senior.contains("model_reasoning_effort = \"max\""));
+    assert!(architect.contains("model_reasoning_effort = \"medium\""));
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }

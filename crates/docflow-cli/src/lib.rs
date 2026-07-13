@@ -7199,37 +7199,37 @@ mod tests {
         let map = "docs/product/spec/current-spec-map.md";
         let target = "docs/product/spec/flappy-bird-design.md";
 
-        assert!(project_doc_map_contains_registration(
+        assert!(super::project_doc_map_contains_registration(
             map,
             "- [Flappy Bird](flappy-bird-design.md)",
             target
         ));
-        assert!(project_doc_map_contains_registration(
+        assert!(super::project_doc_map_contains_registration(
             map,
             "- `docs/product/spec/flappy-bird-design.md`",
             target
         ));
-        assert!(!project_doc_map_contains_registration(
+        assert!(!super::project_doc_map_contains_registration(
             map,
             "The file is docs/product/spec/flappy-bird-design.md.",
             target
         ));
-        assert!(!project_doc_map_contains_registration(
+        assert!(!super::project_doc_map_contains_registration(
             map,
             "- [docs/product/spec/flappy-bird-design.md](other.md)",
             target
         ));
-        assert!(!project_doc_map_contains_registration(
+        assert!(!super::project_doc_map_contains_registration(
             map,
             "- [Flappy Bird](flappy-bird-design.md.bak)",
             target
         ));
-        assert!(!project_doc_map_contains_registration(
+        assert!(!super::project_doc_map_contains_registration(
             map,
             "- [Flappy Bird](../other/flappy-bird-design.md)",
             target
         ));
-        assert!(!project_doc_map_contains_registration(
+        assert!(!super::project_doc_map_contains_registration(
             map,
             "- [map](current-spec-map.md)",
             map
@@ -7238,10 +7238,11 @@ mod tests {
 
     #[test]
     fn current_spec_catalog_is_a_spec_registry_without_self_reference() {
-        let owners = project_doc_owning_maps("docs/product/spec/flappy-bird-design.md");
+        let owners = super::project_doc_owning_maps("docs/product/spec/flappy-bird-design.md");
         assert!(owners.contains(&"docs/product/spec/current-spec-catalog.md"));
 
-        let catalog_owners = project_doc_owning_maps("docs/product/spec/current-spec-catalog.md");
+        let catalog_owners =
+            super::project_doc_owning_maps("docs/product/spec/current-spec-catalog.md");
         assert!(!catalog_owners.contains(&"docs/product/spec/current-spec-catalog.md"));
     }
 
