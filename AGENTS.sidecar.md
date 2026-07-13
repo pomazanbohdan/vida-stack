@@ -108,6 +108,15 @@ Purpose: provide the project-level agent instruction overlay for the repository 
 29. For protocol authoring, instruction compression, token-budget gates, quality-versus-size block routing, or bootstrap-visible protocol registration, continue early to:
    - `docs/product/spec/protocol-authoring-and-token-economy-law.md`
 
+## Canonical Code-Search Routing
+
+1. Use `ccc` for semantic discovery and ranked concept search after `ccc init` and index-freshness checks; refresh or initialize the index when needed.
+2. Run `ctx_compose` before `ctx_search`, `ctx_read`, or `ctx_shell`; use `ctx_search` for lean-ctx context plus filesystem-aware verification and impact context.
+3. Use `rg` for the fastest exact symbol, string, path, or high-recall search, and as the exact fallback or confirmation path.
+4. Search output is discovery only and never replaces proof, tests, or runtime evidence. For defects, classify `ccc`, `ctx_search`, and `rg` results as leads until current source, tests, or runtime confirm them.
+5. Batch independent read-only searches, avoid repeating identical queries, and keep proof commands separate.
+6. Keep this routing contract independent of agent model, runtime role, and thinking settings; resolve those from runtime/config contracts.
+
 ## Project Script Discovery Before Implementation
 
 1. After reading `AGENTS.md` and this sidecar, inventory project-owned scripts before running direct Cargo or ad-hoc environment commands:
