@@ -160,36 +160,43 @@ Project-routing rule:
 5. **NO WRITE WITHOUT STEP:** After creating the step, execute only the single bounded action. Do not chain multiple write-producing actions in one turn without updating the step list. After completing the action, close the step through `vida task close <step-id> --reason "<proof>" --json` and create the next step before the following write-producing move. `todo` remains a deprecated TaskFlow input alias for `step`; do not use it in new project instructions. This prevents the "unbounded action loop" pattern where the model repeats the same action indefinitely without explicit stop conditions.
 6. **READ-ONLY EXCEPTION:** This rule does not apply to read-only actions: file reads, code analysis, diagnostic commands, searches, git log, status checks, or any operation that does not modify project files or state.
 7. **EXPLICIT RUNTIME-DEFECT BYPASS:** When the user/operator explicitly says VIDA runtime is defective for the current cleanup, planning, or documentation block, do not invent step receipts and do not run mutating VIDA runtime commands. Use bounded static analysis, file proof, script-only checks, and scoped commits. Record any missing TaskFlow/DocFlow evidence as a later runtime-repair follow-up once the runtime is usable.
-8. Prefer the project canonical maps here over broad manual repo scanning when the task depends on project/product understanding.
-9. Documentation tooling and operator commands are mapped in `docs/process/documentation-tooling-map.md`.
-10. For documentation-shaped, spec-shaped, canonical-map, or runtime-law documentation work, activate the documentation tooling path early rather than treating it as a late optional step.
-11. The expected early route for such work is:
+8. **MANDATORY POST-TASK SESSION DIAGNOSTIC:** After every bounded task/step is implemented, proved, merged, or determined blocked, run a read-only session diagnosis and step-optimization pass before closing it or selecting the next move.
+   - Reconcile the actual runtime state, changed files/commits, worktree/branch inventory, proof results, and unresolved blockers.
+   - Compare the executed path with the planned path and identify duplicate reads, repeated commands, unnecessary agent round trips, stale projections, orphaned worktrees, and avoidable mid-flow build/release/install actions.
+   - Choose the smallest safe next sequence; batch independent read-only research and keep writes, authoritative merges, release gates, and cleanup serialized.
+   - Never use optimization as permission to bypass a runtime guard, fabricate receipt/proof evidence, mutate a closed task, or silently change the active bounded unit.
+   - Save the diagnosis result in the active TaskFlow/DocFlow evidence when runtime authority is available; when runtime is blocked, keep a concise local evidence note and create the runtime-repair follow-up when authority returns.
+   - The pass is complete only when it states: actual result, dominant inefficiency or contradiction, optimized next action, and stop/blocker condition.
+9. Prefer the project canonical maps here over broad manual repo scanning when the task depends on project/product understanding.
+10. Documentation tooling and operator commands are mapped in `docs/process/documentation-tooling-map.md`.
+11. For documentation-shaped, spec-shaped, canonical-map, or runtime-law documentation work, activate the documentation tooling path early rather than treating it as a late optional step.
+12. The expected early route for such work is:
    - `AGENTS.sidecar.md`
    - `docs/project-root-map.md`
    - `docs/process/documentation-tooling-map.md`
-12. When runtime is usable, `vida docflow` is the canonical project-side operator/runtime surface for bounded documentation validation, readiness, relation, and proof work once the relevant project/spec context is known.
-13. Do not postpone `vida docflow` usage when runtime is usable and the task already depends on documentation mutation, validation, readiness, or proof-shaped output.
-14. For task/backlog lifecycle work, prefer the DB-backed `vida taskflow task` surface over flat task artifacts.
-15. The expected local operator path is plain `vida taskflow ...` with project-local defaults already bound to this repository root; manual `VIDA_ROOT=...` overrides are fallback-only.
-16. Project-local development routing is intentionally thin after generic runtime protocol promotion:
+13. When runtime is usable, `vida docflow` is the canonical project-side operator/runtime surface for bounded documentation validation, readiness, relation, and proof work once the relevant project/spec context is known.
+14. Do not postpone `vida docflow` usage when runtime is usable and the task already depends on documentation mutation, validation, readiness, or proof-shaped output.
+15. For task/backlog lifecycle work, prefer the DB-backed `vida taskflow task` surface over flat task artifacts.
+16. The expected local operator path is plain `vida taskflow ...` with project-local defaults already bound to this repository root; manual `VIDA_ROOT=...` overrides are fallback-only.
+17. Project-local development routing is intentionally thin after generic runtime protocol promotion:
    - use `docs/process/project-orchestrator-operating-protocol.md` for the vida-stack top-level loop and local read set,
    - use `docs/process/command-timing-and-gate-optimization-protocol.md` for local proof ladder, slow gates, script timing, and CI/non-blocking iteration decisions,
    - use `docs/process/project-error-search-runtime-diagnostics-protocol.md` for VIDA-specific application of the generic `TRACE` algorithm.
-17. Generic runtime owner law is not duplicated here. Resolve these owners through `vida protocol view <id>` or the mapped runtime instruction docs when a case needs the full rule:
+18. Generic runtime owner law is not duplicated here. Resolve these owners through `vida protocol view <id>` or the mapped runtime instruction docs when a case needs the full rule:
    - active-unit binding, anti-stop, final-report, and continuation law: `instruction-contracts/core.orchestration-runtime-capsule`, `instruction-contracts/core.orchestration-protocol`, and `runtime-instructions/work.taskflow-protocol`,
    - TaskFlow state, parent/child closure, scheduling, and source-neutral intake: `runtime-instructions/work.taskflow-protocol`,
    - command timing and fast/long gate discipline: `runtime-instructions/work.command-execution-discipline-protocol`,
    - delegated handoff, packet readiness, result synthesis, and host-agent bridge boundaries: `instruction-contracts/lane.worker-dispatch-protocol`, `runtime-instructions/lane.agent-handoff-context-protocol`, and active agent-system/carrier registry owners,
    - release/version/readiness gates: the mapped release and runtime readiness process/spec owners.
-18. Project residue that remains valid in this sidecar:
+19. Project residue that remains valid in this sidecar:
    - active repository paths and canonical docs maps,
    - DB-backed step-before-write command shape and explicit stop criteria,
    - root `AGENTS.md` and `install/assets/AGENTS.scaffold.md` synchronization when either bootstrap carrier changes,
    - current local proof scripts and release/install timing decisions as documented in the command-timing protocol,
    - vida-stack temporary artifact commit guard and project-local worktree-root policy.
-19. Role, model, carrier, host CLI, flow, and worktree authority must remain configuration-derived from `vida.config.yaml`, enabled agent-extension registries, and current TaskFlow/runtime state. Concrete values may be recorded only as observed evidence, not as owner law.
-20. Historical labels, release labels, and external project names are provenance only unless a current project spec or release task makes them active. Do not add new hardcoded historical or source-project names as runtime authority.
-21. Temporary artifact commit guard: the orchestrator must never commit scratch output, advisory drafts, logs, generated local release/package directories, caches, temp folders, sentinel files, or session-only analysis artifacts such as root-level `tmp*`, `tmp/`, `_temp/`, `temp/`, `logs/`, `dist/`, `target/`, root-level `false`, `true`, `null`, `undefined`, `nul`, `*.tmp`, `*.temp`, `*.log`, `*.bak`, `*.swp`, or `*.pid`. Before every commit, run a tracked-temp scan (`git ls-files` filtered for these paths/patterns, including `git ls-files tmp* false true null undefined nul`) and treat any match outside an explicitly documented, product-owned fixture/artifact path as a repo-hygiene defect to remove before committing.
+20. Role, model, carrier, host CLI, flow, and worktree authority must remain configuration-derived from `vida.config.yaml`, enabled agent-extension registries, and current TaskFlow/runtime state. Concrete values may be recorded only as observed evidence, not as owner law.
+21. Historical labels, release labels, and external project names are provenance only unless a current project spec or release task makes them active. Do not add new hardcoded historical or source-project names as runtime authority.
+22. Temporary artifact commit guard: the orchestrator must never commit scratch output, advisory drafts, logs, generated local release/package directories, caches, temp folders, sentinel files, or session-only analysis artifacts such as root-level `tmp*`, `tmp/`, `_temp/`, `temp/`, `logs/`, `dist/`, `target/`, root-level `false`, `true`, `null`, `undefined`, `nul`, `*.tmp`, `*.temp`, `*.log`, `*.bak`, `*.swp`, or `*.pid`. Before every commit, run a tracked-temp scan (`git ls-files` filtered for these paths/patterns, including `git ls-files tmp* false true null undefined nul`) and treat any match outside an explicitly documented, product-owned fixture/artifact path as a repo-hygiene defect to remove before committing.
 
 ## Epic Execution Optimization Overlay
 
