@@ -10000,8 +10000,8 @@ pub(crate) async fn derive_advanced_run_graph_state(
             let active_entry = existing
                 .next_node
                 .clone()
-                .expect("configured sequence entry was present");
-            let next_node = next_seeded_implementation_lane(sequence, &active_entry);
+            .expect("configured sequence entry was present");
+        let next_node = next_seeded_implementation_lane(sequence, &active_entry);
             return Ok(TaskflowRunGraphAdvancePayload {
                 status: run_graph_state_from_authority_ready_transition(
                     &existing,
@@ -18065,6 +18065,88 @@ agent_system:
         assert_eq!(payload.status.lifecycle_stage, "developer_active");
         assert_eq!(payload.status.next_node.as_deref(), Some("coach"));
         assert_eq!(payload.status.handoff_state, "awaiting_coach");
+    }
+
+    #[tokio::test]
+    async fn configured_runtime_defect_seed_advance_and_dispatch_init_share_lane_contract() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let task_id = "task-run-graph-configured-coder-contract";
+        let labels = vec!["runtime-recovery".to_string()];
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Repair configured run-graph coder contract",
+                display_id: None,
+                description:
+                    "Seed, advance, and dispatch-init must preserve the configured coder lane.",
+                issue_type: "runtime_defect",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "seed -> advance -> dispatch-init preserves the configured coder next-node contract"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create configured runtime-defect task");
+
+        let request_text =
+            "Repair the configured run-graph seed/advance/dispatch-init next-node contract.";
+        let seeded = derive_seeded_run_graph_state(&store, task_id, request_text)
+            .await
+            .expect("configured runtime-defect seed should derive");
+        assert_eq!(seeded.status.task_class, "implementation");
+        assert_eq!(seeded.status.route_task_class, "implementation");
+        assert_eq!(seeded.status.active_node, "planning");
+        assert_eq!(seeded.status.next_node.as_deref(), Some("coder"));
+        assert_eq!(seeded.status.lifecycle_stage, "coder_dispatch_ready");
+        assert!(run_graph_dispatch_bootstrap_from_state(&seeded.status).is_ok());
+
+        persist_seed_artifacts(&store, &seeded)
+            .await
+            .expect("seed artifacts should persist");
+        let dispatch_init = run_graph_dispatch_init(&store, task_id)
+            .await
+            .expect("dispatch-init should accept the seeded coder handoff");
+        assert_eq!(
+            dispatch_init["dispatch_receipt"]["dispatch_target"],
+            "coder"
+        );
+        assert!(store
+            .run_graph_dispatch_receipt(task_id)
+            .await
+            .expect("dispatch receipt lookup should succeed")
+            .is_some());
+
+        let advanced = derive_advanced_run_graph_state(
+            &store,
+            store
+                .run_graph_status(task_id)
+                .await
+                .expect("seeded status lookup should succeed"),
+        )
+        .await
+        .expect("advance should accept the configured coder handoff");
+        assert_eq!(advanced.status.active_node, "coder");
+        assert_eq!(advanced.status.next_node.as_deref(), Some("cleaner"));
+        assert_eq!(advanced.status.lifecycle_stage, "coder_active");
+        assert_eq!(advanced.status.resume_target, "dispatch.cleaner_lane");
     }
 
     #[tokio::test]
