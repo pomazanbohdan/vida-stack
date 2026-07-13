@@ -498,7 +498,7 @@ fn surrealkv_wal_commit_and_rollback_recover_after_reopen() {
             .expect("durable WAL row should persist");
 
         let transaction = db.begin().await.expect("commit transaction should begin");
-        transaction
+        let _: Option<PersistentStorageProbe> = transaction
             .upsert(("state_wal_probe", "committed"))
             .content(PersistentStorageProbe {
                 value: "committed".to_string(),
@@ -511,7 +511,7 @@ fn surrealkv_wal_commit_and_rollback_recover_after_reopen() {
             .expect("transactional row should commit");
 
         let transaction = db.begin().await.expect("rollback transaction should begin");
-        transaction
+        let _: Option<PersistentStorageProbe> = transaction
             .upsert(("state_wal_probe", "rolled-back"))
             .content(PersistentStorageProbe {
                 value: "must-not-survive".to_string(),
@@ -555,7 +555,7 @@ fn surrealkv_wal_commit_and_rollback_recover_after_reopen() {
             .begin()
             .await
             .expect("rollback update transaction should begin");
-        transaction
+        let _: Option<PersistentStorageProbe> = transaction
             .upsert(("state_wal_probe", "durable"))
             .content(PersistentStorageProbe {
                 value: "must-not-replace".to_string(),
