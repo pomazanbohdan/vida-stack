@@ -337,14 +337,15 @@ metadata discovered after creation.
 `Delegate` must:
 
 1. use the cheapest capable executor for the bounded packet,
-2. use mini/highest-reasoning for hunk classification, preflight, docs/source
-   fidelity, test-only patches, and one-file implementation when the proof
-   bundle is explicit,
-3. use `gpt-5.5-low` or the configured low-cost stronger executor for focused
-   rework after mini timeout, under-coverage, or validator rejection,
-4. use `gpt-5.5-medium` or the configured medium validator for TaskFlow,
-   host-bridge, receipt authority, path policy, public CLI, release, or
-   wave-closure gates,
+2. use the lowest-cost eligible capability pattern for hunk classification,
+   preflight, docs/source fidelity, test-only patches, and one-file
+   implementation when the proof bundle is explicit,
+3. use the next eligible capability pattern for focused rework after timeout,
+   under-coverage, or validator rejection,
+4. use the strongest eligible capability pattern for TaskFlow, host-bridge,
+   receipt authority, path policy, public CLI, release, or wave-closure gates;
+   resolve model, role, and reasoning values from configuration and telemetry,
+   never from hardcoded runtime branches,
 5. keep validator prompts short: invariant gap, false-green tests, missing
    proof, unrelated hunks, residual risk,
 6. classify every agent return before launching a replacement for the same

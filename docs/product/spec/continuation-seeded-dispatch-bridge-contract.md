@@ -196,9 +196,9 @@ Will implement / choose:
   - targeted `cargo test -p vida ...` for state-store and surface coverage
 
 ### Phase 3
-- Prefer explicit binding in init/status, run live CLI proof, and rebuild the release binary.
+- Prefer explicit binding in init/status and run live CLI proof; defer release build/install to the final coherent pack or epic gate.
 - Final proof target
-  - docflow + targeted cargo tests + live seeded-run proof + release build
+  - docflow + targeted cargo tests + live seeded-run proof; final release build is owned by the coherent pack/epic closure gate
 
 ## Validation / Proof
 - Unit tests:
@@ -224,7 +224,7 @@ Will implement / choose:
 ## Rollout Strategy
 - Land state-store, routing, and summary preference in one bounded change.
 - Keep all changes additive so existing runtime rows remain readable.
-- Rebuild and reinstall the local `vida` binary after proof passes.
+- Rebuild and reinstall the local `vida` binary once, after all selected coherent-pack/epic changes are merged and final proof passes.
 
 ## Future Considerations
 - Add richer packet diff/inspect variants once more packet types are persisted.
