@@ -252,9 +252,11 @@ function Invoke-BinaryFirstLine {
         [string[]]$Arguments
     )
     try {
-        $output = & $BinaryPath @Arguments 2>$null | Select-Object -First 1
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($output)) {
-            return ([string]$output).Trim()
+        $output = & $BinaryPath @Arguments 2>$null
+        $exitCode = $LASTEXITCODE
+        $firstLine = $output | Select-Object -First 1
+        if ($exitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($firstLine)) {
+            return ([string]$firstLine).Trim()
         }
     } catch {
         return ""
