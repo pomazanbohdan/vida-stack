@@ -9989,19 +9989,18 @@ pub(crate) async fn derive_advanced_run_graph_state(
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "analysis".to_string());
         let direct_writer_entry = compiled_control.first_execution_lane.clone();
-        if let Some(sequence) = seeded_lane_sequence.as_ref()
-            .filter(|sequence| {
-                existing
-                    .next_node
-                    .as_deref()
-                    .is_some_and(|entry| sequence.iter().any(|node| node == entry))
-            })
-        {
-            let active_entry = existing
-                .next_node
-                .clone()
-            .expect("configured sequence entry was present");
-        let next_node = next_seeded_implementation_lane(sequence, &active_entry);
+        if let Some(sequence) = seeded_lane_sequence.as_ref() {
+            let expected_entry = sequence
+                .first()
+                .expect("seeded lane sequence should be non-empty");
+            let actual_entry = existing.next_node.as_deref().unwrap_or("none");
+            if actual_entry != expected_entry {
+                return Err(format!(
+                    "run-graph advance expected configured execution lane `{expected_entry}`, got `{actual_entry}`"
+                ));
+            }
+            let active_entry = expected_entry.clone();
+            let next_node = next_seeded_implementation_lane(sequence, &active_entry);
             return Ok(TaskflowRunGraphAdvancePayload {
                 status: run_graph_state_from_authority_ready_transition(
                     &existing,
@@ -17888,6 +17887,85 @@ agent_system:
         assert_eq!(
             advanced.status.resume_target,
             format!("dispatch.{second}_lane")
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_execution_sequence_rejects_skipped_seed_lane() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let task_id = "task-run-graph-configured-sequence-skip";
+        let labels = vec!["runtime-recovery".to_string()];
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Reject skipped configured execution sequence",
+                display_id: None,
+                description:
+                    "Advance must fail closed when persisted planning state skips a configured predecessor lane.",
+                issue_type: "runtime_defect",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "advance rejects out-of-order configured execution lanes".to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create configured sequence task");
+
+        let request_text = "Repair the configured run-graph seed/advance/dispatch-init contract.";
+        let seeded = derive_seeded_run_graph_state(&store, task_id, request_text)
+            .await
+            .expect("configured sequence seed should derive");
+        let dispatch_contract = seeded
+            .role_selection
+            .execution_plan
+            .get("development_flow")
+            .and_then(|flow| flow.get("dispatch_contract"))
+            .expect("seed should retain the dispatch contract");
+        let configured_sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
+        assert!(configured_sequence.len() >= 2, "configured sequence needs two steps");
+        let first = configured_sequence[0].clone();
+        let second = configured_sequence[1].clone();
+        assert_eq!(seeded.status.next_node.as_deref(), Some(first.as_str()));
+
+        persist_seed_artifacts(&store, &seeded)
+            .await
+            .expect("seed artifacts should persist");
+        let mut corrupted_status = store
+            .run_graph_status(task_id)
+            .await
+            .expect("seeded status lookup should succeed");
+        corrupted_status.next_node = Some(second.clone());
+        corrupted_status.resume_target = format!("dispatch.{second}_lane");
+        store
+            .record_run_graph_status(&corrupted_status)
+            .await
+            .expect("corrupted status should persist for regression proof");
+
+        let error = derive_advanced_run_graph_state(&store, corrupted_status)
+            .await
+            .expect_err("advance must reject skipped configured predecessor lanes");
+        assert!(
+            error.contains(&format!(
+                "expected configured execution lane `{first}`, got `{second}`"
+            )),
+            "unexpected error: {error}"
         );
     }
 
