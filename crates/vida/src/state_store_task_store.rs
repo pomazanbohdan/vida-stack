@@ -6803,6 +6803,16 @@ mod tests {
             .record_run_graph_status(&status)
             .await
             .expect("persist run-graph status");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "claim-close-task",
+                "run-close-task",
+                "feature-close-dev",
+                "task:feature-close-dev",
+                "crates/vida/src/state_store_task_store.rs",
+            )
+            .await
+            .expect("seed current-session run-graph claim");
 
         store
             .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
@@ -7097,6 +7107,16 @@ mod tests {
             .record_run_graph_status(&status)
             .await
             .expect("persist run-graph status");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "claim-explicit-task-close",
+                "run-explicit-task-close",
+                "run-owner-task",
+                "task:run-owner-task",
+                "crates/vida/src/state_store_task_store.rs",
+            )
+            .await
+            .expect("seed current-session run-graph claim");
 
         store
             .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
