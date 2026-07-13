@@ -1,10 +1,31 @@
 use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use surrealdb::Surreal;
+use surrealdb::engine::local::{Db, SurrealKv};
+use surrealdb::types::SurrealValue;
 
 #[path = "support/runtime_consumption.rs"]
 mod runtime_consumption_support;
 
 use runtime_consumption_support::PersistentRuntimeFixture;
+
+#[derive(Debug, Deserialize, PartialEq, Serialize, SurrealValue)]
+struct PersistentStorageProbe {
+    value: String,
+}
+
+async fn open_persistent_storage_probe(root: &Path) -> Surreal<Db> {
+    let db = Surreal::new::<SurrealKv>(root.to_path_buf())
+        .await
+        .expect("SurrealKV probe database should open");
+    db.use_ns("vida")
+        .use_db("primary")
+        .await
+        .expect("SurrealKV probe namespace should bind");
+    db
+}
 
 fn enable_parallel_scheduler(fixture: &PersistentRuntimeFixture, max_parallel_agents: u32) {
     fixture.write_project_config(format!(
@@ -402,4 +423,163 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
     let selected_b = json_string_array(&dispatch_b, "selected_task_ids");
     assert_eq!(selected_b, vec!["b-primary", "b-disjoint"]);
     assert!(!selected_b.iter().any(|task_id| task_id == "a-primary"));
+}
+
+#[test]
+fn surrealkv_backup_restore_persists_rows_after_reopen() {
+    let fixture = PersistentRuntimeFixture::state_only("surrealkv-backup-restore");
+    let state_dir = fixture.state_dir().to_path_buf();
+    let backup_path = state_dir
+        .parent()
+        .expect("state directory should have a parent")
+        .join("surrealkv-backup.surql");
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+    runtime.block_on(async {
+        let db = open_persistent_storage_probe(&state_dir).await;
+        let _: Option<PersistentStorageProbe> = db
+            .upsert(("state_backup_probe", "baseline"))
+            .content(PersistentStorageProbe {
+                value: "baseline".to_string(),
+            })
+            .await
+            .expect("baseline row should persist");
+
+        db.export(backup_path.clone())
+            .await
+            .expect("SurrealKV backup should export");
+        assert!(
+            std::fs::metadata(&backup_path)
+                .expect("backup file should exist")
+                .len()
+                > 0,
+            "SurrealKV backup should contain serialized state"
+        );
+
+        db.query("REMOVE TABLE state_backup_probe")
+            .await
+            .expect("backup restore fixture should remove the live table");
+        db.import(backup_path.clone())
+            .await
+            .expect("SurrealKV backup should restore");
+        drop(db);
+
+        let reopened = open_persistent_storage_probe(&state_dir).await;
+        let restored: Option<PersistentStorageProbe> = reopened
+            .select(("state_backup_probe", "baseline"))
+            .await
+            .expect("restored row should be readable after reopen");
+        assert_eq!(
+            restored,
+            Some(PersistentStorageProbe {
+                value: "baseline".to_string(),
+            })
+        );
+        drop(reopened);
+    });
+    runtime.shutdown_timeout(std::time::Duration::from_millis(250));
+    let _ = std::fs::remove_file(backup_path);
+}
+
+#[test]
+fn surrealkv_wal_commit_and_rollback_recover_after_reopen() {
+    let fixture = PersistentRuntimeFixture::state_only("surrealkv-wal-recovery-rollback");
+    let state_dir = fixture.state_dir().to_path_buf();
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+
+    runtime.block_on(async {
+        let db = open_persistent_storage_probe(&state_dir).await;
+        let _: Option<PersistentStorageProbe> = db
+            .upsert(("state_wal_probe", "durable"))
+            .content(PersistentStorageProbe {
+                value: "before-rollback".to_string(),
+            })
+            .await
+            .expect("durable WAL row should persist");
+
+        let transaction = db.begin().await.expect("commit transaction should begin");
+        transaction
+            .upsert(("state_wal_probe", "committed"))
+            .content(PersistentStorageProbe {
+                value: "committed".to_string(),
+            })
+            .await
+            .expect("transactional row should write before commit");
+        let db = transaction
+            .commit()
+            .await
+            .expect("transactional row should commit");
+
+        let transaction = db.begin().await.expect("rollback transaction should begin");
+        transaction
+            .upsert(("state_wal_probe", "rolled-back"))
+            .content(PersistentStorageProbe {
+                value: "must-not-survive".to_string(),
+            })
+            .await
+            .expect("rollback row should write before cancel");
+        let db = transaction
+            .cancel()
+            .await
+            .expect("rollback transaction should cancel");
+        drop(db);
+
+        let reopened = open_persistent_storage_probe(&state_dir).await;
+        let durable: Option<PersistentStorageProbe> = reopened
+            .select(("state_wal_probe", "durable"))
+            .await
+            .expect("durable row should recover after reopen");
+        let committed: Option<PersistentStorageProbe> = reopened
+            .select(("state_wal_probe", "committed"))
+            .await
+            .expect("committed row should recover after reopen");
+        let rolled_back: Option<PersistentStorageProbe> = reopened
+            .select(("state_wal_probe", "rolled-back"))
+            .await
+            .expect("rolled-back row lookup should succeed after reopen");
+        assert_eq!(
+            durable,
+            Some(PersistentStorageProbe {
+                value: "before-rollback".to_string(),
+            })
+        );
+        assert_eq!(
+            committed,
+            Some(PersistentStorageProbe {
+                value: "committed".to_string(),
+            })
+        );
+        assert_eq!(rolled_back, None);
+
+        let transaction = reopened
+            .begin()
+            .await
+            .expect("rollback update transaction should begin");
+        transaction
+            .upsert(("state_wal_probe", "durable"))
+            .content(PersistentStorageProbe {
+                value: "must-not-replace".to_string(),
+            })
+            .await
+            .expect("rollback update should write before cancel");
+        let reopened = transaction
+            .cancel()
+            .await
+            .expect("rollback update transaction should cancel");
+        drop(reopened);
+
+        let reopened = open_persistent_storage_probe(&state_dir).await;
+        let durable_after_rollback: Option<PersistentStorageProbe> = reopened
+            .select(("state_wal_probe", "durable"))
+            .await
+            .expect("durable row should remain readable after rollback reopen");
+        assert_eq!(
+            durable_after_rollback,
+            Some(PersistentStorageProbe {
+                value: "before-rollback".to_string(),
+            })
+        );
+        drop(reopened);
+    });
+    runtime.shutdown_timeout(std::time::Duration::from_millis(250));
 }
