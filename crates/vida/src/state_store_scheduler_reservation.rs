@@ -479,7 +479,7 @@ impl StateStore {
         )>,
         StateStoreError,
     > {
-        let active_reservations = self.active_scheduler_dispatch_reservations().await?;
+        let active_reservations = self.query_active_scheduler_dispatch_reservations().await?;
         let mut active = Vec::with_capacity(active_reservations.len());
         let mut repairs = Vec::new();
         let mut blocked_ids = Vec::new();
@@ -560,6 +560,41 @@ impl StateStore {
         Ok(active)
     }
 
+    async fn query_active_scheduler_dispatch_reservations(
+        &self,
+    ) -> Result<Vec<SchedulerDispatchReservation>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT * FROM scheduler_dispatch_reservation \
+                 WHERE lease_status IN ['reserved', 'executing'] \
+                 ORDER BY reserved_at DESC, reservation_id DESC;",
+            )
+            .await?;
+        Ok(query.take(0)?)
+    }
+
+    async fn reconcile_scheduler_reservations_for_projection(
+        &self,
+    ) -> Result<Vec<SchedulerDispatchReservation>, StateStoreError> {
+        let _guard = ReservationAcquireGuard::acquire(self.root()).await?;
+        let active_reservations = self.query_active_scheduler_dispatch_reservations().await?;
+        let mut active = Vec::with_capacity(active_reservations.len());
+        for reservation in active_reservations {
+            let authority = self
+                .scheduler_dispatch_reservation_authority(&reservation.reservation_id)
+                .await?
+                .unwrap_or_else(|| scheduler_reservation_unresolved_authority(&reservation, None));
+            active.push((reservation, authority));
+        }
+        self.expire_active_scheduler_reservations_under_guard(&mut active)
+            .await?;
+        Ok(active
+            .into_iter()
+            .map(|(reservation, _)| reservation)
+            .collect())
+    }
+
     async fn expire_active_scheduler_reservations_under_guard(
         &self,
         active: &mut Vec<(
@@ -607,16 +642,7 @@ impl StateStore {
     pub(crate) async fn active_scheduler_dispatch_reservations(
         &self,
     ) -> Result<Vec<SchedulerDispatchReservation>, StateStoreError> {
-        let mut query = self
-            .db
-            .query(
-                "SELECT * FROM scheduler_dispatch_reservation \
-                 WHERE lease_status IN ['reserved', 'executing'] \
-                 ORDER BY reserved_at DESC, reservation_id DESC;",
-            )
-            .await?;
-        let rows: Vec<SchedulerDispatchReservation> = query.take(0)?;
-        Ok(rows)
+        self.reconcile_scheduler_reservations_for_projection().await
     }
 
     #[allow(dead_code)]
@@ -624,6 +650,8 @@ impl StateStore {
         &self,
         reservation_id: &str,
     ) -> Result<Option<SchedulerDispatchReservation>, StateStoreError> {
+        self.reconcile_scheduler_reservations_for_projection()
+            .await?;
         let row: Option<SchedulerDispatchReservation> = self
             .db
             .select(("scheduler_dispatch_reservation", reservation_id))
@@ -2225,6 +2253,55 @@ mod tests {
         );
         assert_eq!(expired.execute_status, "expired");
         drop(store);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn scheduler_reservation_read_projection_reconciles_expired_persisted_lease() {
+        let root = temp_state_dir("read-expired");
+        let writer = StateStore::open(root.clone()).await.expect("open store");
+        persist_task(&writer, "task-1", "domain-a", &["crates/a"]).await;
+        let mut expired = reservation_request("reservation-1", "task-1", Some("domain-a"));
+        expired.lease_seconds = -1;
+        writer
+            .acquire_scheduler_dispatch_reservations(&[expired])
+            .await
+            .expect("expired reservation should persist before read reconciliation");
+        drop(writer);
+
+        let reader = StateStore::open_existing_read_only(root.clone())
+            .await
+            .expect("read-only store should open");
+        let active = reader
+            .active_scheduler_dispatch_reservations()
+            .await
+            .expect("active reservations should read");
+        assert!(active.is_empty(), "expired lease must not remain active");
+
+        let reservation = reader
+            .scheduler_dispatch_reservation("reservation-1")
+            .await
+            .expect("reservation detail should read")
+            .expect("expired reservation should remain queryable");
+        assert_eq!(
+            reservation.lease_status,
+            SchedulerDispatchReservationStatus::Expired.as_str()
+        );
+        assert_eq!(reservation.execute_status, "expired");
+        assert_eq!(reservation.release_reason.as_deref(), Some("lease_expired"));
+        assert!(reservation.released_at.is_some());
+
+        let evidence = reader
+            .scheduler_dispatch_reservation_evidence("reservation-1")
+            .await
+            .expect("reservation evidence should read")
+            .expect("expired evidence should remain queryable");
+        assert_eq!(
+            evidence.lease_status,
+            SchedulerDispatchReservationStatus::Expired.as_str()
+        );
+        assert_eq!(evidence.execute_status, "expired");
+        drop(reader);
         let _ = fs::remove_dir_all(root);
     }
 
