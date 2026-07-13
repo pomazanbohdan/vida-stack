@@ -42,17 +42,17 @@ host_environment:
       junior:
         tier: junior
         rate: 1
-        reasoning_band: high
+        reasoning_band: xhigh
         model: gpt-5.6-luna
-        model_reasoning_effort: high
+        model_reasoning_effort: xhigh
         sandbox_mode: workspace-write
-        default_model_profile: codex_gpt56_luna_high_write
+        default_model_profile: codex_gpt56_luna_xhigh_write
         model_profiles:
-          codex_gpt56_luna_high_write:
+          codex_gpt56_luna_xhigh_write:
             provider: openai-codex
             model_ref: gpt-5.6-luna
-            reasoning_effort: high
-            plan_mode_reasoning_effort: high
+            reasoning_effort: xhigh
+            plan_mode_reasoning_effort: xhigh
             sandbox_mode: workspace-write
             normalized_cost_units: 1
             pricing:
@@ -119,26 +119,6 @@ host_environment:
             readiness:
               mode: codex_profile
               required: true
-          codex_gpt56_luna_xhigh_analysis_legacy:
-            provider: openai-codex
-            model_ref: gpt-5.6-luna
-            reasoning_effort: xhigh
-            plan_mode_reasoning_effort: xhigh
-            sandbox_mode: read-only
-            normalized_cost_units: 2
-            speed_tier: fast
-            quality_tier: medium
-            write_scope: read-only
-            runtime_roles:
-              - business_analyst
-            task_classes:
-              - research
-              - analysis
-              - specification
-              - planning
-            readiness:
-              mode: codex_profile
-              required: true
         default_runtime_role: coach
         runtime_roles:
           - business_analyst
@@ -194,17 +174,17 @@ host_environment:
       architect:
         tier: architect
         rate: 16
-        reasoning_band: medium
-        model: gpt-5.6-sol
-        model_reasoning_effort: medium
+        reasoning_band: max
+        model: gpt-5.6-luna
+        model_reasoning_effort: max
         sandbox_mode: read-only
-        default_model_profile: codex_gpt56_sol_medium_arch
+        default_model_profile: codex_gpt56_luna_max_readonly
         model_profiles:
-          codex_gpt56_sol_medium_arch:
+          codex_gpt56_luna_max_readonly:
             provider: openai-codex
-            model_ref: gpt-5.6-sol
-            reasoning_effort: medium
-            plan_mode_reasoning_effort: medium
+            model_ref: gpt-5.6-luna
+            reasoning_effort: max
+            plan_mode_reasoning_effort: max
             sandbox_mode: read-only
             normalized_cost_units: 16
             speed_tier: medium

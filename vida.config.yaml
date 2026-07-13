@@ -50,47 +50,17 @@ host_environment:
         tier: junior
         description: Level 1 Codex lane for cheap bounded implementation packets that own one explicit write scope and return concrete delivery evidence without self-approving closure.
         rate: 1
-        reasoning_band: high
+        reasoning_band: xhigh
         model: gpt-5.6-luna
-        model_reasoning_effort: high
+        model_reasoning_effort: xhigh
         sandbox_mode: workspace-write
-        default_model_profile: codex_gpt56_luna_high_write
+        default_model_profile: codex_gpt56_luna_xhigh_write
         model_profiles:
-          codex_gpt56_luna_high_legacy:
+          codex_gpt56_luna_xhigh_write:
             provider: openai-codex
             model_ref: gpt-5.6-luna
-            reasoning_effort: high
-            plan_mode_reasoning_effort: high
-            sandbox_mode: workspace-write
-            normalized_cost_units: 1
-            pricing:
-              price_source_kind: provider_catalog
-              source_paths:
-                - docs/process/codex-agent-configuration-guide.md
-              freshness:
-                required: false
-                max_age_days: 30
-                stale_price_policy: diagnostic_only_use_normalized_cost_units
-                missing_price_policy: diagnostic_only_use_normalized_cost_units
-                diagnostic_only: true
-                enforced: false
-            speed_tier: fast
-            quality_tier: medium
-            write_scope: workspace-write
-            runtime_roles:
-              - worker
-            task_classes:
-              - implementation
-              - delivery_task
-              - execution_block
-            readiness:
-              mode: codex_profile
-              required: true
-          codex_gpt56_luna_high_write:
-            provider: openai-codex
-            model_ref: gpt-5.6-luna
-            reasoning_effort: high
-            plan_mode_reasoning_effort: high
+            reasoning_effort: xhigh
+            plan_mode_reasoning_effort: xhigh
             sandbox_mode: workspace-write
             normalized_cost_units: 1
             speed_tier: fast
@@ -122,34 +92,6 @@ host_environment:
         sandbox_mode: workspace-write
         default_model_profile: codex_gpt56_luna_xhigh_write
         model_profiles:
-          codex_gpt56_luna_xhigh_legacy:
-            provider: openai-codex
-            model_ref: gpt-5.6-luna
-            reasoning_effort: high
-            plan_mode_reasoning_effort: xhigh
-            sandbox_mode: workspace-write
-            normalized_cost_units: 4
-            speed_tier: fast
-            quality_tier: medium
-            write_scope: workspace-write
-            runtime_roles:
-              - business_analyst
-              - pm
-              - coach
-              - worker
-            task_classes:
-              - research
-              - analysis
-              - specification
-              - planning
-              - coach
-              - implementation_medium
-              - test_authoring
-              - regression_test
-              - quality_gate
-            readiness:
-              mode: codex_profile
-              required: true
           codex_gpt56_luna_xhigh_write:
             provider: openai-codex
             model_ref: gpt-5.6-luna
@@ -175,26 +117,6 @@ host_environment:
               - test_authoring
               - regression_test
               - quality_gate
-            readiness:
-              mode: codex_profile
-              required: true
-          codex_gpt56_luna_xhigh_analysis_legacy:
-            provider: openai-codex
-            model_ref: gpt-5.6-luna
-            reasoning_effort: xhigh
-            plan_mode_reasoning_effort: xhigh
-            sandbox_mode: read-only
-            normalized_cost_units: 2
-            speed_tier: fast
-            quality_tier: medium
-            write_scope: read-only
-            runtime_roles:
-              - business_analyst
-            task_classes:
-              - research
-              - analysis
-              - specification
-              - planning
             readiness:
               mode: codex_profile
               required: true
@@ -258,17 +180,17 @@ host_environment:
         tier: architect
         description: Level 4 Codex lane for architecture preparation, hard escalation, and cross-scope conflict resolution when the normal implementer-coach-verifier path cannot close lawfully.
         rate: 16
-        reasoning_band: medium
-        model: gpt-5.6-sol
-        model_reasoning_effort: medium
+        reasoning_band: max
+        model: gpt-5.6-luna
+        model_reasoning_effort: max
         sandbox_mode: read-only
-        default_model_profile: codex_gpt56_sol_medium_arch
+        default_model_profile: codex_gpt56_luna_max_readonly
         model_profiles:
-          codex_gpt56_sol_medium_arch:
+          codex_gpt56_luna_max_readonly:
             provider: openai-codex
-            model_ref: gpt-5.6-sol
-            reasoning_effort: medium
-            plan_mode_reasoning_effort: medium
+            model_ref: gpt-5.6-luna
+            reasoning_effort: max
+            plan_mode_reasoning_effort: max
             sandbox_mode: read-only
             normalized_cost_units: 16
             speed_tier: medium
