@@ -3976,7 +3976,10 @@ impl StateStore {
                     .run_graph_latest_receipt_row_supersedes_current_session_lane(bound_run_id)
                     .await?
             {
-                match self.run_graph_status_from_task_rows(bound_run_id, &[]).await {
+                match self
+                    .run_graph_status_from_task_rows(bound_run_id, &[])
+                    .await
+                {
                     Ok(status)
                         if !self
                             .run_graph_status_has_completed_exception_takeover_supersession(&status)
@@ -4093,15 +4096,11 @@ impl StateStore {
             )
             .await?;
         let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
-        let mut latest_terminal_task_active_run_id = None;
         for latest in rows {
             let terminal_task_active = self
                 .run_graph_latest_row_points_to_terminal_task_active(&latest)
                 .await?;
             if terminal_task_active {
-                if latest_terminal_task_active_run_id.is_none() {
-                    latest_terminal_task_active_run_id = Some(latest.run_id.clone());
-                }
                 continue;
             }
             if self
@@ -4111,9 +4110,6 @@ impl StateStore {
                 continue;
             }
             return Ok(Some(latest.run_id));
-        }
-        if let Some(run_id) = latest_terminal_task_active_run_id {
-            return Ok(Some(run_id));
         }
         let mut receipt_query = self
             .db
@@ -4134,12 +4130,17 @@ impl StateStore {
             {
                 continue;
             }
-            if self
-                .run_graph_status_from_task_rows(run_id, &[])
-                .await
-                .is_ok()
-            {
-                return Ok(Some(run_id.to_string()));
+            match self.run_graph_status_from_task_rows(run_id, &[]).await {
+                Ok(status) => {
+                    if !self
+                        .run_graph_status_points_to_terminal_task_active(&status)
+                        .await?
+                    {
+                        return Ok(Some(run_id.to_string()));
+                    }
+                }
+                Err(StateStoreError::MissingTask { .. }) => continue,
+                Err(error) => return Err(error),
             }
         }
         Ok(None)
@@ -4859,6 +4860,12 @@ impl StateStore {
         task_rows: &[TaskRecord],
     ) -> Result<bool, StateStoreError> {
         if Self::run_graph_status_is_reconciled_terminal_closure(status) {
+            return Ok(true);
+        }
+        if self
+            .run_graph_status_points_to_terminal_task_active(status)
+            .await?
+        {
             return Ok(true);
         }
         self.run_graph_status_is_stale_after_release_admission_complete_from_task_rows(
@@ -7531,11 +7538,8 @@ mod tests {
             })
             .await
             .expect("acquire current session claim");
-        let mut binding = sample_explicit_binding(
-            "run-bound",
-            "task-bound",
-            "2026-05-21T01:00:00Z",
-        );
+        let mut binding =
+            sample_explicit_binding("run-bound", "task-bound", "2026-05-21T01:00:00Z");
         binding.binding_source = "explicit_continuation_bind_task".to_string();
         binding.active_bounded_unit = serde_json::json!({
             "kind": "task_graph_task",
@@ -9387,6 +9391,8 @@ mod tests {
 
     #[tokio::test]
     async fn latest_run_graph_status_skips_active_run_for_closed_task() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -9400,7 +9406,7 @@ mod tests {
         let labels = Vec::new();
         store
             .create_task_with_fixture_parent(CreateTaskRequest {
-                task_id: "run-active-open-task",
+                task_id: "task-active-open",
                 title: "Active open task",
                 display_id: None,
                 description: "",
@@ -9417,9 +9423,22 @@ mod tests {
             .await
             .expect("create active open task");
         store
-            .show_task("run-active-open-task")
+            .show_task("task-active-open")
             .await
             .expect("active open task should be readable");
+
+        let active = crate::taskflow_run_graph::default_run_graph_status(
+            "task-active-open",
+            "implementation",
+            "implementation",
+        );
+        let mut active = active;
+        active.run_id = "run-active-open-task".to_string();
+        store
+            .record_run_graph_status(&active)
+            .await
+            .expect("persist active open status");
+
         store
             .create_task_with_fixture_parent(CreateTaskRequest {
                 task_id: "task-closed-active-run",
@@ -9439,21 +9458,12 @@ mod tests {
             .await
             .expect("create closed task");
 
-        let active = crate::taskflow_run_graph::default_run_graph_status(
-            "run-active-open-task",
-            "task-active-open",
-            "implementation",
-        );
-        store
-            .record_run_graph_status(&active)
-            .await
-            .expect("persist active open status");
-
         let mut stale = crate::taskflow_run_graph::default_run_graph_status(
-            "run-closed-active-task",
             "task-closed-active-run",
             "implementation",
+            "implementation",
         );
+        stale.run_id = "run-closed-active-task".to_string();
         stale.task_id = "task-closed-active-run".to_string();
         stale.status = "ready".to_string();
         stale.lifecycle_stage = "implementation_dispatch_ready".to_string();
@@ -9462,6 +9472,37 @@ mod tests {
             .await
             .expect("persist stale closed-task status");
 
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "session-requested-active-run");
+        }
+        store
+            .acquire_orchestrator_claim(AcquireOrchestratorClaimRequest {
+                claim_id: "requested-active-run-claim".to_string(),
+                state_root_id: "state-root".to_string(),
+                worktree_environment_id: "worktree-a".to_string(),
+                orchestrator_session_id: "session-requested-active-run".to_string(),
+                process_id: None,
+                task_id: Some("task-active-open".to_string()),
+                run_id: Some("run-active-open-task".to_string()),
+                lane_id: None,
+                claim_kind: "active_task_session_claim".to_string(),
+                conflict_domain: Some("task:task-active-open".to_string()),
+                owned_paths: Vec::new(),
+                read_only_paths: Vec::new(),
+                lease_mode: LeaseMode::Observe,
+                lease_seconds: 60,
+            })
+            .await
+            .expect("acquire requested active run claim");
+        store
+            .record_run_graph_continuation_binding(&sample_explicit_binding(
+                "run-active-open-task",
+                "task-active-open",
+                "2026-07-14T00:00:00Z",
+            ))
+            .await
+            .expect("persist requested active run binding");
+
         let latest = store
             .latest_run_graph_status()
             .await
@@ -9469,7 +9510,56 @@ mod tests {
             .expect("open-task run should remain latest after stale closed-task run is skipped");
         assert_eq!(latest.run_id, "run-active-open-task");
 
+        let recovery = store
+            .latest_run_graph_recovery_summary()
+            .await
+            .expect("latest recovery should load")
+            .expect("latest recovery should remain on active run");
+        assert_eq!(recovery.run_id, "run-active-open-task");
+
+        let scoped = store
+            .latest_run_graph_status_for_task("task-active-open")
+            .await
+            .expect("scoped latest status should load")
+            .expect("scoped latest status should remain on active run");
+        assert_eq!(scoped.run_id, "run-active-open-task");
+
+        let current_session = store
+            .latest_run_graph_status_for_current_session()
+            .await
+            .expect("current-session latest status should load")
+            .expect("explicit requested active run should win current-session selection");
+        assert_eq!(current_session.run_id, "run-active-open-task");
+
+        let current_session_recovery = store
+            .latest_run_graph_recovery_summary_for_current_session()
+            .await
+            .expect("current-session recovery should load")
+            .expect("current-session recovery should remain on active run");
+        assert_eq!(current_session_recovery.run_id, "run-active-open-task");
+
+        let binding = store
+            .latest_explicit_run_graph_continuation_binding_for_current_session()
+            .await
+            .expect("current-session binding should load")
+            .expect("requested active run binding should remain present");
+        assert_eq!(binding.run_id, "run-active-open-task");
+
+        let terminal_evidence = store
+            .latest_terminal_task_active_run_graph_status()
+            .await
+            .expect("terminal-task-active evidence should load")
+            .expect("closed-task stale run should remain explicit evidence");
+        assert_eq!(terminal_evidence.run_id, "run-closed-active-task");
+
+        let graph_summary = store
+            .run_graph_summary()
+            .await
+            .expect("graph summary should load");
+        assert_eq!(graph_summary.execution_plan_count, 2);
+
         close_store_and_remove_root(store, root).await;
+        restore_vida_session_id(saved_session_id);
     }
 
     #[tokio::test]
@@ -11658,5 +11748,4 @@ mod tests {
 
         close_store_and_remove_root(store, root).await;
     }
-
 }
