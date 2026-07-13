@@ -175,8 +175,8 @@ Use this ladder before starting a Rust proof, runtime smoke, release install, or
 2. `debug_source_proof`: default for active Rust repair loops. Use `scripts/vida-dev-gate.ps1 -Mode quick -Json` on Windows, or the equivalent direct changed-file rustfmt check, `cargo check --locked -p vida`, and `git diff --check` on Unix-like hosts. This is the normal cheap compile-aware proof class for code correctness while a batch is still being assembled. Use `scripts/vida-dev-gate.ps1 -Mode focused-nextest -Package <crate> -TestFilter <filter> -Json` or direct `cargo nextest run --locked -p <crate> --profile default <filter>` only when the bounded slice needs a regression test proof.
 3. `debug_runtime_smoke`: use `target/debug/vida ...` only after the debug binary proves it can open the current project state with an authoritative read such as `target/debug/vida status --json`. If the debug binary cannot open the state store, classify that as `debug_runtime_incompatible` and do not use it for runtime closure.
 4. `installed_runtime_validation`: use the environment-resolved `vida ...` when the acceptance target is specifically the operator-facing launcher, installed binary path, state compatibility, command timing, or downstream project behavior through the user's normal PATH.
-5. `release_install_gate`: run `vida release install --json` only for installed-runtime acceptance, release admission, packaging/installer proof, explicit user order, closure of a TaskFlow wave parent, repeated runtime defects that block active work, or when debug runtime smoke is invalid and the current closure must validate the installed launcher. It is not a per-micro-edit proof.
-6. `release_packaging_gate`: run full release/installer/package smoke after the coherent batch is complete, not while more related code edits are still expected.
+5. `release_install_gate`: run `vida release install --json` once after the coherent runtime pack or epic is merged and focused proof is green; never run it per micro-task or between sibling fixes unless the user explicitly requests an interim install or the old binary blocks active work.
+6. `release_packaging_gate`: run release/package smoke at the final coherent pack/epic gate. Keep the parent/epic open until it passes; child tasks may close after their merge and focused proof, but no task may close while its verified commit is unmerged.
 
 When a release install is considered, first record why `debug_source_proof` and, when applicable, `debug_runtime_smoke` are insufficient. A closed wave parent is sufficient reason because the operator-facing system binary must advance to the closed wave state. If the reason is only "the code changed" inside an unfinished task or micro-edit, use the debug proof class instead.
 
@@ -193,12 +193,12 @@ When a release install is considered, first record why `debug_source_proof` and,
 
 ## System Binary Update Policy
 
-1. Batch system binary updates after several unrelated closed tasks when no remaining unblocked runtime-defect task is expected to change the same installed binary.
-2. Update the system binary immediately after a validated fix when the defect blocks the current session, blocks an external downstream project, recurs repeatedly in the session, corrupts state/receipts, or makes the lawful runtime flow impossible.
-3. Defer `vida release install --json` when another unblocked, related runtime-defect task is ready and likely to touch the same runtime command family; use debug source proof and debug runtime smoke until the coherent fix pool is complete.
-4. Before a system binary update, complete focused tests, a medium validator or equivalent independent review, PR protocol, and scoped git status review.
-5. After a system binary update, record `vida --version`, installed path/fingerprint evidence when available, `vida status --json` or a narrower authoritative smoke, and any downstream project proof that motivated the update.
-6. If all remaining ready tasks are blocked by the old runtime binary or by PR/review state, prefer one system binary update for the already validated batch so downstream work can resume.
+1. Do not accumulate closed-but-unmerged tasks: merge each self-contained verified task before closure.
+2. Defer system-binary replacement until the final coherent pack/epic release gate; do not build or install per task or between sibling fixes.
+3. Keep docs-only and TaskFlow-only tasks on their canonical lightweight gates; do not rebuild an unchanged runtime binary.
+4. Before the final system-binary update, complete focused tests, independent review, PR protocol, all selected merge evidence, and a scoped final git-status review.
+5. After the final system-binary update, record `vida --version`, installed path/fingerprint evidence when available, `vida status --json` or narrower authoritative smoke, and downstream proof for the completed pack/epic.
+6. If merge, focused proof, final release build/install, smoke, PR, or runtime authority fails, keep the affected task or parent/epic open, preserve its worktree/integration evidence, and record the exact blocker.
 
 ## Diagnostic Update Format
 

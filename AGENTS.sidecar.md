@@ -133,6 +133,15 @@ Project-routing rule:
 3. Scripts must preserve visible failures and safety: never hide errors, weaken safety checks, bypass ownership/approval, or turn diagnostics into unsafe cleanup.
 4. Require focused tests or dry-runs, plus `git diff --check` and any applicable diff/diagnostic check, for script changes; preserve unrelated worktree edits.
 
+## Merge-Before-Close And Release Sync
+
+1. A source task is not `closed` while its verified commit exists only in a worktree; keep it `in_progress` with a `verified_pending_integration` evidence note/label, or `blocked`, until merge evidence exists.
+2. For a self-contained task, immediately after proof and PR processing: merge the bounded branch into the authoritative branch and run scoped post-merge proof. Defer `release-package` and `vida release install --json` until the final gate of the coherent runtime pack or epic; do not rebuild or install between sibling fixes.
+3. Docs-only or TaskFlow-only changes still merge before closure but require only their canonical doc/graph gates; do not rebuild the binary when no installed runtime behavior changed.
+4. A failed merge, focused proof, PR gate, or runtime-authority check prevents task closure; preserve the worktree and record the exact blocker instead of accumulating a closed unmerged task. A failed final release/install gate prevents parent or epic closure and preserves the integration evidence.
+5. Cleanup is last: after task merge and TaskFlow close remove merged task worktrees and obsolete branches; retain any integration worktree needed for the final pack/epic release gate; never remove dirty or unmerged worktrees.
+6. Parallel implementation is allowed only for disjoint owned paths; authoritative merge, final release/package/install, system-binary replacement, TaskFlow closure, and cleanup are serialized integration gates.
+
 ## Working Rule
 
 1. Use `AGENTS.md` for lane routing and hard invariants.

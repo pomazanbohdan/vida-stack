@@ -82,6 +82,20 @@ optimization loop:
 5. close the wave parent before moving to an unrelated wave when its children,
    proof, release/install, and diagnostic gates are complete.
 
+## Merge-Before-Close Loop
+
+For every self-contained delivery task, the task-level closure sequence is:
+
+1. verify the bounded worktree commit, focused proof, independent review, and PR state;
+2. merge the task branch into the authoritative branch immediately;
+3. run focused post-merge proof; do not run release/package/install between sibling tasks;
+4. record task proof refs, status/authority smoke, and merge artifact refs;
+5. close the child TaskFlow task after merge and focused proof pass;
+6. after all coherent runtime tasks are merged, run one `release-package` plus `vida release install --json` final gate and record version/path/fingerprint;
+7. close the parent/epic only after the final release gate passes, then remove merged task worktrees and obsolete branches.
+
+A task with a verified but unmerged worktree commit is not closed. Keep it `in_progress` with a `verified_pending_integration` evidence note/label until merge. If merge, focused proof, PR, or runtime authority fails, keep the task `in_progress`/`blocked`, preserve the worktree, and record the blocker. A failed final release gate keeps the parent/epic open. Disjoint implementation may run in parallel, but authoritative merge, final release/install, system-binary update, parent/epic closure, and cleanup are serialized.
+
 Generic owner references:
 
 1. active-unit binding, anti-stop, final-report, and continuation law are owned by `instruction-contracts/core.orchestration-runtime-capsule`, `instruction-contracts/core.orchestration-protocol`, and `runtime-instructions/work.taskflow-protocol`,
@@ -365,14 +379,14 @@ metadata discovered after creation.
     next: refresh task status, parent/child layer, priority, dependencies,
     owned paths, proof targets, execution semantics, and sequential/parallel
     posture from current evidence,
-15. release-install and smoke the system `vida` binary before treating a wave as
-    operationally closed,
+15. run one release-package/install and installed-binary smoke gate only after
+    all selected runtime tasks in the coherent pack or epic are merged and
+    focused proof is green; do not install between sibling tasks,
 16. for a runtime defect that blocked the current session, continuation, lane
-    execution, receipt/proof truth, or installed CLI behavior, run
-    `vida release install --json` and an installed-binary smoke check after the
-    focused fix proof unless the current explicit operator policy already
-    requires a system build after every task; if release install cannot run,
-    keep closure blocked or record the proof blocker,
+    execution, receipt/proof truth, or installed CLI behavior, keep focused
+    proof and debug smoke at task level and defer installed-runtime validation
+    to the final coherent pack/epic gate; if that final gate cannot run, keep
+    the parent/epic closure blocked or record the proof blocker,
 17. select the next task using the updated scorecard, self-analysis, and
     closure-distance data.
 
@@ -588,8 +602,8 @@ Coherent work-pool execution:
 10. Actualize TaskFlow last, immediately before next-work analysis, so candidate
    tasks are ordered from current status, dependencies, proof targets,
    execution semantics, and sequential/parallel posture.
-11. Commit, push, release, and install per pool rather than per small task when
-   current publication and release rules allow it. The closure scorecard must
+11. Commit and push per task or coherent pool as authorized; release and install
+   once at the final coherent pack/epic gate rather than per small task. The closure scorecard must
    report pool membership, posture, tasks closed, rows split, proof commands
    reused, operations saved, residual risks, and the next routing rule.
 
