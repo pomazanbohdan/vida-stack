@@ -31,3 +31,4 @@ logs/
 .venv
 dist
 projects/vida-mobile/
+.worktrees/
