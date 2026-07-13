@@ -18281,6 +18281,46 @@ fn create_zombie_d_default_route_task(state_dir: &str, task_id: &str, title: &st
     );
 }
 
+fn create_zombie_d_dispatch_matrix_task(state_dir: &str, task_id: &str, title: &str) {
+    let parent_id = format!("{task_id}-parent");
+    create_epic_parent_for_state(state_dir, &parent_id, &format!("{title} parent"));
+    let output = bounded_vida_output(
+        &["-k", "5s", "20s"],
+        "ZOMBIE-D dispatch matrix task create",
+        |command| {
+            command.args([
+                "task",
+                "create",
+                task_id,
+                title,
+                "--type",
+                "task",
+                "--status",
+                "open",
+                "--priority",
+                "1",
+                "--parent-id",
+                parent_id.as_str(),
+                "--owned-path",
+                "crates/vida/tests/boot_smoke.rs",
+                "--state-dir",
+                state_dir,
+                "--json",
+            ]);
+        },
+    );
+    assert_output_success(&output, "ZOMBIE-D dispatch matrix task create");
+    let created = parse_json_output(&output, "ZOMBIE-D dispatch matrix task create");
+    assert_eq!(created["task"]["id"], task_id);
+    assert!(created["task"]["planner_metadata"]["owned_paths"]
+        .as_array()
+        .is_some_and(|paths| {
+            paths
+                .iter()
+                .any(|path| path.as_str() == Some("crates/vida/tests/boot_smoke.rs"))
+        }));
+}
+
 fn zombie_d_prepare_bridge_pending_task(
     project_root: &str,
     state_dir: &str,
@@ -18466,6 +18506,226 @@ fn zombie_d_recovery_commands(value: &serde_json::Value, commands: &mut Vec<Stri
         }
         _ => {}
     }
+}
+
+#[test]
+fn agent_dispatch_next_initial_implementation_zombie_d_public_matrix() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "agent-dispatch-next-initial-implementation-zombie-d",
+        "Agent Dispatch Next Initial Implementation ZOMBIE-D",
+    );
+    let task_id = "agent-dispatch-next-initial-implementation-zombie-d-task";
+    create_zombie_d_dispatch_matrix_task(
+        &state_dir,
+        task_id,
+        "Agent Dispatch Next Initial Implementation ZOMBIE-D task",
+    );
+
+    // O/I: the first worker implementation is admitted even when its owned path
+    // looks test-like; the public projection names the narrow exemption.
+    let (initial, initial_success) = zombie_d_json_command(
+        &project_root,
+        &state_dir,
+        &[
+            "agent",
+            "dispatch-next",
+            "--dev-team",
+            "--current-task-id",
+            task_id,
+            "--state-dir",
+            &state_dir,
+            "--lanes",
+            "1",
+            "--full",
+            "--json",
+        ],
+        "ZOMBIE-D initial implementation dispatch",
+    );
+    assert!(initial_success, "initial implementation must dispatch: {initial}");
+    assert_eq!(initial["status"], "pass");
+    assert_eq!(initial["selected_lanes"][0]["task_id"], task_id);
+    assert_eq!(initial["selected_lanes"][0]["task_class"], "implementation");
+    assert_eq!(
+        initial["flow_projection"]["zombie_d_gate"]["admission_scope"],
+        "initial_implementation_dispatch"
+    );
+    assert_eq!(
+        initial["flow_projection"]["zombie_d_gate"]["matrix_required"],
+        false
+    );
+    assert!(initial["next_actions"].as_array().is_some_and(|actions| {
+        !actions.iter().any(|action| {
+            action
+                .as_str()
+                .is_some_and(|value| value.contains("zombie_d_matrix_missing"))
+        })
+    }));
+
+    // I: default human output stays compact and actionable.
+    let compact = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "ZOMBIE-D initial implementation compact dispatch",
+        |command| {
+            command
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .args([
+                    "agent",
+                    "dispatch-next",
+                    "--dev-team",
+                    "--current-task-id",
+                    task_id,
+                    "--state-dir",
+                    &state_dir,
+                    "--lanes",
+                    "1",
+                ]);
+        },
+    );
+    assert!(compact.status.success());
+    let compact_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&compact.stdout),
+        String::from_utf8_lossy(&compact.stderr)
+    );
+    assert!(compact_text.contains("agent dispatch-next: pass"));
+    assert!(compact_text.contains("lanes selected: 1"));
+    assert!(!compact_text.contains("blocked_candidates"));
+
+    // B/E: help documents both output modes and the dispatch scope flags.
+    let help = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "ZOMBIE-D dispatch-next help",
+        |command| {
+            command
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .args(["agent", "dispatch-next", "--help"]);
+        },
+    );
+    assert!(help.status.success());
+    let help_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&help.stdout),
+        String::from_utf8_lossy(&help.stderr)
+    );
+    for option in ["--dev-team", "--current-task-id", "--lanes", "--full", "--json"] {
+        assert!(help_text.contains(option), "help must document {option}: {help_text}");
+    }
+
+    // Z/E: persisted runtime state keeps handoff fail-closed; closure below asserts the matrix gate.
+    let (handoff, _handoff_success) = zombie_d_json_command(
+        &project_root,
+        &state_dir,
+        &[
+            "taskflow",
+            "consume",
+            "final",
+            "--task-id",
+            task_id,
+            "--preview",
+            "--json",
+        ],
+        "ZOMBIE-D later handoff proof",
+    );
+    assert_eq!(
+        handoff["status"],
+        "blocked",
+        "handoff proof must fail closed: {handoff}"
+    );
+    assert!(handoff["blocker_codes"]
+        .as_array()
+        .is_some_and(|blockers| !blockers.is_empty()));
+
+    let (blocked_close, close_success) = zombie_d_json_command(
+        &project_root,
+        &state_dir,
+        &[
+            "task",
+            "close",
+            task_id,
+            "--reason",
+            "ZOMBIE-D closure must require proof",
+            "--json",
+        ],
+        "ZOMBIE-D blocked closure",
+    );
+    assert!(!close_success);
+    assert_eq!(blocked_close["status"], "blocked");
+    assert_eq!(
+        blocked_close["blocker_codes"],
+        serde_json::json!(["missing_gate_evidence"])
+    );
+    assert!(blocked_close["zombie_d_gate"]["blocker_codes"]
+        .as_array()
+        .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_missing")));
+
+    // S: attach the complete matrix through the public proof surface, then close.
+    let evidence = serde_json::json!({
+        "schema_version": 1,
+        "categories": {
+            "Z": {"status": "pass", "evidence_refs": ["zero"]},
+            "O": {"status": "pass", "evidence_refs": ["one"]},
+            "M": {"status": "na", "reason": "single dispatch contract fixture"},
+            "B": {"status": "pass", "evidence_refs": ["boundary"]},
+            "I": {"status": "pass", "evidence_refs": ["interface"]},
+            "E": {"status": "pass", "evidence_refs": ["exceptions"]},
+            "S": {"status": "pass", "evidence_refs": ["simple"]}
+        },
+        "doubts": []
+    });
+    let (attached, attached_success) = zombie_d_json_command(
+        &project_root,
+        &state_dir,
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            task_id,
+            "--proof-target",
+            "zombie_d_matrix",
+            "--result",
+            "pass",
+            "--evidence",
+            &evidence.to_string(),
+            "--json",
+        ],
+        "ZOMBIE-D proof attach",
+    );
+    assert!(attached_success, "matrix proof attach should pass: {attached}");
+    let (closed, closed_success) = zombie_d_json_command(
+        &project_root,
+        &state_dir,
+        &[
+            "task",
+            "close",
+            task_id,
+            "--reason",
+            "ZOMBIE-D matrix attached",
+            "--json",
+        ],
+        "ZOMBIE-D proven closure",
+    );
+    assert!(closed_success, "proven closure should pass: {closed}");
+    assert_eq!(closed["task"]["status"], "closed");
+
+    let (persisted, persisted_success) = zombie_d_json_command(
+        &project_root,
+        &state_dir,
+        &["task", "show", task_id, "--state-dir", &state_dir, "--json"],
+        "ZOMBIE-D persisted task state",
+    );
+    assert!(persisted_success);
+    assert_eq!(persisted["task"]["status"], "closed");
+    assert!(persisted["task"]["notes"].as_str().is_some_and(|notes| {
+        notes.contains("zombie_d_matrix") && notes.contains("task_proof_evidence")
+    }));
+
+    let _ = fs::remove_dir_all(&project_root);
 }
 
 #[test]

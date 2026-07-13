@@ -3669,6 +3669,123 @@ fn build_agent_dispatch_next_preview_standard(
     }
 }
 
+fn zombie_d_gate_dispatch_admission(
+    readiness: &serde_json::Value,
+    task: &state_store::TaskRecord,
+    step: &DevTeamSequenceStep,
+    initial_implementation_available: bool,
+    dev_team_receipt: Option<&state_store::RunGraphDispatchReceipt>,
+) -> serde_json::Value {
+    let initial_implementation_dispatch = dev_team_receipt.is_none()
+        && initial_implementation_available
+        && step.runtime_role.eq_ignore_ascii_case("worker")
+        && step.task_class.eq_ignore_ascii_case("implementation");
+    let gate = readiness.get("zombie_d_gate");
+    let gate_id = gate
+        .and_then(|value| value.get("gate_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("zombie_d_test_writing");
+    let artifact_refs = serde_json::json!({
+        "task_id": task.id,
+        "gate_id": gate_id,
+        "enforcement_point": "dispatch",
+        "proof_target": "zombie_d_matrix",
+    });
+
+    if initial_implementation_dispatch {
+        let enabled = gate
+            .and_then(|value| value.get("enabled"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let config_blockers = gate
+            .and_then(|value| value.get("blockers"))
+            .and_then(serde_json::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !config_blockers.is_empty() {
+            return serde_json::json!({
+                "status": "blocked",
+                "enabled": enabled,
+                "applicable": false,
+                "gate_id": gate_id,
+                "enforcement_point": "dispatch",
+                "task_id": task.id,
+                "task_class": step.task_class,
+                "admission_scope": "initial_implementation_dispatch",
+                "matrix_required": false,
+                "blocker_codes": config_blockers,
+                "next_actions": [
+                    "Repair the configured ZOMBIE-D gate policy before dispatching the initial implementation lane."
+                ],
+                "artifact_refs": artifact_refs,
+            });
+        }
+        if !enabled {
+            return serde_json::json!({
+                "status": "disabled",
+                "enabled": false,
+                "applicable": false,
+                "gate_id": gate_id,
+                "enforcement_point": "dispatch",
+                "task_id": task.id,
+                "task_class": step.task_class,
+                "admission_scope": "initial_implementation_dispatch",
+                "matrix_required": false,
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": artifact_refs,
+            });
+        }
+        return serde_json::json!({
+            "status": "not_applicable",
+            "enabled": true,
+            "applicable": false,
+            "gate_id": gate_id,
+            "enforcement_point": "dispatch",
+            "task_id": task.id,
+            "task_class": step.task_class,
+            "admission_scope": "initial_implementation_dispatch",
+            "matrix_required": false,
+            "later_enforcement_points": ["handoff", "closure"],
+            "reason": "Initial implementation admission precedes proof-only ZOMBIE-D matrix enforcement; later verification, test-authoring, quality-gate, handoff, and closure proof remain fail-closed.",
+            "blocker_codes": [],
+            "next_actions": [],
+            "artifact_refs": artifact_refs,
+        });
+    }
+
+    let mut result = crate::zombie_d_gate::evaluate_from_readiness(
+        readiness,
+        task,
+        Some(&step.task_class),
+        "dispatch",
+    );
+    if let Some(object) = result.as_object_mut() {
+        object.insert(
+            "admission_scope".to_string(),
+            serde_json::json!("zombie_d_matrix"),
+        );
+        object.insert(
+            "matrix_required".to_string(),
+            serde_json::json!(object
+                .get("applicable")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)),
+        );
+        object.insert(
+            "initial_implementation_dispatch".to_string(),
+            serde_json::json!(false),
+        );
+    }
+    result
+}
+
 fn build_agent_dispatch_next_preview_dev_team(
     activation_bundle: &serde_json::Value,
     projection: &state_store::TaskSchedulingProjection,
@@ -3785,15 +3902,41 @@ fn build_agent_dispatch_next_preview_dev_team(
             })
         })
         .flatten();
+    let initial_implementation_step_index = if scoped_current_task_dev_team
+        && dev_team_receipt.is_none()
+    {
+        sequence.iter().position(|step| {
+            step.requires_task
+                && step.runtime_role.eq_ignore_ascii_case("worker")
+                && step.task_class.eq_ignore_ascii_case("implementation")
+        })
+    } else {
+        None
+    };
+    let selected_zombie_d_step = initial_implementation_step_index
+        .and_then(|index| sequence.get(index).map(|step| (index, step)))
+        .or_else(|| {
+            receipt_gate
+        .as_ref()
+        .and_then(|gate| gate.selected_step_index)
+        .and_then(|index| sequence.get(index).map(|step| (index, step)))
+        })
+        .or_else(|| {
+            sequence
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step.requires_task)
+        });
     let zombie_d_gate_result = selected_ready_candidates
         .first()
         .and_then(|candidate| {
-            sequence.first().map(|step| {
-                crate::zombie_d_gate::evaluate_from_readiness(
+            selected_zombie_d_step.map(|(_, step)| {
+                zombie_d_gate_dispatch_admission(
                     &activation_bundle["dev_team_readiness"],
                     &candidate.task,
-                    Some(&step.task_class),
-                    "dispatch",
+                    step,
+                    initial_implementation_step_index.is_some(),
+                    dev_team_receipt,
                 )
             })
         });
@@ -3845,22 +3988,30 @@ fn build_agent_dispatch_next_preview_dev_team(
     let configured_max_parallel_agents = configured_max_parallel_agents.max(1);
     let effective_max_parallel_agents = lanes_requested.min(configured_max_parallel_agents);
     let preview_step_limit = lanes_requested;
-    let steps_to_preview = receipt_gate.as_ref().map_or_else(
-        || {
-            sequence
-                .iter()
-                .cloned()
-                .take(preview_step_limit)
-                .collect::<Vec<_>>()
-        },
-        |gate| {
-            gate.selected_step_index
-                .and_then(|index| sequence.get(index))
-                .cloned()
-                .into_iter()
-                .collect::<Vec<_>>()
-        },
-    );
+    let steps_to_preview = if let Some(index) = initial_implementation_step_index {
+        sequence
+            .get(index)
+            .cloned()
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        receipt_gate.as_ref().map_or_else(
+            || {
+                sequence
+                    .iter()
+                    .cloned()
+                    .take(preview_step_limit)
+                    .collect::<Vec<_>>()
+            },
+            |gate| {
+                gate.selected_step_index
+                    .and_then(|index| sequence.get(index))
+                    .cloned()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            },
+        )
+    };
     if projection.ready.is_empty() {
         blocker_codes.push("no_ready_task_candidates".to_string());
         next_actions.push(format!(
@@ -3958,11 +4109,12 @@ fn build_agent_dispatch_next_preview_dev_team(
             ));
             break;
         };
-        let zombie_d_gate = crate::zombie_d_gate::evaluate_from_readiness(
+        let zombie_d_gate = zombie_d_gate_dispatch_admission(
             &activation_bundle["dev_team_readiness"],
             &candidate.task,
-            Some(&step.task_class),
-            "dispatch",
+            &step,
+            initial_implementation_step_index.is_some(),
+            dev_team_receipt,
         );
         if zombie_d_gate["status"].as_str() == Some("blocked") {
             blocked_candidates.push(blocked_candidate(
@@ -16162,6 +16314,99 @@ mod tests {
             complete_preview.flow_projection["predecessor_receipt_gate"]["blocker_code"],
             "dev_team_sequence_completed:task=task-current"
         );
+    }
+
+    #[test]
+    fn initial_implementation_dispatch_admission_skips_matrix_but_later_verification_blocks() {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "implementation_then_verification",
+            "zombie_d_gate": {
+                "enabled": true,
+                "gate_id": "zombie_d_test_writing",
+                "required_categories": ["Z", "O", "M", "B", "I", "E", "S"],
+                "applies_to": {
+                    "task_classes": ["test_authoring", "regression_test", "verification", "quality_gate"],
+                    "path_tokens": ["test", "fixture", "snapshot", "golden", "coverage", "smoke", "integration"]
+                },
+                "enforcement_points": ["dispatch", "handoff", "closure"],
+                "status": "ready",
+                "blockers": []
+            },
+            "roles": [
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]},
+                {"role_id": "verifier", "runtime_role": "verifier", "task_classes": ["verification"]}
+            ],
+            "flows": [{
+                "flow_id": "implementation_then_verification",
+                "enabled": true,
+                "default": true,
+                "sequential": true,
+                "ordered_steps": [
+                    {"role_id": "developer", "runtime_role": "worker", "task_class": "implementation"},
+                    {"role_id": "verifier", "runtime_role": "verifier", "task_class": "verification"}
+                ]
+            }]
+        });
+        let mut candidate = candidate(
+            "task-initial-implementation",
+            "Initial implementation with test-owned scope",
+            true,
+            true,
+            Vec::new(),
+        );
+        candidate.task.planner_metadata.owned_paths =
+            vec!["crates/vida/tests/boot_smoke.rs".to_string()];
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("task-initial-implementation".to_string()),
+            ready: vec![candidate],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+        let initial = build_agent_dispatch_next_preview_with_diagnostics_and_dev_team_receipt(
+            &activation_bundle,
+            &projection,
+            1,
+            1,
+            None,
+            true,
+            true,
+            Some("run-initial-implementation"),
+            None,
+        );
+        assert_eq!(initial.status, "pass", "{initial:#?}");
+        assert_eq!(initial.selected_lanes[0].role_label, "developer");
+        assert_eq!(
+            initial.flow_projection["zombie_d_gate"]["admission_scope"],
+            "initial_implementation_dispatch"
+        );
+        assert_eq!(
+            initial.flow_projection["zombie_d_gate"]["matrix_required"],
+            false
+        );
+
+        let verifier = build_agent_dispatch_next_preview_with_diagnostics_and_dev_team_receipt(
+            &activation_bundle,
+            &projection,
+            1,
+            1,
+            None,
+            true,
+            true,
+            Some("run-initial-implementation"),
+            Some(&completed_dev_team_receipt(
+                "run-initial-implementation",
+                "developer",
+            )),
+        );
+        assert_eq!(verifier.status, "blocked", "{verifier:#?}");
+        assert!(verifier.selected_lanes.is_empty());
+        assert!(verifier.blocked_candidates.iter().any(|candidate| {
+            candidate
+                .reasons
+                .iter()
+                .any(|reason| reason == "zombie_d_matrix_missing")
+        }));
     }
 
     #[test]
