@@ -1733,6 +1733,23 @@ fn status_with_timeout(project_root: &str, state_dir: &str, args: &[&str]) -> st
     command_output_with_state_lock_retry(&mut command)
 }
 
+fn status_with_session_timeout(
+    project_root: &str,
+    state_dir: &str,
+    run_id: &str,
+    args: &[&str],
+) -> std::process::Output {
+    let mut command = vida();
+    command
+        .args(args)
+        .current_dir(project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", state_dir)
+        .env("VIDA_SESSION_ID", run_graph_test_session_id(run_id));
+    command_output_with_state_lock_retry(&mut command)
+}
+
 fn doctor_with_timeout(state_dir: &str, args: &[&str]) -> std::process::Output {
     let mut command = vida();
     command.args(args).env("VIDA_STATE_DIR", state_dir);
@@ -18292,6 +18309,33 @@ fn zombie_d_prepare_bridge_pending_task(
     );
     assert_eq!(seed["payload"]["status"]["run_id"], task_id);
 
+    let (binding, binding_success) = zombie_d_run_graph_json_command(
+        project_root,
+        state_dir,
+        task_id,
+        &[
+            "taskflow",
+            "continuation",
+            "bind",
+            task_id,
+            "--task-id",
+            task_id,
+            "--why",
+            "ZOMBIE-D explicit session-scoped continuation",
+            "--json",
+        ],
+        "ZOMBIE-D continuation bind",
+    );
+    assert!(
+        binding_success,
+        "ZOMBIE-D continuation bind should succeed: {binding}"
+    );
+    assert_eq!(
+        binding["binding"]["status"],
+        "bound",
+        "binding should be explicit: {binding}"
+    );
+
     let (advance, advance_success) = zombie_d_run_graph_json_command(
         project_root,
         state_dir,
@@ -18336,9 +18380,10 @@ fn zombie_d_prepare_bridge_pending_task(
 }
 
 fn zombie_d_close_task(project_root: &str, state_dir: &str, task_id: &str, reason: &str) {
-    let (proof, proof_success) = zombie_d_json_command(
+    let (proof, proof_success) = zombie_d_run_graph_json_command(
         project_root,
         state_dir,
+        task_id,
         &[
             "task",
             "proof",
@@ -18349,7 +18394,7 @@ fn zombie_d_close_task(project_root: &str, state_dir: &str, task_id: &str, reaso
             "--result",
             "pass",
             "--evidence",
-            "{\"matrix\":\"zombie_d_public_matrix\",\"scenarios\":[\"zero\",\"simple\",\"one\",\"many\"]}",
+            "{\"schema_version\":1,\"categories\":{\"Z\":{\"status\":\"pass\",\"evidence_refs\":[\"zero\"]},\"O\":{\"status\":\"pass\",\"evidence_refs\":[\"one\"]},\"M\":{\"status\":\"na\",\"reason\":\"single fixture contract\"},\"B\":{\"status\":\"pass\",\"evidence_refs\":[\"boundary\"]},\"I\":{\"status\":\"pass\",\"evidence_refs\":[\"interface\"]},\"E\":{\"status\":\"pass\",\"evidence_refs\":[\"error\"]},\"S\":{\"status\":\"pass\",\"evidence_refs\":[\"stability\"]}},\"doubts\":[]}",
             "--json",
         ],
         "ZOMBIE-D proof attach",
@@ -18359,9 +18404,10 @@ fn zombie_d_close_task(project_root: &str, state_dir: &str, task_id: &str, reaso
         "ZOMBIE-D proof attach should succeed before close: {proof}"
     );
 
-    let (closed, success) = zombie_d_json_command(
+    let (closed, success) = zombie_d_run_graph_json_command(
         project_root,
         state_dir,
+        task_id,
         &["task", "close", task_id, "--reason", reason, "--json"],
         "ZOMBIE-D task close",
     );
@@ -18498,9 +18544,10 @@ fn orchestrator_init_closed_task_zombie_d_public_matrix() {
         simple_graph["delegation_gate"]["delegated_cycle_state"],
         "handoff_pending"
     );
-    let (simple_status, simple_status_success) = zombie_d_json_command(
+    let (simple_status, simple_status_success) = zombie_d_run_graph_json_command(
         &simple_project_root,
         &simple_state_dir,
+        simple_task_id,
         &["status", "--json"],
         "ZOMBIE-D simple status",
     );
@@ -18511,7 +18558,8 @@ fn orchestrator_init_closed_task_zombie_d_public_matrix() {
     assert!(!zombie_d_has_closed_task_gate(&simple_status));
     assert_eq!(
         simple_status["latest_run_graph_status"]["run_id"],
-        simple_task_id
+        simple_task_id,
+        "explicitly bound session status should remain scoped: {simple_status}"
     );
     assert_eq!(
         simple_status["latest_run_graph_gate"]["delegation_gate"]["delegated_cycle_open"],
@@ -18607,7 +18655,13 @@ fn orchestrator_init_closed_task_zombie_d_public_matrix() {
         ),
     ];
     for (label, args) in public_surfaces {
-        let (payload, success) = zombie_d_json_command(&project_root, &state_dir, &args, label);
+        let (payload, success) = zombie_d_run_graph_json_command(
+            &project_root,
+            &state_dir,
+            many_b,
+            &args,
+            label,
+        );
         assert!(
             !success || payload["status"] == "blocked",
             "{label} must fail closed: {payload}"
@@ -18634,16 +18688,35 @@ fn orchestrator_init_closed_task_zombie_d_public_matrix() {
         );
     }
 
-    let (many_status, _) = zombie_d_json_command(
+    let (many_status, _) = zombie_d_run_graph_json_command(
         &project_root,
         &state_dir,
+        many_b,
         &["status", "--json"],
         "ZOMBIE-D many status",
     );
-    assert_eq!(many_status["latest_run_graph_status"]["task_id"], many_b);
+    assert!(
+        many_status["latest_run_graph_status"].is_null(),
+        "closed foreign runs must not be projected as current-session status: {many_status}"
+    );
+    assert!(
+        many_status["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| {
+                codes
+                    .iter()
+                    .any(|code| code == "closed_task_active_run_projection_mismatch")
+            }),
+        "closed foreign run projection must retain the canonical closed-task gate: {many_status}"
+    );
 
     // Interface: compact default, explicit JSON, and help/options remain public and aligned.
-    let compact_status = status_with_timeout(&project_root, &state_dir, &["status"]);
+    let compact_status = status_with_session_timeout(
+        &project_root,
+        &state_dir,
+        many_b,
+        &["status"],
+    );
     assert!(compact_status.status.success());
     let compact_stdout = String::from_utf8_lossy(&compact_status.stdout);
     assert!(compact_stdout.contains("closed_task_active_run_projection_mismatch"));

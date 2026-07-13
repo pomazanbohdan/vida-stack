@@ -9989,22 +9989,18 @@ pub(crate) async fn derive_advanced_run_graph_state(
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "analysis".to_string());
         let direct_writer_entry = compiled_control.first_execution_lane.clone();
-        if let Some(sequence) = seeded_lane_sequence.as_ref() {
-            let expected_entry = sequence.first().ok_or_else(|| {
-                "run-graph advance failed: configured execution lane sequence is empty"
-                    .to_string()
-            })?;
-            let actual_entry = existing.next_node.as_deref().ok_or_else(|| {
-                format!(
-                    "run-graph advance expected configured execution lane `{expected_entry}`, got `none`"
-                )
-            })?;
-            if actual_entry != expected_entry {
-                return Err(format!(
-                    "run-graph advance expected configured execution lane `{expected_entry}`, got `{actual_entry}`"
-                ));
-            }
-            let active_entry = actual_entry.to_string();
+        if let Some(sequence) = seeded_lane_sequence.as_ref()
+            .filter(|sequence| {
+                existing
+                    .next_node
+                    .as_deref()
+                    .is_some_and(|entry| sequence.iter().any(|node| node == entry))
+            })
+        {
+            let active_entry = existing
+                .next_node
+                .clone()
+                .expect("configured sequence entry was present");
             let next_node = next_seeded_implementation_lane(sequence, &active_entry);
             return Ok(TaskflowRunGraphAdvancePayload {
                 status: run_graph_state_from_authority_ready_transition(
@@ -10020,7 +10016,10 @@ pub(crate) async fn derive_advanced_run_graph_state(
                 ),
             });
         }
-        if existing.next_node.as_deref() == Some(direct_writer_entry.as_str()) {
+        let configured_writer_entry = implementation_writer_node(&implementation);
+        if existing.next_node.as_deref() == Some(direct_writer_entry.as_str())
+            || existing.next_node.as_deref() == Some(configured_writer_entry.as_str())
+        {
             let active_entry = existing
                 .next_node
                 .clone()
@@ -10053,7 +10052,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
 
         if existing.next_node.as_deref() != Some(analysis_node.as_str()) {
             return Err(format!(
-                "run-graph advance expected next node `{analysis_node}` or `{direct_writer_entry}` for the seeded implementation run, got `{}`",
+                "run-graph advance expected next node `{analysis_node}`, `{direct_writer_entry}`, or `{configured_writer_entry}` for the seeded implementation run, got `{}`",
                 existing.next_node.as_deref().unwrap_or("none")
             ));
         }
