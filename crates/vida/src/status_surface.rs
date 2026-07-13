@@ -320,7 +320,6 @@ pub(crate) async fn current_runtime_projection(
         dispatch_receipt_matches_status,
         dispatch_receipt_summary_inconsistent,
         snapshot_inconsistent,
-        session_identity_ambiguous,
     })
 }
 
