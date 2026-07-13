@@ -6475,7 +6475,9 @@ pub(crate) fn validate_run_graph_resume_gate(status: &RunGraphStatus) -> Result<
             status.handoff_state
         ));
     }
-    if !status.delegation_gate().delegated_cycle_open {
+    if !status.delegation_gate().delegated_cycle_open
+        && !is_seeded_implementation_dispatch_ready(status)
+    {
         return Err(format!(
             "Run-graph resume gate denied for `{}`: delegated cycle is not open",
             status.run_id
@@ -6753,6 +6755,39 @@ fn implementation_writer_node(implementation: &serde_json::Value) -> String {
         .or_else(|| json_raw_string_field(implementation, "implementer_route_task_class"))
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "writer".to_string())
+}
+
+async fn seeded_implementation_lane_sequence(
+    store: &StateStore,
+    run_id: &str,
+) -> Option<Vec<String>> {
+    let context = store
+        .run_graph_dispatch_context(run_id)
+        .await
+        .ok()
+        .flatten()?;
+    let selection = context.role_selection().ok()?;
+    let dispatch_contract = selection
+        .execution_plan
+        .get("development_flow")?
+        .get("dispatch_contract")?;
+    let sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
+    (!sequence.is_empty()).then_some(sequence)
+}
+
+fn next_seeded_implementation_lane(sequence: &[String], current_node: &str) -> Option<String> {
+    let current_index = sequence.iter().position(|node| node == current_node)?;
+    sequence.get(current_index + 1).cloned()
+}
+
+fn is_seeded_implementation_dispatch_ready(status: &RunGraphStatus) -> bool {
+    status.task_class == "implementation"
+        && status.route_task_class == "implementation"
+        && status.active_node == "planning"
+        && status.status == "ready"
+        && status.next_node.is_some()
+        && status.lifecycle_stage.ends_with("_dispatch_ready")
+        && status.recovery_ready
 }
 
 fn implementation_verification_gate(
@@ -9898,6 +9933,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
 ) -> Result<TaskflowRunGraphAdvancePayload, String> {
     let compiled_control = compiled_run_graph_control(store).await?;
     let implementation = compiled_control.implementation;
+    let seeded_lane_sequence = seeded_implementation_lane_sequence(store, &existing.run_id).await;
     let dispatch_receipt = store
         .run_graph_dispatch_receipt(&existing.run_id)
         .await
@@ -9930,6 +9966,32 @@ pub(crate) async fn derive_advanced_run_graph_state(
             .unwrap_or_else(|| "analysis".to_string());
         let direct_writer_entry = compiled_control.first_execution_lane.clone();
         let configured_dev_team_entry = "developer";
+        if seeded_lane_sequence
+            .as_ref()
+            .and_then(|sequence| sequence.first())
+            .is_some_and(|entry| existing.next_node.as_deref() == Some(entry.as_str()))
+        {
+            let active_entry = existing
+                .next_node
+                .clone()
+                .expect("configured dev-team entry was present");
+            let next_node = seeded_lane_sequence
+                .as_ref()
+                .and_then(|sequence| next_seeded_implementation_lane(sequence, &active_entry));
+            return Ok(TaskflowRunGraphAdvancePayload {
+                status: run_graph_state_from_authority_ready_transition(
+                    &existing,
+                    active_entry.clone(),
+                    next_node.clone(),
+                    format!("{active_entry}_lane"),
+                    format!("{active_entry}_active"),
+                    "not_required".to_string(),
+                    "execution_cursor".to_string(),
+                    DispatchTargetFormat::Lane,
+                    next_node.is_some(),
+                ),
+            });
+        }
         if existing.next_node.as_deref() == Some(direct_writer_entry.as_str())
             || existing.next_node.as_deref() == Some(configured_dev_team_entry)
         {
@@ -10048,6 +10110,73 @@ pub(crate) async fn derive_advanced_run_graph_state(
                 true,
             ),
         });
+    }
+
+    if let Some(sequence) = seeded_lane_sequence.as_ref() {
+        if sequence.iter().any(|node| node == &existing.active_node) {
+            if existing.lifecycle_stage.ends_with("_dispatch_ready")
+                && existing.next_node.as_deref() == Some(existing.active_node.as_str())
+            {
+                let next_node = next_seeded_implementation_lane(sequence, &existing.active_node);
+                return Ok(TaskflowRunGraphAdvancePayload {
+                    status: run_graph_state_from_authority_ready_transition(
+                        &existing,
+                        existing.active_node.clone(),
+                        next_node.clone(),
+                        existing.lane_id.clone(),
+                        format!("{}_active", existing.active_node),
+                        "not_required".to_string(),
+                        "execution_cursor".to_string(),
+                        DispatchTargetFormat::Lane,
+                        next_node.is_some(),
+                    ),
+                });
+            }
+            let expected_next_node =
+                next_seeded_implementation_lane(sequence, &existing.active_node);
+            match (existing.next_node.as_deref(), expected_next_node.as_deref()) {
+                (None, None) => {
+                    let mut status = run_graph_state_from_authority_ready_transition(
+                        &existing,
+                        existing.active_node.clone(),
+                        None,
+                        existing.lane_id.clone(),
+                        "implementation_complete".to_string(),
+                        "not_required".to_string(),
+                        existing.checkpoint_kind.clone(),
+                        DispatchTargetFormat::Lane,
+                        false,
+                    );
+                    status.status = "completed".to_string();
+                    status.context_state = existing.context_state;
+                    return Ok(TaskflowRunGraphAdvancePayload { status });
+                }
+                (Some(actual), Some(expected)) if actual == expected => {
+                    let next_node = next_seeded_implementation_lane(sequence, actual);
+                    return Ok(TaskflowRunGraphAdvancePayload {
+                        status: run_graph_state_from_authority_ready_transition(
+                            &existing,
+                            actual.to_string(),
+                            next_node.clone(),
+                            format!("{actual}_lane"),
+                            format!("{actual}_active"),
+                            "not_required".to_string(),
+                            "execution_cursor".to_string(),
+                            DispatchTargetFormat::Lane,
+                            next_node.is_some(),
+                        ),
+                    });
+                }
+                (actual, expected) => {
+                    return Err(format!(
+                        "run-graph advance expected configured dev-team next node `{}` for active node `{}`, got `{}`",
+                        expected.unwrap_or("none"),
+                        existing.active_node,
+                        actual.unwrap_or("none")
+                    ));
+                }
+            }
+        }
     }
 
     let writer_node = implementation_writer_node(&implementation);
@@ -17795,6 +17924,88 @@ agent_system:
         assert_eq!(payload.status.lifecycle_stage, "developer_active");
         assert_eq!(payload.status.next_node.as_deref(), Some("coach"));
         assert_eq!(payload.status.handoff_state, "awaiting_coach");
+    }
+
+    #[tokio::test]
+    async fn configured_runtime_defect_seed_advance_and_dispatch_init_share_lane_contract() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let task_id = "task-run-graph-configured-coder-contract";
+        let labels = vec!["runtime-recovery".to_string()];
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Repair configured run-graph coder contract",
+                display_id: None,
+                description:
+                    "Seed, advance, and dispatch-init must preserve the configured coder lane.",
+                issue_type: "runtime_defect",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "seed -> advance -> dispatch-init preserves the configured coder next-node contract"
+                            .to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create configured runtime-defect task");
+
+        let request_text =
+            "Repair the configured run-graph seed/advance/dispatch-init next-node contract.";
+        let seeded = derive_seeded_run_graph_state(&store, task_id, request_text)
+            .await
+            .expect("configured runtime-defect seed should derive");
+        assert_eq!(seeded.status.task_class, "implementation");
+        assert_eq!(seeded.status.route_task_class, "implementation");
+        assert_eq!(seeded.status.active_node, "planning");
+        assert_eq!(seeded.status.next_node.as_deref(), Some("coder"));
+        assert_eq!(seeded.status.lifecycle_stage, "coder_dispatch_ready");
+        assert!(run_graph_dispatch_bootstrap_from_state(&seeded.status).is_ok());
+
+        persist_seed_artifacts(&store, &seeded)
+            .await
+            .expect("seed artifacts should persist");
+        let dispatch_init = run_graph_dispatch_init(&store, task_id)
+            .await
+            .expect("dispatch-init should accept the seeded coder handoff");
+        assert_eq!(
+            dispatch_init["dispatch_receipt"]["dispatch_target"],
+            "coder"
+        );
+        assert!(store
+            .run_graph_dispatch_receipt(task_id)
+            .await
+            .expect("dispatch receipt lookup should succeed")
+            .is_some());
+
+        let advanced = derive_advanced_run_graph_state(
+            &store,
+            store
+                .run_graph_status(task_id)
+                .await
+                .expect("seeded status lookup should succeed"),
+        )
+        .await
+        .expect("advance should accept the configured coder handoff");
+        assert_eq!(advanced.status.active_node, "coder");
+        assert_eq!(advanced.status.next_node.as_deref(), Some("cleaner"));
+        assert_eq!(advanced.status.lifecycle_stage, "coder_active");
+        assert_eq!(advanced.status.resume_target, "dispatch.cleaner_lane");
     }
 
     #[tokio::test]
