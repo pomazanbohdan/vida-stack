@@ -1101,10 +1101,17 @@ fn write_scope_allows_task_class(
     if !task_class_requires_write_scope(task_class) {
         return true;
     }
+    write_scope_allows_write_task_class(write_scope, external_backend_readiness)
+}
+
+fn write_scope_allows_write_task_class(
+    write_scope: &str,
+    external_backend_readiness: Option<&serde_json::Value>,
+) -> bool {
     let normalized = write_scope.trim().to_ascii_lowercase();
     if matches!(
         normalized.as_str(),
-        "" | "none" | "read-only" | "read_only" | "readorreview" | "read_or_review"
+        "" | "none" | "read-only" | "read_only" | "readonly" | "readorreview" | "read_or_review"
     ) {
         return false;
     }
@@ -1121,6 +1128,31 @@ fn write_scope_allows_task_class(
     }
 
     true
+}
+
+fn isolation_requires_readonly_scope(isolation: &str) -> bool {
+    let normalized = isolation.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "readonly"
+            | "read-only"
+            | "read_only"
+            | "internal_readonly_complete"
+            | "external_readonly_complete"
+            | "root_validate_only"
+    )
+}
+
+fn write_scope_is_readonly(write_scope: &str) -> bool {
+    let normalized = write_scope.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "" | "none" | "read-only" | "read_only" | "readonly" | "readorreview" | "read_or_review"
+    )
+}
+
+fn isolation_allows_write_scope(isolation: &str, write_scope: &str) -> bool {
+    !isolation_requires_readonly_scope(isolation) || write_scope_is_readonly(write_scope)
 }
 
 fn write_scope_requires_live_guard(write_scope: &str) -> bool {
@@ -1443,6 +1475,7 @@ pub(crate) fn build_runtime_assignment_from_resolved_constraints(
         task_class,
         execution_runtime_role,
         true,
+        None,
     )
 }
 
@@ -1458,6 +1491,24 @@ pub(crate) fn build_runtime_assignment_preview_from_resolved_constraints(
         task_class,
         execution_runtime_role,
         false,
+        None,
+    )
+}
+
+fn build_runtime_assignment_from_resolved_constraints_with_stage_isolation(
+    compiled_bundle: &serde_json::Value,
+    conversation_role: &str,
+    task_class: &str,
+    execution_runtime_role: &str,
+    stage_isolation: Option<&str>,
+) -> serde_json::Value {
+    build_runtime_assignment_from_resolved_constraints_with_readiness(
+        compiled_bundle,
+        conversation_role,
+        task_class,
+        execution_runtime_role,
+        true,
+        stage_isolation,
     )
 }
 
@@ -1467,6 +1518,7 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
     task_class: &str,
     execution_runtime_role: &str,
     probe_external_readiness: bool,
+    scoped_row_isolation: Option<&str>,
 ) -> serde_json::Value {
     let carrier_runtime = carrier_runtime_section(compiled_bundle);
     let selection_rule = selection_rule_for_runtime(carrier_runtime);
@@ -1864,6 +1916,11 @@ fn build_runtime_assignment_from_resolved_constraints_with_readiness(
             candidate.external_backend_readiness.as_ref(),
         ) {
             reasons.push("write_scope_inadmissible_for_task_class".to_string());
+        }
+        if scoped_row_isolation
+            .is_some_and(|isolation| !isolation_allows_write_scope(isolation, &write_scope))
+        {
+            reasons.push("write_scope_inadmissible_for_isolation".to_string());
         }
         if !service_executor_write_candidate_ready(
             &backend_class,
@@ -2400,11 +2457,17 @@ fn stage_policy_assignment(
     let runtime_role = stage_policy_string(row, "runtime_role", "worker");
     let conversation_role = stage_policy_string(row, "conversation_role", &runtime_role);
     let scoped_bundle = stage_policy_scoped_bundle(compiled_bundle, row);
-    let mut assignment = build_runtime_assignment_from_resolved_constraints(
+    let isolation = row["isolation"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("readonly");
+    let mut assignment = build_runtime_assignment_from_resolved_constraints_with_stage_isolation(
         &scoped_bundle,
         &conversation_role,
         &task_class,
         &runtime_role,
+        Some(isolation),
     );
     if let Some(map) = assignment.as_object_mut() {
         map.insert("stage_id".to_string(), serde_json::json!(stage_id));
@@ -2426,12 +2489,7 @@ fn stage_policy_assignment(
         );
         map.insert(
             "isolation".to_string(),
-            row["isolation"]
-                .as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(serde_json::Value::from)
-                .unwrap_or_else(|| serde_json::json!("readonly")),
+            serde_json::json!(isolation),
         );
         map.insert(
             "requested_carrier_id".to_string(),
@@ -2777,6 +2835,116 @@ mod tests {
         assert_ne!(
             policy["consolidator"]["selected_model_profile_id"],
             policy["attempts"][0]["selected_model_profile_id"]
+        );
+    }
+
+    #[test]
+    fn readonly_stage_isolation_rejects_write_enabled_profile() {
+        let mut compiled_bundle = compiled_bundle_with_roles(vec![
+            serde_json::json!({
+                "role_id": "analysis_writer",
+                "tier": "middle",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "business_analyst",
+                "runtime_roles": ["business_analyst"],
+                "task_classes": ["analysis"],
+                "reasoning_band": "xhigh",
+                "default_model_profile": "codex_write_analysis",
+                "model_profiles": {
+                    "codex_write_analysis": {
+                        "profile_id": "codex_write_analysis",
+                        "model_ref": "codex/write-analysis",
+                        "provider": "openai",
+                        "reasoning_effort": "xhigh",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "workspace-write",
+                        "runtime_roles": ["business_analyst"],
+                        "task_classes": ["analysis"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+            serde_json::json!({
+                "role_id": "coach_consolidator",
+                "tier": "coach",
+                "rate": 1,
+                "normalized_cost_units": 1,
+                "default_runtime_role": "coach",
+                "runtime_roles": ["coach"],
+                "task_classes": ["review"],
+                "reasoning_band": "medium",
+                "default_model_profile": "coach_review",
+                "model_profiles": {
+                    "coach_review": {
+                        "profile_id": "coach_review",
+                        "model_ref": "coach/review",
+                        "provider": "test",
+                        "reasoning_effort": "medium",
+                        "normalized_cost_units": 1,
+                        "speed_tier": "fast",
+                        "quality_tier": "medium",
+                        "write_scope": "none",
+                        "runtime_roles": ["coach"],
+                        "task_classes": ["review"],
+                        "readiness": { "required": true, "ready": true }
+                    }
+                }
+            }),
+        ]);
+        compiled_bundle["agent_system"] = serde_json::json!({
+            "stage_attempt_policies": {
+                "analysis": {
+                    "fanout": { "mode": "single", "max_attempts": 1 },
+                    "attempts": [
+                        {
+                            "attempt_id": "analysis-readonly-write-profile",
+                            "carrier_id": "analysis_writer",
+                            "model_profile_id": "codex_write_analysis",
+                            "conversation_role": "analyst",
+                            "runtime_role": "business_analyst",
+                            "task_class": "analysis",
+                            "isolation": "internal_readonly_complete"
+                        }
+                    ],
+                    "consolidator": {
+                        "attempt_id": "analysis-consolidator",
+                        "carrier_id": "coach_consolidator",
+                        "model_profile_id": "coach_review",
+                        "conversation_role": "coach",
+                        "runtime_role": "coach",
+                        "task_class": "review",
+                        "isolation": "root_validate_only"
+                    }
+                }
+            }
+        });
+
+        let policy = build_stage_attempt_policy_from_config(&compiled_bundle, "analysis");
+
+        assert_eq!(policy["status"], "blocked");
+        assert!(
+            policy["blocker_codes"]
+                .as_array()
+                .expect("blocker codes should render")
+                .iter()
+                .any(|reason| {
+                    reason.as_str() == Some("attempt:write_scope_inadmissible_for_isolation")
+                }),
+            "policy={policy:#}"
+        );
+        assert_eq!(policy["attempts"][0]["enabled"], false);
+        assert!(
+            policy["attempts"][0]["rejected_candidates"]
+                .as_array()
+                .expect("rejected candidates should render")
+                .iter()
+                .any(|candidate| {
+                    candidate["carrier_id"] == "analysis_writer"
+                        && candidate["reason"] == "write_scope_inadmissible_for_isolation"
+                })
         );
     }
 

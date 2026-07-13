@@ -1767,7 +1767,7 @@ agent_system:
       attempts:
         - attempt_id: analysis-internal-medium-readonly
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_luna_xhigh_write
+          model_profile_id: codex_gpt56_luna_xhigh_analysis_legacy
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: analysis
@@ -1775,7 +1775,7 @@ agent_system:
       consolidator:
         attempt_id: analysis-root-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt56_luna_xhigh_write
+        model_profile_id: codex_gpt56_luna_xhigh_analysis_legacy
         conversation_role: analyst
         runtime_role: business_analyst
         task_class: analysis
@@ -1787,7 +1787,7 @@ agent_system:
       attempts:
         - attempt_id: specification-internal-medium-readonly
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_luna_xhigh_write
+          model_profile_id: codex_gpt56_luna_xhigh_analysis_legacy
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: specification
