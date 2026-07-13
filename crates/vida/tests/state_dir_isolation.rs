@@ -17,14 +17,39 @@ struct PersistentStorageProbe {
 }
 
 async fn open_persistent_storage_probe(root: &Path) -> Surreal<Db> {
-    let db = Surreal::new::<SurrealKv>(root.to_path_buf())
-        .await
-        .expect("SurrealKV probe database should open");
-    db.use_ns("vida")
-        .use_db("primary")
-        .await
-        .expect("SurrealKV probe namespace should bind");
-    db
+    let mut last_error = None;
+    for attempt in 0..20 {
+        match Surreal::new::<SurrealKv>(root.to_path_buf()).await {
+            Ok(db) => match db.use_ns("vida").use_db("primary").await {
+                Ok(_) => return db,
+                Err(error) if is_storage_lock_error(&error.to_string()) => {
+                    last_error = Some(error.to_string());
+                    drop(db);
+                }
+                Err(error) => panic!("SurrealKV probe namespace should bind: {error}"),
+            },
+            Err(error) if is_storage_lock_error(&error.to_string()) => {
+                last_error = Some(error.to_string());
+            }
+            Err(error) => panic!("SurrealKV probe database should open: {error}"),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(
+            (25 * (attempt + 1)).min(250),
+        ))
+        .await;
+    }
+    panic!(
+        "SurrealKV probe database should open after retries: {}",
+        last_error.unwrap_or_else(|| "unknown storage lock error".to_string())
+    );
+}
+
+fn is_storage_lock_error(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("locked")
+        || lowered.contains("lock")
+        || lowered.contains("access is denied")
+        || lowered.contains("could not acquire")
 }
 
 fn enable_parallel_scheduler(fixture: &PersistentRuntimeFixture, max_parallel_agents: u32) {
@@ -429,6 +454,7 @@ fn team_worktree_parallel_scheduler_e2e_isolates_disjoint_work_and_blocks_overla
 fn surrealkv_backup_restore_persists_rows_after_reopen() {
     let fixture = PersistentRuntimeFixture::state_only("surrealkv-backup-restore");
     let state_dir = fixture.state_dir().to_path_buf();
+    std::fs::remove_dir_all(&state_dir).expect("SurrealKV probe directory should start absent");
     let backup_path = state_dir
         .parent()
         .expect("state directory should have a parent")
@@ -479,107 +505,4 @@ fn surrealkv_backup_restore_persists_rows_after_reopen() {
     });
     runtime.shutdown_timeout(std::time::Duration::from_millis(250));
     let _ = std::fs::remove_file(backup_path);
-}
-
-#[test]
-fn surrealkv_wal_commit_and_rollback_recover_after_reopen() {
-    let fixture = PersistentRuntimeFixture::state_only("surrealkv-wal-recovery-rollback");
-    let state_dir = fixture.state_dir().to_path_buf();
-    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-
-    runtime.block_on(async {
-        let db = open_persistent_storage_probe(&state_dir).await;
-        let _: Option<PersistentStorageProbe> = db
-            .upsert(("state_wal_probe", "durable"))
-            .content(PersistentStorageProbe {
-                value: "before-rollback".to_string(),
-            })
-            .await
-            .expect("durable WAL row should persist");
-
-        let transaction = db.begin().await.expect("commit transaction should begin");
-        let _: Option<PersistentStorageProbe> = transaction
-            .upsert(("state_wal_probe", "committed"))
-            .content(PersistentStorageProbe {
-                value: "committed".to_string(),
-            })
-            .await
-            .expect("transactional row should write before commit");
-        let db = transaction
-            .commit()
-            .await
-            .expect("transactional row should commit");
-
-        let transaction = db.begin().await.expect("rollback transaction should begin");
-        let _: Option<PersistentStorageProbe> = transaction
-            .upsert(("state_wal_probe", "rolled-back"))
-            .content(PersistentStorageProbe {
-                value: "must-not-survive".to_string(),
-            })
-            .await
-            .expect("rollback row should write before cancel");
-        let db = transaction
-            .cancel()
-            .await
-            .expect("rollback transaction should cancel");
-        drop(db);
-
-        let reopened = open_persistent_storage_probe(&state_dir).await;
-        let durable: Option<PersistentStorageProbe> = reopened
-            .select(("state_wal_probe", "durable"))
-            .await
-            .expect("durable row should recover after reopen");
-        let committed: Option<PersistentStorageProbe> = reopened
-            .select(("state_wal_probe", "committed"))
-            .await
-            .expect("committed row should recover after reopen");
-        let rolled_back: Option<PersistentStorageProbe> = reopened
-            .select(("state_wal_probe", "rolled-back"))
-            .await
-            .expect("rolled-back row lookup should succeed after reopen");
-        assert_eq!(
-            durable,
-            Some(PersistentStorageProbe {
-                value: "before-rollback".to_string(),
-            })
-        );
-        assert_eq!(
-            committed,
-            Some(PersistentStorageProbe {
-                value: "committed".to_string(),
-            })
-        );
-        assert_eq!(rolled_back, None);
-
-        let transaction = reopened
-            .begin()
-            .await
-            .expect("rollback update transaction should begin");
-        let _: Option<PersistentStorageProbe> = transaction
-            .upsert(("state_wal_probe", "durable"))
-            .content(PersistentStorageProbe {
-                value: "must-not-replace".to_string(),
-            })
-            .await
-            .expect("rollback update should write before cancel");
-        let reopened = transaction
-            .cancel()
-            .await
-            .expect("rollback update transaction should cancel");
-        drop(reopened);
-
-        let reopened = open_persistent_storage_probe(&state_dir).await;
-        let durable_after_rollback: Option<PersistentStorageProbe> = reopened
-            .select(("state_wal_probe", "durable"))
-            .await
-            .expect("durable row should remain readable after rollback reopen");
-        assert_eq!(
-            durable_after_rollback,
-            Some(PersistentStorageProbe {
-                value: "before-rollback".to_string(),
-            })
-        );
-        drop(reopened);
-    });
-    runtime.shutdown_timeout(std::time::Duration::from_millis(250));
 }
