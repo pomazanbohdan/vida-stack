@@ -32,3 +32,5 @@ logs/
 dist
 projects/vida-mobile/
 .worktrees/
+# CocoIndex Code (ccc)
+/.cocoindex_code/
