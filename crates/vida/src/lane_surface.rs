@@ -3748,8 +3748,13 @@ fn trusted_host_bridge_completion_request_context(
     if status.active_node.trim() != dispatch_target && !packet_confirms_active_request {
         return Ok(None);
     }
-    let adapter_gate_context =
-        status.status == "blocked" && status.policy_gate == "host_tool_bridge_adapter_required";
+    let adapter_gate_context = status.status == "blocked"
+        && (status.policy_gate == "host_tool_bridge_adapter_required"
+            || receipt.blocker_code.as_deref() == Some("host_tool_bridge_adapter_required")
+            || receipt
+                .downstream_dispatch_blockers
+                .iter()
+                .any(|blocker| blocker == "host_tool_bridge_adapter_required"));
     let retryable_completion_context = status.status == "blocked"
         && (host_bridge_completion_request_required(receipt)
             || host_bridge_request_is_retryable_completion_state(&request)
@@ -13245,13 +13250,14 @@ mod tests {
         receipt.dispatch_result_path = Some(dispatch_result_path.display().to_string());
         receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
         receipt.selected_backend = Some("internal_subagents".to_string());
+        receipt.blocker_code = Some("host_tool_bridge_adapter_required".to_string());
 
         let mut status =
             crate::taskflow_run_graph::default_run_graph_status(run_id, "testing", "testing");
         status.task_id = run_id.to_string();
         status.active_node = dispatch_target.to_string();
         status.status = "blocked".to_string();
-        status.policy_gate = "host_tool_bridge_adapter_required".to_string();
+        status.policy_gate = "not_required".to_string();
 
         let context = trusted_host_bridge_completion_request_context(
             &root,

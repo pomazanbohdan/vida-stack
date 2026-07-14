@@ -89,6 +89,7 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
             | "host_agent_execution_failed"
             | "host_agent_capacity_unavailable"
             | "host_tool_capability_missing"
+            | "host_tool_bridge_adapter_required"
     ) || matches!(
         taskflow_contracts::BlockerCode::try_from(blocker_code),
         Ok(taskflow_contracts::BlockerCode::ImplementationArtifactAuthorityMissing)
@@ -110,6 +111,7 @@ fn host_agent_adapter_blockers_are_retryable_completion_evidence() {
         "host_agent_execution_failed",
         "host_agent_capacity_unavailable",
         "host_tool_capability_missing",
+        "host_tool_bridge_adapter_required",
     ] {
         assert!(host_bridge_completion_retryable_blocker(blocker_code));
         assert!(host_bridge_artifact_has_retryable_completion_blocker(
