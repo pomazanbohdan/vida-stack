@@ -227,7 +227,9 @@ fn closed_task_stale_host_bridge_run_projection_is_not_active_recovery() {
             "closed-host-bridge-run",
             "Closed Host Bridge Run",
             "--type",
-            "task",
+            "runtime_defect",
+            "--status",
+            "in_progress",
             "--parent-id",
             "closed-host-bridge-parent",
             "--json",
@@ -308,18 +310,31 @@ fn closed_task_stale_host_bridge_run_projection_is_not_active_recovery() {
             "--json",
         ],
     );
-    let run_graph_blockers = json_string_vec(&run_graph, "/blocker_codes");
+    assert_eq!(run_graph["status"], "pass");
     assert!(
-        run_graph_blockers
-            .iter()
-            .any(|code| code == "closed_task_active_run_projection_mismatch"),
-        "closed task projection must fail closed, not remain active: {run_graph:#}"
+        run_graph["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.is_empty()),
+        "closed task run-graph projection must not expose active blockers: {run_graph:#}"
     );
-    assert!(
-        run_graph["next_actions"]
-            .to_string()
-            .contains("vida task reconcile-closed-runs --limit 25"),
-        "closed task projection should name the stable reconcile command: {run_graph:#}"
+    assert_eq!(run_graph["run_graph_status"]["active_node"], "closure");
+    assert_eq!(
+        run_graph["run_graph_status"]["lifecycle_stage"],
+        "closure_complete"
+    );
+    assert_eq!(
+        run_graph["run_graph_status"]["policy_gate"],
+        "closed_run_archived"
+    );
+    assert_eq!(run_graph["run_graph_status"]["context_state"], "sealed");
+    assert_eq!(run_graph["run_graph_status"]["recovery_ready"], false);
+    assert_eq!(
+        run_graph["delegation_gate"]["delegated_cycle_open"],
+        false
+    );
+    assert_eq!(
+        run_graph["delegation_gate"]["delegated_cycle_state"],
+        "clear"
     );
 
     let recovery = run_json(
@@ -337,13 +352,13 @@ fn closed_task_stale_host_bridge_run_projection_is_not_active_recovery() {
         recovery_blockers
             .iter()
             .any(|code| code == "closed_task_active_run_projection_mismatch"),
-        "closed task recovery must fail closed, not remain active: {recovery:#}"
+        "raw closed task recovery must remain fail-closed: {recovery:#}"
     );
     assert!(
         recovery["next_actions"]
             .to_string()
             .contains("vida task reconcile-closed-runs --limit 25"),
-        "closed task recovery should name the stable reconcile command: {recovery:#}"
+        "raw closed task recovery should name the stable reconcile command: {recovery:#}"
     );
 }
 
