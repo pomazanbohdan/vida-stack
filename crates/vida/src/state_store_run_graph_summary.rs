@@ -1330,7 +1330,13 @@ impl RunGraphDelegationGateSummary {
         let dispatch_ready_resume = status.status == "ready"
             && status.lifecycle_stage.ends_with("_dispatch_ready")
             && status.resume_target.starts_with("dispatch.");
+        let terminal_blocked = status.status == "blocked"
+            && status.next_node.is_none()
+            && status.handoff_state == "blocked"
+            && status.resume_target == "none"
+            && status.lifecycle_stage.ends_with("_blocked");
         let handoff_pending = !dispatch_ready_resume
+            && !terminal_blocked
             && (status.next_node.is_some()
                 || status.handoff_state != "none"
                 || status.resume_target != "none");
@@ -1343,7 +1349,9 @@ impl RunGraphDelegationGateSummary {
             && status.active_node != "planning"
             && status.lifecycle_stage.ends_with("_blocked")
             && status.policy_gate != "not_required";
-        let (delegated_cycle_open, delegated_cycle_state) = if handoff_pending {
+        let (delegated_cycle_open, delegated_cycle_state) = if terminal_blocked {
+            (false, "terminal_blocked".to_string())
+        } else if handoff_pending {
             (true, "handoff_pending".to_string())
         } else if delegated_lane_active {
             (true, "delegated_lane_active".to_string())
@@ -5434,6 +5442,24 @@ mod tests {
         status.resume_target = "dispatch.implementer_lane".to_string();
         status.recovery_ready = true;
         status
+    }
+
+    #[test]
+    fn terminal_blocked_dispatch_closes_delegated_cycle_gate() {
+        let mut status = sample_run_graph_status();
+        status.active_node = "coder".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coder_blocked".to_string();
+        status.handoff_state = "blocked".to_string();
+        status.resume_target = "none".to_string();
+
+        let gate = RunGraphDelegationGateSummary::from_status(&status);
+
+        assert!(!gate.delegated_cycle_open);
+        assert_eq!(gate.delegated_cycle_state, "terminal_blocked");
+        assert_eq!(gate.local_exception_takeover_gate, "delegated_cycle_clear");
+        assert_eq!(gate.blocker_code, None);
     }
 
     fn mark_terminal_closure_status(status: &mut RunGraphStatus) {

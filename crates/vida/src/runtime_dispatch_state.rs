@@ -21484,6 +21484,63 @@ fn terminalize_internal_host_bridge_pending_result_closes_orphaned_cycle_without
     }
 
     #[test]
+    fn apply_first_handoff_execution_terminalizes_blocked_bridge_lane() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-blocked-bridge",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "run-blocked-bridge".to_string();
+        status.active_node = "coder".to_string();
+        status.next_node = None;
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "coder_active".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-blocked-bridge".to_string(),
+            dispatch_target: "coder".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_recorded".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("run-blocked-bridge".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/blocked-bridge-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/blocked-bridge-result.json".to_string()),
+            blocker_code: Some("host_tool_bridge_adapter_required".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["host_tool_bridge_adapter_required".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-07-14T00:00:00Z".to_string(),
+        };
+
+        let advanced = apply_first_handoff_execution_to_run_graph_status(&status, &receipt);
+        let gate = advanced.delegation_gate();
+
+        assert_eq!(advanced.status, "blocked");
+        assert_eq!(advanced.lifecycle_stage, "coder_blocked");
+        assert_eq!(advanced.handoff_state, "blocked");
+        assert_eq!(advanced.resume_target, "none");
+        assert!(!gate.delegated_cycle_open);
+        assert_eq!(gate.delegated_cycle_state, "terminal_blocked");
+    }
+
+    #[test]
     fn apply_first_handoff_execution_terminalizes_allowed_closure_downstream() {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             "run-prover-closure",
@@ -28829,7 +28886,11 @@ pub(crate) fn apply_first_handoff_execution_to_run_graph_status(
         } else {
             format!("{dispatch_target}_lane")
         },
-        lifecycle_stage: format!("{dispatch_target}_active"),
+        lifecycle_stage: if blocked_dispatch {
+            format!("{dispatch_target}_blocked")
+        } else {
+            format!("{dispatch_target}_active")
+        },
         policy_gate: status.policy_gate.clone(),
         handoff_state,
         context_state: "sealed".to_string(),
