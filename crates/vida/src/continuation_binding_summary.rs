@@ -2,6 +2,26 @@ use taskflow_authority::continuation_transition::{
     ContinuationGateInput, decide_continuation_gate,
 };
 
+pub(crate) fn cached_projection_has_ambiguous_continuation_without_active_unit(
+    payload: &serde_json::Value,
+) -> bool {
+    if !payload
+        .get("active_bounded_unit")
+        .is_some_and(serde_json::Value::is_null)
+    {
+        return false;
+    }
+    [
+        payload.get("continuation_binding"),
+        payload.get("init").and_then(|init| init.get("continuation_binding")),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|binding| {
+        binding.get("status").and_then(serde_json::Value::as_str) == Some("ambiguous")
+    })
+}
+
 fn explicit_binding_is_admissible_for_status(
     binding: &crate::state_store::RunGraphContinuationBinding,
     status: &crate::state_store::RunGraphStatus,

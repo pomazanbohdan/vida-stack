@@ -2078,6 +2078,13 @@ impl StateStore {
         Ok(self.current_session_id()?.is_some())
     }
 
+    pub(crate) fn current_session_identity_is_explicit(&self) -> Result<bool, StateStoreError> {
+        let evidence = self.current_runtime_owner_evidence()?;
+        Ok(evidence["current_session"]["identity_source"]
+            .as_str()
+            .is_some_and(|source| source != "generated_local_session_token"))
+    }
+
     fn run_graph_owner_evidence_record_id(run_id: &str, artifact_kind: &str) -> String {
         sanitize_record_id(&format!("{run_id}::{artifact_kind}"))
     }

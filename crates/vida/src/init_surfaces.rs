@@ -2175,6 +2175,11 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
     if cached_orchestrator_init_payload_has_closed_task_active_run_projection_mismatch(&payload) {
         return false;
     }
+    if crate::continuation_binding_summary::
+        cached_projection_has_ambiguous_continuation_without_active_unit(&payload)
+    {
+        return false;
+    }
     let Ok(store) = StateStore::open_existing_read_only_with_timeout(
         state_dir.to_path_buf(),
         std::time::Duration::from_secs(2),
@@ -2183,11 +2188,18 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
     else {
         return false;
     };
-    let latest_terminal_task_active_run_graph_status =
+    let current_session_scope_is_explicit = match store.current_session_identity_is_explicit() {
+        Ok(present) => present,
+        Err(_) => return false,
+    };
+    let latest_terminal_task_active_run_graph_status = if current_session_scope_is_explicit {
+        None
+    } else {
         match store.latest_terminal_task_active_run_graph_status().await {
             Ok(summary) => summary,
             Err(_) => return false,
-        };
+        }
+    };
     if latest_terminal_task_active_run_graph_status.is_some() {
         return false;
     }
@@ -2203,7 +2215,11 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
             return false;
         }
     }
-    let latest_run_graph_status = match store.latest_run_graph_status().await {
+    let latest_run_graph_status = match if current_session_scope_is_explicit {
+        store.latest_run_graph_status_for_current_session().await
+    } else {
+        store.latest_run_graph_status().await
+    } {
         Ok(summary) => summary,
         Err(_) => return false,
     };
@@ -3276,6 +3292,11 @@ mod tests {
             "view": "summary",
             "status": "ready_enough_for_normal_work",
             "active_bounded_unit": serde_json::Value::Null,
+            "active_step": serde_json::Value::Null,
+            "active_parent_task": serde_json::Value::Null,
+            "active_epic": serde_json::Value::Null,
+            "why_this_unit": "No active TaskFlow work",
+            "sequential_vs_parallel_posture": "not_applicable_no_active_work",
             "continuation_binding": {
                 "status": "ambiguous",
                 "active_bounded_unit": serde_json::Value::Null,
@@ -3299,6 +3320,93 @@ mod tests {
             )
             .await,
             "orchestrator-init cache must not hide a blocked latest run graph status behind a null active unit"
+        );
+    }
+
+    #[tokio::test]
+    async fn orchestrator_init_cache_ignores_foreign_blocked_run_when_current_session_is_bound() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _session = EnvVarGuard::set("VIDA_SESSION_ID", "session-current");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("state store should open");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "foreign-blocked-run-task",
+                title: "Foreign blocked run task",
+                display_id: None,
+                description: "Blocked run from another session must not replace current scope",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("foreign blocked task should exist");
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "foreign-blocked-run",
+            "foreign-blocked-run-task",
+            "coach",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coach_blocked".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("foreign blocked run graph status should record");
+        assert!(
+            store
+                .current_session_identity_is_present()
+                .expect("current session identity should resolve")
+        );
+        assert!(
+            store
+                .latest_run_graph_status_for_current_session()
+                .await
+                .expect("current-session run graph status should resolve")
+                .is_none(),
+            "foreign run must not appear in current-session status"
+        );
+        store.close().await;
+
+        let cached = json!({
+            "surface": "vida orchestrator-init",
+            "view": "summary",
+            "status": "ready_enough_for_normal_work",
+            "active_bounded_unit": serde_json::Value::Null,
+            "active_step": serde_json::Value::Null,
+            "active_parent_task": serde_json::Value::Null,
+            "active_epic": serde_json::Value::Null,
+            "why_this_unit": "No active TaskFlow work",
+            "sequential_vs_parallel_posture": "not_applicable_no_active_work",
+            "continuation_binding": {
+                "status": "idle",
+                "active_bounded_unit": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "sequential_vs_parallel_posture": "not_applicable_no_active_work"
+            },
+            "init": {
+                "continuation_binding": {
+                    "status": "idle",
+                    "active_bounded_unit": serde_json::Value::Null,
+                    "why_this_unit": serde_json::Value::Null,
+                    "sequential_vs_parallel_posture": "not_applicable_no_active_work"
+                }
+            }
+        });
+
+        assert!(
+            cached_orchestrator_init_payload_is_currently_admissible(
+                harness.path(),
+                &cached.to_string()
+            )
+            .await,
+            "current-session cache must not inherit a blocked run from another session"
         );
     }
 

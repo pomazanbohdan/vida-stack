@@ -362,7 +362,7 @@ pub(crate) async fn sync_run_graph_continuation_binding_with_request_text(
             })?
             .map(|context| context.request_text)
     };
-    let Some(binding) =
+    let Some(mut binding) =
         build_run_graph_continuation_binding(status, request_text.as_deref(), binding_source, None)
     else {
         store
@@ -373,6 +373,19 @@ pub(crate) async fn sync_run_graph_continuation_binding_with_request_text(
             })?;
         return Ok(None);
     };
+    let session_id = store
+        .current_session_id()
+        .map_err(|error| format!("Failed to resolve current orchestrator session identity: {error}"))?
+        .ok_or_else(|| {
+            "Current orchestrator session identity is missing; refusing an unscoped continuation binding."
+                .to_string()
+        })?;
+    if let Some(active_bounded_unit) = binding.active_bounded_unit.as_object_mut() {
+        active_bounded_unit.insert(
+            "orchestrator_session_id".to_string(),
+            serde_json::Value::String(session_id),
+        );
+    }
     store
         .record_run_graph_continuation_binding(&binding)
         .await
@@ -1091,6 +1104,76 @@ mod tests {
         assert_eq!(
             binding.active_bounded_unit["orchestrator_session_id"],
             "session-current"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn sync_run_graph_continuation_binding_records_current_session_identity() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-continuation-sync-session-identity-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::state_store::StateStore::open(root.clone())
+            .await
+            .expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "task-auto-session",
+                title: "Automatic session binding task",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-auto-session",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "task-auto-session".to_string();
+        let binding = sync_run_graph_continuation_binding(
+            &store,
+            &status,
+            "automatic_projection",
+        )
+        .await
+        .expect("automatic binding should resolve")
+        .expect("automatic binding should be recorded");
+        let session_id = store
+            .current_session_id()
+            .expect("current session should resolve")
+            .expect("current session should be present");
+
+        assert_eq!(
+            binding.active_bounded_unit["orchestrator_session_id"],
+            session_id
+        );
+        let persisted = store
+            .run_graph_continuation_binding("run-auto-session")
+            .await
+            .expect("reload binding")
+            .expect("binding should persist");
+        assert_eq!(
+            persisted.active_bounded_unit["orchestrator_session_id"],
+            session_id
         );
 
         let _ = fs::remove_dir_all(&root);

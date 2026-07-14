@@ -188,11 +188,16 @@ pub(crate) async fn current_runtime_projection(
 ) -> Result<CurrentRuntimeProjection, state_store::StateStoreError> {
     let current_session_status = store.latest_run_graph_status_for_current_session().await?;
     let current_session_identity_present = store.current_session_identity_is_present()?;
+    let current_session_scope_is_explicit = store.current_session_identity_is_explicit()?;
     let global_status = store.latest_run_graph_status().await?;
     let session_identity_ambiguous = current_session_identity_present
         && current_session_status.is_none()
         && global_status.is_some();
-    let terminal_task_active_status = store.latest_terminal_task_active_run_graph_status().await?;
+    let terminal_task_active_status = if current_session_scope_is_explicit {
+        None
+    } else {
+        store.latest_terminal_task_active_run_graph_status().await?
+    };
     let mut current_session_dispatch_receipt_checkpoint_leakage = false;
     let current_session_dispatch_receipt = match current_session_status.as_ref() {
         Some(status) => match store
@@ -1891,11 +1896,26 @@ async fn cached_status_projection_current_runtime_admissible_with_store(
     if payload_has_closed_task_active_run_projection_mismatch(&payload) {
         return false;
     }
+    let current_session_scope_is_explicit = match store.current_session_identity_is_explicit() {
+        Ok(explicit) => explicit,
+        Err(_) => return false,
+    };
     let cached_active_unit_is_null = payload
         .get("active_bounded_unit")
         .unwrap_or(&serde_json::Value::Null)
         .is_null();
+    if crate::continuation_binding_summary::
+        cached_projection_has_ambiguous_continuation_without_active_unit(&payload)
+    {
+        return false;
+    }
     if cached_active_unit_is_null {
+        if current_session_scope_is_explicit {
+            return store
+                .latest_run_graph_status_for_current_session()
+                .await
+                .is_ok_and(|status| status.is_none());
+        }
         let Ok(all_tasks) = store.list_tasks(None, true).await else {
             return false;
         };
@@ -1903,15 +1923,22 @@ async fn cached_status_projection_current_runtime_admissible_with_store(
             .iter()
             .any(|task| task.status.as_str() == "in_progress");
     }
-    let latest_terminal_task_active_run_graph_status =
+    let latest_terminal_task_active_run_graph_status = if current_session_scope_is_explicit {
+        None
+    } else {
         match store.latest_terminal_task_active_run_graph_status().await {
             Ok(summary) => summary,
             Err(_) => return false,
-        };
+        }
+    };
     if latest_terminal_task_active_run_graph_status.is_some() {
         return false;
     }
-    let latest_run_graph_status = match store.latest_run_graph_status().await {
+    let latest_run_graph_status = match if current_session_scope_is_explicit {
+        store.latest_run_graph_status_for_current_session().await
+    } else {
+        store.latest_run_graph_status().await
+    } {
         Ok(summary) => summary,
         Err(_) => return false,
     };
@@ -4859,6 +4886,78 @@ mod tests {
 
         drop(held_reader);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_cache_ignores_foreign_blocked_run_for_explicit_session() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", "status-current-session");
+        }
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-status-cache-foreign-run-{}-{nanos}",
+            std::process::id()
+        ));
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open state store");
+        let labels = Vec::new();
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "status-foreign-blocked-task",
+                title: "Foreign blocked status task",
+                display_id: None,
+                description: "",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create foreign task");
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "status-foreign-blocked-run",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "status-foreign-blocked-task".to_string();
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "implementation_blocked".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("record foreign blocked status");
+
+        let cached = serde_json::json!({
+            "surface": "vida status",
+            "status": "pass",
+            "active_bounded_unit": serde_json::Value::Null,
+            "continuation_binding": {
+                "status": "idle"
+            }
+        });
+        assert!(
+            super::cached_status_projection_current_runtime_admissible_with_store(
+                &store,
+                &cached.to_string()
+            )
+            .await,
+            "explicit-session status cache must not inherit a foreign blocked run"
+        );
+
+        store.close().await;
+        let _ = fs::remove_dir_all(root);
+        restore_vida_session_id(saved_session_id);
     }
 
     #[test]
