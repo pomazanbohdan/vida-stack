@@ -18180,19 +18180,62 @@ agent_system:
         write_activation_snapshot_for_store(&store)
             .await
             .expect("activation snapshot should be written");
-        let mut existing = default_run_graph_state(
-            "task-configured-blocked-coder",
-            "implementation",
-            "implementation",
-        );
-        existing.active_node = "coder".to_string();
-        existing.next_node = Some("cleaner".to_string());
+        let task_id = "task-configured-blocked-coder";
+        let labels = vec!["runtime-recovery".to_string()];
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Reject blocked configured lane advance",
+                display_id: None,
+                description: "Configured lane advancement must fail closed for blocked seeded lanes.",
+                issue_type: "runtime_defect",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "blocked configured lane advance fails closed".to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create configured blocked-lane task");
+        let seeded = derive_seeded_run_graph_state(
+            &store,
+            task_id,
+            "Repair configured run-graph lane advance guards.",
+        )
+        .await
+        .expect("seeded configured lane state should derive");
+        let dispatch_contract = seeded
+            .role_selection
+            .execution_plan
+            .get("development_flow")
+            .and_then(|flow| flow.get("dispatch_contract"))
+            .expect("seed should retain the dispatch contract");
+        let configured_sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
+        let first_lane = configured_sequence
+            .first()
+            .cloned()
+            .expect("configured lane sequence should have a first lane");
+        persist_seed_artifacts(&store, &seeded)
+            .await
+            .expect("seed artifacts should persist");
+        let mut existing = seeded.status;
+        existing.active_node = first_lane.clone();
+        existing.next_node = Some(first_lane.clone());
         existing.status = "blocked".to_string();
-        existing.lane_id = "coder_lane".to_string();
-        existing.lifecycle_stage = "coder_blocked".to_string();
+        existing.lane_id = format!("{first_lane}_lane");
+        existing.lifecycle_stage = format!("{first_lane}_dispatch_ready");
         existing.policy_gate = "targeted_verification".to_string();
-        existing.handoff_state = "awaiting_cleaner".to_string();
-        existing.resume_target = "dispatch.cleaner_lane".to_string();
+        existing.handoff_state = format!("awaiting_{first_lane}");
+        existing.resume_target = format!("dispatch.{first_lane}_lane");
         existing.recovery_ready = true;
         store
             .record_run_graph_status(&existing)
@@ -18218,19 +18261,61 @@ agent_system:
         write_activation_snapshot_for_store(&store)
             .await
             .expect("activation snapshot should be written");
-        let mut existing = default_run_graph_state(
-            "task-configured-policy-gated-coder",
-            "implementation",
-            "implementation",
-        );
-        existing.active_node = "coder".to_string();
-        existing.next_node = Some("coder".to_string());
+        let task_id = "task-configured-policy-gated-coder";
+        let labels = vec!["runtime-recovery".to_string()];
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Reject policy-gated configured lane advance",
+                display_id: None,
+                description: "Configured dispatch-ready lanes must reject uncleared policy gates.",
+                issue_type: "runtime_defect",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "policy-gated configured dispatch-ready lane fails closed".to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create configured policy-gated task");
+        let seeded = derive_seeded_run_graph_state(
+            &store,
+            task_id,
+            "Repair configured run-graph lane policy guards.",
+        )
+        .await
+        .expect("seeded configured policy state should derive");
+        let dispatch_contract = seeded
+            .role_selection
+            .execution_plan
+            .get("development_flow")
+            .and_then(|flow| flow.get("dispatch_contract"))
+            .expect("seed should retain the dispatch contract");
+        let first_lane = crate::dispatch_contract_execution_lane_sequence(dispatch_contract)
+            .first()
+            .cloned()
+            .expect("configured lane sequence should have a first lane");
+        persist_seed_artifacts(&store, &seeded)
+            .await
+            .expect("seed artifacts should persist");
+        let mut existing = seeded.status;
+        existing.active_node = first_lane.clone();
+        existing.next_node = Some(first_lane.clone());
         existing.status = "ready".to_string();
-        existing.lane_id = "coder_lane".to_string();
-        existing.lifecycle_stage = "coder_dispatch_ready".to_string();
+        existing.lane_id = format!("{first_lane}_lane");
+        existing.lifecycle_stage = format!("{first_lane}_dispatch_ready");
         existing.policy_gate = "targeted_verification".to_string();
-        existing.handoff_state = "awaiting_coder".to_string();
-        existing.resume_target = "dispatch.coder_lane".to_string();
+        existing.handoff_state = format!("awaiting_{first_lane}");
+        existing.resume_target = format!("dispatch.{first_lane}_lane");
         existing.recovery_ready = true;
         store
             .record_run_graph_status(&existing)
@@ -18256,16 +18341,58 @@ agent_system:
         write_activation_snapshot_for_store(&store)
             .await
             .expect("activation snapshot should be written");
-        let mut existing = default_run_graph_state(
-            "task-configured-final-ready",
-            "implementation",
-            "implementation",
-        );
-        existing.active_node = "review_ensemble".to_string();
+        let task_id = "task-configured-final-ready";
+        let labels = vec!["runtime-recovery".to_string()];
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Reject incomplete configured final lane",
+                display_id: None,
+                description: "The final configured lane must require completed evidence.",
+                issue_type: "runtime_defect",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "final configured lane requires completed evidence".to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create configured final-lane task");
+        let seeded = derive_seeded_run_graph_state(
+            &store,
+            task_id,
+            "Repair configured run-graph final-lane completion guards.",
+        )
+        .await
+        .expect("seeded configured final-lane state should derive");
+        let dispatch_contract = seeded
+            .role_selection
+            .execution_plan
+            .get("development_flow")
+            .and_then(|flow| flow.get("dispatch_contract"))
+            .expect("seed should retain the dispatch contract");
+        let final_lane = crate::dispatch_contract_execution_lane_sequence(dispatch_contract)
+            .last()
+            .cloned()
+            .expect("configured lane sequence should have a final lane");
+        persist_seed_artifacts(&store, &seeded)
+            .await
+            .expect("seed artifacts should persist");
+        let mut existing = seeded.status;
+        existing.active_node = final_lane.clone();
         existing.next_node = None;
         existing.status = "ready".to_string();
-        existing.lane_id = "review_ensemble_lane".to_string();
-        existing.lifecycle_stage = "review_ensemble_active".to_string();
+        existing.lane_id = format!("{final_lane}_lane");
+        existing.lifecycle_stage = format!("{final_lane}_active");
         existing.policy_gate = "not_required".to_string();
         existing.handoff_state = "none".to_string();
         existing.resume_target = "none".to_string();

@@ -8973,10 +8973,12 @@ fn build_runtime_dispatch_packet_body(
     ctx: &RuntimeDispatchPacketContext<'_>,
     dispatch_command: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let current_dir = std::env::current_dir().map_err(|error| {
+        format!("Failed to resolve project root for dispatch packet rendering: {error}")
+    })?;
     let project_root = taskflow_task_bridge::infer_project_root_from_state_root(ctx.state_root)
-        .unwrap_or(std::env::current_dir().map_err(|error| {
-            format!("Failed to resolve project root for dispatch packet rendering: {error}")
-        })?);
+        .or_else(|| crate::resolve_runtime_project_root().ok())
+        .unwrap_or(current_dir);
     let carrier_policy_revalidation =
         runtime_dispatch_packet_carrier_policy_revalidation(
             &project_root,
