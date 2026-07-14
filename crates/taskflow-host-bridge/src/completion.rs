@@ -86,6 +86,9 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
             | "review_rework_required"
             | "closure_evidence_blocked"
             | "host_bridge_request_task_mismatch"
+            | "host_agent_execution_failed"
+            | "host_agent_capacity_unavailable"
+            | "host_tool_capability_missing"
     ) || matches!(
         taskflow_contracts::BlockerCode::try_from(blocker_code),
         Ok(taskflow_contracts::BlockerCode::ImplementationArtifactAuthorityMissing)
@@ -99,6 +102,33 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
             | Ok(taskflow_contracts::BlockerCode::ActiveCarrierPolicyMismatch)
             | Ok(taskflow_contracts::BlockerCode::CarrierPolicyReselectionRequired)
     )
+}
+
+#[test]
+fn host_agent_adapter_blockers_are_retryable_completion_evidence() {
+    for blocker_code in [
+        "host_agent_execution_failed",
+        "host_agent_capacity_unavailable",
+        "host_tool_capability_missing",
+    ] {
+        assert!(host_bridge_completion_retryable_blocker(blocker_code));
+        assert!(host_bridge_artifact_has_retryable_completion_blocker(
+            &serde_json::json!({"blocker_code": blocker_code})
+        ));
+        assert!(host_bridge_artifact_has_retryable_completion_blocker(
+            &serde_json::json!({"blocker_codes": [blocker_code]})
+        ));
+    }
+}
+
+#[test]
+fn activation_only_evidence_is_not_retryable_completion_evidence() {
+    assert!(!host_bridge_completion_retryable_blocker(
+        "activation_view_only"
+    ));
+    assert!(!host_bridge_artifact_has_retryable_completion_blocker(
+        &serde_json::json!({"blocker_code": "activation_view_only"})
+    ));
 }
 
 #[must_use]

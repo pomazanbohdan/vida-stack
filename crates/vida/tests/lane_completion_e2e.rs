@@ -446,6 +446,31 @@ fn host_bridge_completion_command_resolves_packet_next_target() {
         std::process::id()
     ));
     let state_root = root.join(".vida/data/state");
+    std::fs::create_dir_all(&root).expect("create test project root");
+    let init = vida()
+        .arg("init")
+        .current_dir(&root)
+        .env("VIDA_STATE_DIR", &state_root)
+        .output()
+        .expect("init should launch");
+    assert!(
+        init.status.success(),
+        "init should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&init.stdout),
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let boot = vida()
+        .arg("boot")
+        .current_dir(&root)
+        .env("VIDA_STATE_DIR", &state_root)
+        .output()
+        .expect("boot should launch");
+    assert!(
+        boot.status.success(),
+        "boot should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&boot.stdout),
+        String::from_utf8_lossy(&boot.stderr)
+    );
     let packet_path = state_root.join("runtime-consumption/downstream-dispatch-packets/run.json");
     let request_path = state_root.join("host-tool-bridge/requests/request.json");
     let result_path = state_root.join("host-tool-bridge/results/result.json");
