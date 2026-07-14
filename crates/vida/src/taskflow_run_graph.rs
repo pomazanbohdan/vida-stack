@@ -18026,7 +18026,7 @@ agent_system:
     }
 
     #[tokio::test]
-    async fn seeded_worker_run_can_advance_directly_into_writer_lane() {
+    async fn seeded_worker_run_can_advance_directly_into_configured_writer_lane() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
             .await
@@ -18034,22 +18034,39 @@ agent_system:
         write_activation_snapshot_for_store(&store)
             .await
             .expect("activation snapshot should be written");
+        let compiled_control = compiled_run_graph_control(&store)
+            .await
+            .expect("compiled run-graph control should be available");
+        let writer_node = compiled_control.first_execution_lane.clone();
+        let coach_required =
+            json_bool_field(&compiled_control.implementation, "coach_required").unwrap_or(false);
+        let (verification_next_node, _) = implementation_verification_gate(
+            &compiled_control.implementation,
+            &compiled_control.verification,
+        );
+        let expected_next_node = if coach_required {
+            json_raw_string_field(&compiled_control.implementation, "coach_route_task_class")
+                .filter(|value| !value.is_empty())
+                .or(verification_next_node)
+        } else {
+            verification_next_node
+        };
         let existing = RunGraphStatus {
-            run_id: "task-direct-developer".to_string(),
-            task_id: "task-direct-developer".to_string(),
+            run_id: "task-direct-configured-writer".to_string(),
+            task_id: "task-direct-configured-writer".to_string(),
             task_class: "implementation".to_string(),
             active_node: "planning".to_string(),
-            next_node: Some("developer".to_string()),
+            next_node: Some(writer_node.clone()),
             status: "ready".to_string(),
             route_task_class: "implementation".to_string(),
             selected_backend: "internal_subagents".to_string(),
             lane_id: "planning_lane".to_string(),
             lifecycle_stage: "implementation_dispatch_ready".to_string(),
             policy_gate: "not_required".to_string(),
-            handoff_state: "awaiting_developer".to_string(),
+            handoff_state: format!("awaiting_{writer_node}"),
             context_state: "sealed".to_string(),
             checkpoint_kind: "execution_cursor".to_string(),
-            resume_target: "dispatch.developer_lane".to_string(),
+            resume_target: format!("dispatch.{writer_node}_lane"),
             recovery_ready: true,
         };
         store
@@ -18061,10 +18078,19 @@ agent_system:
             .await
             .expect("seeded writer run should advance");
 
-        assert_eq!(payload.status.active_node, "developer");
-        assert_eq!(payload.status.lifecycle_stage, "developer_active");
-        assert_eq!(payload.status.next_node.as_deref(), Some("coach"));
-        assert_eq!(payload.status.handoff_state, "awaiting_coach");
+        assert_eq!(payload.status.active_node, writer_node);
+        assert_eq!(
+            payload.status.lifecycle_stage,
+            format!("{writer_node}_active")
+        );
+        assert_eq!(payload.status.next_node, expected_next_node);
+        assert_eq!(
+            payload.status.handoff_state,
+            expected_next_node
+                .as_deref()
+                .map(|node| format!("awaiting_{node}"))
+                .unwrap_or_else(|| "none".to_string())
+        );
     }
 
     #[tokio::test]
