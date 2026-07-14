@@ -5576,6 +5576,19 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 task_owned_write_scope_for_status(&store, status.as_ref()).await;
             let summary = if closed_task_retired {
                 retired_closed_task_summary_for_show(summary)
+            } else if let Some(status) = status.as_ref() {
+                match store
+                    .run_graph_dispatch_receipt_for_status(run_id, Some(status))
+                    .await
+                {
+                    Ok(Some(receipt)) =>
+                        crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt),
+                    Ok(None) => summary,
+                    Err(error) => {
+                        eprintln!("Failed to reproject lane receipt `{run_id}`: {error}");
+                        return ExitCode::from(1);
+                    }
+                }
             } else {
                 summary
             };
