@@ -160,6 +160,60 @@ pub fn host_bridge_request_status_allows_parent_completion(
 }
 
 #[must_use]
+pub fn host_bridge_request_allows_parent_adapter_dispatch(
+    request_status: &str,
+    dispatch_status: &str,
+    dispatch_transport: &str,
+    blocker_code: Option<&str>,
+) -> bool {
+    request_status == "pending"
+        && dispatch_transport == "host_tool_bridge"
+        && (matches!(
+            dispatch_status,
+            "routed" | "executing" | "bridge_request_pending"
+        ) || (dispatch_status == "blocked"
+            && blocker_code == Some("host_tool_bridge_adapter_required")))
+}
+
+#[test]
+fn pending_adapter_request_is_admissible_after_adapter_required_dispatch_blocker() {
+    assert!(host_bridge_request_allows_parent_adapter_dispatch(
+        "pending",
+        "blocked",
+        "host_tool_bridge",
+        Some("host_tool_bridge_adapter_required")
+    ));
+    assert!(host_bridge_request_allows_parent_adapter_dispatch(
+        "pending",
+        "bridge_request_pending",
+        "host_tool_bridge",
+        None
+    ));
+}
+
+#[test]
+fn parent_adapter_dispatch_admission_remains_fail_closed_for_non_pending_or_wrong_transport() {
+    assert!(!host_bridge_request_allows_parent_adapter_dispatch(
+        "completed",
+        "blocked",
+        "host_tool_bridge",
+        Some("host_tool_bridge_adapter_required")
+    ));
+    assert!(!host_bridge_request_allows_parent_adapter_dispatch(
+        "pending",
+        "blocked",
+        "child_process",
+        Some("host_tool_bridge_adapter_required")
+    ));
+    assert!(!host_bridge_request_allows_parent_adapter_dispatch(
+        "pending",
+        "blocked",
+        "host_tool_bridge",
+        Some("activation_view_only")
+    ));
+}
+
+#[must_use]
 pub fn host_bridge_existing_request_status_is_admissible(status: &str) -> bool {
     matches!(status, "pending" | "completed")
 }
@@ -740,7 +794,7 @@ mod tests {
             host_bridge_request_status_after_completion(&[
                 "host_agent_execution_failed".to_string()
             ]),
-            "blocked"
+            "retryable_blocked"
         );
     }
 

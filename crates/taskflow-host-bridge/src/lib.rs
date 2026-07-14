@@ -32,6 +32,7 @@ pub use completion::{
     host_bridge_completion_authorized_request_artifacts,
     host_bridge_completion_requires_implementation_artifacts,
     host_bridge_completion_retryable_blocker, host_bridge_completion_verdict,
+    host_bridge_request_allows_parent_adapter_dispatch,
     host_bridge_existing_request_status_is_admissible,
     host_bridge_request_artifacts_are_bare_completion_candidates,
     host_bridge_request_effectively_requires_implementation_artifacts,
