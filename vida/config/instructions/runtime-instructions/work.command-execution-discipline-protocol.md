@@ -71,10 +71,13 @@ Admission tasks may override this boundary only by naming the admission surface 
 
 ## Code Search Policy
 
-1. Use `rg` as the primary cross-file search tool.
-2. Use `rg --files` for fast file discovery.
-3. Use `grep` or exact-match tools only for exact string or filename pattern matching.
-4. Full tooling/search orientation belongs to `system-maps/tooling.search-guide`.
+1. Use `ccc` for semantic discovery and ranked concept search after initialization and index-freshness checks.
+2. Run `ctx_compose` before `ctx_search`; use `ctx_search` for filesystem-aware confirmation, bounded context, and impact context.
+3. Use `rg` for exact symbols, strings, paths, `rg --files` discovery, and high-recall fallback/confirmation.
+4. Treat ccc, ctx_search, and rg output as discovery or context only; none replaces focused proof, tests, or current runtime evidence.
+5. Batch independent read-only searches; keep tests, builds, runtime commands, and other stateful proof serialized and separate.
+6. Keep search-tool routing independent of agent model, runtime role, carrier, and thinking settings; resolve those from runtime/config contracts.
+7. Full examples and fallback details belong to `system-maps/tooling.search-guide`.
 
 ## Log-Read Budget
 
@@ -110,5 +113,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.command-execution-discipline-protocol.md
 created_at: '2026-03-11T00:00:00+02:00'
-updated_at: 2026-06-02T06:40:00+03:00
+updated_at: 2026-07-14T00:49:42.699Z
 changelog_ref: work.command-execution-discipline-protocol.changelog.jsonl
