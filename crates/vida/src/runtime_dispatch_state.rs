@@ -690,6 +690,23 @@ fn normalize_internal_host_timeout_result_blocker(
     }
     apply_internal_host_blocker_output_contract_parity(execution_result, blocker_code);
 }
+fn terminalize_internal_host_bridge_pending_result(
+    execution_result: &mut serde_json::Value,
+) -> bool {
+    if execution_result.get("execution_state").and_then(serde_json::Value::as_str)
+        != Some("bridge_request_pending")
+        || execution_result["execution_evidence"]["receipt_backed"].as_bool() == Some(true)
+    {
+        return false;
+    }
+    let blocker_code = json_string(execution_result.get("blocker_code"))
+        .unwrap_or_else(|| "host_tool_bridge_adapter_required".to_string());
+    execution_result["status"] = serde_json::json!("blocked");
+    execution_result["execution_state"] = serde_json::json!("blocked");
+    apply_internal_host_blocker_output_contract_parity(execution_result, &blocker_code);
+    true
+}
+
 
 fn is_internal_activation_view_without_receipt_blocker(blocker_code: Option<&str>) -> bool {
     matches!(
@@ -12881,6 +12898,31 @@ host_environment:
             "execute-dispatch fallback must not surface activation-view evidence as execution result: {result}"
         );
     }
+#[test]
+fn terminalize_internal_host_bridge_pending_result_closes_orphaned_cycle_without_receipt() {
+    let mut result = serde_json::json!({
+        "status": "blocked",
+        "execution_state": "bridge_request_pending",
+        "blocker_code": "host_tool_bridge_adapter_required",
+        "execution_evidence": serde_json::Value::Null,
+        "next_actions": [],
+        "artifact_refs": {}
+    });
+
+    assert!(terminalize_internal_host_bridge_pending_result(&mut result));
+    assert_eq!(result["status"], "blocked");
+    assert_eq!(result["execution_state"], "blocked");
+    assert_eq!(result["blocker_code"], "host_tool_bridge_adapter_required");
+    assert_eq!(
+        result["shared_fields"]["blocker_codes"],
+        serde_json::json!(["host_tool_bridge_adapter_required"])
+    );
+    assert_ne!(
+        result["execution_evidence"]["receipt_backed"].as_bool(),
+        Some(true)
+    );
+}
+
 
     #[test]
     fn execute_runtime_dispatch_handoff_keeps_internal_host_on_codex_when_receipt_backend_is_external(
@@ -28180,6 +28222,9 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         receipt,
         &mut execution_result,
     );
+    if internal_host_handoff {
+        terminalize_internal_host_bridge_pending_result(&mut execution_result);
+    }
     let dispatch_result_path =
         write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
     receipt.dispatch_result_path = Some(dispatch_result_path);

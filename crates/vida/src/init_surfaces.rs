@@ -4617,7 +4617,7 @@ mod tests {
                         "--execute-dispatch",
                         "--json",
                     ]))),
-                    ExitCode::SUCCESS
+                    ExitCode::from(1)
                 );
                 wait_for_state_unlock(harness.path());
 
@@ -4628,7 +4628,7 @@ mod tests {
                     .block_on(store.latest_run_graph_dispatch_receipt())
                     .expect("latest dispatch receipt should load")
                     .expect("latest dispatch receipt should exist");
-                assert_eq!(recorded_receipt.dispatch_status, "bridge_request_pending");
+                assert_eq!(recorded_receipt.dispatch_status, "blocked");
                 assert_eq!(
                     recorded_receipt.blocker_code.as_deref(),
                     Some("host_tool_bridge_adapter_required")
@@ -4647,7 +4647,7 @@ mod tests {
                 let parsed: serde_json::Value =
                     serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
                 assert_eq!(parsed["status"], "blocked");
-                assert_eq!(parsed["execution_state"], "bridge_request_pending");
+                assert_eq!(parsed["execution_state"], "blocked");
                 assert_eq!(parsed["blocker_code"], "host_tool_bridge_adapter_required");
                 assert_eq!(
                     parsed["host_bridge_auto_invocation"]["schema_version"],
