@@ -45,6 +45,8 @@ pub enum BlockerCode {
     SelectedLaneRuntimeAssignmentTruthRequired,
     SelectedModelProfileOverBudget,
     SelectedExternalBackendNotReady,
+    ActiveCarrierPolicyMismatch,
+    CarrierPolicyReselectionRequired,
     BlockedDispatch,
     AutoDispatchPacketActiveUnitMissing,
     AutoDispatchPacketActiveUnitMismatch,
@@ -116,6 +118,8 @@ impl BlockerCode {
             }
             Self::SelectedModelProfileOverBudget => "selected_model_profile_over_budget",
             Self::SelectedExternalBackendNotReady => "selected_external_backend_not_ready",
+            Self::ActiveCarrierPolicyMismatch => "active_carrier_policy_mismatch",
+            Self::CarrierPolicyReselectionRequired => "carrier_policy_reselection_required",
             Self::BlockedDispatch => "blocked_dispatch",
             Self::AutoDispatchPacketActiveUnitMissing => "auto_dispatch_packet_active_unit_missing",
             Self::AutoDispatchPacketActiveUnitMismatch => {
@@ -177,6 +181,8 @@ impl BlockerCode {
             Self::SelectedLaneRuntimeAssignmentTruthRequired,
             Self::SelectedModelProfileOverBudget,
             Self::SelectedExternalBackendNotReady,
+            Self::ActiveCarrierPolicyMismatch,
+            Self::CarrierPolicyReselectionRequired,
             Self::BlockedDispatch,
             Self::AutoDispatchPacketActiveUnitMissing,
             Self::AutoDispatchPacketActiveUnitMismatch,
@@ -297,10 +303,10 @@ pub fn is_selected_lane_assignment_guard_blocked(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlockerCode, canonical_blocker_code_list, canonical_blocker_code_str,
+        canonical_blocker_code_list, canonical_blocker_code_str,
         canonical_blocker_code_value_from_str, is_selected_lane_assignment_guard_blocked,
         is_selected_lane_runtime_assignment_truth_missing, selected_lane_assignment_guard_blocked,
-        selected_lane_runtime_assignment_truth_missing,
+        selected_lane_runtime_assignment_truth_missing, BlockerCode,
     };
     use std::collections::BTreeSet;
 
@@ -316,6 +322,30 @@ mod tests {
                 Ok(code.as_str())
             );
         }
+    }
+
+    #[test]
+    fn carrier_policy_blocker_codes_are_registry_backed() {
+        let codes = [
+            BlockerCode::ActiveCarrierPolicyMismatch,
+            BlockerCode::CarrierPolicyReselectionRequired,
+        ];
+
+        for code in codes {
+            assert_eq!(
+                canonical_blocker_code_str(code.as_str()),
+                Some(code.as_str())
+            );
+            assert_eq!(BlockerCode::try_from(code.as_str()), Ok(code));
+        }
+
+        assert_eq!(
+            canonical_blocker_code_list(codes.iter().map(|code| code.as_str())),
+            vec![
+                "active_carrier_policy_mismatch".to_string(),
+                "carrier_policy_reselection_required".to_string(),
+            ]
+        );
     }
 
     #[test]

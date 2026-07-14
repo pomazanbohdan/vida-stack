@@ -4973,6 +4973,36 @@ fn materialize_host_bridge_completion_evidence(
             &implementation_scope_validation,
         ));
     }
+    let carrier_policy_revalidation = role_selection
+        .map(|selection| {
+            let assignment =
+                crate::carrier_runtime_projection::carrier_policy_assignment_for_dispatch(
+                    &selection.execution_plan,
+                    dispatch_target,
+                );
+            if !crate::carrier_runtime_projection::carrier_policy_assignment_has_policy_identity(
+                &assignment,
+            ) {
+                return serde_json::Value::Null;
+            }
+            let project_root =
+                crate::runtime_dispatch_state::runtime_dispatch_project_root_from_state_root(
+                    state_root,
+                );
+            crate::carrier_runtime_projection::carrier_policy_revalidation_for_project_root(
+                project_root.as_ref(),
+                &assignment,
+            )
+        })
+        .unwrap_or(serde_json::Value::Null);
+    if let Some(policy_blockers) = carrier_policy_revalidation["blocker_codes"].as_array() {
+        blocker_codes.extend(
+            policy_blockers
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string),
+        );
+    }
     blocker_codes.extend(supplied_blocker_codes.iter().cloned());
     if supplied_completion_blocked && blocker_codes.is_empty() {
         blocker_codes.push("host_bridge_completion_result_blocked".to_string());
@@ -5183,6 +5213,7 @@ fn materialize_host_bridge_completion_evidence(
         "implementation_artifact_source": implementation_artifacts.source,
         "implementation_artifact_refs": implementation_artifacts.artifact_refs.clone(),
         "scope_validation": implementation_scope_validation.clone(),
+        "carrier_policy_revalidation": carrier_policy_revalidation,
         "source_dispatch_packet_path": packet_path,
         "host_tool_bridge_request": {
             "request_path": canonical_request_path.display().to_string(),

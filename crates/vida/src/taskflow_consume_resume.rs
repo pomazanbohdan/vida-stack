@@ -4111,6 +4111,16 @@ pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, Stri
         .map_err(|error| {
             format!("execution_preparation_gate_blocked: {error}; dispatch packet `{path}`")
         })?;
+    let project_root = std::env::current_dir()
+        .map_err(|error| format!("Failed to resolve project root for dispatch packet `{path}`: {error}"))?;
+    crate::runtime_dispatch_state::validate_runtime_dispatch_packet_carrier_policy_for_project_root(
+        &project_root,
+        &packet,
+        "Persisted dispatch packet",
+    )
+    .map_err(|error| {
+        format!("execution_preparation_gate_blocked: {error}; dispatch packet `{path}`")
+    })?;
     Ok(packet)
 }
 
@@ -4128,6 +4138,14 @@ fn read_dispatch_packet_from_state_root(
         .map_err(|error| {
             format!("execution_preparation_gate_blocked: {error}; dispatch packet `{path}`")
         })?;
+    crate::runtime_dispatch_state::validate_runtime_dispatch_packet_carrier_policy_from_state_root(
+        state_root,
+        &packet,
+        "Persisted dispatch packet",
+    )
+    .map_err(|error| {
+        format!("execution_preparation_gate_blocked: {error}; dispatch packet `{path}`")
+    })?;
     Ok(packet)
 }
 

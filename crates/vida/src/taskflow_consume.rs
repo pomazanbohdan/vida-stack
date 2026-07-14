@@ -862,8 +862,38 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 eprintln!("{error}");
                                 return ExitCode::from(1);
                             }
+                            let mut dispatch_receipt =
+                                build_runtime_consumption_dispatch_receipt(
+                                    &role_selection,
+                                    &run_graph_bootstrap,
+                                );
+                            let role_selection_value =
+                                crate::carrier_runtime_projection::carrier_policy_assignment_for_dispatch(
+                                    &role_selection.execution_plan,
+                                    &dispatch_receipt.dispatch_target,
+                                );
+                            let carrier_policy_revalidation =
+                                crate::carrier_runtime_projection::carrier_policy_revalidation(
+                                    &runtime_bundle.activation_bundle,
+                                    &role_selection_value,
+                                );
+                            let carrier_policy_blockers = carrier_policy_revalidation[
+                                "blocker_codes"
+                            ]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_string)
+                            .collect::<Vec<_>>();
                             let mut taskflow_handoff_plan =
                                 super::build_taskflow_handoff_plan(&role_selection);
+                            if !carrier_policy_blockers.is_empty() {
+                                taskflow_handoff_plan["status"] = serde_json::json!("blocked");
+                                taskflow_handoff_plan["handoff_ready"] = serde_json::json!(false);
+                                taskflow_handoff_plan["carrier_policy_revalidation"] =
+                                    carrier_policy_revalidation.clone();
+                            }
                             let zombie_d_handoff_gate = if let Some(task_id) = explicit_task_id {
                                 match store.show_task(task_id).await {
                                     Ok(task) => Some(
@@ -898,6 +928,17 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 &mut docflow_verdict,
                                 &mut closure_admission,
                             );
+                            for blocker_code in &carrier_policy_blockers {
+                                if !closure_admission.blockers.contains(blocker_code) {
+                                    closure_admission.blockers.push(blocker_code.clone());
+                                }
+                            }
+                            if !carrier_policy_blockers.is_empty() {
+                                closure_admission.blockers.sort();
+                                closure_admission.blockers.dedup();
+                                closure_admission.status = "blocked".to_string();
+                                closure_admission.admitted = false;
+                            }
                             if let Some(gate) = zombie_d_handoff_gate.as_ref() {
                                 if gate["status"].as_str() == Some("blocked") {
                                     for blocker in crate::zombie_d_gate::string_array_for_operator(
@@ -969,10 +1010,20 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 closure_admission.status = "blocked".to_string();
                                 closure_admission.admitted = false;
                             }
-                            let mut dispatch_receipt = build_runtime_consumption_dispatch_receipt(
-                                &role_selection,
-                                &run_graph_bootstrap,
-                            );
+                            for blocker_code in &carrier_policy_blockers {
+                                dispatch_receipt.dispatch_status = "blocked".to_string();
+                                dispatch_receipt.blocker_code = Some(blocker_code.clone());
+                                dispatch_receipt.downstream_dispatch_ready = false;
+                                if !dispatch_receipt
+                                    .downstream_dispatch_blockers
+                                    .iter()
+                                    .any(|value| value == blocker_code)
+                                {
+                                    dispatch_receipt
+                                        .downstream_dispatch_blockers
+                                        .insert(0, blocker_code.clone());
+                                }
+                            }
                             if let Some(blocker_code) = execution_preparation_gate.blocker_code() {
                                 dispatch_receipt.dispatch_status = "blocked".to_string();
                                 dispatch_receipt.blocker_code = Some(blocker_code.to_string());
@@ -1020,7 +1071,9 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     &role_selection,
                                     &dispatch_receipt.dispatch_target,
                                 );
-                            let downstream_preview_result = if consume_final_mode.is_read_only() {
+                            let downstream_preview_result = if !carrier_policy_blockers.is_empty() {
+                                Ok(())
+                            } else if consume_final_mode.is_read_only() {
                                 super::preview_downstream_dispatch_receipt(
                                     &store,
                                     &role_selection,
@@ -1124,7 +1177,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 role_selection.conversational_mode.is_some(),
                                 consume_final_blocker_code.as_deref(),
                             );
-                            if !consume_final_mode.is_read_only() {
+                            if !consume_final_mode.is_read_only() && carrier_policy_blockers.is_empty() {
                                 let owned_paths_override = consume_final_owned_paths_override(
                                     &store,
                                     &role_selection,

@@ -331,6 +331,332 @@ pub(crate) fn build_carrier_runtime_projection(
     }
 }
 
+fn carrier_policy_string(assignment: &serde_json::Value, field: &str) -> Option<String> {
+    assignment
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn policy_list_contains(policy: &serde_json::Value, field: &str, value: &str) -> bool {
+    policy
+        .get(field)
+        .and_then(serde_json::Value::as_array)
+        .map(|values| values.iter().any(|candidate| candidate.as_str() == Some(value)))
+        .unwrap_or(false)
+}
+
+fn policy_list_is_restrictive(policy: &serde_json::Value, field: &str) -> bool {
+    policy
+        .get(field)
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|values| !values.is_empty())
+}
+
+fn carrier_policy_mismatch_code() -> &'static str {
+    taskflow_contracts::BlockerCode::ActiveCarrierPolicyMismatch.as_str()
+}
+
+fn carrier_policy_reselection_code() -> &'static str {
+    taskflow_contracts::BlockerCode::CarrierPolicyReselectionRequired.as_str()
+}
+
+pub(crate) fn carrier_policy_revalidation(
+    current_bundle: &serde_json::Value,
+    assignment: &serde_json::Value,
+) -> serde_json::Value {
+    let selected_carrier = carrier_policy_string(assignment, "selected_carrier_id");
+    let selected_backend = carrier_policy_string(assignment, "selected_backend_id");
+    let selected_profile = carrier_policy_string(assignment, "selected_model_profile_id");
+    let selected_model = carrier_policy_string(assignment, "selected_model_ref");
+    let selected_reasoning = carrier_policy_string(assignment, "selected_reasoning_effort");
+    let selected_runtime_role = carrier_policy_string(assignment, "selected_runtime_role")
+        .or_else(|| carrier_policy_string(assignment, "runtime_role"));
+    let selected_task_class =
+        carrier_policy_string(assignment, "task_class").or_else(|| carrier_policy_string(assignment, "route_task_class"));
+
+    let mut blockers = Vec::new();
+    let mut reasons = Vec::new();
+    let mut mismatches = Vec::new();
+    let roles = current_bundle["carrier_runtime"]["roles"].as_array();
+    let Some(roles) = roles else {
+        blockers.push(carrier_policy_reselection_code().to_string());
+        reasons.push("current carrier policy snapshot is unavailable".to_string());
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": blockers,
+            "reason": reasons[0],
+            "reselection_required": true,
+            "selected": assignment,
+            "mismatches": mismatches,
+        });
+    };
+
+    let Some(selected_carrier) = selected_carrier.as_deref() else {
+        blockers.push(carrier_policy_reselection_code().to_string());
+        reasons.push("selected carrier is missing from the assignment".to_string());
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": blockers,
+            "reason": reasons[0],
+            "reselection_required": true,
+            "selected": assignment,
+            "mismatches": mismatches,
+        });
+    };
+    let Some(carrier) = roles.iter().find(|role| role["role_id"].as_str() == Some(selected_carrier)) else {
+        mismatches.push(serde_json::json!({
+            "field": "selected_carrier_id",
+            "selected": selected_carrier,
+            "current": serde_json::Value::Null,
+            "reason": "selected carrier is not admissible in the current carrier policy",
+        }));
+        reasons.push("selected carrier is not admissible in the current carrier policy".to_string());
+        blockers.push(carrier_policy_mismatch_code().to_string());
+        blockers.push(carrier_policy_reselection_code().to_string());
+        blockers.sort();
+        blockers.dedup();
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": blockers,
+            "reason": reasons[0],
+            "reselection_required": true,
+            "selected": assignment,
+            "mismatches": mismatches,
+        });
+    };
+
+    let Some(selected_profile) = selected_profile.as_deref() else {
+        blockers.push(carrier_policy_reselection_code().to_string());
+        reasons.push("selected model profile is missing from the assignment".to_string());
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": blockers,
+            "reason": reasons[0],
+            "reselection_required": true,
+            "selected": assignment,
+            "carrier": carrier,
+            "mismatches": mismatches,
+        });
+    };
+    let profiles = carrier["model_profiles"].as_object();
+    let Some(profiles) = profiles else {
+        blockers.push(carrier_policy_reselection_code().to_string());
+        reasons.push("current carrier has no model profile policy".to_string());
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": blockers,
+            "reason": reasons[0],
+            "reselection_required": true,
+            "selected": assignment,
+            "carrier": carrier,
+            "mismatches": mismatches,
+        });
+    };
+    let Some(profile) = profiles.get(selected_profile) else {
+        mismatches.push(serde_json::json!({
+            "field": "selected_model_profile_id",
+            "selected": selected_profile,
+            "current": profiles.keys().collect::<Vec<_>>(),
+            "reason": "selected model profile is not admissible in the current carrier policy",
+        }));
+        reasons.push("selected model profile is not admissible in the current carrier policy".to_string());
+        blockers.push(carrier_policy_mismatch_code().to_string());
+        blockers.push(carrier_policy_reselection_code().to_string());
+        blockers.sort();
+        blockers.dedup();
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": blockers,
+            "reason": reasons[0],
+            "reselection_required": true,
+            "selected": assignment,
+            "carrier": carrier,
+            "mismatches": mismatches,
+        });
+    };
+
+    let compare_scalar = |field: &str,
+                          selected: Option<&str>,
+                          current: Option<&str>,
+                          reason: &str,
+                          mismatches: &mut Vec<serde_json::Value>,
+                          reasons: &mut Vec<String>| {
+        if let Some(selected) = selected {
+            if current != Some(selected) {
+                mismatches.push(serde_json::json!({
+                    "field": field,
+                    "selected": selected,
+                    "current": current,
+                    "reason": reason,
+                }));
+                reasons.push(reason.to_string());
+            }
+        }
+    };
+    compare_scalar(
+        "selected_model_ref",
+        selected_model.as_deref(),
+        profile["model_ref"].as_str(),
+        "selected model reference differs from current profile",
+        &mut mismatches,
+        &mut reasons,
+    );
+    compare_scalar(
+        "selected_reasoning_effort",
+        selected_reasoning.as_deref(),
+        profile["reasoning_effort"].as_str(),
+        "selected reasoning effort differs from current profile",
+        &mut mismatches,
+        &mut reasons,
+    );
+    if let Some(selected_runtime_role) = selected_runtime_role.as_deref() {
+        if policy_list_is_restrictive(profile, "runtime_roles")
+            && !policy_list_contains(profile, "runtime_roles", selected_runtime_role)
+        {
+            mismatches.push(serde_json::json!({
+                "field": "selected_runtime_role",
+                "selected": selected_runtime_role,
+                "current": profile["runtime_roles"],
+                "reason": "selected runtime role is not admitted by current profile",
+            }));
+            reasons.push("selected runtime role is not admitted by current profile".to_string());
+        }
+    }
+    if let Some(selected_task_class) = selected_task_class.as_deref() {
+        if policy_list_is_restrictive(profile, "task_classes")
+            && !policy_list_contains(profile, "task_classes", selected_task_class)
+        {
+            mismatches.push(serde_json::json!({
+                "field": "task_class",
+                "selected": selected_task_class,
+                "current": profile["task_classes"],
+                "reason": "selected task class is not admitted by current profile",
+            }));
+            reasons.push("selected task class is not admitted by current profile".to_string());
+        }
+    }
+    if let Some(selected_backend) = selected_backend.as_deref() {
+        if let Some(backends) = current_bundle["agent_system"]["subagents"].as_object() {
+            if !backends.contains_key(selected_backend) {
+                mismatches.push(serde_json::json!({
+                    "field": "selected_backend_id",
+                    "selected": selected_backend,
+                    "current": backends.keys().collect::<Vec<_>>(),
+                    "reason": "selected backend is not present in current agent-system policy",
+                }));
+                reasons.push(
+                    "selected backend is not present in current agent-system policy".to_string(),
+                );
+            }
+        }
+    }
+
+    if !mismatches.is_empty() {
+        blockers.push(carrier_policy_mismatch_code().to_string());
+        blockers.push(carrier_policy_reselection_code().to_string());
+    }
+    blockers.sort();
+    blockers.dedup();
+    reasons.sort();
+    reasons.dedup();
+    serde_json::json!({
+        "status": if blockers.is_empty() { "pass" } else { "blocked" },
+        "blocker_codes": blockers,
+        "reason": reasons.first().cloned().unwrap_or_else(|| "selected carrier policy is current".to_string()),
+        "reselection_required": !mismatches.is_empty(),
+        "selected": assignment,
+        "carrier": carrier,
+        "profile": profile,
+        "mismatches": mismatches,
+    })
+}
+
+pub(crate) fn carrier_policy_revalidation_blockers(
+    current_bundle: &serde_json::Value,
+    assignment: &serde_json::Value,
+) -> Vec<String> {
+    carrier_policy_revalidation(current_bundle, assignment)["blocker_codes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+pub(crate) fn carrier_policy_assignment_for_dispatch(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+) -> serde_json::Value {
+    let (assignment, _) = crate::runtime_dispatch_state::dispatch_target_runtime_assignment(
+        execution_plan,
+        dispatch_target,
+    );
+    if assignment.is_object() {
+        return assignment;
+    }
+    for candidate in [
+        execution_plan.get("runtime_assignment"),
+        execution_plan.get("carrier_runtime_assignment"),
+    ] {
+        if let Some(candidate) = candidate.filter(|value| value.is_object()) {
+            return candidate.clone();
+        }
+    }
+    serde_json::Value::Null
+}
+
+pub(crate) fn carrier_policy_assignment_has_policy_identity(
+    assignment: &serde_json::Value,
+) -> bool {
+    assignment
+        .get("selected_model_profile_id")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+pub(crate) fn carrier_policy_revalidation_for_project_root(
+    project_root: &Path,
+    assignment: &serde_json::Value,
+) -> serde_json::Value {
+    let Ok(config) = crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root)
+    else {
+        return serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": [carrier_policy_reselection_code()],
+            "reason": "current project carrier policy could not be loaded",
+            "reselection_required": true,
+            "selected": assignment,
+        });
+    };
+    let selected_host_cli_system = crate::yaml_string(crate::yaml_lookup(
+        &config,
+        &["host_environment", "cli_system"],
+    ));
+    let host_cli_system_registry =
+        crate::project_activator_surface::host_cli_system_registry_with_fallback(Some(&config));
+    let runtime_root = selected_runtime_root(
+        project_root,
+        selected_host_cli_system.as_deref(),
+        &host_cli_system_registry,
+    );
+    let mut roles = crate::carrier_runtime_catalog::resolved_carrier_roles(&config, &runtime_root);
+    roles.extend(subagent_runtime_candidate_rows(&config));
+    let current_bundle = serde_json::json!({
+        "agent_system": serde_json::to_value(
+            crate::yaml_lookup(&config, &["agent_system"])
+                .cloned()
+                .unwrap_or(serde_yaml::Value::Null),
+        )
+        .unwrap_or(serde_json::Value::Null),
+        "carrier_runtime": {"roles": roles},
+    });
+    carrier_policy_revalidation(&current_bundle, assignment)
+}
+
 #[cfg(test)]
 mod tests {
     use super::build_carrier_runtime_projection;
@@ -339,6 +665,93 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::Path;
+
+    fn test_bundle() -> serde_json::Value {
+        json!({
+            "agent_system": {"subagents": {"backend-a": {}}},
+            "carrier_runtime": {
+                "roles": [{
+                    "role_id": "carrier-a",
+                    "model_profiles": {
+                        "profile-a": {
+                            "model_ref": "model-a",
+                            "reasoning_effort": "effort-a",
+                            "runtime_roles": ["runtime-a"],
+                            "task_classes": ["class-a"]
+                        }
+                    }
+                }]
+            }
+        })
+    }
+
+    fn test_assignment() -> serde_json::Value {
+        json!({
+            "selected_carrier_id": "carrier-a",
+            "selected_backend_id": "backend-a",
+            "selected_model_profile_id": "profile-a",
+            "selected_model_ref": "model-a",
+            "selected_reasoning_effort": "effort-a",
+            "selected_runtime_role": "runtime-a",
+            "task_class": "class-a"
+        })
+    }
+
+    #[test]
+    fn carrier_policy_revalidation_accepts_current_selection() {
+        let result = super::carrier_policy_revalidation(&test_bundle(), &test_assignment());
+        assert_eq!(result["status"], "pass");
+        assert_eq!(result["blocker_codes"], json!([]));
+    }
+
+    #[test]
+    fn carrier_policy_revalidation_blocks_stale_profile_and_reasoning() {
+        let mut assignment = test_assignment();
+        assignment["selected_model_profile_id"] = json!("profile-stale");
+        assignment["selected_reasoning_effort"] = json!("effort-stale");
+        let result = super::carrier_policy_revalidation(&test_bundle(), &assignment);
+        assert_eq!(result["status"], "blocked");
+        assert!(
+            result["blocker_codes"]
+                .as_array()
+                .expect("blockers")
+                .iter()
+                .any(|code| code == "active_carrier_policy_mismatch")
+        );
+        assert_eq!(result["reselection_required"], json!(true));
+    }
+
+    #[test]
+    fn carrier_policy_assignment_for_dispatch_uses_nested_runtime_assignment() {
+        let assignment = test_assignment();
+        let execution_plan = json!({"runtime_assignment": assignment});
+        let resolved = super::carrier_policy_assignment_for_dispatch(&execution_plan, "worker");
+        assert_eq!(resolved["selected_model_profile_id"], "profile-a");
+        assert_eq!(resolved["selected_reasoning_effort"], "effort-a");
+    }
+
+    #[test]
+    fn carrier_policy_revalidation_blocks_stale_carrier_backend_and_scope() {
+        for (field, value) in [
+            ("selected_carrier_id", "carrier-stale"),
+            ("selected_backend_id", "backend-stale"),
+            ("selected_runtime_role", "runtime-stale"),
+            ("task_class", "class-stale"),
+        ] {
+            let mut assignment = test_assignment();
+            assignment[field] = json!(value);
+            let result = super::carrier_policy_revalidation(&test_bundle(), &assignment);
+            assert_eq!(result["status"], "blocked", "field={field}");
+            assert!(
+                result["blocker_codes"]
+                    .as_array()
+                    .expect("blockers")
+                    .iter()
+                    .any(|code| code == taskflow_contracts::BlockerCode::ActiveCarrierPolicyMismatch.as_str()),
+                "field={field} result={result:#}"
+            );
+        }
+    }
 
     #[test]
     fn selected_runtime_root_prefers_explicit_system_from_registry() {

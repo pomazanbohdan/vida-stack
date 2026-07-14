@@ -6181,6 +6181,26 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
         };
     }
 
+    let project_root = super::runtime_dispatch_project_root_from_state_root(&state_root);
+    let persisted_assignment =
+        crate::carrier_runtime_projection::carrier_policy_assignment_for_dispatch(
+            &resume_inputs.role_selection.execution_plan,
+            &resume_inputs.dispatch_receipt.dispatch_target,
+        );
+    let carrier_policy_revalidation =
+        crate::carrier_runtime_projection::carrier_policy_revalidation_for_project_root(
+            project_root.as_ref(),
+            &persisted_assignment,
+        );
+    if carrier_policy_revalidation["status"] == "blocked" {
+        return emit_agent_init_carrier_policy_blocked(
+            dispatch_mode,
+            &resume_inputs.dispatch_receipt,
+            &carrier_policy_revalidation,
+            json_output,
+        );
+    }
+
     let dispatch_handoff_timeout_seconds = super::dispatch_handoff_timeout_seconds_for_state_root(
         &state_root,
         &resume_inputs.role_selection,
@@ -6369,6 +6389,63 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
             ExitCode::from(1)
         }
     }
+}
+
+fn emit_agent_init_carrier_policy_blocked(
+    dispatch_mode: &serde_json::Value,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    policy: &serde_json::Value,
+    json_output: bool,
+) -> ExitCode {
+    let blocker_codes = policy["blocker_codes"]
+        .as_array()
+        .cloned()
+        .unwrap_or_else(|| {
+            vec![serde_json::json!(
+                taskflow_contracts::BlockerCode::CarrierPolicyReselectionRequired.as_str()
+            )]
+        });
+    let artifact_refs = serde_json::json!({
+        "surface": "vida agent-init",
+        "run_id": dispatch_receipt.run_id,
+        "dispatch_packet_path": dispatch_receipt.dispatch_packet_path,
+        "carrier_policy_revalidation": policy,
+    });
+    let next_actions = vec![
+        "Reselect the carrier, model profile, and reasoning policy from the current project configuration before retrying execution.".to_string(),
+        "Do not execute a persisted packet while carrier_policy_reselection_required is present.".to_string(),
+    ];
+    let payload = serde_json::json!({
+        "surface": "vida agent-init",
+        "status": "blocked",
+        "execution_state": "blocked",
+        "dispatch_mode": dispatch_mode,
+        "blocker_code": blocker_codes.first(),
+        "blocker_codes": blocker_codes,
+        "error_kind": "carrier_policy_revalidation_failed",
+        "provider_error": policy["reason"],
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+        "operator_contracts": {
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": policy["blocker_codes"],
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+            "risk_tier": null,
+            "trace_id": null,
+            "workflow_class": null,
+        },
+        "shared_fields": {
+            "status": "blocked",
+            "blocker_codes": policy["blocker_codes"],
+            "next_actions": next_actions,
+            "artifact_refs": artifact_refs,
+        },
+    });
+    emit_agent_init_dispatch_timeout_payload(&payload, json_output);
+    ExitCode::from(1)
 }
 
 async fn execute_agent_init_prelaunch_blocker_without_store_reopen(
@@ -8371,6 +8448,11 @@ fn agent_init_backend_truth(
         .get("selected_model_profile_id")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let carrier_policy_revalidation =
+        crate::carrier_runtime_projection::carrier_policy_revalidation(
+            activation_bundle,
+            &runtime_assignment,
+        );
 
     let selected_backend_str = selected_backend.as_str().filter(|value| !value.is_empty());
     let route_primary_backend_str = route_primary_backend
@@ -8444,6 +8526,7 @@ fn agent_init_backend_truth(
         "assignment_source": assignment_source,
         "runtime_assignment": runtime_assignment,
         "assignment_blocker": assignment_blocker,
+        "carrier_policy_revalidation": carrier_policy_revalidation,
     })
 }
 
