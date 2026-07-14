@@ -999,6 +999,41 @@ fn terminal_closure_supersedes_stale_handoff_receipt(
     true
 }
 
+fn terminal_closure_historicalizes_active_exception_takeover_receipt(
+    status: &RunGraphStatus,
+    receipt: &mut RunGraphDispatchReceipt,
+) -> bool {
+    if !terminal_closure_status(status)
+        || !matches!(
+            receipt.lane_status.as_str(),
+            "lane_exception_takeover" | "lane_superseded"
+        )
+        || !has_receipt_evidence_id(receipt.exception_path_receipt_id.as_deref())
+        || !has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
+    {
+        return false;
+    }
+
+    receipt.dispatch_status = "executed".to_string();
+    receipt.lane_status = "lane_completed".to_string();
+    receipt.blocker_code = None;
+    receipt.exception_path_receipt_id = None;
+    receipt.supersedes_receipt_id = None;
+    receipt.downstream_dispatch_target = Some("closure".to_string());
+    receipt.downstream_dispatch_command = None;
+    receipt.downstream_dispatch_note =
+        Some("terminal closure historicalized exception takeover".to_string());
+    receipt.downstream_dispatch_ready = false;
+    receipt.downstream_dispatch_blockers.clear();
+    receipt.downstream_dispatch_packet_path = None;
+    receipt.downstream_dispatch_status = Some("retired_closed_task_run".to_string());
+    receipt.downstream_dispatch_result_path = None;
+    receipt.downstream_dispatch_trace_path = None;
+    receipt.downstream_dispatch_active_target = Some("closure".to_string());
+    receipt.downstream_dispatch_last_target = Some("closure".to_string());
+    true
+}
+
 fn task_status_is_terminal_for_continuation(status: &str) -> bool {
     taskflow_core::task_status_is_closed_like(status)
 }
@@ -4433,6 +4468,7 @@ impl StateStore {
         let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
         let mut receipt: RunGraphDispatchReceipt = receipt.into();
         terminal_closure_supersedes_stale_handoff_receipt(&status, &mut receipt);
+        terminal_closure_historicalizes_active_exception_takeover_receipt(&status, &mut receipt);
         let host_runtime = crate::taskflow_task_bridge::infer_project_root_from_state_root(
             self.root(),
         )
@@ -4623,6 +4659,7 @@ impl StateStore {
         let mut receipt: RunGraphDispatchReceipt = receipt.into();
         if let Some(status) = status {
             terminal_closure_supersedes_stale_handoff_receipt(status, &mut receipt);
+            terminal_closure_historicalizes_active_exception_takeover_receipt(status, &mut receipt);
         }
         Ok(Some(receipt))
     }
@@ -10706,6 +10743,99 @@ mod tests {
         assert!(
             terminal_active.is_none(),
             "exception takeover receipt should keep closed task out of active projection"
+        );
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn terminal_closure_historicalizes_active_exception_takeover_projection() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-terminal-closure-exception-takeover-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "task-terminal-exception-takeover",
+                title: "Closed task with terminal exception takeover",
+                display_id: None,
+                description: "",
+                issue_type: "bug",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-terminal-exception-takeover",
+            "closure",
+            "delivery",
+        );
+        status.task_id = "task-terminal-exception-takeover".to_string();
+        mark_terminal_closure_status(&mut status);
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist terminal closure status");
+
+        let mut receipt = sample_dispatch_receipt("run-terminal-exception-takeover");
+        receipt.dispatch_target = "coder".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.blocker_code = Some("internal_dispatch_timeout_without_receipt".to_string());
+        receipt.exception_path_receipt_id = Some("exception-receipt".to_string());
+        receipt.supersedes_receipt_id = Some("exception-receipt".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist active exception takeover receipt");
+
+        store
+            .close_task(
+                "task-terminal-exception-takeover",
+                "terminal closure proof",
+            )
+            .await
+            .expect("close task");
+
+        let reconciled = store
+            .run_graph_status("run-terminal-exception-takeover")
+            .await
+            .expect("load terminal closure status");
+        let projected = store
+            .run_graph_dispatch_receipt_for_status(
+                "run-terminal-exception-takeover",
+                Some(&reconciled),
+            )
+            .await
+            .expect("project terminal exception takeover receipt")
+            .expect("projected receipt should exist");
+
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.lifecycle_stage, "closure_complete");
+        assert_eq!(projected.dispatch_status, "executed");
+        assert_eq!(projected.lane_status, "lane_completed");
+        assert_eq!(projected.blocker_code, None);
+        assert_eq!(projected.exception_path_receipt_id, None);
+        assert_eq!(projected.supersedes_receipt_id, None);
+        assert_eq!(projected.downstream_dispatch_target.as_deref(), Some("closure"));
+        assert_eq!(
+            projected.downstream_dispatch_status.as_deref(),
+            Some("retired_closed_task_run")
         );
 
         close_store_and_remove_root(store, root).await;
