@@ -10725,15 +10725,36 @@ host_environment:
     }
 
     fn agent_lane_test_execution_plan(executor_backend: &str) -> serde_json::Value {
-        let (model_profile_id, model_ref, reasoning_effort) = match executor_backend {
+        let (selected_carrier_id, selected_backend_id, model_profile_id, model_ref, reasoning_effort) =
+            match executor_backend {
             "opencode_cli" => (
+                "opencode_cli",
+                "opencode_cli",
                 "opencode_codex_mini_review",
                 "opencode/gpt-5.1-codex-mini",
                 "low",
             ),
-            "internal_subagents" => ("internal_fast", "internal_fast", "low"),
-            "middle" => ("codex_gpt54_medium_write", "gpt-5.5", "medium"),
-            _ => ("codex_gpt54_low_write", "gpt-5.5", "low"),
+            "internal_subagents" => (
+                "internal_subagents",
+                "internal_subagents",
+                "codex_gpt56_luna_xhigh_legacy",
+                "gpt-5.6-luna",
+                "xhigh",
+            ),
+            "middle" => (
+                "middle",
+                "internal_subagents",
+                "codex_gpt56_luna_xhigh_write",
+                "gpt-5.6-luna",
+                "xhigh",
+            ),
+            _ => (
+                "junior",
+                "internal_subagents",
+                "codex_gpt56_luna_xhigh_write",
+                "gpt-5.6-luna",
+                "xhigh",
+            ),
         };
         json!({
             "backend_admissibility_matrix": [
@@ -10772,8 +10793,9 @@ host_environment:
                 }
             },
             "runtime_assignment": {
-                "selected_carrier_id": executor_backend,
-                "selected_backend_id": executor_backend,
+                "selected_carrier_id": selected_carrier_id,
+                "selected_backend_id": selected_backend_id,
+                "selected_dispatch_backend_id": selected_backend_id,
                 "selected_model_profile_id": model_profile_id,
                 "selected_model_ref": model_ref,
                 "selected_reasoning_effort": reasoning_effort,
