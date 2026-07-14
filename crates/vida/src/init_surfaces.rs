@@ -6191,6 +6191,26 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
         return exit_code;
     }
 
+    let project_root = super::runtime_dispatch_project_root_from_state_root(&state_root);
+    let persisted_assignment =
+        crate::carrier_runtime_projection::carrier_policy_assignment_for_dispatch(
+            &resume_inputs.role_selection.execution_plan,
+            &resume_inputs.dispatch_receipt.dispatch_target,
+        );
+    let carrier_policy_revalidation =
+        crate::carrier_runtime_projection::carrier_policy_revalidation_for_project_root(
+            project_root.as_ref(),
+            &persisted_assignment,
+        );
+    if carrier_policy_revalidation["status"] == "blocked" {
+        return emit_agent_init_carrier_policy_blocked(
+            dispatch_mode,
+            &resume_inputs.dispatch_receipt,
+            &carrier_policy_revalidation,
+            json_output,
+        );
+    }
+
     if resume_inputs.dispatch_receipt.dispatch_status == "executed"
         && resume_inputs.dispatch_receipt.lane_status == super::LaneStatus::LaneCompleted.as_str()
         && resume_inputs.dispatch_receipt.blocker_code.is_none()
@@ -6219,26 +6239,6 @@ async fn execute_agent_init_dispatch_from_resume_inputs(
                 ExitCode::from(1)
             }
         };
-    }
-
-    let project_root = super::runtime_dispatch_project_root_from_state_root(&state_root);
-    let persisted_assignment =
-        crate::carrier_runtime_projection::carrier_policy_assignment_for_dispatch(
-            &resume_inputs.role_selection.execution_plan,
-            &resume_inputs.dispatch_receipt.dispatch_target,
-        );
-    let carrier_policy_revalidation =
-        crate::carrier_runtime_projection::carrier_policy_revalidation_for_project_root(
-            project_root.as_ref(),
-            &persisted_assignment,
-        );
-    if carrier_policy_revalidation["status"] == "blocked" {
-        return emit_agent_init_carrier_policy_blocked(
-            dispatch_mode,
-            &resume_inputs.dispatch_receipt,
-            &carrier_policy_revalidation,
-            json_output,
-        );
     }
 
     let dispatch_handoff_timeout_seconds = super::dispatch_handoff_timeout_seconds_for_state_root(
