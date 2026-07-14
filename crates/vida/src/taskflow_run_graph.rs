@@ -1382,12 +1382,23 @@ async fn latest_recovery_summary_for_operator_surface(
     store: &StateStore,
 ) -> Result<Option<crate::state_store::RunGraphRecoverySummary>, crate::state_store::StateStoreError>
 {
-    match store
+    let current_session_scope_is_explicit = store.current_session_identity_is_explicit()?;
+    let scoped = store
         .latest_run_graph_recovery_summary_for_current_session()
-        .await?
-    {
-        Some(summary) => Ok(Some(summary)),
-        None => store.latest_run_graph_recovery_summary().await,
+        .await?;
+    if scoped.is_some() || current_session_scope_is_explicit {
+        return Ok(scoped);
+    }
+    store.latest_run_graph_recovery_summary().await
+}
+
+async fn latest_run_graph_status_for_operator_surface(
+    store: &StateStore,
+) -> Result<Option<RunGraphStatus>, crate::state_store::StateStoreError> {
+    if store.current_session_identity_is_explicit()? {
+        store.latest_run_graph_status_for_current_session().await
+    } else {
+        store.latest_run_graph_status().await
     }
 }
 
@@ -4609,7 +4620,7 @@ async fn run_taskflow_run_graph_state(
 
 async fn run_taskflow_run_graph_latest(state_dir: &std::path::Path, as_json: bool) -> ExitCode {
     match StateStore::open_existing_read_only(state_dir.to_path_buf()).await {
-        Ok(store) => match store.latest_run_graph_status().await {
+        Ok(store) => match latest_run_graph_status_for_operator_surface(&store).await {
             Ok(status) => {
                 let projection_truth = match status.as_ref() {
                     Some(status) => match run_graph_projection_truth(&store, status).await {
@@ -4763,7 +4774,7 @@ async fn run_taskflow_run_graph_diagnose_latest(
     as_json: bool,
 ) -> ExitCode {
     match StateStore::open_existing_read_only(state_dir.to_path_buf()).await {
-        Ok(store) => match store.latest_run_graph_status().await {
+        Ok(store) => match latest_run_graph_status_for_operator_surface(&store).await {
             Ok(Some(status)) => {
                 let run_id = status.run_id.clone();
                 drop(store);
