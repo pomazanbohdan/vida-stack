@@ -711,6 +711,7 @@ fn blocked_agent_lane_receipt_keeps_resume_target(receipt: &RunGraphDispatchRece
     !matches!(
         blocker_code,
         "internal_activation_view_only"
+            | "host_tool_bridge_adapter_required"
             | crate::runtime_dispatch_state::INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
     )
 }
