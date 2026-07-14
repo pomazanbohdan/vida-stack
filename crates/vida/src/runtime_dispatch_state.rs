@@ -21879,6 +21879,77 @@ fn terminalize_internal_host_bridge_pending_result_closes_orphaned_cycle_without
             Some(executed_path.as_str())
         );
     }
+    #[test]
+    fn normalize_stale_in_flight_dispatch_receipt_terminalizes_persisted_bridge_pending_result() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "run-persisted-bridge-pending".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "bridge_request_pending".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch --json".to_string()),
+            dispatch_packet_path: Some("dispatch-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("host_tool_bridge_adapter_required".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("configured".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-07-14T00:00:00Z".to_string(),
+        };
+        let result_path = write_runtime_dispatch_result(
+            harness.path(),
+            &receipt,
+            &serde_json::json!({
+                "status": "blocked",
+                "execution_state": "bridge_request_pending",
+                "blocker_code": "host_tool_bridge_adapter_required",
+                "execution_evidence": serde_json::Value::Null,
+                "next_actions": [],
+                "artifact_refs": {}
+            }),
+        )
+        .expect("pending bridge result should write");
+        receipt.dispatch_result_path = Some(result_path.clone());
+
+        assert!(
+            normalize_stale_in_flight_dispatch_receipt(harness.path(), &mut receipt)
+                .expect("pending bridge normalization should not fail")
+        );
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(receipt.lane_status, "lane_blocked");
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some("host_tool_bridge_adapter_required")
+        );
+
+        let normalized = crate::read_json_file_if_present(std::path::Path::new(
+            receipt.dispatch_result_path.as_deref().expect("normalized result path"),
+        ))
+        .expect("normalized bridge result should remain readable");
+        assert_eq!(normalized["status"], "blocked");
+        assert_eq!(normalized["execution_state"], "blocked");
+        assert_eq!(
+            normalized["execution_evidence"]["receipt_backed"].as_bool(),
+            None
+        );
+    }
+
 
     #[test]
     fn existing_executed_dispatch_result_rejects_mismatched_completion_target() {
@@ -27849,6 +27920,48 @@ pub(crate) fn normalize_stale_in_flight_dispatch_receipt(
     {
         return Ok(true);
     }
+    if receipt.dispatch_status == "bridge_request_pending"
+        && !dispatch_receipt_has_execution_evidence(receipt)
+    {
+        let Some(result_path) = receipt
+            .dispatch_result_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(false);
+        };
+        let Some(mut result) =
+            crate::read_json_file_if_present(std::path::Path::new(result_path))
+        else {
+            return Ok(false);
+        };
+        let bridge_blocker = result["blocker_code"].as_str().is_some_and(|code| {
+            matches!(
+                code,
+                "host_tool_bridge_adapter_required"
+                    | INTERNAL_DISPATCH_TIMEOUT_WITHOUT_RECEIPT
+                    | INTERNAL_CODEX_CARRIER_UNAVAILABLE
+                    | "internal_activation_view_only"
+            )
+        });
+        if bridge_blocker && terminalize_internal_host_bridge_pending_result(&mut result) {
+            let dispatch_result_path =
+                write_runtime_dispatch_result(state_root, receipt, &result)?;
+            receipt.dispatch_result_path = Some(dispatch_result_path);
+            receipt.dispatch_status = "blocked".to_string();
+            receipt.lane_status = derive_lane_status(
+                &receipt.dispatch_status,
+                receipt.supersedes_receipt_id.as_deref(),
+                receipt.exception_path_receipt_id.as_deref(),
+            )
+            .as_str()
+            .to_string();
+            receipt.blocker_code = json_string(result.get("blocker_code"));
+            return Ok(true);
+        }
+    }
+
     if receipt.dispatch_status != "executing" && !timeout_blocked_receipt {
         return Ok(false);
     }
