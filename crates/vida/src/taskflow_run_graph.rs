@@ -4450,7 +4450,7 @@ async fn run_taskflow_run_graph_state(
     as_json: bool,
 ) -> ExitCode {
     match StateStore::open_existing_read_only(state_dir.to_path_buf()).await {
-        Ok(store) => match store.run_graph_status(run_id).await {
+        Ok(store) => match store.run_graph_status_for_operator_selector(run_id).await {
             Ok(status) => {
                 let projection_truth = match run_graph_projection_truth(&store, &status).await {
                     Ok(truth) => truth,

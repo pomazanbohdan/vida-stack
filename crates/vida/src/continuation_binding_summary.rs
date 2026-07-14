@@ -1127,8 +1127,14 @@ fn active_step_by_parent_task_id<'a>(
     tasks: &'a [crate::state_store::TaskRecord],
 ) -> std::collections::BTreeMap<String, &'a crate::state_store::TaskRecord> {
     let mut active_steps = std::collections::BTreeMap::new();
+    let closed_task_ids = tasks
+        .iter()
+        .filter(|task| crate::state_store::StateStore::task_status_is_closed_like(&task.status))
+        .map(|task| task.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
     for task in tasks.iter().filter(|task| {
         taskflow_core::canonical_task_status(&task.status) == Some("in_progress")
+            && !closed_task_ids.contains(task.id.as_str())
             && taskflow_core::issue_type_is_execution_step(
                 &crate::state_store::canonical_work_item_issue_type(&task.issue_type),
             )
@@ -2546,6 +2552,29 @@ mod tests {
             taskflow_candidates[0]["task_id"],
             "runtime-defect-closed-step-parent"
         );
+        assert!(taskflow_candidates[0]["active_step"].is_null());
+    }
+
+    #[test]
+    fn taskflow_active_candidates_ignore_stale_in_progress_duplicate_when_closed_row_exists() {
+        let active_parent = task_record("runtime-defect-duplicate-step-parent", "in_progress");
+        let mut closed_step = task_with_parent(
+            "step-duplicate-regression",
+            "closed",
+            "runtime-defect-duplicate-step-parent",
+        );
+        closed_step.issue_type = "step".to_string();
+        let mut stale_step = task_with_parent(
+            "step-duplicate-regression",
+            "in_progress",
+            "runtime-defect-duplicate-step-parent",
+        );
+        stale_step.issue_type = "step".to_string();
+
+        let taskflow_candidates =
+            taskflow_active_candidates_from_tasks(&[active_parent, closed_step, stale_step]);
+
+        assert_eq!(taskflow_candidates.len(), 1);
         assert!(taskflow_candidates[0]["active_step"].is_null());
     }
 

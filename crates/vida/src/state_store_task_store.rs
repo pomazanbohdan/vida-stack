@@ -290,10 +290,23 @@ impl StateStore {
         tasks: &[TaskRecord],
         task_id: &str,
     ) -> Vec<TaskChildStatusEvidence> {
+        let closed_child_ids = tasks
+            .iter()
+            .filter(|candidate| {
+                candidate.id != task_id
+                    && Self::task_status_is_closed_like(&candidate.status)
+                    && candidate.dependencies.iter().any(|dependency| {
+                        dependency.edge_type == "parent-child"
+                            && dependency.depends_on_id == task_id
+                    })
+            })
+            .map(|candidate| candidate.id.as_str())
+            .collect::<BTreeSet<_>>();
         tasks
             .iter()
             .filter(|candidate| {
                 candidate.id != task_id
+                    && !closed_child_ids.contains(candidate.id.as_str())
                     && !Self::task_status_is_closed_like(&candidate.status)
                     && !Self::task_is_execution_step(candidate)
                     && candidate.dependencies.iter().any(|dependency| {
@@ -310,26 +323,9 @@ impl StateStore {
         task_id: &str,
     ) -> Result<Vec<TaskChildStatusEvidence>, StateStoreError> {
         let all_tasks = self.all_tasks().await?;
-        let child_ids: Vec<String> = all_tasks
-            .iter()
-            .filter(|candidate| {
-                candidate.id != task_id
-                    && candidate.dependencies.iter().any(|dependency| {
-                        dependency.edge_type == "parent-child"
-                            && dependency.depends_on_id == task_id
-                    })
-            })
-            .map(|candidate| candidate.id.clone())
-            .collect();
-
-        let mut non_closed = Vec::new();
-        for child_id in child_ids {
-            let child_task = self.show_task(&child_id).await?;
-            if !Self::task_status_is_closed_like(&child_task.status) {
-                non_closed.push(TaskChildStatusEvidence::from_task(&child_task));
-            }
-        }
-        Ok(non_closed)
+        Ok(Self::non_closed_child_status_evidence_for_task(
+            &all_tasks, task_id,
+        ))
     }
 
     pub(crate) async fn run_graph_terminal_closure_has_task_close_truth(
@@ -4374,6 +4370,22 @@ mod tests {
             metadata: "{}".to_string(),
             thread_id: String::new(),
         }
+    }
+
+    #[test]
+    fn closed_child_row_wins_over_stale_in_progress_duplicate_for_close_admission() {
+        let parent = test_task_record("parent", "epic", "in_progress");
+        let mut closed = test_task_record("child", "task", "closed");
+        closed.dependencies = vec![test_task_dependency("child", "parent", "parent-child")];
+        let mut stale = test_task_record("child", "task", "in_progress");
+        stale.updated_at = "2".to_string();
+        stale.dependencies = vec![test_task_dependency("child", "parent", "parent-child")];
+
+        let evidence = StateStore::non_closed_child_status_evidence_for_task(
+            &[parent, stale, closed],
+            "parent",
+        );
+        assert!(evidence.is_empty());
     }
 
     #[test]

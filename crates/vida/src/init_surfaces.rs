@@ -798,22 +798,36 @@ fn safe_existing_agent_init_dispatch_result_artifact_path(
     if trimmed.is_empty() {
         return None;
     }
-    let candidate = Path::new(trimmed);
-    let candidate = if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        state_root.join(candidate)
-    };
     let state_root = std::fs::canonicalize(state_root).ok()?;
-    let candidate = std::fs::canonicalize(candidate).ok()?;
-    if !candidate.starts_with(&state_root) {
-        return None;
+    let persisted_path = Path::new(trimmed);
+    let candidates = if persisted_path.is_absolute() {
+        vec![persisted_path.to_path_buf()]
+    } else {
+        // Persisted runtime surfaces may contain either a project-relative path
+        // (for example `.vida/data/state/...`) or a path relative to state_root.
+        // Try both forms, then apply the same canonical state-root containment
+        // check to prevent path escape.
+        vec![
+            persisted_path.to_path_buf(),
+            state_root.join(persisted_path),
+        ]
+    };
+    for candidate in candidates {
+        let Ok(candidate) = std::fs::canonicalize(candidate) else {
+            continue;
+        };
+        if !candidate.starts_with(&state_root) {
+            continue;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(&candidate) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            continue;
+        }
+        return Some(candidate);
     }
-    let metadata = std::fs::symlink_metadata(&candidate).ok()?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return None;
-    }
-    Some(candidate)
+    None
 }
 
 fn safe_dispatch_worker_id(run_id: &str, dispatch_target: &str) -> String {
@@ -3803,6 +3817,20 @@ mod tests {
     }
 
     fn agent_lane_test_execution_plan(executor_backend: &str) -> serde_json::Value {
+        let runtime_assignment = if executor_backend == "junior" {
+            json!({
+                "selected_carrier_id": "junior",
+                "selected_backend_id": "internal_subagents",
+                "selected_dispatch_backend_id": "internal_subagents",
+                "selected_model_profile_id": "codex_gpt56_luna_xhigh_write",
+                "selected_model_ref": "gpt-5.6-luna",
+                "selected_reasoning_effort": "xhigh",
+                "selected_runtime_role": "worker",
+                "task_class": "implementation"
+            })
+        } else {
+            serde_json::Value::Null
+        };
         json!({
             "backend_admissibility_matrix": [
                 {
@@ -3811,13 +3839,25 @@ mod tests {
                     "lane_admissibility": {
                         "implementation": true
                     }
+                },
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true
+                    }
                 }
             ],
             "development_flow": {
                 "implementer": {
-                    "executor_backend": executor_backend
+                    "executor_backend": if executor_backend == "junior" {
+                        "internal_subagents"
+                    } else {
+                        executor_backend
+                    }
                 }
-            }
+            },
+            "runtime_assignment": runtime_assignment
         })
     }
 

@@ -1283,6 +1283,22 @@ fn reconcile_run_graph_status_with_closed_task(
     status
 }
 
+pub(crate) fn project_closed_task_scoped_run_graph_status(
+    mut status: RunGraphStatus,
+) -> RunGraphStatus {
+    status.active_node = "closure".to_string();
+    status.next_node = None;
+    status.status = "completed".to_string();
+    status.lifecycle_stage = "closure_complete".to_string();
+    status.policy_gate = "closed_run_archived".to_string();
+    status.handoff_state = "none".to_string();
+    status.context_state = "sealed".to_string();
+    status.checkpoint_kind = "none".to_string();
+    status.resume_target = "none".to_string();
+    status.recovery_ready = false;
+    status
+}
+
 pub(crate) fn requires_memory_governance_enforcement(policy_gate: &str) -> bool {
     let normalized = policy_gate.trim().to_ascii_lowercase();
     normalized.contains("consent")
@@ -4362,6 +4378,54 @@ impl StateStore {
             }
         }
         Ok(None)
+    }
+
+    pub(crate) async fn run_graph_status_for_operator_selector(
+        &self,
+        selector: &str,
+    ) -> Result<RunGraphStatus, StateStoreError> {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return Err(StateStoreError::MissingTask {
+                task_id: "run_graph:<empty>".to_string(),
+            });
+        }
+
+        let (status, resolved_from_task) = match self.run_graph_status(selector).await {
+            Ok(status) => (status, false),
+            Err(StateStoreError::MissingTask { .. }) => {
+                if let Some(status) = self.latest_run_graph_status_for_task(selector).await? {
+                    (status, true)
+                } else {
+                    let Some(run_id) = self.latest_run_graph_run_id_for_task(selector).await?
+                    else {
+                        return Err(StateStoreError::MissingTask {
+                            task_id: format!("run_graph:{selector}"),
+                        });
+                    };
+                    (self.run_graph_status(&run_id).await?, true)
+                }
+            }
+            Err(error) => return Err(error),
+        };
+
+        if resolved_from_task && status.task_id.trim() != selector {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "scoped run-graph selector resolved to a different task: requested `{selector}`, status task `{}`",
+                    status.task_id
+                ),
+            });
+        }
+
+        let task = self.show_task(&status.task_id).await.ok();
+        if task
+            .as_ref()
+            .is_some_and(|task| task_status_is_terminal_for_continuation(&task.status))
+        {
+            return Ok(project_closed_task_scoped_run_graph_status(status));
+        }
+        Ok(status)
     }
 
     async fn ensure_run_graph_recovery_surface_rows_present(
@@ -8653,6 +8717,78 @@ mod tests {
         assert_eq!(reconciled.resume_target, "none");
         assert!(reconciled.recovery_ready);
         assert!(reconciled.delegation_gate().delegated_cycle_open);
+
+        close_store_and_remove_root(store, root).await;
+    }
+
+    #[tokio::test]
+    async fn operator_run_graph_selector_archives_closed_task_run_without_mutating_raw_status() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-run-graph-closed-selector-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+
+        store
+            .create_task_with_fixture_parent(CreateTaskRequest {
+                task_id: "task-closed-scoped-diagnostic",
+                title: "Closed task with archived scoped run",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create closed task");
+
+        let mut raw = crate::taskflow_run_graph::default_run_graph_status(
+            "task-closed-scoped-diagnostic",
+            "implementation",
+            "implementation",
+        );
+        raw.run_id = "run-closed-scoped-diagnostic".to_string();
+        raw.status = "in_progress".to_string();
+        raw.active_node = "implementer".to_string();
+        raw.lifecycle_stage = "implementer_active".to_string();
+        raw.policy_gate = "targeted_verification".to_string();
+        raw.checkpoint_kind = "active".to_string();
+        raw.recovery_ready = true;
+        store
+            .record_run_graph_status(&raw)
+            .await
+            .expect("persist raw closed-task run status");
+
+        let scoped = store
+            .run_graph_status_for_operator_selector("task-closed-scoped-diagnostic")
+            .await
+            .expect("resolve task-scoped run-graph status");
+        assert_eq!(scoped.run_id, "run-closed-scoped-diagnostic");
+        assert_eq!(scoped.task_id, "task-closed-scoped-diagnostic");
+        assert_eq!(scoped.status, "completed");
+        assert_eq!(scoped.active_node, "closure");
+        assert_eq!(scoped.lifecycle_stage, "closure_complete");
+        assert_eq!(scoped.policy_gate, "closed_run_archived");
+        assert!(!scoped.recovery_ready);
+
+        let raw_after = store
+            .run_graph_status("run-closed-scoped-diagnostic")
+            .await
+            .expect("read raw run-graph status");
+        assert_eq!(raw_after.status, "in_progress");
+        assert_eq!(raw_after.active_node, "implementer");
 
         close_store_and_remove_root(store, root).await;
     }
