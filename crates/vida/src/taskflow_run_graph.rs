@@ -6795,6 +6795,71 @@ async fn seeded_implementation_lane_sequence(
     (!sequence.is_empty()).then_some(sequence)
 }
 
+fn ensure_configured_lane_advance_allowed(
+    existing: &RunGraphStatus,
+    transition_kind: &str,
+) -> Result<(), String> {
+    if existing.task_class != "implementation" || existing.route_task_class != "implementation" {
+        return Err(format!(
+            "run-graph advance blocked: configured execution lane `{}` belongs to task_class=`{}` route_task_class=`{}`; configured lane advancement is limited to implementation runs",
+            existing.active_node, existing.task_class, existing.route_task_class
+        ));
+    }
+
+    if existing.lifecycle_stage.contains("blocked")
+        || existing.lifecycle_stage.ends_with("_blocked")
+        || existing.status == "blocked"
+        || existing.status == "failed"
+    {
+        return Err(format!(
+            "run-graph advance blocked: configured execution lane `{}` is not advanceable while status=`{}` lifecycle_stage=`{}`",
+            existing.active_node, existing.status, existing.lifecycle_stage
+        ));
+    }
+
+    match transition_kind {
+        "dispatch_ready" => {
+            if existing.status != "ready" {
+                return Err(format!(
+                    "run-graph advance blocked: configured dispatch-ready lane `{}` requires status=`ready`, got `{}`",
+                    existing.active_node, existing.status
+                ));
+            }
+            if existing.policy_gate != "not_required" {
+                return Err(format!(
+                    "run-graph advance blocked: configured dispatch-ready lane `{}` still requires policy_gate=`{}`",
+                    existing.active_node, existing.policy_gate
+                ));
+            }
+        }
+        "handoff" | "complete" => {
+            if !matches!(
+                existing.status.as_str(),
+                "clean" | "completed" | "completed_success" | "completed-success"
+            ) {
+                return Err(format!(
+                    "run-graph advance blocked: configured execution lane `{}` requires completed lane evidence before `{transition_kind}`, got status=`{}`",
+                    existing.active_node, existing.status
+                ));
+            }
+            if existing.policy_gate.trim().is_empty() || existing.policy_gate == "none" {
+                return Err(format!(
+                    "run-graph advance blocked: configured execution lane `{}` has invalid policy_gate=`{}`",
+                    existing.active_node, existing.policy_gate
+                ));
+            }
+        }
+        _ => {
+            return Err(format!(
+                "run-graph advance blocked: unknown configured lane transition `{transition_kind}` for `{}`",
+                existing.active_node
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn next_seeded_implementation_lane(sequence: &[String], current_node: &str) -> Option<String> {
     let current_index = sequence.iter().position(|node| node == current_node)?;
     sequence.get(current_index + 1).cloned()
@@ -10141,6 +10206,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
             if existing.lifecycle_stage.ends_with("_dispatch_ready")
                 && existing.next_node.as_deref() == Some(existing.active_node.as_str())
             {
+                ensure_configured_lane_advance_allowed(&existing, "dispatch_ready")?;
                 let next_node = next_seeded_implementation_lane(sequence, &existing.active_node);
                 return Ok(TaskflowRunGraphAdvancePayload {
                     status: run_graph_state_from_authority_ready_transition(
@@ -10160,6 +10226,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
                 next_seeded_implementation_lane(sequence, &existing.active_node);
             match (existing.next_node.as_deref(), expected_next_node.as_deref()) {
                 (None, None) => {
+                    ensure_configured_lane_advance_allowed(&existing, "complete")?;
                     let mut status = run_graph_state_from_authority_ready_transition(
                         &existing,
                         existing.active_node.clone(),
@@ -10176,6 +10243,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
                     return Ok(TaskflowRunGraphAdvancePayload { status });
                 }
                 (Some(actual), Some(expected)) if actual == expected => {
+                    ensure_configured_lane_advance_allowed(&existing, "handoff")?;
                     let next_node = next_seeded_implementation_lane(sequence, actual);
                     return Ok(TaskflowRunGraphAdvancePayload {
                         status: run_graph_state_from_authority_ready_transition(
@@ -18101,6 +18169,120 @@ agent_system:
             .expect("load latest dispatch receipt summary")
             .expect("latest dispatch receipt summary should exist");
         assert_eq!(latest_receipt.run_id, "task-refresh-latest");
+    }
+
+    #[tokio::test]
+    async fn configured_lane_advance_rejects_blocked_seeded_lane() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let mut existing = default_run_graph_state(
+            "task-configured-blocked-coder",
+            "implementation",
+            "implementation",
+        );
+        existing.active_node = "coder".to_string();
+        existing.next_node = Some("cleaner".to_string());
+        existing.status = "blocked".to_string();
+        existing.lane_id = "coder_lane".to_string();
+        existing.lifecycle_stage = "coder_blocked".to_string();
+        existing.policy_gate = "targeted_verification".to_string();
+        existing.handoff_state = "awaiting_cleaner".to_string();
+        existing.resume_target = "dispatch.cleaner_lane".to_string();
+        existing.recovery_ready = true;
+        store
+            .record_run_graph_status(&existing)
+            .await
+            .expect("record run status");
+
+        let error = derive_advanced_run_graph_state(&store, existing)
+            .await
+            .expect_err("blocked configured lane must not advance");
+
+        assert!(
+            error.contains("configured execution lane `coder` is not advanceable"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_dispatch_ready_lane_requires_cleared_policy_gate() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let mut existing = default_run_graph_state(
+            "task-configured-policy-gated-coder",
+            "implementation",
+            "implementation",
+        );
+        existing.active_node = "coder".to_string();
+        existing.next_node = Some("coder".to_string());
+        existing.status = "ready".to_string();
+        existing.lane_id = "coder_lane".to_string();
+        existing.lifecycle_stage = "coder_dispatch_ready".to_string();
+        existing.policy_gate = "targeted_verification".to_string();
+        existing.handoff_state = "awaiting_coder".to_string();
+        existing.resume_target = "dispatch.coder_lane".to_string();
+        existing.recovery_ready = true;
+        store
+            .record_run_graph_status(&existing)
+            .await
+            .expect("record run status");
+
+        let error = derive_advanced_run_graph_state(&store, existing)
+            .await
+            .expect_err("policy-gated configured dispatch-ready lane must not advance");
+
+        assert!(
+            error.contains("still requires policy_gate=`targeted_verification`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_final_lane_requires_completed_evidence_before_completion() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let mut existing = default_run_graph_state(
+            "task-configured-final-ready",
+            "implementation",
+            "implementation",
+        );
+        existing.active_node = "review_ensemble".to_string();
+        existing.next_node = None;
+        existing.status = "ready".to_string();
+        existing.lane_id = "review_ensemble_lane".to_string();
+        existing.lifecycle_stage = "review_ensemble_active".to_string();
+        existing.policy_gate = "not_required".to_string();
+        existing.handoff_state = "none".to_string();
+        existing.resume_target = "none".to_string();
+        existing.recovery_ready = false;
+        store
+            .record_run_graph_status(&existing)
+            .await
+            .expect("record run status");
+
+        let error = derive_advanced_run_graph_state(&store, existing)
+            .await
+            .expect_err("final configured lane must not complete without completed evidence");
+
+        assert!(
+            error.contains("requires completed lane evidence"),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]
