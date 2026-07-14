@@ -6795,6 +6795,71 @@ async fn seeded_implementation_lane_sequence(
     (!sequence.is_empty()).then_some(sequence)
 }
 
+fn ensure_configured_lane_advance_allowed(
+    existing: &RunGraphStatus,
+    transition_kind: &str,
+) -> Result<(), String> {
+    if existing.task_class != "implementation" || existing.route_task_class != "implementation" {
+        return Err(format!(
+            "run-graph advance blocked: configured execution lane `{}` belongs to task_class=`{}` route_task_class=`{}`; configured lane advancement is limited to implementation runs",
+            existing.active_node, existing.task_class, existing.route_task_class
+        ));
+    }
+
+    if existing.lifecycle_stage.contains("blocked")
+        || existing.lifecycle_stage.ends_with("_blocked")
+        || existing.status == "blocked"
+        || existing.status == "failed"
+    {
+        return Err(format!(
+            "run-graph advance blocked: configured execution lane `{}` is not advanceable while status=`{}` lifecycle_stage=`{}`",
+            existing.active_node, existing.status, existing.lifecycle_stage
+        ));
+    }
+
+    match transition_kind {
+        "dispatch_ready" => {
+            if existing.status != "ready" {
+                return Err(format!(
+                    "run-graph advance blocked: configured dispatch-ready lane `{}` requires status=`ready`, got `{}`",
+                    existing.active_node, existing.status
+                ));
+            }
+            if existing.policy_gate != "not_required" {
+                return Err(format!(
+                    "run-graph advance blocked: configured dispatch-ready lane `{}` still requires policy_gate=`{}`",
+                    existing.active_node, existing.policy_gate
+                ));
+            }
+        }
+        "handoff" | "complete" => {
+            if !matches!(
+                existing.status.as_str(),
+                "clean" | "completed" | "completed_success" | "completed-success"
+            ) {
+                return Err(format!(
+                    "run-graph advance blocked: configured execution lane `{}` requires completed lane evidence before `{transition_kind}`, got status=`{}`",
+                    existing.active_node, existing.status
+                ));
+            }
+            if existing.policy_gate.trim().is_empty() || existing.policy_gate == "none" {
+                return Err(format!(
+                    "run-graph advance blocked: configured execution lane `{}` has invalid policy_gate=`{}`",
+                    existing.active_node, existing.policy_gate
+                ));
+            }
+        }
+        _ => {
+            return Err(format!(
+                "run-graph advance blocked: unknown configured lane transition `{transition_kind}` for `{}`",
+                existing.active_node
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn next_seeded_implementation_lane(sequence: &[String], current_node: &str) -> Option<String> {
     let current_index = sequence.iter().position(|node| node == current_node)?;
     sequence.get(current_index + 1).cloned()
@@ -9989,19 +10054,18 @@ pub(crate) async fn derive_advanced_run_graph_state(
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "analysis".to_string());
         let direct_writer_entry = compiled_control.first_execution_lane.clone();
-        if let Some(sequence) = seeded_lane_sequence.as_ref()
-            .filter(|sequence| {
-                existing
-                    .next_node
-                    .as_deref()
-                    .is_some_and(|entry| sequence.iter().any(|node| node == entry))
-            })
-        {
-            let active_entry = existing
-                .next_node
-                .clone()
-            .expect("configured sequence entry was present");
-        let next_node = next_seeded_implementation_lane(sequence, &active_entry);
+        if let Some(sequence) = seeded_lane_sequence.as_ref() {
+            let expected_entry = sequence
+                .first()
+                .expect("seeded lane sequence should be non-empty");
+            let actual_entry = existing.next_node.as_deref().unwrap_or("none");
+            if actual_entry != expected_entry {
+                return Err(format!(
+                    "run-graph advance expected configured execution lane `{expected_entry}`, got `{actual_entry}`"
+                ));
+            }
+            let active_entry = expected_entry.clone();
+            let next_node = next_seeded_implementation_lane(sequence, &active_entry);
             return Ok(TaskflowRunGraphAdvancePayload {
                 status: run_graph_state_from_authority_ready_transition(
                     &existing,
@@ -10142,6 +10206,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
             if existing.lifecycle_stage.ends_with("_dispatch_ready")
                 && existing.next_node.as_deref() == Some(existing.active_node.as_str())
             {
+                ensure_configured_lane_advance_allowed(&existing, "dispatch_ready")?;
                 let next_node = next_seeded_implementation_lane(sequence, &existing.active_node);
                 return Ok(TaskflowRunGraphAdvancePayload {
                     status: run_graph_state_from_authority_ready_transition(
@@ -10161,6 +10226,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
                 next_seeded_implementation_lane(sequence, &existing.active_node);
             match (existing.next_node.as_deref(), expected_next_node.as_deref()) {
                 (None, None) => {
+                    ensure_configured_lane_advance_allowed(&existing, "complete")?;
                     let mut status = run_graph_state_from_authority_ready_transition(
                         &existing,
                         existing.active_node.clone(),
@@ -10177,6 +10243,7 @@ pub(crate) async fn derive_advanced_run_graph_state(
                     return Ok(TaskflowRunGraphAdvancePayload { status });
                 }
                 (Some(actual), Some(expected)) if actual == expected => {
+                    ensure_configured_lane_advance_allowed(&existing, "handoff")?;
                     let next_node = next_seeded_implementation_lane(sequence, actual);
                     return Ok(TaskflowRunGraphAdvancePayload {
                         status: run_graph_state_from_authority_ready_transition(
@@ -17892,6 +17959,85 @@ agent_system:
     }
 
     #[tokio::test]
+    async fn configured_execution_sequence_rejects_skipped_seed_lane() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let task_id = "task-run-graph-configured-sequence-skip";
+        let labels = vec!["runtime-recovery".to_string()];
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Reject skipped configured execution sequence",
+                display_id: None,
+                description:
+                    "Advance must fail closed when persisted planning state skips a configured predecessor lane.",
+                issue_type: "runtime_defect",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "advance rejects out-of-order configured execution lanes".to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create configured sequence task");
+
+        let request_text = "Repair the configured run-graph seed/advance/dispatch-init contract.";
+        let seeded = derive_seeded_run_graph_state(&store, task_id, request_text)
+            .await
+            .expect("configured sequence seed should derive");
+        let dispatch_contract = seeded
+            .role_selection
+            .execution_plan
+            .get("development_flow")
+            .and_then(|flow| flow.get("dispatch_contract"))
+            .expect("seed should retain the dispatch contract");
+        let configured_sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
+        assert!(configured_sequence.len() >= 2, "configured sequence needs two steps");
+        let first = configured_sequence[0].clone();
+        let second = configured_sequence[1].clone();
+        assert_eq!(seeded.status.next_node.as_deref(), Some(first.as_str()));
+
+        persist_seed_artifacts(&store, &seeded)
+            .await
+            .expect("seed artifacts should persist");
+        let mut corrupted_status = store
+            .run_graph_status(task_id)
+            .await
+            .expect("seeded status lookup should succeed");
+        corrupted_status.next_node = Some(second.clone());
+        corrupted_status.resume_target = format!("dispatch.{second}_lane");
+        store
+            .record_run_graph_status(&corrupted_status)
+            .await
+            .expect("corrupted status should persist for regression proof");
+
+        let error = derive_advanced_run_graph_state(&store, corrupted_status)
+            .await
+            .expect_err("advance must reject skipped configured predecessor lanes");
+        assert!(
+            error.contains(&format!(
+                "expected configured execution lane `{first}`, got `{second}`"
+            )),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
     async fn dispatch_init_refreshes_latest_run_graph_surfaces_to_effective_run() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let store = StateStore::open(harness.path().to_path_buf())
@@ -18023,6 +18169,247 @@ agent_system:
             .expect("load latest dispatch receipt summary")
             .expect("latest dispatch receipt summary should exist");
         assert_eq!(latest_receipt.run_id, "task-refresh-latest");
+    }
+
+    #[tokio::test]
+    async fn configured_lane_advance_rejects_blocked_seeded_lane() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let task_id = "task-configured-blocked-coder";
+        let labels = vec!["runtime-recovery".to_string()];
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Reject blocked configured lane advance",
+                display_id: None,
+                description: "Configured lane advancement must fail closed for blocked seeded lanes.",
+                issue_type: "runtime_defect",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "blocked configured lane advance fails closed".to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create configured blocked-lane task");
+        let seeded = derive_seeded_run_graph_state(
+            &store,
+            task_id,
+            "Repair configured run-graph lane advance guards.",
+        )
+        .await
+        .expect("seeded configured lane state should derive");
+        let dispatch_contract = seeded
+            .role_selection
+            .execution_plan
+            .get("development_flow")
+            .and_then(|flow| flow.get("dispatch_contract"))
+            .expect("seed should retain the dispatch contract");
+        let configured_sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
+        let first_lane = configured_sequence
+            .first()
+            .cloned()
+            .expect("configured lane sequence should have a first lane");
+        persist_seed_artifacts(&store, &seeded)
+            .await
+            .expect("seed artifacts should persist");
+        let mut existing = seeded.status;
+        existing.active_node = first_lane.clone();
+        existing.next_node = Some(first_lane.clone());
+        existing.status = "blocked".to_string();
+        existing.lane_id = format!("{first_lane}_lane");
+        existing.lifecycle_stage = format!("{first_lane}_dispatch_ready");
+        existing.policy_gate = "targeted_verification".to_string();
+        existing.handoff_state = format!("awaiting_{first_lane}");
+        existing.resume_target = format!("dispatch.{first_lane}_lane");
+        existing.recovery_ready = true;
+        store
+            .record_run_graph_status(&existing)
+            .await
+            .expect("record run status");
+
+        let error = derive_advanced_run_graph_state(&store, existing)
+            .await
+            .expect_err("blocked configured lane must not advance");
+
+        assert!(
+            error.contains("configured execution lane `coder` is not advanceable"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_dispatch_ready_lane_requires_cleared_policy_gate() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let task_id = "task-configured-policy-gated-coder";
+        let labels = vec!["runtime-recovery".to_string()];
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Reject policy-gated configured lane advance",
+                display_id: None,
+                description: "Configured dispatch-ready lanes must reject uncleared policy gates.",
+                issue_type: "runtime_defect",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "policy-gated configured dispatch-ready lane fails closed".to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create configured policy-gated task");
+        let seeded = derive_seeded_run_graph_state(
+            &store,
+            task_id,
+            "Repair configured run-graph lane policy guards.",
+        )
+        .await
+        .expect("seeded configured policy state should derive");
+        let dispatch_contract = seeded
+            .role_selection
+            .execution_plan
+            .get("development_flow")
+            .and_then(|flow| flow.get("dispatch_contract"))
+            .expect("seed should retain the dispatch contract");
+        let first_lane = crate::dispatch_contract_execution_lane_sequence(dispatch_contract)
+            .first()
+            .cloned()
+            .expect("configured lane sequence should have a first lane");
+        persist_seed_artifacts(&store, &seeded)
+            .await
+            .expect("seed artifacts should persist");
+        let mut existing = seeded.status;
+        existing.active_node = first_lane.clone();
+        existing.next_node = Some(first_lane.clone());
+        existing.status = "ready".to_string();
+        existing.lane_id = format!("{first_lane}_lane");
+        existing.lifecycle_stage = format!("{first_lane}_dispatch_ready");
+        existing.policy_gate = "targeted_verification".to_string();
+        existing.handoff_state = format!("awaiting_{first_lane}");
+        existing.resume_target = format!("dispatch.{first_lane}_lane");
+        existing.recovery_ready = true;
+        store
+            .record_run_graph_status(&existing)
+            .await
+            .expect("record run status");
+
+        let error = derive_advanced_run_graph_state(&store, existing)
+            .await
+            .expect_err("policy-gated configured dispatch-ready lane must not advance");
+
+        assert!(
+            error.contains("still requires policy_gate=`targeted_verification`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_final_lane_requires_completed_evidence_before_completion() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let task_id = "task-configured-final-ready";
+        let labels = vec!["runtime-recovery".to_string()];
+        store
+            .create_task_with_fixture_parent(crate::state_store::CreateTaskRequest {
+                task_id,
+                title: "Reject incomplete configured final lane",
+                display_id: None,
+                description: "The final configured lane must require completed evidence.",
+                issue_type: "runtime_defect",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                planner_metadata: crate::state_store::TaskPlannerMetadata {
+                    owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
+                    proof_targets: vec![
+                        "final configured lane requires completed evidence".to_string(),
+                    ],
+                    ..crate::state_store::TaskPlannerMetadata::default()
+                },
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create configured final-lane task");
+        let seeded = derive_seeded_run_graph_state(
+            &store,
+            task_id,
+            "Repair configured run-graph final-lane completion guards.",
+        )
+        .await
+        .expect("seeded configured final-lane state should derive");
+        let dispatch_contract = seeded
+            .role_selection
+            .execution_plan
+            .get("development_flow")
+            .and_then(|flow| flow.get("dispatch_contract"))
+            .expect("seed should retain the dispatch contract");
+        let final_lane = crate::dispatch_contract_execution_lane_sequence(dispatch_contract)
+            .last()
+            .cloned()
+            .expect("configured lane sequence should have a final lane");
+        persist_seed_artifacts(&store, &seeded)
+            .await
+            .expect("seed artifacts should persist");
+        let mut existing = seeded.status;
+        existing.active_node = final_lane.clone();
+        existing.next_node = None;
+        existing.status = "ready".to_string();
+        existing.lane_id = format!("{final_lane}_lane");
+        existing.lifecycle_stage = format!("{final_lane}_active");
+        existing.policy_gate = "not_required".to_string();
+        existing.handoff_state = "none".to_string();
+        existing.resume_target = "none".to_string();
+        existing.recovery_ready = false;
+        store
+            .record_run_graph_status(&existing)
+            .await
+            .expect("record run status");
+
+        let error = derive_advanced_run_graph_state(&store, existing)
+            .await
+            .expect_err("final configured lane must not complete without completed evidence");
+
+        assert!(
+            error.contains("requires completed lane evidence"),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]

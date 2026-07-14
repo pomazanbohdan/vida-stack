@@ -3924,31 +3924,25 @@ fn build_agent_dispatch_next_preview_dev_team(
             })
         })
         .flatten();
-    let initial_implementation_step_index = if scoped_current_task_dev_team
-        && dev_team_receipt.is_none()
-    {
-        sequence.iter().position(|step| {
-            step.requires_task
+    let receipt_gate_selected_step = receipt_gate
+        .as_ref()
+        .and_then(|gate| gate.selected_step_index)
+        .and_then(|index| sequence.get(index).map(|step| (index, step)));
+    let initial_implementation_step_index = receipt_gate_selected_step
+        .filter(|(_, step)| {
+            scoped_current_task_dev_team
+                && dev_team_receipt.is_none()
+                && step.requires_task
                 && step.runtime_role.eq_ignore_ascii_case("worker")
                 && step.task_class.eq_ignore_ascii_case("implementation")
         })
-    } else {
-        None
-    };
-    let selected_zombie_d_step = initial_implementation_step_index
-        .and_then(|index| sequence.get(index).map(|step| (index, step)))
-        .or_else(|| {
-            receipt_gate
-        .as_ref()
-        .and_then(|gate| gate.selected_step_index)
-        .and_then(|index| sequence.get(index).map(|step| (index, step)))
-        })
-        .or_else(|| {
-            sequence
-                .iter()
-                .enumerate()
-                .find(|(_, step)| step.requires_task)
-        });
+        .map(|(index, _)| index);
+    let selected_zombie_d_step = receipt_gate_selected_step.or_else(|| {
+        sequence
+            .iter()
+            .enumerate()
+            .find(|(_, step)| step.requires_task)
+    });
     let zombie_d_gate_result = selected_ready_candidates
         .first()
         .and_then(|candidate| {
@@ -4010,30 +4004,22 @@ fn build_agent_dispatch_next_preview_dev_team(
     let configured_max_parallel_agents = configured_max_parallel_agents.max(1);
     let effective_max_parallel_agents = lanes_requested.min(configured_max_parallel_agents);
     let preview_step_limit = lanes_requested;
-    let steps_to_preview = if let Some(index) = initial_implementation_step_index {
-        sequence
-            .get(index)
-            .cloned()
-            .into_iter()
-            .collect::<Vec<_>>()
-    } else {
-        receipt_gate.as_ref().map_or_else(
-            || {
-                sequence
-                    .iter()
-                    .cloned()
-                    .take(preview_step_limit)
-                    .collect::<Vec<_>>()
-            },
-            |gate| {
-                gate.selected_step_index
-                    .and_then(|index| sequence.get(index))
-                    .cloned()
-                    .into_iter()
-                    .collect::<Vec<_>>()
-            },
-        )
-    };
+    let steps_to_preview = receipt_gate.as_ref().map_or_else(
+        || {
+            sequence
+                .iter()
+                .cloned()
+                .take(preview_step_limit)
+                .collect::<Vec<_>>()
+        },
+        |gate| {
+            gate.selected_step_index
+                .and_then(|index| sequence.get(index))
+                .cloned()
+                .into_iter()
+                .collect::<Vec<_>>()
+        },
+    );
     if projection.ready.is_empty() {
         blocker_codes.push("no_ready_task_candidates".to_string());
         next_actions.push(format!(
@@ -16386,6 +16372,77 @@ mod tests {
         assert_eq!(
             complete_preview.flow_projection["predecessor_receipt_gate"]["blocker_code"],
             "dev_team_sequence_completed:task=task-current"
+        );
+    }
+
+    #[test]
+    fn no_receipt_dev_team_dispatch_uses_configured_initial_step_before_implementation() {
+        let mut activation_bundle = activation_bundle_with_dev_team_selection_truth();
+        activation_bundle["dev_team_readiness"] = serde_json::json!({
+            "default_flow_id": "analysis_then_implementation",
+            "zombie_d_gate": {
+                "enabled": true,
+                "gate_id": "zombie_d_test_writing",
+                "required_categories": ["Z", "O", "M", "B", "I", "E", "S"],
+                "applies_to": {
+                    "task_classes": ["test_authoring", "regression_test", "verification", "quality_gate"],
+                    "path_tokens": ["test", "fixture", "snapshot", "golden", "coverage", "smoke", "integration"]
+                },
+                "enforcement_points": ["dispatch", "handoff", "closure"],
+                "status": "ready",
+                "blockers": []
+            },
+            "roles": [
+                {"role_id": "analyst", "runtime_role": "business_analyst", "task_classes": ["specification"]},
+                {"role_id": "developer", "runtime_role": "worker", "task_classes": ["implementation"]}
+            ],
+            "flows": [{
+                "flow_id": "analysis_then_implementation",
+                "enabled": true,
+                "default": true,
+                "sequential": true,
+                "ordered_steps": [
+                    {"role_id": "analyst", "runtime_role": "business_analyst", "task_class": "specification"},
+                    {"role_id": "developer", "runtime_role": "worker", "task_class": "implementation"}
+                ]
+            }]
+        });
+        let projection = TaskSchedulingProjection {
+            current_task_id: Some("task-analysis-first".to_string()),
+            ready: vec![candidate(
+                "task-analysis-first",
+                "Analysis first before implementation",
+                true,
+                true,
+                Vec::new(),
+            )],
+            blocked: Vec::new(),
+            parallel_candidates_after_current: Vec::new(),
+        };
+
+        let preview = build_agent_dispatch_next_preview_with_diagnostics_and_dev_team_receipt(
+            &activation_bundle,
+            &projection,
+            1,
+            1,
+            None,
+            true,
+            true,
+            Some("run-analysis-first"),
+            None,
+        );
+
+        assert_eq!(preview.status, "pass", "{preview:#?}");
+        assert_eq!(preview.selected_lanes.len(), 1, "{preview:#?}");
+        assert_eq!(preview.selected_lanes[0].role_label, "analyst");
+        assert_eq!(preview.selected_lanes[0].task_class, "specification");
+        assert_eq!(
+            preview.flow_projection["predecessor_receipt_gate"]["selected_step_index"],
+            0
+        );
+        assert_ne!(
+            preview.flow_projection["zombie_d_gate"]["admission_scope"],
+            "initial_implementation_dispatch"
         );
     }
 

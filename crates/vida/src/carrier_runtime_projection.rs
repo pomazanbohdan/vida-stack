@@ -478,69 +478,105 @@ pub(crate) fn carrier_policy_revalidation(
         });
     };
 
-    let compare_scalar = |field: &str,
-                          selected: Option<&str>,
-                          current: Option<&str>,
-                          reason: &str,
-                          mismatches: &mut Vec<serde_json::Value>,
-                          reasons: &mut Vec<String>| {
-        if let Some(selected) = selected {
-            if current != Some(selected) {
+    let compare_required_scalar = |field: &str,
+                                   selected: Option<&str>,
+                                   current: Option<&str>,
+                                   mismatch_reason: &str,
+                                   missing_reason: &str,
+                                   mismatches: &mut Vec<serde_json::Value>,
+                                   reasons: &mut Vec<String>| {
+        match selected {
+            Some(selected) if current == Some(selected) => {}
+            Some(selected) => {
                 mismatches.push(serde_json::json!({
                     "field": field,
                     "selected": selected,
                     "current": current,
-                    "reason": reason,
+                    "reason": mismatch_reason,
                 }));
-                reasons.push(reason.to_string());
+                reasons.push(mismatch_reason.to_string());
+            }
+            None => {
+                mismatches.push(serde_json::json!({
+                    "field": field,
+                    "selected": serde_json::Value::Null,
+                    "current": current,
+                    "reason": missing_reason,
+                }));
+                reasons.push(missing_reason.to_string());
             }
         }
     };
-    compare_scalar(
+    compare_required_scalar(
         "selected_model_ref",
         selected_model.as_deref(),
         profile["model_ref"].as_str(),
         "selected model reference differs from current profile",
+        "selected model reference is missing from the assignment",
         &mut mismatches,
         &mut reasons,
     );
-    compare_scalar(
+    compare_required_scalar(
         "selected_reasoning_effort",
         selected_reasoning.as_deref(),
         profile["reasoning_effort"].as_str(),
         "selected reasoning effort differs from current profile",
+        "selected reasoning effort is missing from the assignment",
         &mut mismatches,
         &mut reasons,
     );
-    if let Some(selected_runtime_role) = selected_runtime_role.as_deref() {
-        if policy_list_is_restrictive(profile, "runtime_roles")
-            && !policy_list_contains(profile, "runtime_roles", selected_runtime_role)
-        {
-            mismatches.push(serde_json::json!({
-                "field": "selected_runtime_role",
-                "selected": selected_runtime_role,
-                "current": profile["runtime_roles"],
-                "reason": "selected runtime role is not admitted by current profile",
-            }));
-            reasons.push("selected runtime role is not admitted by current profile".to_string());
+    if policy_list_is_restrictive(profile, "runtime_roles") {
+        match selected_runtime_role.as_deref() {
+            Some(selected_runtime_role)
+                if policy_list_contains(profile, "runtime_roles", selected_runtime_role) => {}
+            Some(selected_runtime_role) => {
+                mismatches.push(serde_json::json!({
+                    "field": "selected_runtime_role",
+                    "selected": selected_runtime_role,
+                    "current": profile["runtime_roles"],
+                    "reason": "selected runtime role is not admitted by current profile",
+                }));
+                reasons.push("selected runtime role is not admitted by current profile".to_string());
+            }
+            None => {
+                mismatches.push(serde_json::json!({
+                    "field": "selected_runtime_role",
+                    "selected": serde_json::Value::Null,
+                    "current": profile["runtime_roles"],
+                    "reason": "selected runtime role is missing from the assignment",
+                }));
+                reasons.push("selected runtime role is missing from the assignment".to_string());
+            }
         }
     }
-    if let Some(selected_task_class) = selected_task_class.as_deref() {
-        if policy_list_is_restrictive(profile, "task_classes")
-            && !policy_list_contains(profile, "task_classes", selected_task_class)
-        {
-            mismatches.push(serde_json::json!({
-                "field": "task_class",
-                "selected": selected_task_class,
-                "current": profile["task_classes"],
-                "reason": "selected task class is not admitted by current profile",
-            }));
-            reasons.push("selected task class is not admitted by current profile".to_string());
+    if policy_list_is_restrictive(profile, "task_classes") {
+        match selected_task_class.as_deref() {
+            Some(selected_task_class)
+                if policy_list_contains(profile, "task_classes", selected_task_class) => {}
+            Some(selected_task_class) => {
+                mismatches.push(serde_json::json!({
+                    "field": "task_class",
+                    "selected": selected_task_class,
+                    "current": profile["task_classes"],
+                    "reason": "selected task class is not admitted by current profile",
+                }));
+                reasons.push("selected task class is not admitted by current profile".to_string());
+            }
+            None => {
+                mismatches.push(serde_json::json!({
+                    "field": "task_class",
+                    "selected": serde_json::Value::Null,
+                    "current": profile["task_classes"],
+                    "reason": "selected task class is missing from the assignment",
+                }));
+                reasons.push("selected task class is missing from the assignment".to_string());
+            }
         }
     }
-    if let Some(selected_backend) = selected_backend.as_deref() {
-        if let Some(backends) = current_bundle["agent_system"]["subagents"].as_object() {
-            if !backends.contains_key(selected_backend) {
+    if let Some(backends) = current_bundle["agent_system"]["subagents"].as_object() {
+        match selected_backend.as_deref() {
+            Some(selected_backend) if backends.contains_key(selected_backend) => {}
+            Some(selected_backend) => {
                 mismatches.push(serde_json::json!({
                     "field": "selected_backend_id",
                     "selected": selected_backend,
@@ -550,6 +586,15 @@ pub(crate) fn carrier_policy_revalidation(
                 reasons.push(
                     "selected backend is not present in current agent-system policy".to_string(),
                 );
+            }
+            None => {
+                mismatches.push(serde_json::json!({
+                    "field": "selected_backend_id",
+                    "selected": serde_json::Value::Null,
+                    "current": backends.keys().collect::<Vec<_>>(),
+                    "reason": "selected backend is missing from the assignment",
+                }));
+                reasons.push("selected backend is missing from the assignment".to_string());
             }
         }
     }
@@ -719,6 +764,44 @@ mod tests {
                 .any(|code| code == "active_carrier_policy_mismatch")
         );
         assert_eq!(result["reselection_required"], json!(true));
+    }
+
+    #[test]
+    fn carrier_policy_revalidation_blocks_stripped_policy_identity_fields() {
+        for field in [
+            "selected_backend_id",
+            "selected_model_ref",
+            "selected_reasoning_effort",
+            "selected_runtime_role",
+            "task_class",
+        ] {
+            let mut assignment = test_assignment();
+            assignment
+                .as_object_mut()
+                .expect("assignment should be an object")
+                .remove(field);
+            let result = super::carrier_policy_revalidation(&test_bundle(), &assignment);
+            assert_eq!(result["status"], "blocked", "field={field}");
+            assert!(
+                result["blocker_codes"]
+                    .as_array()
+                    .expect("blockers")
+                    .iter()
+                    .any(|code| {
+                        code
+                            == taskflow_contracts::BlockerCode::ActiveCarrierPolicyMismatch.as_str()
+                    }),
+                "field={field} result={result:#}"
+            );
+            assert!(
+                result["mismatches"]
+                    .as_array()
+                    .expect("mismatches")
+                    .iter()
+                    .any(|mismatch| mismatch["field"] == field),
+                "field={field} result={result:#}"
+            );
+        }
     }
 
     #[test]

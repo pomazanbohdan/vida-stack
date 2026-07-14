@@ -8921,11 +8921,6 @@ fn runtime_dispatch_packet_carrier_policy_revalidation(
             execution_plan,
             dispatch_target,
         );
-    if !crate::carrier_runtime_projection::carrier_policy_assignment_has_policy_identity(
-        &assignment,
-    ) {
-        return serde_json::Value::Null;
-    }
     crate::carrier_runtime_projection::carrier_policy_revalidation_for_project_root(
         project_root,
         &assignment,
@@ -8978,10 +8973,12 @@ fn build_runtime_dispatch_packet_body(
     ctx: &RuntimeDispatchPacketContext<'_>,
     dispatch_command: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let current_dir = std::env::current_dir().map_err(|error| {
+        format!("Failed to resolve project root for dispatch packet rendering: {error}")
+    })?;
     let project_root = taskflow_task_bridge::infer_project_root_from_state_root(ctx.state_root)
-        .unwrap_or(std::env::current_dir().map_err(|error| {
-            format!("Failed to resolve project root for dispatch packet rendering: {error}")
-        })?);
+        .or_else(|| crate::resolve_runtime_project_root().ok())
+        .unwrap_or(current_dir);
     let carrier_policy_revalidation =
         runtime_dispatch_packet_carrier_policy_revalidation(
             &project_root,
@@ -26307,6 +26304,35 @@ agent_system:
         assert!(blockers.iter().any(|code| {
             code.as_str() == Some("active_carrier_policy_mismatch")
         }));
+        assert!(blockers.iter().any(|code| {
+            code.as_str() == Some("carrier_policy_reselection_required")
+        }));
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_policy_revalidation_blocks_stripped_profile_identity() {
+        let packet = json!({
+            "role_selection_full": {
+                "execution_plan": {
+                    "runtime_assignment": {
+                        "selected_carrier_id": "stale-carrier",
+                        "selected_model_ref": "stale-model",
+                        "selected_reasoning_effort": "stale-effort",
+                        "runtime_role": "worker",
+                        "task_class": "implementation"
+                    }
+                }
+            },
+            "dispatch_target": "implementer"
+        });
+        let policy = runtime_dispatch_packet_carrier_policy_revalidation(
+            &crate::state_store::repo_root(),
+            &packet,
+        );
+        assert_eq!(policy["status"], "blocked");
+        let blockers = policy["blocker_codes"]
+            .as_array()
+            .expect("policy blockers should be an array");
         assert!(blockers.iter().any(|code| {
             code.as_str() == Some("carrier_policy_reselection_required")
         }));
