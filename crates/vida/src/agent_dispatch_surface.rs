@@ -144,6 +144,7 @@ struct AgentDispatchLaneSelectionTruth {
     pricing_readiness: serde_json::Value,
     runtime_role: String,
     task_class: String,
+    carrier_policy_blockers: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -3058,6 +3059,11 @@ fn selection_truth_for_task_with_role_and_class(
     let estimated_task_price_units = assignment["estimated_task_price_units"]
         .as_u64()
         .ok_or_else(|| "estimated_task_price_units_missing".to_string())?;
+    let carrier_policy_blockers =
+        crate::carrier_runtime_projection::carrier_policy_revalidation_blockers(
+            activation_bundle,
+            &assignment,
+        );
 
     Ok(AgentDispatchLaneSelectionTruth {
         selected_carrier,
@@ -3076,11 +3082,12 @@ fn selection_truth_for_task_with_role_and_class(
         pricing_readiness: assignment["pricing_readiness"].clone(),
         runtime_role,
         task_class,
+        carrier_policy_blockers,
     })
 }
 
 fn selection_truth_guard_blockers(truth: &AgentDispatchLaneSelectionTruth) -> Vec<String> {
-    let mut blockers = Vec::new();
+    let mut blockers = truth.carrier_policy_blockers.clone();
     if truth.selected_over_budget && truth.budget_verdict == "over_budget" {
         blockers.push(
             taskflow_contracts::BlockerCode::SelectedModelProfileOverBudget
@@ -4867,6 +4874,17 @@ fn apply_configured_lane_runtime_assignment(
             lane.role_label, lane.runtime_role, lane.task_class
         ));
     }
+    let carrier_policy_blockers =
+        crate::carrier_runtime_projection::carrier_policy_revalidation_blockers(
+            activation_bundle,
+            &assignment,
+        );
+    if !carrier_policy_blockers.is_empty() {
+        return Err(format!(
+            "carrier_policy_revalidation_failed:{}",
+            carrier_policy_blockers.join(",")
+        ));
+    }
     let execution_plan = role_selection
         .execution_plan
         .as_object_mut()
@@ -5115,15 +5133,40 @@ async fn materialize_agent_dispatch_next_packets(
         match materialize_configured_agent_dispatch_lane(lane, state_dir, activation_bundle).await {
             Ok(artifact) => artifacts.push(artifact),
             Err(error) => {
-                let blocker = format!("packet_materialization_failed:task={}", lane.task_id);
-                if !preview.blocker_codes.iter().any(|value| value == &blocker) {
-                    preview.blocker_codes.push(blocker);
+                let policy_blockers = error
+                    .strip_prefix("carrier_policy_revalidation_failed:")
+                    .map(|value| {
+                        value
+                            .split(',')
+                            .filter(|code| !code.trim().is_empty())
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if policy_blockers.is_empty() {
+                    let blocker = format!("packet_materialization_failed:task={}", lane.task_id);
+                    if !preview.blocker_codes.iter().any(|value| value == &blocker) {
+                        preview.blocker_codes.push(blocker);
+                    }
+                } else {
+                    for blocker in &policy_blockers {
+                        if !preview.blocker_codes.iter().any(|value| value == blocker) {
+                            preview.blocker_codes.push(blocker.clone());
+                        }
+                    }
                 }
                 errors.push(serde_json::json!({
                     "task_id": lane.task_id,
                     "role_label": lane.role_label,
-                    "blocker_code": "packet_materialization_failed",
-                    "blocker_codes": ["packet_materialization_failed"],
+                    "blocker_code": policy_blockers
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "packet_materialization_failed".to_string()),
+                    "blocker_codes": if policy_blockers.is_empty() {
+                        vec!["packet_materialization_failed".to_string()]
+                    } else {
+                        policy_blockers
+                    },
                     "missing_fields": [],
                     "next_actions": [
                         "Inspect the packet materialization error and repair the selected lane before retrying dispatch packet materialization."
@@ -7299,6 +7342,7 @@ mod tests {
                 pricing_readiness: serde_json::json!({"status": "ready"}),
                 runtime_role: "coach".to_string(),
                 task_class: "coach".to_string(),
+                carrier_policy_blockers: Vec::new(),
             },
             requires_user_approval: false,
             approval_gate: serde_json::json!({

@@ -96,6 +96,8 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
             | Ok(taskflow_contracts::BlockerCode::ImplementationArtifactReceiptUnverified)
             | Ok(taskflow_contracts::BlockerCode::ImplementationArtifactsMissing)
             | Ok(taskflow_contracts::BlockerCode::ImplementationAttemptScopeGuardViolation)
+            | Ok(taskflow_contracts::BlockerCode::ActiveCarrierPolicyMismatch)
+            | Ok(taskflow_contracts::BlockerCode::CarrierPolicyReselectionRequired)
     )
 }
 
@@ -646,6 +648,48 @@ mod tests {
         assert!(!host_bridge_request_status_allows_parent_completion(
             "blocked", false
         ));
+    }
+
+    #[test]
+    fn carrier_policy_blockers_remain_retryable_but_completion_stays_blocked() {
+        for blocker_code in [
+            taskflow_contracts::BlockerCode::ActiveCarrierPolicyMismatch.as_str(),
+            taskflow_contracts::BlockerCode::CarrierPolicyReselectionRequired.as_str(),
+        ] {
+            assert!(host_bridge_completion_retryable_blocker(blocker_code));
+            assert!(host_bridge_artifact_has_retryable_completion_blocker(
+                &serde_json::json!({"status": "blocked", "blocker_codes": [blocker_code]})
+            ));
+
+            let blockers = vec![blocker_code.to_string()];
+            assert_eq!(
+                host_bridge_request_status_after_completion(&blockers),
+                "retryable_blocked"
+            );
+            let verdict = host_bridge_completion_verdict(&blockers);
+            assert_eq!(verdict.status, "blocked");
+            assert!(!verdict.completion_ready);
+            assert_eq!(verdict.completion_verdict, "rework_required");
+        }
+    }
+
+    #[test]
+    fn unknown_policy_evidence_keeps_completion_fail_closed() {
+        let blockers = vec![
+            taskflow_contracts::BlockerCode::CarrierPolicyReselectionRequired
+                .as_str()
+                .to_string(),
+            "unknown_policy_evidence".to_string(),
+        ];
+
+        assert!(!host_bridge_completion_retryable_blocker(
+            "unknown_policy_evidence"
+        ));
+        assert_eq!(
+            host_bridge_request_status_after_completion(&blockers),
+            "blocked"
+        );
+        assert!(!host_bridge_completion_verdict(&blockers).completion_ready);
     }
 
     #[test]

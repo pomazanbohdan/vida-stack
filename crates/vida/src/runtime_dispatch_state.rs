@@ -8883,6 +8883,80 @@ impl<'a> RuntimeDispatchPacketContext<'a> {
     }
 }
 
+fn runtime_dispatch_packet_carrier_policy_revalidation(
+    project_root: &Path,
+    packet: &serde_json::Value,
+) -> serde_json::Value {
+    let execution_plan = packet
+        .get("role_selection_full")
+        .and_then(|value| value.get("execution_plan"))
+        .or_else(|| packet.get("execution_plan"));
+    let Some(execution_plan) = execution_plan else {
+        return serde_json::Value::Null;
+    };
+    let dispatch_target = packet
+        .get("dispatch_target")
+        .or_else(|| packet.get("downstream_dispatch_target"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let assignment =
+        crate::carrier_runtime_projection::carrier_policy_assignment_for_dispatch(
+            execution_plan,
+            dispatch_target,
+        );
+    if !crate::carrier_runtime_projection::carrier_policy_assignment_has_policy_identity(
+        &assignment,
+    ) {
+        return serde_json::Value::Null;
+    }
+    crate::carrier_runtime_projection::carrier_policy_revalidation_for_project_root(
+        project_root,
+        &assignment,
+    )
+}
+
+fn runtime_dispatch_packet_carrier_policy_blockers(
+    policy: &serde_json::Value,
+) -> Vec<String> {
+    policy
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+pub(crate) fn validate_runtime_dispatch_packet_carrier_policy_for_project_root(
+    project_root: &Path,
+    packet: &serde_json::Value,
+    packet_label: &str,
+) -> Result<(), String> {
+    let policy = runtime_dispatch_packet_carrier_policy_revalidation(project_root, packet);
+    let blockers = runtime_dispatch_packet_carrier_policy_blockers(&policy);
+    if blockers.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{packet_label} carrier policy revalidation failed: {}",
+        blockers.join(",")
+    ))
+}
+
+pub(crate) fn validate_runtime_dispatch_packet_carrier_policy_from_state_root(
+    state_root: &Path,
+    packet: &serde_json::Value,
+    packet_label: &str,
+) -> Result<(), String> {
+    let project_root = runtime_dispatch_project_root_from_state_root(state_root);
+    validate_runtime_dispatch_packet_carrier_policy_for_project_root(
+        project_root.as_ref(),
+        packet,
+        packet_label,
+    )
+}
+
 fn build_runtime_dispatch_packet_body(
     ctx: &RuntimeDispatchPacketContext<'_>,
     dispatch_command: Option<String>,
@@ -8891,6 +8965,14 @@ fn build_runtime_dispatch_packet_body(
         .unwrap_or(std::env::current_dir().map_err(|error| {
             format!("Failed to resolve project root for dispatch packet rendering: {error}")
         })?);
+    let carrier_policy_revalidation =
+        runtime_dispatch_packet_carrier_policy_revalidation(
+            &project_root,
+            &serde_json::json!({
+                "role_selection_full": ctx.role_selection,
+                "dispatch_target": ctx.receipt.dispatch_target,
+            }),
+        );
     let host_runtime = runtime_host_execution_contract_for_root(&project_root);
     let selected_backend_override = current_selected_backend_override(
         ctx.role_selection,
@@ -9087,6 +9169,7 @@ fn build_runtime_dispatch_packet_body(
         "execution_truth": execution_truth,
         "activation_evidence": activation_evidence,
         "host_runtime": host_runtime,
+        "carrier_policy_revalidation": carrier_policy_revalidation,
         "request_text": ctx.role_selection.request,
         "role_selection": {
             "selected_role": ctx.role_selection.selected_role,
@@ -9133,6 +9216,10 @@ pub(crate) fn runtime_dispatch_packet_preview(
         .unwrap_or(serde_json::Value::Null);
     let validation_error =
         validate_runtime_dispatch_packet_contract(&packet, "Runtime dispatch packet preview").err();
+    let carrier_policy_revalidation =
+        runtime_dispatch_packet_carrier_policy_revalidation(ctx.state_root, &packet);
+    let carrier_policy_blockers =
+        runtime_dispatch_packet_carrier_policy_blockers(&carrier_policy_revalidation);
     let packet_contract_missing_fields = validation_error
         .as_deref()
         .and_then(|error| error.split("is missing required packet fields: ").nth(1))
@@ -9146,10 +9233,16 @@ pub(crate) fn runtime_dispatch_packet_preview(
         })
         .unwrap_or_default();
     Ok(serde_json::json!({
-        "status": if validation_error.is_some() { "blocked" } else { "pass" },
+        "status": if validation_error.is_some() || !carrier_policy_blockers.is_empty() {
+            "blocked"
+        } else {
+            "pass"
+        },
         "packet_template_kind": packet_template_kind,
         "packet_contract_missing_fields": packet_contract_missing_fields,
         "contract_validation_error": validation_error,
+        "carrier_policy_revalidation": carrier_policy_revalidation,
+        "blocker_codes": carrier_policy_blockers,
         "owned_paths": active_packet
             .get("owned_paths")
             .cloned()
@@ -26052,6 +26145,39 @@ agent_system:
     }
 
     #[test]
+    fn runtime_dispatch_packet_policy_revalidation_blocks_stale_persisted_identity() {
+        let packet = json!({
+            "role_selection_full": {
+                "execution_plan": {
+                    "runtime_assignment": {
+                        "selected_carrier_id": "stale-carrier",
+                        "selected_model_profile_id": "stale-profile",
+                        "selected_model_ref": "stale-model",
+                        "selected_reasoning_effort": "stale-effort",
+                        "runtime_role": "worker",
+                        "task_class": "implementation"
+                    }
+                }
+            },
+            "dispatch_target": "implementer"
+        });
+        let policy = runtime_dispatch_packet_carrier_policy_revalidation(
+            &crate::state_store::repo_root(),
+            &packet,
+        );
+        assert_eq!(policy["status"], "blocked");
+        let blockers = policy["blocker_codes"]
+            .as_array()
+            .expect("policy blockers should be an array");
+        assert!(blockers.iter().any(|code| {
+            code.as_str() == Some("active_carrier_policy_mismatch")
+        }));
+        assert!(blockers.iter().any(|code| {
+            code.as_str() == Some("carrier_policy_reselection_required")
+        }));
+    }
+
+    #[test]
     fn runtime_dispatch_packet_preview_exposes_template_and_scope_without_writing_packet() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -26651,6 +26777,18 @@ pub(crate) fn write_runtime_dispatch_packet(
         ctx.selected_backend_override.as_deref(),
     );
     let body = build_runtime_dispatch_packet_body(ctx, activation_command)?;
+    let policy_blockers = runtime_dispatch_packet_carrier_policy_blockers(
+        body.get("carrier_policy_revalidation")
+            .unwrap_or(&serde_json::Value::Null),
+    );
+    if !policy_blockers.is_empty() {
+        return Err(format!(
+            "carrier_policy_revalidation_failed:{}; run_id `{}`; dispatch packet `{}`",
+            policy_blockers.join(","),
+            ctx.receipt.run_id,
+            packet_path_display
+        ));
+    }
     if let Err(error) = validate_runtime_dispatch_packet_contract(&body, "Runtime dispatch packet")
     {
         return Err(format!(
