@@ -9230,8 +9230,11 @@ pub(crate) fn runtime_dispatch_packet_preview(
         .unwrap_or(serde_json::Value::Null);
     let validation_error =
         validate_runtime_dispatch_packet_contract(&packet, "Runtime dispatch packet preview").err();
-    let carrier_policy_revalidation =
-        runtime_dispatch_packet_carrier_policy_revalidation(ctx.state_root, &packet);
+    let project_root = runtime_dispatch_project_root_from_state_root(ctx.state_root);
+    let carrier_policy_revalidation = runtime_dispatch_packet_carrier_policy_revalidation(
+        project_root.as_ref(),
+        &packet,
+    );
     let carrier_policy_blockers =
         runtime_dispatch_packet_carrier_policy_blockers(&carrier_policy_revalidation);
     let packet_contract_missing_fields = validation_error
@@ -26345,6 +26348,20 @@ agent_system:
         let state_root = harness.path().join(crate::state_store::default_state_dir());
         fs::create_dir_all(state_root.join("runtime-consumption"))
             .expect("runtime-consumption dir should exist");
+        for path in [".vida/config", ".vida/db", ".vida/project"] {
+            fs::create_dir_all(harness.path().join(path)).expect("project shape should exist");
+        }
+        fs::write(harness.path().join("AGENTS.md"), "test project\n")
+            .expect("project bootstrap should exist");
+        fs::copy(
+            crate::state_store::repo_root().join("vida.config.yaml"),
+            harness.path().join("vida.config.yaml"),
+        )
+        .expect("project config should exist");
+        assert!(
+            !state_root.join("vida.config.yaml").exists(),
+            "state root must not be treated as project root"
+        );
 
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
@@ -26391,6 +26408,14 @@ agent_system:
                     }
                 ],
                 "runtime_assignment": {
+                    "enabled": true,
+                    "selected_carrier_id": "junior",
+                    "selected_backend_id": "internal_subagents",
+                    "selected_model_profile_id": "codex_gpt56_luna_xhigh_write",
+                    "selected_model_ref": "gpt-5.6-luna",
+                    "selected_reasoning_effort": "xhigh",
+                    "selected_runtime_role": "worker",
+                    "task_class": "implementation",
                     "selected_tier": "junior",
                     "activation_agent_type": "junior",
                     "activation_runtime_role": "worker"
