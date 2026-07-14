@@ -4151,7 +4151,11 @@ impl StateStore {
             let terminal_task_active = self
                 .run_graph_latest_row_points_to_terminal_task_active(&latest)
                 .await?;
-            if terminal_task_active {
+            let task_exists = self.show_task(&latest.task_id).await.is_ok();
+            let active_receipt = self
+                .run_graph_dispatch_receipt_has_active_lane_evidence(&latest.run_id)
+                .await?;
+            if terminal_task_active && (task_exists || !active_receipt) {
                 continue;
             }
             if self
@@ -4208,10 +4212,10 @@ impl StateStore {
             .await?;
         let rows: Vec<RunGraphLatestStateRow> = query.take(0)?;
         for latest in rows {
-            if !self
+            let terminal_task_active = self
                 .run_graph_latest_row_points_to_terminal_task_active(&latest)
-                .await?
-            {
+                .await?;
+            if !terminal_task_active && self.show_task(&latest.task_id).await.is_ok() {
                 continue;
             }
             if self
@@ -4220,7 +4224,23 @@ impl StateStore {
             {
                 continue;
             }
-            return Ok(Some(self.run_graph_status(&latest.run_id).await?));
+            let status = self.run_graph_status(&latest.run_id).await?;
+            let active_dispatch =
+                status.recovery_ready && status.resume_target.starts_with("dispatch.");
+            let task_is_terminal = self
+                .show_task(&latest.task_id)
+                .await
+                .ok()
+                .is_some_and(|task| task_status_is_terminal_for_continuation(&task.status));
+            let active_receipt = self
+                .run_graph_dispatch_receipt_has_active_lane_evidence(&latest.run_id)
+                .await?;
+            let delegated_cycle_open = status.delegation_gate().delegated_cycle_open;
+            if (!delegated_cycle_open && task_is_terminal)
+                || (!delegated_cycle_open && !active_dispatch && !active_receipt) {
+                continue;
+            }
+            return Ok(Some(status));
         }
         Ok(None)
     }
@@ -4246,6 +4266,26 @@ impl StateStore {
         };
         Ok(receipt.lane_status.as_deref() == Some("lane_superseded")
             && has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref()))
+    }
+
+    async fn run_graph_dispatch_receipt_has_active_lane_evidence(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        let Some(receipt) = self.run_graph_dispatch_receipt_stored(run_id).await? else {
+            return Ok(false);
+        };
+        Ok(
+            receipt.dispatch_status != "executed"
+                && matches!(
+                    receipt.lane_status.as_deref(),
+                    Some("lane_open")
+                        | Some("lane_running")
+                        | Some("lane_blocked")
+                        | Some("lane_exception_recorded")
+                        | Some("lane_exception_takeover")
+                ),
+        )
     }
 
     async fn run_graph_status_has_completed_exception_takeover_supersession(
@@ -4274,6 +4314,7 @@ impl StateStore {
             return Ok(false);
         }
         let status = self.run_graph_status(&latest.run_id).await?;
+
         Ok(
             crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(
                 self, &status,
@@ -4297,6 +4338,23 @@ impl StateStore {
             .await?
             .stale_for_active_projection(),
         )
+    }
+
+    async fn run_graph_status_points_to_closed_task_active(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<bool, StateStoreError> {
+        if status.status == "completed" {
+            return Ok(false);
+        }
+        let Some(task) = self.show_task(&status.task_id).await.ok() else {
+            return Ok(false);
+        };
+        if !task_status_is_terminal_for_continuation(&task.status) {
+            return Ok(false);
+        }
+        self.run_graph_status_points_to_terminal_task_active(status)
+            .await
     }
 
     fn run_graph_latest_row_points_to_terminal_task_active_from_rows(
@@ -4964,7 +5022,7 @@ impl StateStore {
             return Ok(true);
         }
         if self
-            .run_graph_status_points_to_terminal_task_active(status)
+            .run_graph_status_points_to_closed_task_active(status)
             .await?
         {
             return Ok(true);
@@ -9721,9 +9779,11 @@ mod tests {
         let terminal_evidence = store
             .latest_terminal_task_active_run_graph_status()
             .await
-            .expect("terminal-task-active evidence should load")
-            .expect("closed-task stale run should remain explicit evidence");
-        assert_eq!(terminal_evidence.run_id, "run-closed-active-task");
+            .expect("terminal-task-active evidence should load");
+        assert!(
+            terminal_evidence.is_none(),
+            "terminal closed-task run must not remain active projection evidence"
+        );
 
         let graph_summary = store
             .run_graph_summary()
