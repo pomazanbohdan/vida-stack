@@ -458,36 +458,43 @@ fn zombie_d_matrix_from_notes(notes: Option<&str>) -> Option<Value> {
     let mut proof_target = None;
     let mut result = None;
     let mut evidence = None;
+    let mut latest_matrix = None;
     let finish = |proof_target: &mut Option<String>,
                   result: &mut Option<String>,
-                  evidence: &mut Option<String>| {
-        if proof_target.as_deref() == Some("zombie_d_matrix")
-            && result.as_deref() == Some("pass")
-        {
-            if let Some(raw) = evidence.as_deref() {
-                if let Some(value) = parse_matrix_evidence(raw) {
-                    return Some(value);
-                }
-            }
+                  evidence: &mut Option<String>,
+                  latest_matrix: &mut Option<Value>| {
+        if proof_target.as_deref() == Some("zombie_d_matrix") {
+            let matrix = result
+                .as_deref()
+                .filter(|value| *value == "pass")
+                .and_then(|_| evidence.as_deref())
+                .and_then(parse_matrix_evidence)
+                .unwrap_or(Value::Null);
+            *latest_matrix = Some(matrix);
         }
         *proof_target = None;
         *result = None;
         *evidence = None;
-        None
     };
     for line in notes.lines() {
         let trimmed = line.trim();
         if trimmed == "task_proof_evidence:" {
-            if let Some(value) = finish(&mut proof_target, &mut result, &mut evidence) {
-                return Some(value);
-            }
+            finish(
+                &mut proof_target,
+                &mut result,
+                &mut evidence,
+                &mut latest_matrix,
+            );
             in_proof_note = true;
             continue;
         }
         if in_proof_note && !line.starts_with(' ') && !trimmed.is_empty() {
-            if let Some(value) = finish(&mut proof_target, &mut result, &mut evidence) {
-                return Some(value);
-            }
+            finish(
+                &mut proof_target,
+                &mut result,
+                &mut evidence,
+                &mut latest_matrix,
+            );
             in_proof_note = false;
         }
         if !in_proof_note {
@@ -501,7 +508,13 @@ fn zombie_d_matrix_from_notes(notes: Option<&str>) -> Option<Value> {
             evidence = Some(value.trim().to_string());
         }
     }
-    finish(&mut proof_target, &mut result, &mut evidence)
+    finish(
+        &mut proof_target,
+        &mut result,
+        &mut evidence,
+        &mut latest_matrix,
+    );
+    latest_matrix
 }
 
 fn parse_matrix_evidence(raw: &str) -> Option<Value> {
@@ -582,7 +595,7 @@ mod tests {
         })
     }
 
-    fn matrix_note() -> String {
+    fn matrix_note_with_doubts(doubts: Value) -> String {
         let matrix = json!({
             "schema_version": 1,
             "categories": {
@@ -594,12 +607,16 @@ mod tests {
                 "E": {"status": "pass", "evidence_refs": ["e"]},
                 "S": {"status": "pass", "evidence_refs": ["s"]}
             },
-            "doubts": []
+            "doubts": doubts
         });
         format!(
             "task_proof_evidence:\n  proof_target: zombie_d_matrix\n  result: pass\n  evidence: {}",
             matrix
         )
+    }
+
+    fn matrix_note() -> String {
+        matrix_note_with_doubts(json!([]))
     }
 
     #[test]
@@ -626,6 +643,30 @@ mod tests {
         let task = task(Some(notes), &[], &["crates/vida/tests/runtime.rs"]);
         let result = evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
         assert_eq!(result["status"], "pass");
+    }
+
+    #[test]
+    fn latest_valid_matrix_supersedes_earlier_matrix_with_resolved_doubt() {
+        let older = matrix_note_with_doubts(json!([{"id": "resolved-doubt"}]));
+        let notes = format!("{older}\n\n{}", matrix_note());
+        let task = task(Some(&notes), &[], &["crates/vida/tests/runtime.rs"]);
+        let result = evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
+        assert_eq!(result["status"], "pass");
+        assert_eq!(result["matrix"]["doubts"], json!([]));
+    }
+
+    #[test]
+    fn malformed_latest_matrix_fails_closed_without_stale_fallback() {
+        let notes = format!(
+            "{}\n\ntask_proof_evidence:\n  proof_target: zombie_d_matrix\n  result: pass\n  evidence: not-a-matrix",
+            matrix_note()
+        );
+        let task = task(Some(&notes), &[], &["crates/vida/tests/runtime.rs"]);
+        let result = evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
+        assert_eq!(result["status"], "blocked");
+        assert!(result["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_invalid")));
     }
 
     #[test]
