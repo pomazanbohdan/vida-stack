@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use runtime_path_policy::{existing_regular_file_under_root, ArtifactPathKind, StateRoot};
+use runtime_path_policy::{ArtifactPathKind, StateRoot, existing_regular_file_under_root};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -186,25 +186,13 @@ pub fn host_bridge_blocked_result_contract_is_retryable(
 }
 
 pub fn host_bridge_blocked_result_contract_has_retry_evidence(
-    contract: &serde_json::Map<String, Value>,
+    _contract: &serde_json::Map<String, Value>,
 ) -> bool {
-    if !host_bridge_blocked_result_contract_is_retryable(contract) {
-        return false;
-    }
-    let has_rework_target = contract
-        .get("rework_target")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty() && !matches!(value, "none" | "null" | "closure"));
-    let has_blocker_codes = ["blocker_codes", "allowed_blocker_codes"]
-        .into_iter()
-        .any(|field| {
-            contract
-                .get(field)
-                .and_then(Value::as_array)
-                .is_some_and(|codes| !codes.is_empty())
-        });
-    has_rework_target && has_blocker_codes
+    // A blocked_result_contract is request metadata and may be project-controlled.
+    // It can describe the shape of an acceptable blocked result, but it is not
+    // independent execution evidence. Retry evidence must come from a persisted
+    // host-bridge result or receipt artifact validated by the caller.
+    false
 }
 
 fn host_bridge_blocked_result_contract_field_is_retryable(
@@ -646,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn blocked_result_contract_retry_evidence_requires_target_and_blockers() {
+    fn blocked_result_contract_retry_evidence_rejects_request_local_metadata() {
         let complete = serde_json::json!({
             "decision": "rework_required",
             "verdict": "rework_required",
@@ -654,9 +642,15 @@ mod tests {
             "rework_target": "alpha",
             "blocker_codes": ["host_agent_execution_failed"]
         });
-        assert!(host_bridge_blocked_result_contract_has_retry_evidence(
+        assert!(host_bridge_blocked_result_contract_is_retryable(
             complete.as_object().expect("contract object")
         ));
+        assert!(
+            !host_bridge_blocked_result_contract_has_retry_evidence(
+                complete.as_object().expect("contract object")
+            ),
+            "request-local blocked_result_contract metadata is not independent retry evidence"
+        );
 
         let incomplete = serde_json::json!({
             "decision": "rework_required",
