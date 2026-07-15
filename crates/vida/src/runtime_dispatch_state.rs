@@ -5549,12 +5549,16 @@ pub(crate) fn dispatch_receipt_has_closure_execution_evidence(
             if receipt.blocker_code.is_some() {
                 return false;
             }
-            (receipt.dispatch_target == "closure"
+            (canonical_terminal_closure_dispatch_target(&receipt.dispatch_target).is_some()
                 && receipt_result_path_has_target_execution_evidence(
                     receipt.dispatch_result_path.as_deref(),
                     "closure",
                 ))
-                || (receipt.downstream_dispatch_target.as_deref() == Some("closure")
+                || (receipt
+                    .downstream_dispatch_target
+                    .as_deref()
+                    .and_then(canonical_terminal_closure_dispatch_target)
+                    .is_some()
                     && receipt_result_path_has_target_execution_evidence(
                         receipt.downstream_dispatch_result_path.as_deref(),
                         "closure",
@@ -6800,8 +6804,10 @@ fn apply_downstream_dispatch_preview_to_receipt(
     preview_result_path: Option<String>,
 ) {
     let preview_result_path = receipt_backed_downstream_preview_result_path(preview_result_path);
-    let closure_lineage_ready =
-        downstream_dispatch_target.as_deref().map(str::trim) == Some("closure");
+    let closure_lineage_ready = downstream_dispatch_target
+        .as_deref()
+        .and_then(canonical_terminal_closure_dispatch_target)
+        .is_some();
     let downstream_dispatch_ready = downstream_dispatch_ready || closure_lineage_ready;
     let packet_ready = downstream_dispatch_ready
         && downstream_dispatch_blockers.is_empty()
@@ -6984,6 +6990,18 @@ pub(crate) async fn derive_downstream_dispatch_preview(
         && (dispatch_receipt_has_execution_evidence(receipt)
             || dispatch_receipt_allows_synthetic_lane_completion(receipt))
     {
+        if canonical_terminal_closure_dispatch_target(&receipt.dispatch_target).is_some() {
+            return (
+                None,
+                None,
+                Some(format!(
+                    "terminal closure `{}` is complete; ignore persisted successor routing",
+                    receipt.dispatch_target
+                )),
+                true,
+                Vec::new(),
+            );
+        }
         if let Some(explicit_target) =
             normalized_explicit_allowed_next_target(receipt.downstream_dispatch_target.as_deref())
                 .filter(|target| {
@@ -7190,7 +7208,7 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                 },
             )
         }
-        "closure" => (
+        "closure" | "closure_lane" | "terminal_closure" | "release_closure" => (
             None,
             None,
             Some("terminal closure is the active bounded runtime target".to_string()),
@@ -7598,6 +7616,16 @@ fn lawful_explicit_downstream_dispatch_target(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     explicit_target: &str,
 ) -> Option<RuntimeDispatchTargetResolution> {
+    if matches!(
+        canonical_dispatch_target_name(explicit_target).as_str(),
+        "closure" | "terminal_closure" | "release_closure"
+    ) && terminal_closure_downstream_target_from_execution_plan(execution_plan, receipt).is_some()
+    {
+        return Some(RuntimeDispatchTargetResolution {
+            dispatch_target: canonical_dispatch_target_name(explicit_target),
+            lane_id: None,
+        });
+    }
     let target_resolution = resolve_runtime_dispatch_target(execution_plan, explicit_target)?;
     let target = target_resolution.dispatch_target.as_str();
     let current_index = execution_lane_sequence_index_for_target(
@@ -7728,10 +7756,19 @@ pub(crate) fn lawful_explicit_rework_dispatch_target_for_completed_target(
     if normalized_rework_target.is_empty() {
         return None;
     }
+    let normalized_completed_target = normalized_dispatch_target_token(completed_dispatch_target);
+    let normalized_explicit_target = normalized_dispatch_target_token(explicit_target);
+    if matches!(
+        normalized_completed_target.as_str(),
+        "closure" | "terminal_closure" | "release_closure"
+    ) && normalized_rework_target == normalized_completed_target
+        && normalized_explicit_target == normalized_completed_target
+    {
+        return Some(normalized_completed_target);
+    }
     let completed_resolution =
         resolve_runtime_dispatch_target(execution_plan, completed_dispatch_target)?;
-    let normalized_completed_target =
-        normalized_dispatch_target_token(&completed_resolution.dispatch_target);
+    let normalized_completed_target = normalized_dispatch_target_token(&completed_resolution.dispatch_target);
     if normalized_rework_target == normalized_completed_target {
         if let Some(explicit_resolution) =
             resolve_runtime_dispatch_target(execution_plan, explicit_target)
@@ -7788,7 +7825,11 @@ pub(crate) fn lawful_explicit_rework_dispatch_target_for_completed_target(
 }
 
 pub(crate) fn canonical_terminal_closure_dispatch_target(value: &str) -> Option<&'static str> {
-    matches!(value.trim(), "closure" | "closure_lane").then_some("closure")
+    matches!(
+        value.trim(),
+        "closure" | "closure_lane" | "terminal_closure" | "release_closure"
+    )
+    .then_some("closure")
 }
 
 pub(crate) fn terminal_closure_downstream_target_from_execution_plan(
@@ -7914,8 +7955,14 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
     let dispatch_contract = &role_selection.execution_plan["development_flow"]["dispatch_contract"];
     let allowed_next_lane_sequence =
         dispatch_contract_allowed_next_lane_sequence(dispatch_contract);
-    let result_allowed_next_target = receipt_result_allowed_next_target(store.root(), receipt)
-        .and_then(|target| normalized_explicit_allowed_next_target(Some(target.as_str())));
+    let terminal_closure_completion = receipt_has_terminal_lane_evidence
+        && canonical_terminal_closure_dispatch_target(&receipt.dispatch_target).is_some();
+    let result_allowed_next_target = if terminal_closure_completion {
+        None
+    } else {
+        receipt_result_allowed_next_target(store.root(), receipt)
+            .and_then(|target| normalized_explicit_allowed_next_target(Some(target.as_str())))
+    };
     let result_explicit_downstream_dispatch_target =
         result_allowed_next_target.as_deref().and_then(|target| {
             lawful_explicit_rework_downstream_dispatch_target(
@@ -18850,6 +18897,61 @@ fn terminalize_internal_host_bridge_pending_result_closes_orphaned_cycle_without
     }
 
     #[test]
+    fn derive_downstream_dispatch_preview_terminal_closure_ignores_stale_successor() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let role_selection = bridge_test_role_selection("feature-x-dev");
+            let receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-terminal-closure-stale-successor".to_string(),
+                dispatch_target: "terminal_closure".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/terminal-closure-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("tester".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some("stale successor".to_string()),
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: Some("/tmp/tester-packet.json".to_string()),
+                downstream_dispatch_status: Some("packet_ready".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("tester".to_string()),
+                downstream_dispatch_last_target: Some("tester".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-07-15T00:00:00Z".to_string(),
+            };
+
+            let (next_target, command, note, next_ready, next_blockers) =
+                derive_downstream_dispatch_preview(&store, &role_selection, &receipt).await;
+
+            assert!(next_target.is_none());
+            assert!(command.is_none());
+            assert!(next_ready);
+            assert!(next_blockers.is_empty());
+            assert!(note
+                .as_deref()
+                .unwrap_or_default()
+                .contains("ignore persisted successor routing"));
+        });
+    }
+
+    #[test]
     fn derive_downstream_dispatch_preview_blocks_analysis_to_writer_without_owned_scope() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let state_root = harness.path().join(crate::state_store::default_state_dir());
@@ -19487,6 +19589,101 @@ fn terminalize_internal_host_bridge_pending_result_closes_orphaned_cycle_without
             );
             store.close().await;
             let _ = fs::remove_dir_all(&root);
+        });
+    }
+
+    #[test]
+    fn refresh_downstream_dispatch_preview_terminal_closure_ignores_result_successor() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        let result_dir = state_root
+            .join("runtime-consumption")
+            .join("dispatch-results");
+        fs::create_dir_all(&result_dir).expect("dispatch-results dir should exist");
+        let result_path = result_dir.join("terminal-closure-result.json");
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "status": "pass",
+                "execution_state": "executed",
+                "decision": "approve",
+                "verdict": "pass",
+                "completion_verdict": "pass",
+                "run_id": "run-terminal-closure-result-successor",
+                "dispatch_target": "terminal_closure",
+                "allowed_next_node": "tester",
+                "source_dispatch_packet_path": "/tmp/terminal-closure-packet.json",
+                "activation_semantics": {
+                    "records_completion_receipt": true
+                },
+                "execution_evidence": {
+                    "receipt_backed": true
+                }
+            }))
+            .expect("result json should encode"),
+        )
+        .expect("result artifact should write");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let role_selection = bridge_test_role_selection("feature-x-dev");
+            let run_graph_bootstrap = json!({
+                "run_id": "run-terminal-closure-result-successor"
+            });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-terminal-closure-result-successor".to_string(),
+                dispatch_target: "terminal_closure".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_completed".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
+                dispatch_command: Some("vida lane complete".to_string()),
+                dispatch_packet_path: Some("/tmp/terminal-closure-packet.json".to_string()),
+                dispatch_result_path: Some(
+                    result_path
+                        .strip_prefix(&state_root)
+                        .expect("result path should be inside state root")
+                        .display()
+                        .to_string(),
+                ),
+                blocker_code: None,
+                downstream_dispatch_target: Some("tester".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some("stale successor".to_string()),
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: Some("/tmp/tester-packet.json".to_string()),
+                downstream_dispatch_status: Some("packet_ready".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("tester".to_string()),
+                downstream_dispatch_last_target: Some("tester".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-07-15T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            )
+            .await
+            .expect("terminal closure preview should refresh");
+
+            assert!(receipt.downstream_dispatch_target.is_none());
+            assert!(receipt.downstream_dispatch_command.is_none());
+            assert!(receipt.downstream_dispatch_ready);
+            assert!(receipt.downstream_dispatch_blockers.is_empty());
+            assert!(receipt.downstream_dispatch_packet_path.is_none());
         });
     }
 
@@ -21626,6 +21823,7 @@ fn terminalize_internal_host_bridge_pending_result_closes_orphaned_cycle_without
         status.resume_target = "none".to_string();
         status.recovery_ready = true;
 
+        for downstream_target in ["closure", "closure_lane", "terminal_closure", "release_closure"] {
         let receipt = RunGraphDispatchReceipt {
             run_id: "run-prover-closure".to_string(),
             dispatch_target: "prover".to_string(),
@@ -21639,7 +21837,7 @@ fn terminalize_internal_host_bridge_pending_result_closes_orphaned_cycle_without
             dispatch_packet_path: Some("/tmp/prover-packet.json".to_string()),
             dispatch_result_path: Some("/tmp/prover-result.json".to_string()),
             blocker_code: None,
-            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_target: Some(downstream_target.to_string()),
             downstream_dispatch_command: None,
             downstream_dispatch_note: Some("terminal closure target".to_string()),
             downstream_dispatch_ready: true,
@@ -21664,6 +21862,15 @@ fn terminalize_internal_host_bridge_pending_result_closes_orphaned_cycle_without
         assert_eq!(advanced.lifecycle_stage, "closure_complete");
         assert_eq!(advanced.resume_target, "none");
         assert!(advanced.recovery_ready);
+
+        let mut direct_receipt = receipt.clone();
+        direct_receipt.dispatch_target = downstream_target.to_string();
+        direct_receipt.downstream_dispatch_target = None;
+        let direct = apply_first_handoff_execution_to_run_graph_status(&status, &direct_receipt);
+        assert_eq!(direct.active_node, "closure");
+        assert_eq!(direct.status, "completed");
+        assert_eq!(direct.lifecycle_stage, "closure_complete");
+        }
     }
 
     #[test]
@@ -21721,6 +21928,64 @@ fn terminalize_internal_host_bridge_pending_result_closes_orphaned_cycle_without
         assert!(
             terminal_closure_downstream_target_from_execution_plan(&execution_plan, &receipt)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn lawful_explicit_terminal_closure_accepts_final_lane_without_catalog_entry() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_sequence": ["coder", "tester", "coach_validator", "architect"],
+                    "execution_lane_sequence": ["coder", "tester", "coach_validator", "architect"],
+                    "lane_catalog": {
+                        "coder": {"dispatch_target": "coder"},
+                        "tester": {"dispatch_target": "tester"},
+                        "coach_validator": {"dispatch_target": "coach_validator"},
+                        "architect": {"dispatch_target": "architect"}
+                    }
+                }
+            }
+        });
+        for target in ["closure", "terminal_closure", "release_closure"] {
+            assert_eq!(
+                lawful_explicit_downstream_dispatch_target_for_completed_target(
+                    &execution_plan,
+                    "architect",
+                    None,
+                    target,
+                ),
+                Some(target.to_string())
+            );
+        }
+        assert!(
+            lawful_explicit_downstream_dispatch_target_for_completed_target(
+                &execution_plan,
+                "tester",
+                None,
+                "closure",
+            )
+            .is_none()
+        );
+        assert_eq!(
+            lawful_explicit_rework_dispatch_target_for_completed_target(
+                &execution_plan,
+                "terminal_closure",
+                None,
+                "terminal_closure",
+                "terminal_closure",
+            ),
+            Some("terminal_closure".to_string())
+        );
+        assert!(
+            lawful_explicit_rework_dispatch_target_for_completed_target(
+                &execution_plan,
+                "tester",
+                None,
+                "terminal_closure",
+                "terminal_closure",
+            )
+            .is_none()
         );
     }
 
@@ -28655,7 +28920,8 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         receipt.supersedes_receipt_id.as_deref(),
         receipt.exception_path_receipt_id.as_deref(),
     );
-    let closure_completed = receipt.dispatch_target == "closure"
+    let closure_completed = canonical_terminal_closure_dispatch_target(&receipt.dispatch_target)
+        .is_some()
         && receipt.dispatch_status == "executed"
         && json_bool(execution_result.get("closure_ready"), false)
         && lane_status == LaneStatus::LaneRunning;
@@ -28982,8 +29248,13 @@ pub(crate) fn apply_first_handoff_execution_to_run_graph_status(
     status: &crate::state_store::RunGraphStatus,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> crate::state_store::RunGraphStatus {
-    let terminal_closure_lineage = receipt.dispatch_target == "closure"
-        || (receipt.downstream_dispatch_target.as_deref().map(str::trim) == Some("closure")
+    let terminal_closure_lineage =
+        canonical_terminal_closure_dispatch_target(&receipt.dispatch_target).is_some()
+        || (receipt
+            .downstream_dispatch_target
+            .as_deref()
+            .and_then(canonical_terminal_closure_dispatch_target)
+            .is_some()
             && receipt.dispatch_status == "executed"
             && canonical_lane_status_str(&receipt.lane_status) == Some("lane_completed")
             && receipt.blocker_code.is_none()

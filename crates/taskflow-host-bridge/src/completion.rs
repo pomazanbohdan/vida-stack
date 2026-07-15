@@ -487,6 +487,13 @@ pub fn host_bridge_result_verdict_fields_for_gate_and_contract(
     )
 }
 
+fn terminal_closure_dispatch_target(value: &str) -> bool {
+    matches!(
+        value.trim(),
+        "closure" | "closure_lane" | "terminal_closure" | "release_closure"
+    )
+}
+
 #[must_use]
 pub fn host_bridge_result_verdict_contract_blockers(
     result: &Value,
@@ -519,6 +526,14 @@ pub fn host_bridge_result_verdict_contract_blockers(
                         .as_str()
                         .map(str::trim)
                         .is_some_and(|value| !value.is_empty())
+            } else if field == "allowed_next_node"
+                && value.is_null()
+                && result
+                    .get("dispatch_target")
+                    .and_then(Value::as_str)
+                    .is_some_and(terminal_closure_dispatch_target)
+            {
+                true
             } else {
                 value
                     .as_str()
@@ -891,6 +906,28 @@ mod tests {
         assert_eq!(
             host_bridge_result_verdict_contract_blockers(&result, &downgraded_required_fields),
             vec!["host_bridge_result_missing_verdict_field".to_string()]
+        );
+    }
+
+    #[test]
+    fn terminal_closure_pass_allows_null_successor_route() {
+        let result = serde_json::json!({
+            "status": "pass",
+            "execution_state": "executed",
+            "dispatch_target": "terminal_closure",
+            "decision": "approve",
+            "verdict": "pass",
+            "blocker_codes": [],
+            "rework_target": null,
+            "allowed_next_node": null
+        });
+
+        assert_eq!(
+            host_bridge_result_verdict_contract_blockers(
+                &result,
+                &crate::request::default_host_bridge_required_result_fields(),
+            ),
+            Vec::<String>::new()
         );
     }
 

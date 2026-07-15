@@ -395,6 +395,8 @@ fn build_backend_lane_admissibility(entry: &serde_json::Value) -> serde_json::Va
             &specialties,
             &["planning", "spec", "architecture", "long_context"],
         );
+    let architecture_capable =
+        crate::runtime_assignment_policy::backend_metadata_supports_architecture(entry);
     let implementation_capable = write_scope != "none"
         && (internal_backend
             || backend_has_any(&capabilities, &["implementation_safe"])
@@ -409,6 +411,7 @@ fn build_backend_lane_admissibility(entry: &serde_json::Value) -> serde_json::Va
     serde_json::json!({
         "analysis": read_only_capable,
         "execution_preparation": execution_preparation_capable,
+        "architecture": architecture_capable,
         "implementation": implementation_capable,
         "coach": coach_capable,
         "review": review_capable,
@@ -928,6 +931,7 @@ mod tests {
             .expect("internal row should exist");
         assert_eq!(internal["lane_admissibility"]["implementation"], true);
         assert_eq!(internal["lane_admissibility"]["verification"], true);
+        assert_eq!(internal["lane_admissibility"]["architecture"], false);
 
         let hermes_review_backend = rows
             .iter()

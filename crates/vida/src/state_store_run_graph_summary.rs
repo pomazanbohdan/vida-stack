@@ -356,7 +356,10 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         apply_ready_run_graph_transition(&mut status, transition);
         return Ok(status);
     }
-    let closure_dispatch_completed = receipt.dispatch_target == "closure"
+    let closure_dispatch_completed = crate::runtime_dispatch_state::canonical_terminal_closure_dispatch_target(
+        &receipt.dispatch_target,
+    )
+    .is_some()
         && receipt.dispatch_status == "executed"
         && receipt.blocker_code.is_none();
     if closure_dispatch_completed {
@@ -10088,7 +10091,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closure_dispatch_executed_receipt_reconciles_run_to_closure_complete() {
+    async fn terminal_closure_dispatch_executed_receipt_reconciles_run_to_closure_complete() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10102,14 +10105,14 @@ mod tests {
 
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             "run-closure-direct",
-            "closure",
+            "terminal_closure",
             "delivery",
         );
         status.task_id = "task-closure-direct".to_string();
-        status.active_node = "closure".to_string();
+        status.active_node = "terminal_closure".to_string();
         status.next_node = None;
         status.status = "blocked".to_string();
-        status.lifecycle_stage = "closure_active".to_string();
+        status.lifecycle_stage = "terminal_closure_active".to_string();
         status.policy_gate = "single_task_scope_required".to_string();
         status.handoff_state = "none".to_string();
         status.context_state = "sealed".to_string();
@@ -10123,7 +10126,7 @@ mod tests {
         store
             .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
                 run_id: "run-closure-direct".to_string(),
-                dispatch_target: "closure".to_string(),
+                dispatch_target: "terminal_closure".to_string(),
                 dispatch_status: "executed".to_string(),
                 lane_status: "lane_running".to_string(),
                 supersedes_receipt_id: None,

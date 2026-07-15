@@ -231,6 +231,20 @@ pub(crate) fn backend_admissibility_requires_strict_dispatch_target(
     )
 }
 
+pub(crate) fn backend_metadata_supports_architecture(entry: &serde_json::Value) -> bool {
+    ["capability_band", "specialties"].iter().any(|field| {
+        crate::json_string_list(entry.get(*field))
+            .into_iter()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .any(|value| {
+                matches!(
+                    value.as_str(),
+                    "architecture_safe" | "architecture" | "planning" | "long_context"
+                )
+            })
+    })
+}
+
 pub(crate) fn backend_is_admissible_for_dispatch_target(
     execution_plan: &serde_json::Value,
     backend_id: &str,
@@ -256,10 +270,17 @@ pub(crate) fn backend_is_admissible_for_dispatch_target(
     let Some(lane_admissibility) = row["lane_admissibility"].as_object() else {
         return !strict_required;
     };
-    lane_admissibility
+    if let Some(explicit) = lane_admissibility
         .get(canonical_target.as_str())
         .and_then(serde_json::Value::as_bool)
-        .unwrap_or(!strict_required)
+    {
+        return explicit;
+    }
+
+    let derived_architecture_capability =
+        canonical_target == "architecture" && backend_metadata_supports_architecture(row);
+
+    derived_architecture_capability || !strict_required
 }
 
 pub(crate) fn canonical_dispatch_target_alias(value: &str) -> Option<&'static str> {
@@ -692,6 +713,61 @@ mod tests {
             backend_admissibility_key_for_dispatch_target("solution_architect", None).as_str(),
             "architecture"
         );
+    }
+
+    #[test]
+    fn architecture_capability_requires_explicit_backend_metadata() {
+        assert!(backend_metadata_supports_architecture(&serde_json::json!({
+            "capability_band": ["architecture_safe"]
+        })));
+        assert!(backend_metadata_supports_architecture(&serde_json::json!({
+            "specialties": ["architecture"]
+        })));
+        assert!(backend_metadata_supports_architecture(&serde_json::json!({
+            "capability_band": "architecture_safe,review_safe"
+        })));
+        assert!(!backend_metadata_supports_architecture(
+            &serde_json::json!({
+                "subagent_backend_class": "internal",
+                "specialties": ["implementation"]
+            })
+        ));
+    }
+
+    #[test]
+    fn architecture_explicit_false_overrides_capability_metadata() {
+        let plan = serde_json::json!({
+            "backend_admissibility_matrix": [{
+                "backend_id": "internal_subagents",
+                "capability_band": ["architecture_safe"],
+                "lane_admissibility": {"architecture": false}
+            }]
+        });
+
+        assert!(!backend_is_admissible_for_dispatch_target(
+            &plan,
+            "internal_subagents",
+            "architecture",
+            None
+        ));
+    }
+
+    #[test]
+    fn internal_backend_without_architecture_metadata_is_denied() {
+        let plan = serde_json::json!({
+            "backend_admissibility_matrix": [{
+                "backend_id": "internal_subagents",
+                "backend_class": "internal",
+                "lane_admissibility": {}
+            }]
+        });
+
+        assert!(!backend_is_admissible_for_dispatch_target(
+            &plan,
+            "internal_subagents",
+            "architecture",
+            None
+        ));
     }
 
     #[test]

@@ -1899,6 +1899,67 @@ fn selected_internal_host_carrier(
     }
 
     let internal_backend_id = effective_backend?;
+    let selected_backend_entry =
+        overlay.and_then(|overlay| configured_subagent_backend_entry(overlay, internal_backend_id));
+    let requested_runtime_role = receipt
+        .activation_runtime_role
+        .clone()
+        .or_else(|| {
+            crate::runtime_dispatch_downstream_packets::configured_lane_runtime_role(
+                role_selection,
+                &receipt.dispatch_target,
+            )
+        })
+        .or_else(|| {
+            role_selection
+                .execution_plan
+                .get("runtime_assignment")
+                .and_then(|assignment| assignment.get("runtime_role"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| Some(role_selection.selected_role.clone()));
+    let requested_task_class = requested_runtime_role.as_deref().map(|runtime_role| {
+        crate::runtime_dispatch_state::runtime_packet_handoff_task_class_for_plan(
+            &role_selection.execution_plan,
+            &receipt.dispatch_target,
+            runtime_role,
+        )
+    });
+    let config_matched_carrier = carriers.iter().find(|carrier| {
+        let runtime_role_matches = requested_runtime_role.as_deref().is_some_and(|runtime_role| {
+            carrier["runtime_roles"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .any(|value| value.eq_ignore_ascii_case(runtime_role))
+                || carrier["default_runtime_role"]
+                    .as_str()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(runtime_role))
+        });
+        let task_class_matches = requested_task_class
+            .as_deref()
+            .map(|task_class| {
+                crate::runtime_assignment_policy::role_supports_task_class(carrier, task_class)
+            })
+            .unwrap_or(true);
+        runtime_role_matches && task_class_matches
+    });
+    if let Some(carrier) = config_matched_carrier {
+        let host_profile_carrier =
+            crate::model_profile_contract::apply_selected_model_profile_to_row(
+                carrier,
+                preferred_profile_id.as_deref(),
+            );
+        return Some(apply_internal_subagent_profile_overlay(
+            &host_profile_carrier,
+            internal_backend_id,
+            selected_backend_entry,
+            preferred_profile_id.as_deref(),
+        ));
+    }
+
     let internal_bridge_ids = [
         receipt.activation_agent_type.as_deref(),
         role_selection
@@ -1913,8 +1974,6 @@ fn selected_internal_host_carrier(
             .and_then(serde_json::Value::as_str),
         Some(role_selection.selected_role.as_str()),
     ];
-    let selected_backend_entry =
-        overlay.and_then(|overlay| configured_subagent_backend_entry(overlay, internal_backend_id));
     internal_bridge_ids
         .into_iter()
         .flatten()
@@ -9451,6 +9510,99 @@ carriers:
     }
 
     #[test]
+    fn selected_internal_host_carrier_prefers_runtime_role_over_stale_activation_tier() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+carriers:
+  junior:
+    model: gpt-5.6-luna
+    model_reasoning_effort: high
+    sandbox_mode: workspace-write
+    runtime_roles: [worker]
+    task_classes: [implementation]
+  architect:
+    model: gpt-5.6-sol
+    model_reasoning_effort: medium
+    sandbox_mode: read-only
+    default_runtime_role: solution_architect
+    runtime_roles: [solution_architect]
+    task_classes: [architecture]
+"#,
+        )
+        .expect("system entry should parse");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Review the host bridge architecture contract".to_string(),
+            selected_role: "solution_architect".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["architecture".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "runtime_assignment": {
+                    "activation_agent_type": "junior",
+                    "selected_tier": "junior"
+                },
+                "backend_admissibility_matrix": [{
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {"architecture": true}
+                }]
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-stale-architecture-carrier".to_string(),
+            dispatch_target: "architect".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("architect".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("solution_architect".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-07-15T00:00:00Z".to_string(),
+        };
+
+        let carrier = super::selected_internal_host_carrier(
+            Some(&system_entry),
+            Some("internal_subagents"),
+            &receipt,
+            &role_selection,
+            None,
+        )
+        .expect("runtime-role-compatible carrier should be selected");
+
+        assert_eq!(carrier["role_id"].as_str(), Some("architect"));
+        assert_eq!(carrier["model"].as_str(), Some("gpt-5.6-sol"));
+        assert_eq!(carrier["model_reasoning_effort"].as_str(), Some("medium"));
+    }
+
+    #[test]
     fn selected_internal_host_carrier_applies_selected_model_profile_fields() {
         let system_entry = serde_yaml::from_str(
             r#"
@@ -10868,6 +11020,30 @@ agent_system:
                 "execution_preparation"
             ),
             "execution_preparation lane should fail closed when canonical architecture key is absent"
+        );
+    }
+    #[test]
+    fn backend_is_admissible_for_dispatch_target_derives_architecture_from_capability_metadata() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [{
+                "backend_id": "internal_subagents",
+                "backend_class": "internal",
+                "capability_band": ["architecture_safe"],
+                "specialties": ["architecture"],
+                "lane_admissibility": {
+                    "execution_preparation": true,
+                    "implementation": true
+                }
+            }]
+        });
+
+        assert!(
+            super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "internal_subagents",
+                "architect"
+            ),
+            "architecture-capable backend should remain admissible when a stale matrix omits the canonical architecture key"
         );
     }
 

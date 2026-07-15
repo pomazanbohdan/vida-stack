@@ -5148,7 +5148,7 @@ fn materialize_host_bridge_completion_evidence(
     }
     if blocker_codes.is_empty()
         && effective_allowed_next_node.as_deref().is_none()
-        && !matches!(dispatch_target.trim(), "closure" | "closure_lane")
+        && !terminal_closure_route(dispatch_target)
     {
         return Err(format!(
             "Host bridge completion for `{dispatch_target}` is missing a concrete downstream route."
@@ -6317,6 +6317,8 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 );
             let persisted_allowed_next_node = if blocked_contract_allows_next {
                 None
+            } else if terminal_closure_route(&persisted_completed_target) {
+                None
             } else {
                 receipt
                     .downstream_dispatch_target
@@ -6330,25 +6332,29 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                         host_bridge_result_file_rework_target(&path.display().to_string())
                     })
                 });
-            let effective_allowed_next_node = match reconcile_lane_completion_allowed_next_node(
-                "Lane completion",
-                lane_completion_packet_context
-                    .as_ref()
-                    .map(|(role_selection, _)| role_selection),
-                &receipt,
-                effective_allowed_next_node.as_deref(),
-                persisted_allowed_next_node,
-                supplied_completion_result_rework_target.as_deref(),
-            ) {
-                Ok(target) => target,
-                Err(error) => {
-                    return emit_host_bridge_completion_error_envelope(
-                        as_json,
-                        run_id,
-                        host_bridge_request,
-                        supplied_completion_result_args.result_file,
-                        &error,
-                    );
+            let effective_allowed_next_node = if terminal_closure_route(&persisted_completed_target) {
+                None
+            } else {
+                match reconcile_lane_completion_allowed_next_node(
+                    "Lane completion",
+                    lane_completion_packet_context
+                        .as_ref()
+                        .map(|(role_selection, _)| role_selection),
+                    &receipt,
+                    effective_allowed_next_node.as_deref(),
+                    persisted_allowed_next_node,
+                    supplied_completion_result_rework_target.as_deref(),
+                ) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        return emit_host_bridge_completion_error_envelope(
+                            as_json,
+                            run_id,
+                            host_bridge_request,
+                            supplied_completion_result_args.result_file,
+                            &error,
+                        );
+                    }
                 }
             };
             let accepted_rework_completion = blocked_contract_allows_next
@@ -7752,6 +7758,22 @@ mod tests {
         .expect("final execution lane may route to canonical closure");
 
         assert_eq!(target.as_deref(), Some("closure"));
+
+        for requested in ["terminal_closure", "release_closure"] {
+            assert_eq!(
+                reconcile_lane_completion_allowed_next_node(
+                    "Host bridge completion",
+                    Some(&role_selection),
+                    &receipt,
+                    Some(requested),
+                    None,
+                    None,
+                )
+                .expect("closure aliases must normalize after the final lane")
+                .as_deref(),
+                Some("closure")
+            );
+        }
 
         receipt.dispatch_target = "coach_implementation_gate".to_string();
         let error = reconcile_lane_completion_allowed_next_node(
