@@ -83,6 +83,7 @@ pub struct NextActionReducerInput {
     pub current_unit: Option<NextActionUnit>,
     pub lane: Option<NextActionLane>,
     pub next_action: Option<TypedNextAction>,
+    pub projection_cache: Option<serde_json::Value>,
     pub packet_refs: NextActionReferences,
     pub context_refs: NextActionReferences,
     pub blocker_codes: Vec<String>,
@@ -97,6 +98,7 @@ pub struct NextActionReducerOutput {
     pub current_unit: Option<NextActionUnit>,
     pub lane: Option<NextActionLane>,
     pub next_action: Option<TypedNextAction>,
+    pub projection_cache: Option<serde_json::Value>,
     pub packet_refs: NextActionReferences,
     pub context_refs: NextActionReferences,
     pub blockers: Vec<NextActionBlocker>,
@@ -143,6 +145,7 @@ pub fn reduce_next_action(input: NextActionReducerInput) -> NextActionReducerOut
         current_unit: input.current_unit,
         lane: input.lane,
         next_action: input.next_action,
+        projection_cache: input.projection_cache,
         packet_refs: input.packet_refs,
         context_refs: input.context_refs,
         blockers,
@@ -405,6 +408,7 @@ pub fn reduce_projection(value: &serde_json::Value) -> NextActionReducerOutput {
         )
     });
     let packet = value.get("packet_materialization");
+    let projection_cache = value.get("projection_cache").cloned();
     let packet_artifact = packet.and_then(|packet| first_object(packet, &["artifacts"]));
     let dispatch = value.get("dispatch");
     let packet_refs = NextActionReferences {
@@ -478,6 +482,7 @@ pub fn reduce_projection(value: &serde_json::Value) -> NextActionReducerOutput {
         current_unit,
         lane,
         next_action: action_from_projection(value),
+        projection_cache,
         packet_refs,
         context_refs,
         blocker_codes,
@@ -500,6 +505,7 @@ pub fn decorate_projection(mut value: serde_json::Value) -> serde_json::Value {
             "current_unit",
             "lane",
             "next_action",
+            "projection_cache",
             "packet_refs",
             "context_refs",
             "blockers",
@@ -664,6 +670,12 @@ mod tests {
                 "surface": "vida task ready",
                 "reason": "inspect the authoritative ready projection"
             },
+            "projection_cache": {
+                "status": "hit",
+                "mode": "auto",
+                "freshness": "fresh",
+                "recompute_reason": null
+            },
             "expected_output": ["status", "blocker_codes"],
             "approval_required": true,
             "artifact_refs": {"surface": "vida taskflow next", "task_id": "task-1"},
@@ -685,6 +697,11 @@ mod tests {
         assert_eq!(action["approval_required"], true);
         assert_eq!(action["artifact_refs"]["task_id"], "task-1");
         assert_eq!(action["surface"], "vida task ready");
+        assert_eq!(decorated["projection_cache"]["mode"], "auto");
+        assert_eq!(
+            decorated["next_action_reducer"]["projection_cache"]["freshness"],
+            "fresh"
+        );
         assert_eq!(
             action["reason"],
             "inspect the authoritative ready projection"
