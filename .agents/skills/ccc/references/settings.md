@@ -6,6 +6,13 @@ Configuration lives in two YAML files, both created automatically by `ccc init`.
 
 Shared across all projects. Controls the embedding model and extra environment variables for the daemon.
 
+Before indexing a repository, inspect these settings. Local providers such as
+`sentence-transformers` keep source embeddings local and may be used for
+automatic index refreshes. Remote/cloud or API-key-backed providers such as
+`litellm`, OpenAI, Gemini, and Voyage can receive indexed source text; require
+fresh explicit user opt-in for the current repository and session before running
+`ccc init`, `ccc index`, or `ccc search --refresh` with one of those providers.
+
 ```yaml
 embedding:
   provider: sentence-transformers   # or "litellm" (default when provider is omitted)

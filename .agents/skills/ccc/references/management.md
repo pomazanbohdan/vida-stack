@@ -31,6 +31,12 @@ ccc init
 
 **Subsequent runs** (global settings already exist) — prompts are skipped; only project settings and `.gitignore` are set up.
 
+Skipped `ccc init` prompts are not user consent to index a new repository with a
+remote/cloud embedding provider. If existing global settings select LiteLLM,
+OpenAI, Gemini, Voyage, or another API-key-backed provider, ask for explicit
+opt-in for the current repository and session before running `ccc init`,
+`ccc index`, or `ccc search --refresh`.
+
 To skip the interactive prompts on the first run (e.g. in a script or container), pass `--litellm-model MODEL`:
 
 ```bash
