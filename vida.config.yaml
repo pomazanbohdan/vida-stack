@@ -1814,7 +1814,7 @@ agent_system:
       attempts:
         - attempt_id: analysis-internal-medium-readonly
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_luna_xhigh_analysis_legacy
+          model_profile_id: codex_gpt56_luna_xhigh_write
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: analysis
@@ -1822,7 +1822,7 @@ agent_system:
       consolidator:
         attempt_id: analysis-root-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt56_luna_xhigh_analysis_legacy
+        model_profile_id: codex_gpt56_luna_xhigh_write
         conversation_role: analyst
         runtime_role: business_analyst
         task_class: analysis
@@ -1834,7 +1834,7 @@ agent_system:
       attempts:
         - attempt_id: specification-internal-medium-readonly
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_luna_xhigh_analysis_legacy
+          model_profile_id: codex_gpt56_luna_xhigh_write
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: specification
@@ -1955,64 +1955,56 @@ agent_system:
         - test_authoring
         - regression_test
       model_profiles:
-        codex_gpt56_luna_xhigh_analysis_legacy:
+        codex_gpt56_luna_high_write:
           provider: openai-codex
           model_ref: gpt-5.6-luna
-          reasoning_effort: xhigh
-          normalized_cost_units: 2
+          reasoning_effort: high
+          normalized_cost_units: 1
           speed_tier: fast
           quality_tier: medium
-          write_scope: read_or_analysis
+          write_scope: workspace-write
           runtime_roles:
-            - business_analyst
+            - worker
           task_classes:
-            - research
-            - analysis
-            - specification
-            - planning
+            - implementation
+            - delivery_task
+            - execution_block
           readiness:
             mode: codex_profile
             required: true
-        codex_gpt56_luna_xhigh_legacy:
+        codex_gpt56_luna_xhigh_write:
           provider: openai-codex
           model_ref: gpt-5.6-luna
           reasoning_effort: xhigh
           normalized_cost_units: 4
-          pricing:
-            price_source_kind: provider_catalog
-            source_paths:
-              - docs/process/codex-agent-configuration-guide.md
-            freshness:
-              required: false
-              diagnostic_only: true
-              enforced: false
           speed_tier: fast
           quality_tier: medium
-          write_scope: orchestrator_native
+          write_scope: workspace-write
           runtime_roles:
             - business_analyst
             - pm
             - coach
             - worker
           task_classes:
+            - research
+            - analysis
             - specification
             - planning
             - coach
             - implementation_medium
             - test_authoring
             - regression_test
-            - analysis
           readiness:
             mode: codex_profile
             required: true
-        codex_gpt56_luna_max_readonly_legacy:
+        codex_gpt56_luna_max_readonly:
           provider: openai-codex
           model_ref: gpt-5.6-luna
           reasoning_effort: max
           normalized_cost_units: 16
           speed_tier: medium
           quality_tier: high
-          write_scope: read_or_review
+          write_scope: read-only
           runtime_roles:
             - coach
             - verifier
@@ -2022,6 +2014,24 @@ agent_system:
             - verification
             - coach
             - release_readiness
+          readiness:
+            mode: codex_profile
+            required: true
+        codex_gpt56_sol_medium_arch:
+          provider: openai-codex
+          model_ref: gpt-5.6-sol
+          reasoning_effort: medium
+          normalized_cost_units: 48
+          speed_tier: medium
+          quality_tier: very_high
+          write_scope: read-only
+          runtime_roles:
+            - solution_architect
+          task_classes:
+            - hard_escalation
+            - architecture
+            - execution_preparation
+            - meta_analysis
           readiness:
             mode: codex_profile
             required: true

@@ -23,6 +23,7 @@ pub(crate) struct StatusOperatorContractInputs<'a> {
     pub(crate) latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
     pub(crate) closed_task_active_run_projection_mismatch: bool,
     pub(crate) continuation_binding_ambiguous: bool,
+    pub(crate) active_flow_mismatch: bool,
     pub(crate) incomplete_release_admission_operator_evidence: bool,
     pub(crate) activation_truth:
         Option<&'a crate::project_activator_surface::ProjectActivationStatusTruth>,
@@ -139,6 +140,10 @@ pub(crate) fn build_status_operator_contracts(
     if inputs.continuation_binding_ambiguous {
         operator_blocker_codes
             .push(blocker_code_str(BlockerCode::ContinuationBindingAmbiguous).to_string());
+    }
+    if inputs.active_flow_mismatch {
+        operator_blocker_codes
+            .push(blocker_code_str(BlockerCode::ContinuationBindingMismatch).to_string());
     }
     if inputs.incomplete_release_admission_operator_evidence {
         operator_blocker_codes.push(
@@ -508,6 +513,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
             closed_task_active_run_projection_mismatch: false,
             continuation_binding_ambiguous: false,
+            active_flow_mismatch: false,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
             project_activation_pending: false,
@@ -594,6 +600,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
             closed_task_active_run_projection_mismatch: false,
             continuation_binding_ambiguous: false,
+            active_flow_mismatch: false,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
             project_activation_pending: false,
@@ -691,6 +698,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
             closed_task_active_run_projection_mismatch: false,
             continuation_binding_ambiguous: true,
+            active_flow_mismatch: true,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
             project_activation_pending: false,
@@ -719,6 +727,11 @@ mod tests {
             blockers
                 .iter()
                 .any(|value| value == "continuation_binding_ambiguous")
+        );
+        assert!(
+            blockers
+                .iter()
+                .any(|value| value == "continuation_binding_mismatch")
         );
         let next_actions = contracts["next_actions"]
             .as_array()
@@ -780,6 +793,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
             closed_task_active_run_projection_mismatch: true,
             continuation_binding_ambiguous: false,
+            active_flow_mismatch: false,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
             project_activation_pending: false,
@@ -890,6 +904,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
             closed_task_active_run_projection_mismatch: false,
             continuation_binding_ambiguous: false,
+            active_flow_mismatch: false,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
             project_activation_pending: false,

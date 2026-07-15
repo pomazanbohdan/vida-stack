@@ -130,46 +130,13 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .latest_run_graph_recovery_summary_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest run graph recovery summary: {error}"))?;
-    let global_blocked_status_for_bundle = latest_run_graph_status
-        .is_none()
-        .then(|| {
-            latest_global_run_graph_status
-                .as_ref()
-                .filter(|status| status.status == "blocked")
-        })
-        .flatten();
-    let global_blocked_recovery_for_bundle = match (
-        latest_run_graph_recovery.as_ref(),
-        global_blocked_status_for_bundle,
-    ) {
-        (None, Some(status)) => Some(
-            store
-                .run_graph_recovery_summary(&status.run_id)
-                .await
-                .map_err(|error| {
-                    format!("Failed to read global blocked run graph recovery summary: {error}")
-                })?,
-        ),
-        _ => None,
-    };
-    let global_blocked_dispatch_receipt_for_bundle = match (
-        global_blocked_status_for_bundle,
-        latest_run_graph_status.as_ref(),
-    ) {
-        (Some(status), None) => store
-            .run_graph_dispatch_receipt_summary_for_status(status)
-            .await
-            .map_err(|error| {
-                format!("Failed to read global blocked run graph dispatch receipt: {error}")
-            })?,
-        _ => None,
-    };
-    let effective_latest_run_graph_status = latest_run_graph_status
-        .as_ref()
-        .or(global_blocked_status_for_bundle);
-    let effective_latest_run_graph_recovery = latest_run_graph_recovery
-        .as_ref()
-        .or(global_blocked_recovery_for_bundle.as_ref());
+    let active_flow_mismatch = latest_global_run_graph_status.as_ref().is_some_and(|global| {
+        latest_run_graph_status
+            .as_ref()
+            .is_none_or(|current| current.run_id != global.run_id)
+    });
+    let effective_latest_run_graph_status = latest_run_graph_status.as_ref();
+    let effective_latest_run_graph_recovery = latest_run_graph_recovery.as_ref();
     let latest_terminal_task_active_run_graph_status = store
         .latest_terminal_task_active_run_graph_status()
         .await
@@ -186,9 +153,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .map_err(|error| {
             format!("Failed to read latest run graph dispatch receipt summary: {error}")
         })?;
-    let effective_latest_run_graph_dispatch_receipt = latest_run_graph_dispatch_receipt
-        .as_ref()
-        .or(global_blocked_dispatch_receipt_for_bundle.as_ref());
+    let effective_latest_run_graph_dispatch_receipt = latest_run_graph_dispatch_receipt.as_ref();
     let continuation_binding_evidence_ambiguous = effective_latest_run_graph_dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
@@ -399,6 +364,17 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
     let continuation_binding = if closed_task_active_run_projection_mismatch {
         crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
             continuation_binding,
+        )
+    } else {
+        continuation_binding
+    };
+    let continuation_binding = if active_flow_mismatch {
+        crate::continuation_binding_summary::apply_active_flow_mismatch_gate(
+            continuation_binding,
+            latest_run_graph_status.as_ref().map(|status| status.run_id.as_str()),
+            latest_global_run_graph_status
+                .as_ref()
+                .map(|status| status.run_id.as_str()),
         )
     } else {
         continuation_binding

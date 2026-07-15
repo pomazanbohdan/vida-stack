@@ -1935,8 +1935,94 @@ pub(crate) fn apply_closed_task_active_run_projection_mismatch_gate(
     summary
 }
 
+pub(crate) fn apply_active_flow_mismatch_gate(
+    mut summary: serde_json::Value,
+    scoped_run_id: Option<&str>,
+    global_run_id: Option<&str>,
+) -> serde_json::Value {
+    if let serde_json::Value::Object(object) = &mut summary {
+        object.insert(
+            "status".to_string(),
+            serde_json::Value::String("ambiguous".to_string()),
+        );
+        object.insert(
+            "continuation_allowed".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        object.insert(
+            "continuation_required_now".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        object.insert("active_bounded_unit".to_string(), serde_json::Value::Null);
+        object.insert("why_this_unit".to_string(), serde_json::Value::Null);
+        object.insert(
+            "primary_path".to_string(),
+            serde_json::Value::String("diagnosis_path".to_string()),
+        );
+        object.insert(
+            "sequential_vs_parallel_posture".to_string(),
+            serde_json::Value::String("unknown_until_session_scope_resolved".to_string()),
+        );
+        object.insert(
+            "pause_boundary_gate".to_string(),
+            serde_json::Value::String("forbidden_while_active_flow_mismatch".to_string()),
+        );
+        object.insert(
+            "ambiguity_reason".to_string(),
+            serde_json::Value::String("active_flow_mismatch".to_string()),
+        );
+        object.insert(
+            "scoped_run_id".to_string(),
+            scoped_run_id.map_or(serde_json::Value::Null, |value| {
+                serde_json::Value::String(value.to_string())
+            }),
+        );
+        object.insert(
+            "global_run_id".to_string(),
+            global_run_id.map_or(serde_json::Value::Null, |value| {
+                serde_json::Value::String(value.to_string())
+            }),
+        );
+        object.insert(
+            "blocker_codes".to_string(),
+            serde_json::json!(["continuation_binding_mismatch"]),
+        );
+        object.insert(
+            "next_actions".to_string(),
+            serde_json::json!([
+                "Do not inherit the global latest run while the current session has no scoped run.",
+                "Bind the requested task/run explicitly, then recheck status, recovery, and continuation parity.",
+                "Treat any global run shown in diagnostics as competing-flow evidence until session ownership is proven."
+            ]),
+        );
+    }
+    summary
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn active_flow_mismatch_gate_exposes_scoped_and_global_evidence() {
+        let gated = super::apply_active_flow_mismatch_gate(
+            serde_json::json!({
+                "status": "idle",
+                "continuation_allowed": true,
+                "active_bounded_unit": {"task_id": "foreign-task"}
+            }),
+            None,
+            Some("foreign-run"),
+        );
+
+        assert_eq!(gated["status"], "ambiguous");
+        assert_eq!(gated["continuation_allowed"], false);
+        assert_eq!(gated["ambiguity_reason"], "active_flow_mismatch");
+        assert_eq!(gated["scoped_run_id"], serde_json::Value::Null);
+        assert_eq!(gated["global_run_id"], "foreign-run");
+        assert!(gated["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| code == "continuation_binding_mismatch")));
+    }
+
     use super::{
         add_taskflow_active_work_truth, add_taskflow_active_work_truth_with_session_claims,
         build_continuation_binding_summary, build_continuation_binding_summary_with_idle_policy,

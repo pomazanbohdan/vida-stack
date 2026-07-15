@@ -155,18 +155,14 @@ pub(crate) fn non_empty_str(value: &str) -> Option<&str> {
 
 fn effective_latest_run_graph_status(
     current_session_status: Option<crate::state_store::RunGraphStatus>,
-    global_status: Option<&crate::state_store::RunGraphStatus>,
-    current_session_identity_present: bool,
 ) -> Option<crate::state_store::RunGraphStatus> {
-    if current_session_status.is_some() || current_session_identity_present {
-        return current_session_status;
-    }
-    global_status.cloned()
+    current_session_status
 }
 
 pub(crate) struct CurrentRuntimeProjection {
     pub(crate) current_session_status: Option<crate::state_store::RunGraphStatus>,
     pub(crate) session_identity_ambiguous: bool,
+    pub(crate) competing_run_id: Option<String>,
     pub(crate) global_status: Option<crate::state_store::RunGraphStatus>,
     pub(crate) terminal_task_active_status: Option<crate::state_store::RunGraphStatus>,
     pub(crate) status: Option<crate::state_store::RunGraphStatus>,
@@ -187,12 +183,40 @@ pub(crate) async fn current_runtime_projection(
     store: &StateStore,
 ) -> Result<CurrentRuntimeProjection, state_store::StateStoreError> {
     let current_session_status = store.latest_run_graph_status_for_current_session().await?;
-    let current_session_identity_present = store.current_session_identity_is_present()?;
     let current_session_scope_is_explicit = store.current_session_identity_is_explicit()?;
     let global_status = store.latest_run_graph_status().await?;
-    let session_identity_ambiguous = current_session_identity_present
-        && current_session_status.is_none()
-        && global_status.is_some();
+    let mut competing_run_id = global_status.as_ref().and_then(|global| {
+        current_session_status
+            .as_ref()
+            .is_none_or(|current| current.run_id != global.run_id)
+            .then(|| global.run_id.clone())
+    });
+    let active_exception_takeover_receipt =
+        store.latest_active_exception_takeover_dispatch_receipt().await?;
+    let active_exception_takeover_owned = match active_exception_takeover_receipt.as_ref() {
+        Some(receipt) => match store
+            .current_session_can_mutate_run_graph_run(&receipt.run_id)
+            .await
+        {
+            Ok(owns_run) => {
+                if !owns_run
+                    && current_session_status
+                        .as_ref()
+                        .is_none_or(|current| current.run_id != receipt.run_id)
+                {
+                    competing_run_id = Some(receipt.run_id.clone());
+                }
+                owns_run
+            }
+            Err(state_store::StateStoreError::InvalidTaskRecord { .. }) => {
+                competing_run_id = Some(receipt.run_id.clone());
+                false
+            }
+            Err(error) => return Err(error),
+        },
+        None => false,
+    };
+    let session_identity_ambiguous = competing_run_id.is_some();
     let terminal_task_active_status = if current_session_scope_is_explicit {
         None
     } else {
@@ -217,12 +241,7 @@ pub(crate) async fn current_runtime_projection(
         },
         None => None,
     };
-    let status =
-        effective_latest_run_graph_status(
-            current_session_status.clone(),
-            global_status.as_ref(),
-            current_session_identity_present,
-        );
+    let status = effective_latest_run_graph_status(current_session_status.clone());
     let status_run_id = status.as_ref().map(|status| status.run_id.as_str());
     let mut recovery = match status_run_id {
         Some(run_id) => Some(store.run_graph_recovery_summary(run_id).await?),
@@ -261,9 +280,9 @@ pub(crate) async fn current_runtime_projection(
     let dispatch_receipt = if status_dispatch_receipt.is_none()
         && (status.is_none() || dispatch_receipt_checkpoint_leakage)
     {
-        store
-            .latest_active_exception_takeover_dispatch_receipt()
-            .await?
+        active_exception_takeover_owned
+            .then(|| active_exception_takeover_receipt.clone())
+            .flatten()
             .map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt)
     } else {
         status_dispatch_receipt
@@ -312,6 +331,7 @@ pub(crate) async fn current_runtime_projection(
     Ok(CurrentRuntimeProjection {
         current_session_status,
         session_identity_ambiguous,
+        competing_run_id,
         global_status,
         terminal_task_active_status,
         status,
@@ -833,6 +853,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 };
                 let CurrentRuntimeProjection {
                     global_status: latest_global_run_graph_status,
+                    competing_run_id,
                     terminal_task_active_status: latest_terminal_task_active_run_graph_status,
                     status: latest_run_graph_status,
                     recovery: latest_run_graph_recovery,
@@ -846,6 +867,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     dispatch_receipt_summary_inconsistent:
                         latest_run_graph_dispatch_receipt_summary_inconsistent,
                     snapshot_inconsistent: latest_run_graph_snapshot_inconsistent,
+                    session_identity_ambiguous,
                     ..
                 } = current_runtime_projection;
                 let latest_run_graph_dispatch_receipt_signal_ambiguous =
@@ -1083,6 +1105,24 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                         let mut matched_receipt = None;
                         for candidate_run_id in candidate_run_ids {
+                            let current_session_owns_candidate = match store
+                                .current_session_can_mutate_run_graph_run(&candidate_run_id)
+                                .await
+                            {
+                                Ok(owns_run) => owns_run,
+                                Err(state_store::StateStoreError::InvalidTaskRecord { .. }) => {
+                                    false
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to verify current-session ownership for task-bound exception takeover run `{candidate_run_id}`: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            };
+                            if !current_session_owns_candidate {
+                                continue;
+                            }
                             match store.run_graph_dispatch_receipt(&candidate_run_id).await {
                                 Ok(receipt) => {
                                     let receipt = receipt.map(
@@ -1109,23 +1149,6 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     } else {
                         latest_run_graph_dispatch_receipt
                     };
-                let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt
-                    .is_none()
-                {
-                    match crate::latest_final_runtime_consumption_dispatch_receipt_summary(
-                        store.root(),
-                    ) {
-                        Ok(summary) => summary,
-                        Err(error) => {
-                            eprintln!(
-                                "Failed to read runtime-consumption dispatch receipt fallback: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    }
-                } else {
-                    latest_run_graph_dispatch_receipt
-                };
                 let latest_run_graph_recovery = match latest_run_graph_dispatch_receipt.as_ref() {
                     Some(receipt)
                         if latest_run_graph_recovery
@@ -1226,9 +1249,19 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 } else {
                     continuation_binding
                 };
+                let continuation_binding = if session_identity_ambiguous {
+                    crate::continuation_binding_summary::apply_active_flow_mismatch_gate(
+                        continuation_binding,
+                        latest_run_graph_status.as_ref().map(|status| status.run_id.as_str()),
+                        competing_run_id.as_deref(),
+                    )
+                } else {
+                    continuation_binding
+                };
                 let continuation_binding_ambiguous = continuation_binding["status"].as_str()
                     == Some("ambiguous")
-                    && (has_taskflow_active_candidates
+                    && (session_identity_ambiguous
+                        || has_taskflow_active_candidates
                         || continuation_binding["continuation_required_now"]
                             .as_bool()
                             .unwrap_or(false));
@@ -1396,6 +1429,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             closed_task_active_run_projection_mismatch:
                                 closed_task_active_run_projection_mismatch,
                             continuation_binding_ambiguous,
+                            active_flow_mismatch: session_identity_ambiguous,
                             incomplete_release_admission_operator_evidence,
                             activation_truth: activation_truth.as_ref(),
                             project_activation_pending,
@@ -2132,6 +2166,11 @@ fn refresh_cached_run_graph_operator_contracts(
             "Bind the requested task/run explicitly before continuation; the current session has no scoped active run.".to_string(),
             session_identity_ambiguous,
         ),
+        (
+            "continuation_binding_mismatch",
+            "Do not inherit the global latest run; bind and inspect the requested task/run before continuation.".to_string(),
+            session_identity_ambiguous,
+        ),
     ];
 
     for (blocker_code, next_action, active) in signals {
@@ -2370,6 +2409,7 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
     let current_runtime_projection = current_runtime_projection(store).await.ok()?;
     let CurrentRuntimeProjection {
         global_status: latest_global_run_graph_status,
+        competing_run_id,
         terminal_task_active_status: latest_terminal_task_active_run_graph_status,
         status: latest_run_graph_status,
         recovery: latest_run_graph_recovery,
@@ -2480,6 +2520,17 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
         }
         let mut matched_receipt = None;
         for candidate_run_id in candidate_run_ids {
+            let current_session_owns_candidate = match store
+                .current_session_can_mutate_run_graph_run(&candidate_run_id)
+                .await
+            {
+                Ok(owns_run) => owns_run,
+                Err(state_store::StateStoreError::InvalidTaskRecord { .. }) => false,
+                Err(_) => return None,
+            };
+            if !current_session_owns_candidate {
+                continue;
+            }
             let receipt = store
                 .run_graph_dispatch_receipt(&candidate_run_id)
                 .await
@@ -2498,18 +2549,20 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
     } else {
         latest_run_graph_dispatch_receipt
     };
-    let latest_run_graph_dispatch_receipt = if latest_run_graph_dispatch_receipt.is_none() {
-        crate::latest_final_runtime_consumption_dispatch_receipt_summary(store.root()).ok()?
-    } else {
-        latest_run_graph_dispatch_receipt
-    };
     let latest_run_graph_recovery = match latest_run_graph_dispatch_receipt.as_ref() {
         Some(receipt)
             if latest_run_graph_recovery
                 .as_ref()
                 .is_none_or(|recovery| recovery.run_id != receipt.run_id) =>
         {
-            store.run_graph_recovery_summary(&receipt.run_id).await.ok()
+            if latest_run_graph_status
+                .as_ref()
+                .is_none_or(|status| status.run_id == receipt.run_id)
+            {
+                store.run_graph_recovery_summary(&receipt.run_id).await.ok()
+            } else {
+                latest_run_graph_recovery
+            }
         }
         _ => latest_run_graph_recovery,
     };
@@ -2717,6 +2770,15 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
     let continuation_binding = if closed_task_active_run_projection_mismatch {
         crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
             continuation_binding,
+        )
+    } else {
+        continuation_binding
+    };
+    let continuation_binding = if session_identity_ambiguous {
+        crate::continuation_binding_summary::apply_active_flow_mismatch_gate(
+            continuation_binding,
+            latest_run_graph_status.as_ref().map(|status| status.run_id.as_str()),
+            competing_run_id.as_deref(),
         )
     } else {
         continuation_binding
@@ -3440,28 +3502,11 @@ mod tests {
 
     #[test]
     fn effective_latest_run_graph_status_does_not_synthesize_terminal_task_active_row() {
-        let terminal = crate::taskflow_run_graph::default_run_graph_status(
-            "terminal-run",
-            "implementation",
-            "implementation",
-        );
+        assert!(super::effective_latest_run_graph_status(None).is_none());
 
-        assert!(super::effective_latest_run_graph_status(None, None, false).is_none());
-
-        let global = crate::taskflow_run_graph::default_run_graph_status(
-            "global-run",
-            "implementation",
-            "implementation",
-        );
-        assert_eq!(
-            super::effective_latest_run_graph_status(None, Some(&global), false)
-                .expect("global status should be used")
-                .run_id,
-            "global-run"
-        );
         assert!(
-            super::effective_latest_run_graph_status(None, Some(&global), true).is_none(),
-            "an identified session without a scoped run must not inherit global latest"
+            super::effective_latest_run_graph_status(None).is_none(),
+            "a session without a scoped run must not inherit global latest"
         );
 
         let current = crate::taskflow_run_graph::default_run_graph_status(
@@ -3470,13 +3515,13 @@ mod tests {
             "implementation",
         );
         assert_eq!(
-            super::effective_latest_run_graph_status(Some(current), Some(&terminal), false)
+            super::effective_latest_run_graph_status(Some(current))
                 .expect("current status should win")
                 .run_id,
             "current-run"
         );
 
-        assert!(super::effective_latest_run_graph_status(None, Some(&global), true).is_none());
+        assert!(super::effective_latest_run_graph_status(None).is_none());
     }
 
     #[test]
@@ -4675,13 +4720,11 @@ mod tests {
             serde_json::from_str(&refreshed).expect("refreshed status should remain json");
 
         assert!(payload["latest_run_graph_status"].is_null());
+        assert!(payload["latest_run_graph_dispatch_receipt"].is_null());
+        assert!(payload["latest_run_graph_recovery"].is_null());
         assert_eq!(
-            payload["latest_run_graph_dispatch_receipt"]["run_id"],
-            "task-cache-takeover"
-        );
-        assert_eq!(
-            payload["latest_run_graph_recovery"]["run_id"],
-            "task-cache-takeover"
+            payload["continuation_binding"]["ambiguity_reason"],
+            "active_flow_mismatch"
         );
         assert_eq!(
             payload["root_session_write_guard"]["latest_run_graph_task_stale"],
@@ -4689,7 +4732,11 @@ mod tests {
         );
         assert_eq!(
             payload["root_session_write_guard"]["local_exception_takeover_state"],
-            "active"
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            payload["root_session_write_guard"]["root_local_write_allowed"],
+            false
         );
 
         let _ = fs::remove_dir_all(root);
@@ -4812,25 +4859,22 @@ mod tests {
             payload["latest_run_graph_status"]["run_id"],
             "run-cache-orthogonal"
         );
-        assert_eq!(
-            payload["latest_run_graph_dispatch_receipt"]["run_id"],
-            "task-cache-takeover"
-        );
+        assert!(payload["latest_run_graph_dispatch_receipt"].is_null());
         assert_eq!(
             payload["latest_run_graph_recovery"]["run_id"],
-            "task-cache-takeover"
+            "run-cache-orthogonal"
         );
         assert_eq!(
             payload["root_session_write_guard"]["latest_run_graph_task_stale"],
-            false
+            true
         );
         assert_eq!(
             payload["root_session_write_guard"]["status"],
-            "exception_takeover_active"
+            "blocked_by_default"
         );
         assert_eq!(
             payload["root_session_write_guard"]["root_local_write_allowed"],
-            true
+            false
         );
 
         let _ = fs::remove_dir_all(root);
