@@ -1335,7 +1335,7 @@ impl RunGraphDelegationGateSummary {
             && status.next_node.is_none()
             && status.handoff_state == "blocked"
             && status.resume_target == "none"
-            && status.lifecycle_stage.ends_with("_blocked");
+            && status.lifecycle_stage.ends_with("_terminal_blocked");
         let handoff_pending = !dispatch_ready_resume
             && !terminal_blocked
             && (status.next_node.is_some()
@@ -5446,12 +5446,33 @@ mod tests {
     }
 
     #[test]
-    fn terminal_blocked_dispatch_closes_delegated_cycle_gate() {
+    fn blocked_dispatch_keeps_delegated_cycle_gate_open() {
         let mut status = sample_run_graph_status();
         status.active_node = "coder".to_string();
         status.next_node = None;
         status.status = "blocked".to_string();
         status.lifecycle_stage = "coder_blocked".to_string();
+        status.handoff_state = "blocked".to_string();
+        status.resume_target = "none".to_string();
+
+        let gate = RunGraphDelegationGateSummary::from_status(&status);
+
+        assert!(gate.delegated_cycle_open);
+        assert_eq!(gate.delegated_cycle_state, "handoff_pending");
+        assert_eq!(
+            gate.local_exception_takeover_gate,
+            "blocked_open_delegated_cycle"
+        );
+        assert_eq!(gate.blocker_code.as_deref(), Some("open_delegated_cycle"));
+    }
+
+    #[test]
+    fn terminal_blocked_dispatch_closes_delegated_cycle_gate() {
+        let mut status = sample_run_graph_status();
+        status.active_node = "coder".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coder_terminal_blocked".to_string();
         status.handoff_state = "blocked".to_string();
         status.resume_target = "none".to_string();
 
