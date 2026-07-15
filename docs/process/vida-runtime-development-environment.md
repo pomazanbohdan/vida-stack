@@ -81,6 +81,38 @@ Safety and parity checks:
 4. Never bypass ownership/approval, hide a nonzero exit, or run concurrent Cargo gates against one shared target directory.
 5. A recurring missing script, wrapper ambiguity, or shell mismatch becomes a bounded TaskFlow script/operator-efficiency item with a tested improvement; it is not patched with an undocumented one-off command.
 
+## SurrealDB 3.2.1 Local State-Store Upgrade Runbook
+
+This runbook is the canonical operator path for the current local VIDA state store. The authoritative dependency proof is the pair `crates/vida/Cargo.toml` and `Cargo.lock`: `surrealdb` and `surrealdb-core` must both resolve to `3.2.1` with the `kv-surrealkv` feature.
+
+### Preflight and pin verification
+
+1. Stop any VIDA process that owns `.vida/data/state` and make a copy of the complete state directory before changing the binary or dependencies.
+2. Confirm the resolved dependency graph with `./scripts/vida-cargo-msvc.ps1 tree -p vida --locked` and inspect the `surrealdb`, `surrealdb-core`, and `kv-surrealkv` rows.
+3. Run `./scripts/vida-dev-gate.ps1 -Mode quick -Json` before runtime smoke; do not use an ad-hoc Cargo target directory.
+4. Keep the dependency bump, lockfile update, compatibility proof, and runtime regression in one sequential upgrade pack.
+
+### Compatibility and on-disk posture
+
+VIDA uses `surrealdb::engine::local::{Db, SurrealKv}`. The authoritative state root is `.vida/data/state` (or an explicit `VIDA_STATE_DIR`), with the logical database under `<state-root>/vida/primary`; its `storage_meta:primary` record must report `engine=surrealdb`, `backend=kv-surrealkv`, namespace `vida`, database `primary`, and schema versions `1/1`. Runtime coordination/data may include `LOCK`, `.vida-authoritative-open.guard`, `wal`, `sstables`, and `vlog`. Treat metadata drift as a fail-closed compatibility error. Stop the owning process and back up the whole root before recovery; do not copy, edit, or delete individual WAL/SST/VLog files, and do not infer compatibility from a successful process start alone.
+
+The compatibility proof must cover state-store open, storage metadata validation, state-spine manifest checks, and representative TaskFlow reads. The focused Rust proof is:
+
+```powershell
+./scripts/vida-cargo-msvc.ps1 test -p vida --bin vida backend_summary_fails_closed_on_storage_metadata --locked
+./scripts/vida-cargo-msvc.ps1 check -p vida --locked
+```
+
+### Verification and rollback
+
+After the focused proof, run the project-owned gates in order: `./scripts/vida-dev-gate.ps1 -Mode quick -Json`, `vida status --json`, `vida doctor --json`, and `vida taskflow validate-graph --json`. Record artifact paths and exit codes; a blocked diagnostic is evidence, not a successful upgrade.
+
+Rollback is whole-snapshot based: stop VIDA, preserve the failed state directory as evidence, restore the previously known-good binary/revision and the complete pre-upgrade `.vida/data/state` snapshot, then rerun the same compatibility and runtime gates. If the dependency pin itself must roll back, change `surrealdb` and `surrealdb-core` together and refresh both lock entries; never mix data files from different pins. If SurrealKV reports WAL replay or memtable/SST corruption, preserve the original directory and recover from the known-good snapshot; never repair by deleting suspected files in place.
+
+### INFO logging and redaction impact
+
+Upgrade evidence may retain command families, versions, blocker codes, state-root artifact references, and non-secret record identifiers. It must not retain raw tokens, passwords, cookies, credential-bearing URLs, authorization headers, private keys, or unredacted user/request payloads. Before persisting INFO output, replace secret-bearing values with stable placeholders such as `<REDACTED_TOKEN>` and keep the real values only in the transient operator environment or approved secret manager. This redaction changes shared diagnostics only; it does not change the `3.2.1` pin, persisted state, schema, or rollback compatibility. When uncertain, redact first and record the proof artifact path rather than the raw state or command.
+
 ## Current Installed Runtime Environment
 
 The current Windows operator environment uses the canonical release-install gate:
@@ -372,11 +404,11 @@ Before reporting a runtime environment/docs/skill update as complete:
 -----
 artifact_path: process/vida-runtime-development-environment
 artifact_type: process_doc
-artifact_version: '1'
-artifact_revision: '2026-07-12'
+artifact_version: 1
+artifact_revision: 2026-07-15
 schema_version: '1'
 status: canonical
 source_path: docs/process/vida-runtime-development-environment.md
 created_at: 2026-06-04T00:00:00+03:00
-updated_at: 2026-07-12T16:24:00+03:00
+updated_at: 2026-07-15T15:45:21.9333516Z
 changelog_ref: vida-runtime-development-environment.changelog.jsonl
