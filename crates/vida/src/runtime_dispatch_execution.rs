@@ -2576,7 +2576,7 @@ fn host_bridge_request_value_matches(
                 let normalize = |path: &str| {
                     path.replace('\\', "/")
                         .trim_end_matches('/')
-                        .to_ascii_lowercase()
+                        .to_string()
                 };
                 normalize(existing) == normalize(expected)
                     || taskflow_core::runtime_packet_identity::runtime_packet_paths_equivalent(
@@ -6660,6 +6660,23 @@ host_tool_bridge:
             &first_request,
             "receipt_path"
         ));
+        #[cfg(unix)]
+        {
+            let expected = serde_json::json!({
+                "request_path": "/tmp/vida/host-tool-bridge/requests/request.json"
+            });
+            let substituted = serde_json::json!({
+                "request_path": "/tmp/vida/host-tool-bridge/REQUESTS/request.json"
+            });
+            assert!(
+                !super::host_bridge_request_value_matches(
+                    &substituted,
+                    &expected,
+                    "request_path"
+                ),
+                "case-variant host bridge request paths must remain distinct on case-sensitive filesystems"
+            );
+        }
         assert!(super::existing_host_bridge_request_has_retryable_completion_evidence(
             &blocked_request, &first_request
         ));
