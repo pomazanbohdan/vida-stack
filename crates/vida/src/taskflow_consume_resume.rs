@@ -843,13 +843,6 @@ async fn latest_stale_run_graph_task_authority_error(
                 "Failed to read current-session run-graph status before consume continue: {error}"
             )
         })?;
-    let global_status = if current_session_status.is_some() {
-        None
-    } else {
-        store.latest_run_graph_status().await.map_err(|error| {
-            format!("Failed to read latest run-graph status before consume continue: {error}")
-        })?
-    };
     let terminal_task_active_status = store
         .latest_terminal_task_active_run_graph_status()
         .await
@@ -857,12 +850,13 @@ async fn latest_stale_run_graph_task_authority_error(
             format!(
                 "Failed to read latest terminal task-active run-graph status before consume continue: {error}"
             )
-        })?;
-    for status in [
-        current_session_status,
-        global_status,
-        terminal_task_active_status,
-    ]
+        })?
+        .filter(|terminal| {
+            current_session_status
+                .as_ref()
+                .is_some_and(|current| current.run_id == terminal.run_id)
+        });
+    for status in [current_session_status, terminal_task_active_status]
     .into_iter()
     .flatten()
     {
@@ -6281,53 +6275,59 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
             return Ok(active_exception_run_id.to_string());
         }
     }
-    let global_latest_status = store
-        .latest_run_graph_status()
-        .await
-        .map_err(|error| format!("Failed to read latest persisted run-graph state: {error}"))?;
-    let Some(global_status) = global_latest_status else {
-        return Err("No persisted run-graph dispatch receipt is available".to_string());
-    };
-    let current_session_can_mutate_global = store
-        .current_session_can_mutate_run_graph_run(&global_status.run_id)
+    let status = if let Some(scoped_status) = store
+        .latest_run_graph_status_for_current_session()
         .await
         .map_err(|error| {
-            format!(
-                "Failed to validate current-session ownership for run `{}`: {error}",
-                global_status.run_id
-            )
-        })?;
-    let status = if current_session_can_mutate_global {
-        global_status
+            format!("Failed to read current-session persisted run-graph state: {error}")
+        })? {
+        scoped_status
     } else {
-        let scoped_latest_status = store
-            .latest_run_graph_status_for_current_session()
+        let Some(global_status) = store
+            .latest_run_graph_status()
+            .await
+            .map_err(|error| format!("Failed to read latest persisted run-graph state: {error}"))?
+        else {
+            return Err("No persisted run-graph dispatch receipt is available".to_string());
+        };
+        let current_session_can_mutate_global = store
+            .current_session_can_mutate_run_graph_run(&global_status.run_id)
             .await
             .map_err(|error| {
-                format!("Failed to read current-session persisted run-graph state: {error}")
+                format!(
+                    "Failed to validate current-session ownership for run `{}`: {error}",
+                    global_status.run_id
+                )
             })?;
-        if let Some(scoped_status) = scoped_latest_status {
-            scoped_status
+        if current_session_can_mutate_global {
+            global_status
         } else {
             return Err(format!(
-                "Default `vida taskflow consume continue` resolved latest run `{}`, but the current session does not own run `{}`. Pass `--run-id {}` only from an owning session, bind the intended bounded unit explicitly, or refresh status/recovery before continuing.",
-                global_status.run_id, global_status.run_id, global_status.run_id
+                "Default `vida taskflow consume continue` resolved global run `{}`, but the current session has no scoped run and does not own it. This is an active_flow_mismatch; pass `--run-id {}` only from an owning session, bind the intended bounded unit explicitly, or refresh status/recovery before continuing.",
+                global_status.run_id, global_status.run_id
             ));
         }
     };
     let explicit_continuation_binding = store
-        .latest_explicit_run_graph_continuation_binding()
+        .latest_explicit_run_graph_continuation_binding_for_current_session()
         .await
         .map_err(|error| format!("Failed to read explicit continuation binding: {error}"))?;
-    let latest_run_graph_recovery = store
-        .latest_run_graph_recovery_summary()
+    let latest_run_graph_recovery = match store.run_graph_recovery_summary(&status.run_id).await {
+        Ok(summary) => Some(summary),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read scoped run graph recovery summary for `{}`: {error}",
+                status.run_id
+            ));
+        }
+    };
+    let latest_run_graph_dispatch_receipt = match store
+        .run_graph_dispatch_receipt_summary_for_status(&status)
         .await
-        .map_err(|error| format!("Failed to read latest run graph recovery summary: {error}"))?;
-    let latest_run_graph_dispatch_receipt =
-        match store.latest_run_graph_dispatch_receipt_summary().await {
-            Ok(summary) => summary,
-            Err(_) => None,
-        };
+    {
+        Ok(summary) => summary,
+        Err(_) => None,
+    };
     let continuation_binding_evidence_ambiguous = latest_run_graph_dispatch_receipt
         .as_ref()
         .is_some_and(|receipt| {
@@ -21132,12 +21132,138 @@ agent_system:
             Err(error) => error,
         };
         assert!(
-            error.contains("current session does not own run `run-foreign-terminal`"),
+            error.contains("current session has no scoped run and does not own it"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("active_flow_mismatch"),
             "unexpected error: {error}"
         );
         assert!(
             error.contains("--run-id run-foreign-terminal"),
             "unexpected error: {error}"
+        );
+
+        store.close().await;
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_default_resume_run_id_prefers_current_session_status_over_foreign_global_latest() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-scoped-status-over-global-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let current_run_id = "run-current-scoped";
+        let current_task_id = "task-current-scoped";
+        let foreign_run_id = "run-foreign-global";
+        let foreign_task_id = "task-foreign-global";
+        taskflow_consume_resume_test_create_authority_task(
+            &store,
+            current_task_id,
+            "Current scoped task",
+            "current session scoped continuation authority",
+        )
+        .await;
+        taskflow_consume_resume_test_create_authority_task(
+            &store,
+            foreign_task_id,
+            "Foreign global task",
+            "foreign global latest diagnostic evidence",
+        )
+        .await;
+
+        let mut current_status = crate::taskflow_run_graph::default_run_graph_status(
+            current_run_id,
+            "verification",
+            "delivery",
+        );
+        current_status.task_id = current_task_id.to_string();
+        current_status.active_node = "verification".to_string();
+        current_status.next_node = Some("verification".to_string());
+        current_status.status = "ready".to_string();
+        current_status.lifecycle_stage = "verification_ready".to_string();
+        current_status.policy_gate = "not_required".to_string();
+        current_status.handoff_state = "ready_for_dispatch".to_string();
+        current_status.context_state = "sealed".to_string();
+        current_status.checkpoint_kind = "conversation_cursor".to_string();
+        current_status.resume_target = "dispatch.verification".to_string();
+        current_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&current_status)
+            .await
+            .expect("persist current scoped status");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: current_run_id.to_string(),
+                    task_id: current_task_id.to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": current_task_id,
+                        "run_id": current_run_id,
+                        "task_status": "in_progress",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "current session explicitly owns the bounded task".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("continue current scoped task".to_string()),
+                    recorded_at: "2026-07-15T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist current scoped binding");
+        store
+            .acquire_current_session_run_graph_claim_for_test(
+                "current-scoped-claim",
+                current_run_id,
+                current_task_id,
+                "run-graph-continuation-ownership",
+                "crates/vida/src/taskflow_consume_resume.rs",
+            )
+            .await
+            .expect("current session should claim scoped run");
+
+        let mut foreign_status = crate::taskflow_run_graph::default_run_graph_status(
+            foreign_run_id,
+            "implementation",
+            "delivery",
+        );
+        foreign_status.task_id = foreign_task_id.to_string();
+        foreign_status.active_node = "implementation".to_string();
+        foreign_status.status = "blocked".to_string();
+        foreign_status.lifecycle_stage = "implementation_blocked".to_string();
+        foreign_status.resume_target = "dispatch.implementation".to_string();
+        foreign_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&foreign_status)
+            .await
+            .expect("persist foreign global status");
+
+        assert_eq!(
+            store
+                .latest_run_graph_status()
+                .await
+                .expect("read global latest status")
+                .expect("global latest status")
+                .run_id,
+            foreign_run_id
+        );
+        assert_eq!(
+            resolve_default_resume_run_id(&store)
+                .await
+                .expect("scoped status should win over foreign global latest"),
+            current_run_id
         );
 
         store.close().await;

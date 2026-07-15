@@ -19504,9 +19504,9 @@ fn orchestrator_init_and_next_lawful_reject_closed_task_ready_dev_pack_dispatch_
     assert!(
         json_string_array_contains(
             &next_lawful_json["blocker_codes"],
-            "runtime_binding_task_closed"
+            "closed_task_active_run_projection_mismatch"
         ),
-        "next-lawful should publish runtime_binding_task_closed: {next_lawful_json}"
+        "next-lawful should publish the canonical closed-task projection blocker: {next_lawful_json}"
     );
     assert_ne!(
         next_lawful_json["binding_source"], "latest_run_graph_completed_dispatch_receipt",

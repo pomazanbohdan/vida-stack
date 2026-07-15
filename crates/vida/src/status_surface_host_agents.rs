@@ -710,9 +710,24 @@ mod tests {
                 .as_str()
                 .is_some_and(|model| !model.is_empty())
         );
+        let config = crate::project_activator_surface::read_yaml_file_checked(
+            &project_root.join("vida.config.yaml"),
+        )
+        .expect("project config should parse");
+        let configured_backend_profile = crate::yaml_lookup(
+            &config,
+            &[
+                "agent_system",
+                "subagents",
+                "internal_subagents",
+                "default_model_profile",
+            ],
+        )
+        .and_then(serde_yaml::Value::as_str)
+        .expect("internal backend model profile should be configured");
         assert_eq!(
             summary["subagent_backends"]["internal_subagents"]["default_model_profile"],
-            "codex_gpt55_low_write"
+            configured_backend_profile
         );
         assert_eq!(
             summary["subagent_backends"]["internal_subagents"]["execution_boundary"],
@@ -753,13 +768,37 @@ mod tests {
             implementation_attempt["selected_backend_id"],
             "internal_subagents"
         );
+        let configured_implementation_profile_id = crate::yaml_lookup(
+            &config,
+            &[
+                "agent_system",
+                "stage_attempt_policies",
+                "implementation",
+                "attempts",
+            ],
+        )
+        .and_then(serde_yaml::Value::as_sequence)
+        .and_then(|attempts| attempts.first())
+        .and_then(|attempt| crate::yaml_lookup(attempt, &["model_profile_id"]))
+        .and_then(serde_yaml::Value::as_str)
+        .expect("implementation model profile should be configured");
         assert_eq!(
             implementation_attempt["selected_model_profile_id"],
-            "codex_gpt55_low_write"
+            configured_implementation_profile_id
         );
+        let implementation_profile_path = [
+            "agent_system",
+            "subagents",
+            "internal_subagents",
+            "model_profiles",
+            configured_implementation_profile_id,
+            "write_scope",
+        ];
         assert_eq!(
             implementation_attempt["selected_write_scope"],
-            "orchestrator_native"
+            crate::yaml_lookup(&config, &implementation_profile_path)
+                .and_then(serde_yaml::Value::as_str)
+                .expect("implementation profile write scope should be configured")
         );
         assert_eq!(
             implementation_attempt["selected_model_profile_readiness_status"],
@@ -768,7 +807,18 @@ mod tests {
         assert_eq!(implementation_attempt["normalized_cost_units"], 1);
         assert_eq!(
             summary["stage_attempt_policies"]["stages"]["implementation"]["consolidator"]["selected_model_profile_id"],
-            "codex_gpt55_high_readonly"
+            crate::yaml_lookup(
+                &config,
+                &[
+                    "agent_system",
+                    "stage_attempt_policies",
+                    "implementation",
+                    "consolidator",
+                    "model_profile_id",
+                ],
+            )
+            .and_then(serde_yaml::Value::as_str)
+            .expect("implementation consolidator model profile should be configured")
         );
     }
 
