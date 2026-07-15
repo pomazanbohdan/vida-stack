@@ -164,6 +164,51 @@ pub fn host_bridge_request_status_allows_parent_completion(
 }
 
 #[must_use]
+pub fn host_bridge_activation_only_orphaned_lane(
+    dispatch_kind: &str,
+    dispatch_surface: Option<&str>,
+    dispatch_status: &str,
+    lane_status: &str,
+    has_dispatch_result: bool,
+    has_receipt_backed_evidence: bool,
+) -> bool {
+    dispatch_kind == "agent_lane"
+        && dispatch_surface == Some("vida agent-init")
+        && dispatch_status == "routed"
+        && lane_status == "lane_open"
+        && !has_dispatch_result
+        && !has_receipt_backed_evidence
+}
+
+#[test]
+fn activation_only_routed_lane_is_orphaned_without_execution_evidence() {
+    assert!(host_bridge_activation_only_orphaned_lane(
+        "agent_lane",
+        Some("vida agent-init"),
+        "routed",
+        "lane_open",
+        false,
+        false,
+    ));
+    assert!(!host_bridge_activation_only_orphaned_lane(
+        "agent_lane",
+        Some("vida agent-init"),
+        "routed",
+        "lane_open",
+        true,
+        false,
+    ));
+    assert!(!host_bridge_activation_only_orphaned_lane(
+        "agent_lane",
+        Some("vida agent-init"),
+        "executing",
+        "lane_running",
+        false,
+        false,
+    ));
+}
+
+#[must_use]
 pub fn host_bridge_request_allows_parent_adapter_dispatch(
     request_status: &str,
     dispatch_status: &str,
