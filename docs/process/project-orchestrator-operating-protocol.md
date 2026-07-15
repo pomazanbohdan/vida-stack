@@ -35,7 +35,7 @@ Project rule:
 1. the orchestrator is not expected to rediscover product structure,
 2. the orchestrator is expected to follow the canonical maps, backlog, seams, and packet rules already fixed by project canon.
 3. routine packet/lane reminders should come from the compact project packet/lane capsule, with the full team-development protocol reserved for edge cases, closure conflicts, or packet-law audits.
-4. codebase graph discovery should use `codebase-memory-mcp` when available and fresh; raw file/shell inspection remains the fallback for current working-tree truth and compressed command output.
+4. codebase search follows the canonical chain: use `ccc` for semantic discovery after initialization and index-freshness checks; run `ctx_compose` before `ctx_search` for filesystem-aware confirmation and bounded context; use `rg` for exact symbols, strings, paths, `rg --files`, and high-recall fallback. Search output is discovery evidence, not proof; use tests, runtime commands, and artifacts for proof. Keep `codebase-memory-mcp` optional for fresh graph/call/architecture context, never as sole authority over current worktree truth.
 
 ## Minimum Read Set
 
@@ -125,7 +125,8 @@ Project residue:
 6. keep historical release labels and concrete blocker names as evidence only, not permanent routing law,
 7. when `vida.config.yaml -> autonomous_execution.agent_only_development` is true, the project default is VIDA agent orchestration; a current VIDA `agent-init` packet, host-tool bridge request, sticky continuation intent, or visible agent-only runtime policy is not by itself explicit authorization to use a spawn-capable host subagent bridge when the host tool requires separate explicit subagent/delegation permission,
 8. when the same runtime defect, blocker code, command-surface failure, lane/receipt/dispatch defect, or session-blocking symptom appears more than once in one session, raise or keep its owning TaskFlow item at priority 1, append recurrence evidence, and route it before unrelated runtime-DX cleanup unless a higher-severity blocker is already active.
-9. for codebase search and impact analysis, prefer `codebase-memory-mcp` surfaces in this order: `list_projects`/`index_status` for freshness, `get_graph_schema` for available graph facts, `trace_path` for callers/callees/data-flow, `get_code_snippet` for exact qualified symbols, `detect_changes` for indexed impact, and `manage_adr` for durable architecture decisions. Do not use it as sole authority when the index is stale, contains deleted/generated paths, or the question depends on uncommitted working-tree changes.
+9. for codebase search and impact analysis, follow the canonical chain: `ccc` semantic discovery; `ctx_compose` before `ctx_search` for confirmation/context; `rg` for exact symbols, strings, paths, `rg --files`, and high-recall fallback.
+10. treat search/discovery output as navigation and impact evidence only, never as proof; use tests, runtime commands, and artifacts for proof. Keep `codebase-memory-mcp` optional for fresh graph/call/architecture context and do not use it as sole authority when its index is stale or the question depends on current worktree changes.
 
 Active-epic publication residue:
 
