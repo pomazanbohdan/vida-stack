@@ -2659,6 +2659,12 @@ fn dispatch_result_activation_kind(result: &serde_json::Value) -> Option<&'stati
     {
         return Some("activation_view");
     }
+    if dispatch_result_has_receipt_backed_evidence(result)
+        && (result["execution_state"].as_str() == Some("blocked")
+            || dispatch_result_is_rework_or_blocker(result))
+    {
+        return Some("execution_evidence");
+    }
     if result["activation_vs_execution_evidence"]["evidence_state"].as_str()
         == Some("execution_evidence_recorded")
         || result["activation_semantics"]["activation_kind"].as_str() == Some("execution_evidence")
@@ -2706,6 +2712,19 @@ fn receipt_result_path_activation_kind(path: Option<&str>) -> Option<&'static st
     path.map(str::trim)
         .filter(|value| !value.is_empty())
         .and_then(activation_kind_from_dispatch_result_path)
+}
+
+fn receipt_backed_trace_path_for_preview(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    previous_trace_path: Option<String>,
+) -> Option<String> {
+    let previous_trace_path = previous_trace_path
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    previous_trace_path.filter(|_| {
+        receipt_result_path_activation_kind(receipt.dispatch_result_path.as_deref())
+            == Some("execution_evidence")
+    })
 }
 
 fn canonical_activation_view_only_blocker_code(
@@ -5660,14 +5679,24 @@ fn dispatch_result_is_pass_completion(result: &serde_json::Value) -> bool {
         ))
 }
 
-fn dispatch_result_receipt_backed(result: &serde_json::Value) -> bool {
+fn dispatch_result_has_receipt_backed_evidence(result: &serde_json::Value) -> bool {
     result["artifact_kind"].as_str() == Some("host_tool_bridge_result")
         && result["execution_evidence"]["receipt_backed"]
             .as_bool()
             .unwrap_or(false)
-        && result["activation_semantics"]["records_completion_receipt"]
+        && result["execution_evidence"]["receipt_id"]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn dispatch_result_receipt_backed(result: &serde_json::Value) -> bool {
+    dispatch_result_has_receipt_backed_evidence(result)
+        && (result["activation_semantics"]["records_completion_receipt"]
             .as_bool()
             .unwrap_or(false)
+            || result["execution_evidence"]["receipt_backed"]
+                .as_bool()
+                .unwrap_or(false))
 }
 
 fn dispatch_result_matches_receipt_target(
@@ -7860,6 +7889,7 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
     implementation_owned_paths_override: &[String],
 ) -> Result<(), String> {
+    let previous_trace_path = receipt.downstream_dispatch_trace_path.clone();
     let receipt_has_terminal_lane_evidence =
         matches!(receipt.dispatch_status.as_str(), "executed" | "pass")
             && (dispatch_receipt_has_execution_evidence(receipt)
@@ -7978,7 +8008,8 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
         downstream_dispatch_blockers,
         preview_result_path,
     );
-    receipt.downstream_dispatch_trace_path = None;
+    receipt.downstream_dispatch_trace_path =
+        receipt_backed_trace_path_for_preview(receipt, previous_trace_path);
     receipt.downstream_dispatch_last_target = None;
     receipt.downstream_dispatch_executed_count = 0;
     receipt.downstream_dispatch_packet_path =
@@ -9294,6 +9325,7 @@ pub(crate) async fn preview_downstream_dispatch_receipt(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<(), String> {
+    let previous_trace_path = receipt.downstream_dispatch_trace_path.clone();
     let (
         downstream_dispatch_target,
         downstream_dispatch_command,
@@ -9316,7 +9348,8 @@ pub(crate) async fn preview_downstream_dispatch_receipt(
         downstream_dispatch_blockers,
         None,
     );
-    receipt.downstream_dispatch_trace_path = None;
+    receipt.downstream_dispatch_trace_path =
+        receipt_backed_trace_path_for_preview(receipt, previous_trace_path);
     receipt.downstream_dispatch_last_target = None;
     receipt.downstream_dispatch_executed_count = 0;
     receipt.downstream_dispatch_packet_path = None;
@@ -24362,6 +24395,137 @@ host_environment:
         assert_eq!(receipt.dispatch_status, "executing");
         assert_eq!(receipt.lane_status, "lane_running");
         assert!(receipt.blocker_code.is_none());
+    }
+
+    #[test]
+    fn normalize_activation_view_only_receipt_truth_preserves_receipt_backed_blocked_host_bridge() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let result_path = harness
+            .path()
+            .join("runtime-consumption/dispatch-results/run-host-bridge-blocked.json");
+        fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create dispatch result dir");
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "status": "blocked",
+                "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_codes": ["host_agent_execution_failed"],
+                "rework_target": "coder",
+                "allowed_next_node": "coder",
+                "execution_evidence": {
+                    "receipt_backed": true,
+                    "receipt_id": "host-bridge-receipt-1",
+                    "host_agent_id": "host-agent-1"
+                }
+            }))
+            .expect("encode result"),
+        )
+        .expect("write result");
+
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "run-host-bridge-blocked".to_string(),
+            dispatch_target: "coder".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida lane complete --host-bridge-request".to_string()),
+            dispatch_command: Some("vida lane complete".to_string()),
+            dispatch_packet_path: Some("/tmp/coder-packet.json".to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("tester".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("pending implementation evidence".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_implementation_evidence".to_string()],
+            downstream_dispatch_packet_path: Some("/tmp/tester-packet.json".to_string()),
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: Some("/tmp/host-bridge-receipt.json".to_string()),
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("tester".to_string()),
+            downstream_dispatch_last_target: Some("coder".to_string()),
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-07-15T00:00:00Z".to_string(),
+        };
+
+        assert!(!normalize_activation_view_only_receipt_truth(&mut receipt)
+            .expect("receipt-backed blocked host bridge should not normalize"));
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_completed");
+        assert!(receipt.blocker_code.is_none());
+        assert_eq!(
+            receipt.downstream_dispatch_trace_path.as_deref(),
+            Some("/tmp/host-bridge-receipt.json")
+        );
+    }
+
+    #[test]
+    fn preview_trace_preservation_requires_receipt_backed_result_evidence() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let result_path = harness
+            .path()
+            .join("runtime-consumption/dispatch-results/run-preview-trace.json");
+        fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create dispatch result dir");
+        fs::write(
+            &result_path,
+            serde_json::to_string(&serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "execution_state": "blocked",
+                "execution_evidence": {
+                    "receipt_backed": true,
+                    "receipt_id": "host-bridge-receipt-2"
+                }
+            }))
+            .expect("encode result"),
+        )
+        .expect("write result");
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-preview-trace".to_string(),
+            dispatch_target: "coder".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: None,
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: Some("host_agent_execution_failed".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["host_agent_execution_failed".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coder".to_string()),
+            downstream_dispatch_last_target: Some("coder".to_string()),
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: None,
+            recorded_at: "2026-07-15T00:00:00Z".to_string(),
+        };
+        assert_eq!(
+            receipt_backed_trace_path_for_preview(
+                &receipt,
+                Some("/tmp/host-bridge-receipt.json".to_string())
+            ),
+            Some("/tmp/host-bridge-receipt.json".to_string())
+        );
     }
 
     #[test]

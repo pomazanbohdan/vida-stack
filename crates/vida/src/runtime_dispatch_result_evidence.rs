@@ -276,6 +276,9 @@ pub(crate) fn rework_route_is_authorized(
     let completed_index = sequence
         .iter()
         .position(|target| target == &completed_resolution.dispatch_target);
+    if rework_resolution.dispatch_target == completed_resolution.dispatch_target {
+        return route.allowed_next_node == rework_resolution.dispatch_target;
+    }
     matches!((rework_index, completed_index), (Some(rework_index), Some(completed_index)) if rework_index < completed_index)
 }
 
@@ -698,6 +701,28 @@ mod tests {
             "beta_gate",
             &route
         ));
+    }
+
+    #[test]
+    fn rework_route_authorization_accepts_receipt_backed_same_lane_retry() {
+        let plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "coder": {"dispatch_target": "coder", "task_class": "implementation"},
+                        "tester": {"dispatch_target": "tester", "task_class": "verification"}
+                    },
+                    "execution_lane_sequence": ["coder", "tester"]
+                }
+            }
+        });
+        let route = DispatchReworkRoute {
+            rework_target: "coder".to_string(),
+            allowed_next_node: "coder".to_string(),
+            blocker_code: Some("host_agent_execution_failed".to_string()),
+        };
+
+        assert!(rework_route_is_authorized(&plan, "coder", &route));
     }
 
     #[test]
