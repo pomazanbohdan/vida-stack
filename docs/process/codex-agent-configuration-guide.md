@@ -85,7 +85,7 @@ Project-local Codex configuration should live under:
 12. `vida.config.yaml -> host_environment.systems.codex.legacy_cli`
    - legacy Codex CLI materialization pointer and feature requirements.
 13. `vida.config.yaml -> agent_system.subagents.internal_subagents.model_profiles`
-    - internal Codex App/host-subagent execution profiles for low, medium, high, and xhigh GPT-5.5 lanes.
+    - internal Codex App/host-subagent execution profiles for Luna high/xhigh/max and Sol medium lanes.
 14. `vida.config.yaml -> agent_system.subagents.codex_cli_exec`
     - process-based non-interactive `codex exec` carrier for explicit fallback/automation use, not the implementation of `internal_subagents`.
 
@@ -115,7 +115,7 @@ The 2026-05-01 Codex App environment probe for this repository showed:
 6. For write-producing work, a Codex App host-agent launch is execution capability evidence only; lawful VIDA write ownership still requires receipt-backed delegated execution or an active exception takeover for the same bounded unit.
 7. `codex features list` reports the legacy CLI effective feature state; in this environment `multi_agent` is experimental and false unless the launcher passes `--enable multi_agent` or an equivalent config override.
 8. The main project config records `host_environment.systems.codex.app` for Codex App materialization and `host_environment.systems.codex.legacy_cli` for CLI launchers.
-9. `agent_system.subagents.internal_subagents` carries the same GPT-5.5 low/medium/high/xhigh model-profile ladder used by the visible carrier catalog and internal routing aliases.
+9. `agent_system.subagents.internal_subagents` carries the same config-derived Luna high/xhigh/max and Sol medium profile ladder used by the visible carrier catalog and internal routing aliases.
 10. On Windows Codex App, observed child-agent shells may miss PATH/core Windows environment inherited by a normal terminal; Windows-only recovery belongs under `vida.config.yaml -> host_environment.systems.codex.app.platform_overrides.windows`, not in global carrier definitions or non-Windows projections.
 
 Operational conclusion:
@@ -395,11 +395,11 @@ At the current repository cut:
 1. project roles, skills, profiles, and flow sets already have active registry surfaces,
 2. team semantics already exist as product law,
 3. project-local Codex multi-agent configuration is materialized under `.codex/config.toml` and `.codex/agents/*.toml`,
-4. the active carrier tiers use `gpt-5.5` with low, medium, high, and xhigh reasoning bands,
+4. the active carrier tiers use `gpt-5.6-luna` for junior/high, middle/xhigh, and senior/max, plus `gpt-5.6-sol` for architect/medium,
 5. internal dispatch aliases are materialized as `.codex/agents/development_*.toml`,
 6. Codex App and legacy Codex CLI materialization templates live under `.codex/templates/`,
 7. `vida.config.yaml` records the Codex App config path, Codex App template path, legacy CLI template path, and CLI multi-agent feature argument,
-8. `agent_system.subagents.internal_subagents` carries GPT-5.5 low, medium, high, and xhigh profiles for Codex App/host-subagent selection,
+8. `agent_system.subagents.internal_subagents` carries the config-derived Luna high/xhigh/max and Sol medium profiles for Codex App/host-subagent selection,
 9. Windows Codex App command-resolution bootstrap is platform-scoped under `host_environment.systems.codex.app.platform_overrides.windows`; Linux and macOS must not inherit Windows `%LOCALAPPDATA%` fallback unless they gain their own explicit platform override.
 10. Every standalone `.codex/agents/*.toml` projection must include `name`, `description`, and `developer_instructions`; Codex identifies custom agents by the `name` field, so `[agents.<id>]` in `.codex/config.toml` is not sufficient by itself.
 11. The first intended Codex-backed project team is the bounded four-tier ladder defined in this guide.

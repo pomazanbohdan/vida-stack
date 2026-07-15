@@ -3930,9 +3930,9 @@ mod tests {
                 "selected_carrier_id": "junior",
                 "selected_backend_id": "internal_subagents",
                 "selected_dispatch_backend_id": "internal_subagents",
-                "selected_model_profile_id": "codex_gpt56_luna_xhigh_write",
+                "selected_model_profile_id": "codex_gpt56_luna_high_write",
                 "selected_model_ref": "gpt-5.6-luna",
-                "selected_reasoning_effort": "xhigh",
+                "selected_reasoning_effort": "high",
                 "selected_runtime_role": "worker",
                 "task_class": "implementation"
             })

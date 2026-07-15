@@ -50,17 +50,17 @@ host_environment:
         tier: junior
         description: Level 1 Codex lane for cheap bounded implementation packets that own one explicit write scope and return concrete delivery evidence without self-approving closure.
         rate: 1
-        reasoning_band: xhigh
+        reasoning_band: high
         model: gpt-5.6-luna
-        model_reasoning_effort: xhigh
+        model_reasoning_effort: high
         sandbox_mode: workspace-write
-        default_model_profile: codex_gpt56_luna_xhigh_write
+        default_model_profile: codex_gpt56_luna_high_write
         model_profiles:
-          codex_gpt56_luna_xhigh_write:
+          codex_gpt56_luna_high_write:
             provider: openai-codex
             model_ref: gpt-5.6-luna
-            reasoning_effort: xhigh
-            plan_mode_reasoning_effort: xhigh
+            reasoning_effort: high
+            plan_mode_reasoning_effort: high
             sandbox_mode: workspace-write
             normalized_cost_units: 1
             speed_tier: fast
@@ -179,22 +179,22 @@ host_environment:
       architect:
         tier: architect
         description: Level 4 Codex lane for architecture preparation, hard escalation, and cross-scope conflict resolution when the normal implementer-coach-verifier path cannot close lawfully.
-        rate: 16
-        reasoning_band: max
-        model: gpt-5.6-luna
-        model_reasoning_effort: max
+        rate: 48
+        reasoning_band: medium
+        model: gpt-5.6-sol
+        model_reasoning_effort: medium
         sandbox_mode: read-only
-        default_model_profile: codex_gpt56_luna_max_readonly
+        default_model_profile: codex_gpt56_sol_medium_arch
         model_profiles:
-          codex_gpt56_luna_max_readonly:
+          codex_gpt56_sol_medium_arch:
             provider: openai-codex
-            model_ref: gpt-5.6-luna
-            reasoning_effort: max
-            plan_mode_reasoning_effort: max
+            model_ref: gpt-5.6-sol
+            reasoning_effort: medium
+            plan_mode_reasoning_effort: medium
             sandbox_mode: read-only
-            normalized_cost_units: 16
+            normalized_cost_units: 48
             speed_tier: medium
-            quality_tier: high
+            quality_tier: very_high
             write_scope: read-only
             runtime_roles:
               - solution_architect
@@ -290,8 +290,10 @@ party_chat:
     model_binding: resolved_profile_capability_metadata
     reasoning_binding: resolved_profile_capability_metadata
     allowed_profile_bands:
+      - write_high
       - write_xhigh
       - readonly_max
+      - architecture_medium
     carrier_tiers:
       - junior
       - middle
@@ -1583,7 +1585,7 @@ agent_system:
     root_orchestrator_default_posture: synthesize_not_research
     default_readonly_prefetch: true
     prefer_internal_low_medium_for_write_carriers:
-      - internal_subagents:codex_gpt56_luna_xhigh_write
+      - internal_subagents:codex_gpt56_luna_high_write
     high_cost_carriers_reserved_for:
       - architecture_boundary_decision
       - security_or_safety_review
@@ -1616,8 +1618,8 @@ agent_system:
         primary: internal_subagents:codex_gpt56_luna_xhigh_write
         fallback: internal_subagents:codex_gpt56_luna_max_readonly
       implementation:
-        primary: internal_subagents:codex_gpt56_luna_xhigh_write
-        fallback: internal_subagents:codex_gpt56_luna_xhigh_write
+        primary: internal_subagents:codex_gpt56_luna_high_write
+        fallback: internal_subagents:codex_gpt56_luna_high_write
       regression_test:
         primary: internal_subagents:codex_gpt56_luna_xhigh_write
         fallback: internal_subagents:codex_gpt56_luna_xhigh_write
@@ -1788,10 +1790,10 @@ agent_system:
       review: medium
       quality_gate: medium
       release_readiness: medium
-      architecture: high
-      execution_preparation: high
-      hard_escalation: high
-      meta_analysis: high
+      architecture: medium
+      execution_preparation: medium
+      hard_escalation: medium
+      meta_analysis: medium
     budget_policy:
       enforce_max_budget_units: true
       allow_escalation_over_budget_with_blocker: true
@@ -1844,7 +1846,7 @@ agent_system:
       attempts:
         - attempt_id: implementation-internal-low-write
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_luna_xhigh_write
+          model_profile_id: codex_gpt56_luna_high_write
           conversation_role: developer
           runtime_role: worker
           task_class: implementation
@@ -1909,7 +1911,7 @@ agent_system:
       orchestration_tier: senior
       cost_priority: premium
       budget_cost_units: 10
-      profiles: codex_gpt56_luna_xhigh_write,codex_gpt56_luna_max_readonly
+      profiles: codex_gpt56_luna_high_write,codex_gpt56_luna_xhigh_write,codex_gpt56_luna_max_readonly,codex_gpt56_sol_medium_arch
       default_profile: codex_gpt56_luna_xhigh_write
       default_model_profile: codex_gpt56_luna_xhigh_write
       capability_band: implementation_safe,architecture_safe,review_safe
@@ -2495,7 +2497,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt56_luna_xhigh_write
+        internal_subagents: codex_gpt56_luna_high_write
       analysis_required: yes
       analysis_executor_backend: internal_subagents
       analysis_route_task_class: analysis
@@ -2533,7 +2535,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt56_luna_xhigh_write
+        internal_subagents: codex_gpt56_luna_high_write
       analysis_required: yes
       analysis_executor_backend: internal_subagents
       analysis_route_task_class: analysis
@@ -2564,7 +2566,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt56_luna_xhigh_write
+        internal_subagents: codex_gpt56_luna_high_write
       analysis_required: yes
       analysis_executor_backend: internal_subagents
       analysis_route_task_class: ui_review
@@ -2595,7 +2597,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt56_luna_xhigh_write
+        internal_subagents: codex_gpt56_luna_high_write
       max_runtime_seconds: 420
       analysis_required: yes
       analysis_executor_backend: internal_subagents
@@ -2636,7 +2638,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt56_luna_max_readonly
+        internal_subagents: codex_gpt56_sol_medium_arch
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents

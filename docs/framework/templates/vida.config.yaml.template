@@ -42,17 +42,17 @@ host_environment:
       junior:
         tier: junior
         rate: 1
-        reasoning_band: xhigh
+        reasoning_band: high
         model: gpt-5.6-luna
-        model_reasoning_effort: xhigh
+        model_reasoning_effort: high
         sandbox_mode: workspace-write
-        default_model_profile: codex_gpt56_luna_xhigh_write
+        default_model_profile: codex_gpt56_luna_high_write
         model_profiles:
-          codex_gpt56_luna_xhigh_write:
+          codex_gpt56_luna_high_write:
             provider: openai-codex
             model_ref: gpt-5.6-luna
-            reasoning_effort: xhigh
-            plan_mode_reasoning_effort: xhigh
+            reasoning_effort: high
+            plan_mode_reasoning_effort: high
             sandbox_mode: workspace-write
             normalized_cost_units: 1
             pricing:
@@ -173,22 +173,22 @@ host_environment:
           - release_readiness
       architect:
         tier: architect
-        rate: 16
-        reasoning_band: max
-        model: gpt-5.6-luna
-        model_reasoning_effort: max
+        rate: 48
+        reasoning_band: medium
+        model: gpt-5.6-sol
+        model_reasoning_effort: medium
         sandbox_mode: read-only
-        default_model_profile: codex_gpt56_luna_max_readonly
+        default_model_profile: codex_gpt56_sol_medium_arch
         model_profiles:
-          codex_gpt56_luna_max_readonly:
+          codex_gpt56_sol_medium_arch:
             provider: openai-codex
-            model_ref: gpt-5.6-luna
-            reasoning_effort: max
-            plan_mode_reasoning_effort: max
+            model_ref: gpt-5.6-sol
+            reasoning_effort: medium
+            plan_mode_reasoning_effort: medium
             sandbox_mode: read-only
-            normalized_cost_units: 16
+            normalized_cost_units: 48
             speed_tier: medium
-            quality_tier: high
+            quality_tier: very_high
             write_scope: read-only
             runtime_roles:
               - solution_architect
@@ -1267,10 +1267,10 @@ agent_system:
       review: medium
       quality_gate: medium
       release_readiness: medium
-      architecture: high
-      execution_preparation: high
-      hard_escalation: high
-      meta_analysis: high
+      architecture: medium
+      execution_preparation: medium
+      hard_escalation: medium
+      meta_analysis: medium
     budget_policy:
       enforce_max_budget_units: true
       allow_escalation_over_budget_with_blocker: true
