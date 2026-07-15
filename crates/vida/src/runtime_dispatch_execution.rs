@@ -15,6 +15,7 @@ use crate::runtime_proof_scope::proof_scope_from_dispatch_packet_path;
 use crate::{RuntimeConsumptionLaneSelection, StateStore, yaml_lookup};
 use taskflow_host_bridge::{
     DispatchReceiptBindingInput, HostBridgeRequest, default_host_bridge_required_result_fields,
+    host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
     host_bridge_completed_result_status_is_admissible,
@@ -2460,6 +2461,31 @@ fn host_bridge_request_value_matches(
     expected: &serde_json::Value,
     field: &str,
 ) -> bool {
+    if matches!(
+        field,
+        "packet_path" | "request_path" | "result_path" | "receipt_path"
+    ) {
+        if existing.get(field) == expected.get(field) {
+            return true;
+        }
+        return match (
+            existing.get(field).and_then(serde_json::Value::as_str),
+            expected.get(field).and_then(serde_json::Value::as_str),
+        ) {
+            (Some(existing), Some(expected)) => {
+                let normalize = |path: &str| {
+                    path.replace('\\', "/")
+                        .trim_end_matches('/')
+                        .to_ascii_lowercase()
+                };
+                normalize(existing) == normalize(expected)
+                    || taskflow_core::runtime_packet_identity::runtime_packet_paths_equivalent(
+                        existing, expected,
+                    )
+            }
+            _ => existing.get(field) == expected.get(field),
+        };
+    }
     existing.get(field) == expected.get(field)
 }
 
@@ -2518,6 +2544,50 @@ fn validate_existing_host_bridge_request_matches_expected(
     Ok(())
 }
 
+fn existing_host_bridge_request_has_retryable_completion_evidence(
+    existing: &serde_json::Value,
+    expected: &serde_json::Value,
+) -> bool {
+    let status = existing
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !matches!(status, "blocked" | "retryable_blocked") {
+        return false;
+    }
+
+    ["result_path", "receipt_path"].iter().any(|field| {
+        let paths_match = host_bridge_request_value_matches(existing, expected, field);
+        if !paths_match {
+            return false;
+        }
+        let Some(path) = existing
+            .get(*field)
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+        else {
+            return false;
+        };
+        let artifact = crate::read_json_file_if_present(&path);
+        let retryable = artifact
+            .as_ref()
+            .is_some_and(|artifact| host_bridge_artifact_has_retryable_completion_blocker(artifact));
+        retryable
+    })
+}
+
+fn existing_host_bridge_request_needs_retryable_blocked_refresh(
+    existing: &serde_json::Value,
+    expected: &serde_json::Value,
+) -> bool {
+    let status = existing
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    matches!(status, "blocked" | "retryable_blocked")
+        && existing_host_bridge_request_has_retryable_completion_evidence(existing, expected)
+}
+
 fn validate_existing_host_bridge_request_identity_matches_expected(
     existing: &serde_json::Value,
     expected: &serde_json::Value,
@@ -2527,7 +2597,9 @@ fn validate_existing_host_bridge_request_identity_matches_expected(
         .get("status")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if !host_bridge_existing_request_status_is_admissible(status) {
+    if !host_bridge_existing_request_status_is_admissible(status)
+        && !existing_host_bridge_request_has_retryable_completion_evidence(existing, expected)
+    {
         return Err(format!(
             "Existing host bridge request `{}` has inadmissible status `{status}`.",
             request_path.display()
@@ -2546,9 +2618,6 @@ fn validate_existing_host_bridge_request_identity_matches_expected(
         "carrier_id",
         "execution_boundary",
         "dispatch_transport",
-        "owned_paths",
-        "read_only_paths",
-        "proof_target",
         "request_path",
         "result_path",
         "receipt_path",
@@ -2790,7 +2859,14 @@ fn materialize_host_tool_bridge_request(
             .and_then(serde_json::Value::as_str)
             == Some(dispatch_packet_path)
         {
-            if existing_host_bridge_request_needs_pending_contract_refresh(&existing, &request) {
+            if existing_host_bridge_request_needs_retryable_blocked_refresh(&existing, &request) {
+                validate_existing_host_bridge_request_identity_matches_expected(
+                    &existing,
+                    &request,
+                    &paths.request_path,
+                )?;
+                replace_existing_request = true;
+            } else if existing_host_bridge_request_needs_pending_contract_refresh(&existing, &request) {
                 replace_existing_request = true;
             } else if existing_host_bridge_request_needs_adapter_refresh(&existing, &request) {
                 validate_existing_host_bridge_request_identity_matches_expected(
@@ -6295,6 +6371,195 @@ host_tool_bridge:
             "unexpected error: {error}"
         );
         let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn retryable_blocked_host_bridge_request_can_be_rearmed_but_activation_only_cannot() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-retryable-blocked-request-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let result_path = project_root.join(".vida/data/state/host-tool-bridge/result.json");
+        let receipt_path = project_root.join(".vida/data/state/host-tool-bridge/receipt.json");
+        std::fs::create_dir_all(result_path.parent().expect("result parent"))
+            .expect("create host bridge artifact directory");
+        let expected = serde_json::json!({
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        });
+        let mut existing = expected.clone();
+        existing["status"] = serde_json::json!("blocked");
+        std::fs::write(
+            &result_path,
+            serde_json::json!({
+                "status": "blocked",
+                "blocker_code": "host_tool_bridge_adapter_required"
+            })
+            .to_string(),
+        )
+        .expect("write retryable blocked result");
+        std::fs::write(
+            &receipt_path,
+            serde_json::json!({
+                "status": "blocked",
+                "blocker_code": "host_tool_bridge_adapter_required"
+            })
+            .to_string(),
+        )
+        .expect("write retryable blocked receipt");
+
+        assert!(super::existing_host_bridge_request_has_retryable_completion_evidence(
+            &existing, &expected
+        ));
+        assert!(super::existing_host_bridge_request_needs_retryable_blocked_refresh(
+            &existing, &expected
+        ));
+
+        std::fs::write(
+            &result_path,
+            serde_json::json!({
+                "status": "blocked",
+                "blocker_code": "activation_view_only"
+            })
+            .to_string(),
+        )
+        .expect("write activation-only result");
+        std::fs::write(
+            &receipt_path,
+            serde_json::json!({
+                "status": "blocked",
+                "blocker_code": "activation_view_only"
+            })
+            .to_string(),
+        )
+        .expect("write activation-only receipt");
+        assert!(!super::existing_host_bridge_request_has_retryable_completion_evidence(
+            &existing, &expected
+        ));
+        assert!(!super::existing_host_bridge_request_needs_retryable_blocked_refresh(
+            &existing, &expected
+        ));
+
+        let _ = std::fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn host_tool_bridge_materialize_rearms_retryable_blocked_request() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-materialize-retry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let state_root = project_root.join(".vida/data/state");
+        let packet_path = project_root.join(".vida/dispatch.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({"owned_paths": ["src/lib.rs"]}).to_string(),
+        )
+        .expect("write dispatch packet");
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({}));
+        let receipt = internal_codex_fallback_receipt(
+            packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+        );
+        let first_request = materialize_host_tool_bridge_request(
+            &project_root,
+            &state_root,
+            None,
+            packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("initial host bridge request should materialize");
+        let request_path = PathBuf::from(
+            first_request["request_path"]
+                .as_str()
+                .expect("request path should render"),
+        );
+        let result_path = PathBuf::from(
+            first_request["result_path"]
+                .as_str()
+                .expect("result path should render"),
+        );
+        let receipt_path = PathBuf::from(
+            first_request["receipt_path"]
+                .as_str()
+                .expect("receipt path should render"),
+        );
+        let mut blocked_request = first_request.clone();
+        blocked_request["status"] = serde_json::json!("blocked");
+        blocked_request["owned_paths"] = serde_json::json!(["src/stale.rs"]);
+        std::fs::write(
+            &request_path,
+            serde_json::to_string_pretty(&blocked_request).expect("encode blocked request"),
+        )
+        .expect("write blocked request");
+        let blocked_artifact = serde_json::json!({
+            "status": "blocked",
+            "blocker_code": "host_tool_bridge_adapter_required"
+        });
+        std::fs::write(
+            &result_path,
+            blocked_artifact.to_string(),
+        )
+        .expect("write blocked result");
+        std::fs::write(&receipt_path, blocked_artifact.to_string())
+            .expect("write blocked receipt");
+        assert!(result_path.exists());
+        assert!(super::host_bridge_artifact_has_retryable_completion_blocker(
+            &blocked_artifact
+        ));
+        assert!(crate::read_json_file_if_present(&result_path).is_some());
+        assert!(super::host_bridge_request_value_matches(
+            &blocked_request,
+            &first_request,
+            "result_path"
+        ));
+        assert!(super::host_bridge_request_value_matches(
+            &blocked_request,
+            &first_request,
+            "receipt_path"
+        ));
+        assert!(super::existing_host_bridge_request_has_retryable_completion_evidence(
+            &blocked_request, &first_request
+        ));
+        assert!(super::existing_host_bridge_request_needs_retryable_blocked_refresh(
+            &blocked_request, &first_request
+        ));
+
+        let rearmed_request = materialize_host_tool_bridge_request(
+            &project_root,
+            &state_root,
+            None,
+            packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "middle",
+            &receipt,
+            &role_selection,
+        )
+        .expect("retryable blocked request should rearm");
+
+        assert_eq!(rearmed_request["status"], "pending");
+        assert_eq!(rearmed_request["owned_paths"], serde_json::json!(["src/lib.rs"]));
+        assert!(!result_path.exists(), "old blocked result must not be reused");
+        assert!(!receipt_path.exists(), "old blocked receipt must not be reused");
+        let _ = std::fs::remove_dir_all(project_root);
     }
 
     #[test]
