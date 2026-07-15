@@ -707,6 +707,44 @@ fn terminalize_internal_host_bridge_pending_result(
     true
 }
 
+fn terminalize_internal_host_bridge_orphaned_lane(
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    if !taskflow_host_bridge::completion::host_bridge_activation_only_orphaned_lane(
+        &receipt.dispatch_kind,
+        receipt.dispatch_surface.as_deref(),
+        &receipt.dispatch_status,
+        &receipt.lane_status,
+        receipt.dispatch_result_path.is_some(),
+        dispatch_receipt_has_execution_evidence(receipt),
+    ) {
+        return false;
+    }
+
+    receipt.dispatch_status = "blocked".to_string();
+    receipt.lane_status = derive_lane_status(
+        &receipt.dispatch_status,
+        receipt.supersedes_receipt_id.as_deref(),
+        receipt.exception_path_receipt_id.as_deref(),
+    )
+    .as_str()
+    .to_string();
+    receipt.blocker_code = Some("host_tool_bridge_adapter_required".to_string());
+    receipt.downstream_dispatch_target = None;
+    receipt.downstream_dispatch_command = None;
+    receipt.downstream_dispatch_note = None;
+    receipt.downstream_dispatch_ready = false;
+    receipt.downstream_dispatch_blockers.clear();
+    receipt.downstream_dispatch_packet_path = None;
+    receipt.downstream_dispatch_status = None;
+    receipt.downstream_dispatch_result_path = None;
+    receipt.downstream_dispatch_trace_path = None;
+    receipt.downstream_dispatch_executed_count = 0;
+    receipt.downstream_dispatch_active_target = Some(receipt.dispatch_target.clone());
+    receipt.downstream_dispatch_last_target = Some(receipt.dispatch_target.clone());
+    true
+}
+
 
 fn is_internal_activation_view_without_receipt_blocker(blocker_code: Option<&str>) -> bool {
     matches!(
@@ -22339,6 +22377,58 @@ fn terminalize_internal_host_bridge_pending_result_closes_orphaned_cycle_without
         );
     }
 
+    #[test]
+    fn normalize_stale_in_flight_dispatch_receipt_blocks_activation_only_orphaned_lane() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let mut receipt = RunGraphDispatchReceipt {
+            run_id: "run-activation-only-orphan".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init --execute-dispatch --json".to_string()),
+            dispatch_packet_path: Some("dispatch-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: Some("designer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("stale successor".to_string()),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: vec!["stale_successor".to_string()],
+            downstream_dispatch_packet_path: Some("designer-packet.json".to_string()),
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("designer-result.json".to_string()),
+            downstream_dispatch_trace_path: Some("designer-trace.json".to_string()),
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: Some("designer".to_string()),
+            downstream_dispatch_last_target: Some("designer".to_string()),
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-07-16T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            normalize_stale_in_flight_dispatch_receipt(harness.path(), &mut receipt)
+                .expect("activation-only normalization should not fail")
+        );
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(receipt.lane_status, "lane_blocked");
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some("host_tool_bridge_adapter_required")
+        );
+        assert_eq!(receipt.dispatch_result_path, None);
+        assert!(!receipt.downstream_dispatch_ready);
+        assert_eq!(
+            receipt.downstream_dispatch_active_target.as_deref(),
+            Some("implementer")
+        );
+    }
+
 
     #[test]
     fn existing_executed_dispatch_result_rejects_mismatched_completion_target() {
@@ -28475,6 +28565,9 @@ pub(crate) fn normalize_stale_in_flight_dispatch_receipt(
     state_root: &Path,
     receipt: &mut crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<bool, String> {
+    if terminalize_internal_host_bridge_orphaned_lane(receipt) {
+        return Ok(true);
+    }
     let timeout_blocked_receipt = receipt.dispatch_status == "blocked"
         && receipt.blocker_code.as_deref() == Some("timeout_without_takeover_authority");
     let internal_timeout_blocked_receipt = receipt.dispatch_status == "blocked"
