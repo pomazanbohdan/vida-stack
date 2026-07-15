@@ -3254,6 +3254,19 @@ fn validate_completed_host_bridge_artifacts(
             "Host bridge request receipt_path does not match the resolved receipt path.".into(),
         );
     }
+    if !taskflow_host_bridge::completion::host_bridge_completion_identity_matches(
+        request,
+        result,
+        Some(bridge_receipt),
+        &receipt.run_id,
+        &receipt.dispatch_target,
+        packet_path,
+    ) {
+        return Err(
+            "Host bridge completion identity does not match the active request, run, packet, or lane."
+                .into(),
+        );
+    }
     for (artifact, label) in [(result, "result"), (bridge_receipt, "receipt")] {
         if artifact.get("run_id").and_then(serde_json::Value::as_str)
             != Some(receipt.run_id.as_str())
@@ -3927,6 +3940,12 @@ fn mark_dispatch_result_execution_evidence(
     evidence_kind: &str,
     backend_id: &str,
 ) {
+    let completion_receipt_id = body
+        .get("completion_receipt_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
     let activation_semantics = body
         .entry("activation_semantics".to_string())
         .or_insert_with(|| serde_json::json!({}));
@@ -3972,6 +3991,9 @@ fn mark_dispatch_result_execution_evidence(
     );
     execution_evidence.insert("backend_id".to_string(), serde_json::json!(backend_id));
     execution_evidence.insert("receipt_backed".to_string(), serde_json::json!(true));
+    if let Some(receipt_id) = completion_receipt_id {
+        execution_evidence.insert("receipt_id".to_string(), serde_json::json!(receipt_id));
+    }
     execution_evidence.insert(
         "records_dispatch_result".to_string(),
         serde_json::json!(true),

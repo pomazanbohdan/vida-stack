@@ -5754,6 +5754,23 @@ fn dispatch_result_is_trusted_receipt_completion(
         && result["run_id"].as_str() == Some(receipt.run_id.as_str())
         && dispatch_result_matches_receipt_target(result, receipt)
         && dispatch_result_matches_receipt_source_packet(result, receipt)
+        && receipt
+            .dispatch_packet_path
+            .as_deref()
+            .is_some_and(|packet_path| {
+                result
+                    .get("host_tool_bridge_request")
+                    .is_some_and(|request| {
+                        taskflow_host_bridge::completion::host_bridge_completion_identity_matches(
+                            request,
+                            result,
+                            result.get("host_tool_bridge_receipt"),
+                            &receipt.run_id,
+                            &receipt.dispatch_target,
+                            packet_path,
+                        )
+                    })
+            })
 }
 
 fn receipt_result_allowed_next_target(

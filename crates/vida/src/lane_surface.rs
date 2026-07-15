@@ -5253,6 +5253,7 @@ fn materialize_host_bridge_completion_evidence(
             "evidence_kind": "host_tool_bridge_result",
             "backend_id": backend_id,
             "receipt_backed": true,
+            "receipt_id": receipt_id,
             "completion_verdict": verdict.completion_verdict.clone(),
             "records_dispatch_result": true
         },

@@ -274,6 +274,17 @@ pub fn host_bridge_completed_result_has_preview_refresh_evidence(
     {
         return false;
     }
+    let Some(receipt_id) = result
+        .pointer("/execution_evidence/receipt_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if result.get("completion_receipt_id").and_then(Value::as_str) != Some(receipt_id) {
+        return false;
+    }
     if result
         .get("source_dispatch_packet_path")
         .and_then(Value::as_str)
@@ -305,6 +316,56 @@ pub fn host_bridge_completed_result_has_preview_refresh_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty() && *value != "next")
         .is_some()
+}
+
+#[must_use]
+pub fn host_bridge_completion_identity_matches(
+    request: &Value,
+    result: &Value,
+    receipt: Option<&Value>,
+    expected_run_id: &str,
+    expected_dispatch_target: &str,
+    expected_packet_path: &str,
+) -> bool {
+    let Some(request_id) = host_bridge_request_string(request, "request_id") else {
+        return false;
+    };
+    let Some(request_run_id) = host_bridge_request_string(request, "run_id") else {
+        return false;
+    };
+    let Some(request_target) = host_bridge_request_string(request, "dispatch_target") else {
+        return false;
+    };
+    let Some(request_packet_path) = host_bridge_request_string(request, "packet_path") else {
+        return false;
+    };
+    if request_run_id != expected_run_id
+        || request_target != expected_dispatch_target
+        || request_packet_path != expected_packet_path
+    {
+        return false;
+    }
+    if result.get("request_id").and_then(Value::as_str) != Some(request_id)
+        || result.get("run_id").and_then(Value::as_str) != Some(expected_run_id)
+        || result.get("dispatch_target").and_then(Value::as_str) != Some(expected_dispatch_target)
+        || result.get("source_dispatch_packet_path").and_then(Value::as_str)
+            != Some(expected_packet_path)
+    {
+        return false;
+    }
+    let Some(receipt) = receipt else {
+        return true;
+    };
+    receipt.get("request_id").and_then(Value::as_str) == Some(request_id)
+        && receipt.get("run_id").and_then(Value::as_str) == Some(expected_run_id)
+        && receipt.get("dispatch_target").and_then(Value::as_str) == Some(expected_dispatch_target)
+        && receipt
+            .get("source_dispatch_packet_path")
+            .and_then(Value::as_str)
+            == Some(expected_packet_path)
+        && receipt.get("completion_receipt_id").and_then(Value::as_str)
+            == result.get("completion_receipt_id").and_then(Value::as_str)
+        && receipt.get("receipt_backed").and_then(Value::as_bool) == Some(true)
 }
 
 #[must_use]
@@ -1178,18 +1239,21 @@ mod tests {
             "request_id": "req-1",
             "run_id": "run-1",
             "dispatch_target": "developer"
+            ,"packet_path": "runtime-consumption/dispatch-packet.json"
         });
         let result = serde_json::json!({
             "status": "pass",
             "execution_state": "executed",
             "artifact_kind": "host_tool_bridge_result",
             "execution_evidence": {
-                "receipt_backed": true
+                "receipt_backed": true,
+                "receipt_id": "completion-1"
             },
             "source_dispatch_packet_path": "runtime-consumption/dispatch-packet.json",
             "request_id": "req-1",
             "run_id": "run-1",
             "dispatch_target": "developer",
+            "completion_receipt_id": "completion-1",
             "allowed_next_node": "tester"
         });
 
@@ -1211,6 +1275,66 @@ mod tests {
         assert!(!host_bridge_completed_result_has_preview_refresh_evidence(
             &request,
             &mismatched
+        ));
+    }
+
+    #[test]
+    fn completion_identity_rejects_foreign_late_result_after_terminal_block() {
+        let request = serde_json::json!({
+            "request_id": "req-1",
+            "run_id": "run-1",
+            "dispatch_target": "developer",
+            "packet_path": "runtime-consumption/dispatch-packet.json"
+        });
+        let result = serde_json::json!({
+            "request_id": "req-1",
+            "run_id": "run-1",
+            "dispatch_target": "developer",
+            "source_dispatch_packet_path": "runtime-consumption/dispatch-packet.json",
+            "completion_receipt_id": "completion-1"
+        });
+        let receipt = serde_json::json!({
+            "request_id": "req-1",
+            "run_id": "run-1",
+            "dispatch_target": "developer",
+            "source_dispatch_packet_path": "runtime-consumption/dispatch-packet.json",
+            "completion_receipt_id": "completion-1",
+            "receipt_backed": true
+        });
+        assert!(host_bridge_completion_identity_matches(
+            &request,
+            &result,
+            Some(&receipt),
+            "run-1",
+            "developer",
+            "runtime-consumption/dispatch-packet.json"
+        ));
+
+        let mut foreign = result.clone();
+        foreign["request_id"] = serde_json::json!("req-foreign");
+        assert!(!host_bridge_completion_identity_matches(
+            &request,
+            &foreign,
+            Some(&receipt),
+            "run-1",
+            "developer",
+            "runtime-consumption/dispatch-packet.json"
+        ));
+        assert!(!host_bridge_completion_identity_matches(
+            &request,
+            &result,
+            Some(&receipt),
+            "run-1",
+            "tester",
+            "runtime-consumption/dispatch-packet.json"
+        ));
+        assert!(!host_bridge_completion_identity_matches(
+            &request,
+            &result,
+            Some(&receipt),
+            "run-1",
+            "developer",
+            "runtime-consumption/other-packet.json"
         ));
     }
 
