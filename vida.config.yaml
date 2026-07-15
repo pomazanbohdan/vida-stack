@@ -302,6 +302,37 @@ party_chat:
     role_binding_mode: capability_only
 
 requirement_analysis:
+  role_projection:
+    selected_roles:
+      - role_id: analyst
+        responsibility: Produce requirement atoms, conflicts, questions, options, and readiness verdict.
+      - role_id: developer
+        responsibility: Implement only from a ready handoff.
+      - role_id: tester
+        responsibility: Validate the acceptance criteria and test matrix.
+    role_findings_summary:
+      - role_id: analyst
+        summary: Requirement atoms, readiness, and downstream routing were derived from the supplied source inputs.
+      - role_id: developer
+        summary: Implementation handoff is bounded by requirement atoms, acceptance criteria, and test matrix.
+    readiness_verdict: ready_for_handoff
+    readiness_states:
+      ready: Downstream implementation can start from this artifact.
+      ready_for_handoff: Downstream implementation can start from this artifact.
+      blocked: A critical conflict or missing source prevents routing.
+      needs_questions: Critical or important questions must be answered before routing.
+      draft: Artifact is not yet admitted for downstream routing.
+    downstream_routes:
+      - route_id: developer_handoff
+        when: Use when readiness_verdict is ready_for_handoff and code or doc changes are required.
+        allowed_next_node: developer
+    handoff:
+      summary: Implement against the requirement atoms, recommended option, acceptance criteria, and test matrix.
+      required_inputs: [requirement_atoms, recommended_option, acceptance_criteria, test_matrix]
+      proof_expectation: Return changed files, proof commands, verdict, blockers, rework target, and allowed next node.
+      proof_targets:
+        - cargo test -p vida requirement_analysis_cli_contract -- --test-threads=1
+        - vida requirement analyze --help
   party_chat_route:
     enabled: true
     route_owner: problem-party projection
@@ -309,6 +340,7 @@ requirement_analysis:
     board_flow_id: party_chat_council_modern_full
     activation_policy: optional_explicit_or_risk_triggered
     default_for_routine_requirements: false
+    next_action: Shape an optional challenge-round packet through the configured board flow; TaskFlow closure law remains authoritative.
     structured_output_contract:
       - findings
       - conflicts
@@ -354,6 +386,16 @@ requirement_analysis:
           - low confidence
           - readiness uncertain
           - not confident
+
+run_graph:
+  dispatch_task_identity:
+    target_groups:
+      - identity_field: spec_task_id
+        aliases: [specification, specification_pack, spec_pack]
+      - identity_field: work_pool_task_id
+        aliases: [work_pool_pack, work_pool]
+      - identity_field: dev_task_id
+        aliases: [dev_pack, implementer, developer, coach, tester, reviewer, verification, closure]
 
 agent_extensions:
   enabled: true

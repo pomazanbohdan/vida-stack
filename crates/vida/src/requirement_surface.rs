@@ -328,6 +328,7 @@ fn validate_requirement_source_path(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value, String> {
+    let role_projection = configured_requirement_role_projection()?;
     let mut source_inputs = args
         .input
         .iter()
@@ -393,30 +394,9 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
                 "purpose": "Emit a self-contained handoff artifact for downstream agents and operators."
             }
         ],
-        "selected_roles": [
-            {
-                "role_id": "analyst",
-                "responsibility": "Produce requirement atoms, conflicts, questions, options, and readiness verdict."
-            },
-            {
-                "role_id": "developer",
-                "responsibility": "Implement only from a ready developer handoff."
-            },
-            {
-                "role_id": "tester",
-                "responsibility": "Validate the acceptance criteria and test matrix."
-            }
-        ],
-        "role_findings_summary": [
-            {
-                "role_id": "analyst",
-                "summary": "Requirement atoms, readiness, and downstream routing were derived from the supplied source inputs."
-            },
-            {
-                "role_id": "developer",
-                "summary": "Developer handoff is bounded by requirement atoms, acceptance criteria, and test matrix."
-            }
-        ],
+        "role_projection_source": role_projection["source_path"],
+        "selected_roles": role_projection["selected_roles"],
+        "role_findings_summary": role_projection["role_findings_summary"],
         "detected_conflicts": conflicts,
         "challenge_route": party_chat_route,
         "open_questions": {
@@ -439,21 +419,9 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
             "option_id": "option-a",
             "rationale": "Default recommendation until concrete analysis proves a different option."
         },
-        "readiness_verdict": "ready_for_developer_handoff",
-        "readiness_states": {
-            "ready": "Downstream implementation can start from this artifact.",
-            "ready_for_developer_handoff": "Downstream implementation can start from this artifact.",
-            "blocked": "A critical conflict or missing source prevents routing.",
-            "needs_questions": "Critical or important questions must be answered before routing.",
-            "draft": "Artifact is not yet admitted for downstream routing."
-        },
-        "downstream_routes": [
-            {
-                "route_id": "developer_handoff",
-                "when": "Use when readiness_verdict is ready_for_developer_handoff and code or doc changes are required.",
-                "allowed_next_node": "developer"
-            }
-        ],
+        "readiness_verdict": role_projection["readiness_verdict"],
+        "readiness_states": role_projection["readiness_states"],
+        "downstream_routes": role_projection["downstream_routes"],
         "acceptance_criteria": [
             {
                 "id": "acceptance-1",
@@ -491,15 +459,39 @@ fn requirement_analysis_artifact(args: &RequirementAnalyzeArgs) -> Result<Value,
             "status": if args.codebase_inspected { "inspected" } else { "not_inspected" },
             "summary": "Populate with inspected files, affected modules, risk, and test impact when code was inspected."
         },
-        "developer_handoff": {
-            "summary": "Implement against the requirement atoms, recommended option, acceptance criteria, and test matrix.",
-            "required_inputs": ["requirement_atoms", "recommended_option", "acceptance_criteria", "test_matrix"],
-            "proof_expectation": "Return changed files, proof commands, verdict, blockers, rework target, and allowed next node.",
-            "proof_targets": [
-                "cargo test -p vida requirement_analysis_cli_contract -- --test-threads=1",
-                "vida requirement analyze --help"
-            ]
-        }
+        "handoff": role_projection["handoff"]
+    }))
+}
+
+fn configured_requirement_role_projection() -> Result<Value, String> {
+    let config = load_project_overlay_yaml().map_err(|error| {
+        format!("project config unavailable for requirement role projection: {error}")
+    })?;
+    let Some(projection) = yaml_lookup(&config, &["requirement_analysis", "role_projection"])
+    else {
+        return Err(
+            "project config is missing requirement_analysis.role_projection; refusing role fallback"
+                .to_string(),
+        );
+    };
+    let required = |field: &str| -> Result<Value, String> {
+        let Some(value) = yaml_lookup(projection, &[field]) else {
+            return Err(format!(
+                "project config is missing requirement_analysis.role_projection.{field}"
+            ));
+        };
+        serde_json::to_value(value).map_err(|error| {
+            format!("requirement role projection field {field} is not JSON-compatible: {error}")
+        })
+    };
+    Ok(json!({
+        "source_path": "vida.config.yaml:requirement_analysis.role_projection",
+        "selected_roles": required("selected_roles")?,
+        "role_findings_summary": required("role_findings_summary")?,
+        "readiness_verdict": required("readiness_verdict")?,
+        "readiness_states": required("readiness_states")?,
+        "downstream_routes": required("downstream_routes")?,
+        "handoff": required("handoff")?
     }))
 }
 
@@ -543,7 +535,7 @@ fn requirement_analysis_payload(artifact: Value) -> Value {
         "test_matrix",
         "output_contract",
         "codebase_impact",
-        "developer_handoff",
+        "handoff",
     ] {
         payload[field] = payload["artifact"][field].clone();
     }
@@ -590,9 +582,24 @@ fn print_compact_contract(artifact: &Value) {
     println!("output_modes[2]{{mode,contract}}:");
     println!("  default,compact TOON/plain operator summary");
     println!("  json,machine-readable requirement-analysis artifact");
-    println!("allowed_next_node: developer");
-    println!("downstream_routes: developer_handoff");
-    println!("developer_handoff: Implement against the requirement atoms");
+    if let Some(route) = artifact["downstream_routes"]
+        .as_array()
+        .and_then(|routes| routes.first())
+    {
+        println!(
+            "allowed_next_node: {}",
+            route["allowed_next_node"]
+                .as_str()
+                .unwrap_or("unconfigured")
+        );
+        println!(
+            "downstream_routes: {}",
+            route["route_id"].as_str().unwrap_or("unconfigured")
+        );
+    }
+    if let Some(summary) = artifact["handoff"]["summary"].as_str() {
+        println!("handoff: {summary}");
+    }
 }
 
 fn requirement_atoms(source_inputs: &[RequirementSourceInput]) -> Vec<Value> {
@@ -685,9 +692,13 @@ fn requirement_party_chat_route(
         "structured_output_contract": yaml_string_list(yaml_lookup(route_config, &["structured_output_contract"])),
         "guardrails": yaml_string_list(yaml_lookup(route_config, &["guardrails"])),
         "next_action": if recommended {
-            "Shape an optional Party Chat challenge-round packet through the configured board flow; TaskFlow writer, coach, verifier, approval, and closure law remain authoritative."
+            yaml_string(yaml_lookup(route_config, &["next_action"]))
+                .unwrap_or_else(|| {
+                    "Shape an optional challenge-round packet through the configured board flow; TaskFlow closure law remains authoritative."
+                        .to_string()
+                })
         } else {
-            "Do not run Party Chat for this routine requirement."
+            "Do not run Party Chat for this routine requirement.".to_string()
         }
     })
 }
@@ -794,7 +805,7 @@ const REQUIRED_FIELD_SUMMARY: [(&str, &str); 22] = [
     ("acceptance_criteria", "observable done criteria"),
     ("test_matrix", "proof scenarios for downstream work"),
     ("codebase_impact", "required when code was inspected"),
-    ("developer_handoff", "implementation handoff contract"),
+    ("handoff", "implementation handoff contract"),
     (
         "output_contract",
         "default compact output and explicit JSON parity",

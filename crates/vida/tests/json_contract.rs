@@ -908,12 +908,14 @@ fn requirement_analysis_cli_contract() {
         "solution_options",
         "recommended_option",
         "readiness_verdict",
+        "readiness_states",
         "downstream_routes",
+        "role_projection_source",
         "acceptance_criteria",
         "test_matrix",
         "output_contract",
         "codebase_impact",
-        "developer_handoff",
+        "handoff",
     ] {
         assert!(artifact.get(field).is_some(), "missing field {field}");
     }
