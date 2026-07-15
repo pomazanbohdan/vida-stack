@@ -11694,7 +11694,7 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
 }
 
 #[test]
-fn task_close_json_includes_parent_epic_progress_after_child_close() {
+fn task_close_compact_projection_regression() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
 
@@ -11752,6 +11752,7 @@ fn task_close_json_includes_parent_epic_progress_after_child_close() {
             "child-a",
             "--reason",
             "proof complete",
+            "--include-global-progress",
             "--json",
         ],
         &state_dir,
@@ -11761,7 +11762,7 @@ fn task_close_json_includes_parent_epic_progress_after_child_close() {
     assert_eq!(closed["parent_epic_progress"]["closed_task_id"], "child-a");
     assert_eq!(
         closed["parent_epic_progress"]["scope"],
-        "closed_task_ancestor_epics"
+        "all_epics"
     );
     assert_eq!(
         closed["parent_epic_progress"]["epics"][0]["epic_id"],
@@ -11777,11 +11778,26 @@ fn task_close_json_includes_parent_epic_progress_after_child_close() {
         closed["parent_epic_progress"]
     );
 
+    let default_closed = run_command_json(
+        &[
+            "task",
+            "close",
+            "child-b",
+            "--reason",
+            "proof complete",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(default_closed["status"], "pass");
+    assert!(default_closed["epic_progress_summary"].is_null());
+    assert!(default_closed["parent_epic_progress"].is_null());
+
     let _ = fs::remove_dir_all(&state_dir);
 }
 
 #[test]
-fn task_close_default_output_prints_compact_parent_epic_progress() {
+fn task_close_summary_output_omits_unrelated_epic_progress() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
 
@@ -11833,14 +11849,23 @@ fn task_close_default_output_prints_compact_parent_epic_progress() {
     );
 
     let output = run_and_assert_success(
-        &["task", "close", "child-a", "--reason", "proof complete"],
+        &[
+            "task",
+            "close",
+            "child-a",
+            "--reason",
+            "proof complete",
+            "--summary",
+        ],
         &state_dir,
     );
 
     assert!(!output.trim_start().starts_with('{'));
-    assert!(output.contains("epic progress"));
-    assert!(output.contains("epic parent-epic"));
-    assert!(output.contains("1/2 closed (50.00%)"));
+    assert!(!output.contains("epic progress"));
+    assert!(!output.contains("epic parent-epic"));
+    assert!(!output.contains("1/2 closed (50.00%)"));
+    assert!(output.contains("closed task: child-a"));
+    assert!(output.contains("proof: pass"));
 
     let _ = fs::remove_dir_all(&state_dir);
 }

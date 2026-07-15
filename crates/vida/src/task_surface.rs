@@ -16016,28 +16016,32 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             };
                             let telemetry_feedback_blocker =
                                 task_close_feedback_blocker_summary(&telemetry);
-                            let epic_progress_summary = match store.all_tasks().await {
-                                Ok(rows) => {
-                                    match task_close_epic_progress_summary(
-                                        &rows,
-                                        &command.task_id,
-                                        command.include_global_progress,
-                                    ) {
-                                        Ok(summary) => Some(summary),
-                                        Err(error) => {
-                                            eprintln!(
-                                                "Failed to compute task close epic progress summary: {error}"
-                                            );
-                                            return ExitCode::from(1);
+                            let epic_progress_summary = if command.include_global_progress {
+                                match store.all_tasks().await {
+                                    Ok(rows) => {
+                                        match task_close_epic_progress_summary(
+                                            &rows,
+                                            &command.task_id,
+                                            true,
+                                        ) {
+                                            Ok(summary) => Some(summary),
+                                            Err(error) => {
+                                                eprintln!(
+                                                    "Failed to compute task close epic progress summary: {error}"
+                                                );
+                                                return ExitCode::from(1);
+                                            }
                                         }
                                     }
+                                    Err(error) => {
+                                        eprintln!(
+                                            "Failed to read tasks for task close epic progress summary: {error}"
+                                        );
+                                        return ExitCode::from(1);
+                                    }
                                 }
-                                Err(error) => {
-                                    eprintln!(
-                                        "Failed to read tasks for task close epic progress summary: {error}"
-                                    );
-                                    return ExitCode::from(1);
-                                }
+                            } else {
+                                None
                             };
                             if command.json {
                                 let payload = task_close_result_payload(
