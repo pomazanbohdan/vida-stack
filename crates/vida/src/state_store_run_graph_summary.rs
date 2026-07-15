@@ -735,16 +735,37 @@ fn blocked_agent_lane_receipt_allows_recovery_retry(
             .is_none_or(|value| value.trim().is_empty())
 }
 
+fn configured_dispatch_task_identity_field(dispatch_target: &str) -> Option<String> {
+    let target = dispatch_target.trim().replace('-', "_");
+    let config = crate::config_value_utils::load_project_overlay_yaml().ok()?;
+    let groups = crate::config_value_utils::yaml_lookup(
+        &config,
+        &["run_graph", "dispatch_task_identity", "target_groups"],
+    )?;
+    groups.as_sequence()?.iter().find_map(|group| {
+        let aliases = crate::config_value_utils::yaml_string_list(
+            crate::config_value_utils::yaml_lookup(group, &["aliases"]),
+        );
+        let matches_target = aliases
+            .iter()
+            .map(|alias| alias.replace('-', "_"))
+            .any(|alias| alias == target);
+        matches_target.then(|| {
+            crate::config_value_utils::yaml_string(
+                crate::config_value_utils::yaml_lookup(group, &["identity_field"]),
+            )
+        })?
+    })
+}
+
 fn dispatch_identity_task_id_for_target(
     identity: &RunGraphDispatchTaskIdentity,
     dispatch_target: &str,
 ) -> Option<String> {
-    let target = dispatch_target.trim().replace('-', "_");
-    let candidate = match target.as_str() {
-        "specification" | "specification_pack" | "spec_pack" => identity.spec_task_id.as_ref(),
-        "work_pool_pack" | "work_pool" => identity.work_pool_task_id.as_ref(),
-        "dev_pack" | "implementer" | "developer" | "coach" | "tester" | "reviewer"
-        | "verification" | "closure" => identity.dev_task_id.as_ref(),
+    let candidate = match configured_dispatch_task_identity_field(dispatch_target).as_deref() {
+        Some("spec_task_id") => identity.spec_task_id.as_ref(),
+        Some("work_pool_task_id") => identity.work_pool_task_id.as_ref(),
+        Some("dev_task_id") => identity.dev_task_id.as_ref(),
         _ => None,
     }
     .or(identity.work_pool_task_id.as_ref())
@@ -950,7 +971,7 @@ fn terminal_closure_supersedes_stale_handoff_receipt_fields(
         return false;
     }
     let blocker_code = blocker_code.map(str::trim);
-    let stale_developer_handoff = dispatch_status == "blocked"
+    let stale_downstream_handoff = dispatch_status == "blocked"
         && blocker_code
             == Some(crate::release1_contracts::blocker_code_str(
                 crate::release1_contracts::BlockerCode::PendingDeveloperHandoffPacket,
@@ -965,7 +986,7 @@ fn terminal_closure_supersedes_stale_handoff_receipt_fields(
             lane_status.map(str::trim),
             Some("lane_open" | "lane_running" | "lane_blocked") | None
         );
-    stale_developer_handoff || stale_host_bridge_handoff
+    stale_downstream_handoff || stale_host_bridge_handoff
 }
 
 fn terminal_closure_supersedes_stale_handoff_receipt(
@@ -986,7 +1007,7 @@ fn terminal_closure_supersedes_stale_handoff_receipt(
     let stale_kind = if receipt.dispatch_status == "bridge_request_pending" {
         "host bridge"
     } else {
-        "developer handoff"
+        "downstream handoff"
     };
     receipt.dispatch_status = "executed".to_string();
     receipt.lane_status = "lane_completed".to_string();
@@ -5446,6 +5467,28 @@ mod tests {
         status.resume_target = "dispatch.implementer_lane".to_string();
         status.recovery_ready = true;
         status
+    }
+
+    #[test]
+    fn dispatch_identity_target_uses_configured_target_group() {
+        let identity = RunGraphDispatchTaskIdentity {
+            run_id: "run".to_string(),
+            feature_epic_id: Some("epic".to_string()),
+            spec_task_id: Some("spec".to_string()),
+            work_pool_task_id: Some("pool".to_string()),
+            dev_task_id: Some("dev".to_string()),
+            source: "test".to_string(),
+            updated_at: "now".to_string(),
+        };
+
+        assert_eq!(
+            dispatch_identity_task_id_for_target(&identity, "developer"),
+            Some("dev".to_string())
+        );
+        assert_eq!(
+            dispatch_identity_task_id_for_target(&identity, "work-pool-pack"),
+            Some("pool".to_string())
+        );
     }
 
     #[test]
