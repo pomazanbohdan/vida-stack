@@ -20561,6 +20561,32 @@ mod tests {
     }
 
     #[test]
+    fn host_bridge_same_lane_rework_resolves_explicit_retry_target() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "execution_lane_sequence": ["coder", "cleaner"],
+                    "lane_catalog": {
+                        "coder": {"dispatch_target": "coder"},
+                        "cleaner": {"dispatch_target": "cleaner"}
+                    }
+                }
+            }
+        });
+
+        let resolved = crate::runtime_dispatch_state::
+            lawful_explicit_rework_dispatch_target_for_completed_target(
+                &execution_plan,
+                "coder",
+                None,
+                "coder",
+                "coder",
+            );
+
+        assert_eq!(resolved.as_deref(), Some("coder"));
+    }
+
+    #[test]
     fn lane_complete_uses_current_dispatch_packet_when_downstream_packet_absent() {
         let mut receipt = sample_receipt("blocked");
         receipt.downstream_dispatch_packet_path = None;
