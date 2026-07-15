@@ -1203,6 +1203,9 @@ fn pending_host_bridge_next_action(
     {
         return Some(host_bridge_next_action_for_request_path(request_path));
     }
+    if let Some(request_path) = host_bridge_request_path_from_dispatch_result(summary) {
+        return Some(host_bridge_next_action_for_request_path(request_path));
+    }
     if retryable_blocked_host_bridge {
         if let Some(request_path) =
             host_bridge_request_path_for_run_target(summary, summary.dispatch_target.trim())
@@ -1210,6 +1213,12 @@ fn pending_host_bridge_next_action(
             return Some(host_bridge_next_action_for_request_path(request_path));
         }
     }
+    None
+}
+
+fn host_bridge_request_path_from_dispatch_result(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> Option<String> {
     let state_root = host_bridge_state_root_from_receipt_summary(summary)?;
     let dispatch_result_path = summary.dispatch_result_path.as_deref()?.trim();
     if dispatch_result_path.is_empty() {
@@ -1225,7 +1234,7 @@ fn pending_host_bridge_next_action(
     let request_path = host_bridge_path_string(request, "request_path")
         .ok()?
         .to_string();
-    Some(host_bridge_next_action_for_request_path(request_path))
+    Some(request_path)
 }
 
 fn host_bridge_next_action_for_request_path(request_path: String) -> LaneNextAction {
@@ -20584,6 +20593,93 @@ mod tests {
             );
 
         assert_eq!(resolved.as_deref(), Some("coder"));
+    }
+
+    #[test]
+    fn pending_host_bridge_next_action_prefers_current_dispatch_result_request() {
+        let _guard = acquire_lane_surface_test_lock();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-current-host-bridge-request-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let requests_dir = root.join("host-tool-bridge/requests");
+        let results_dir = root.join("runtime-consumption/dispatch-results");
+        fs::create_dir_all(&requests_dir).expect("create request dir");
+        fs::create_dir_all(&results_dir).expect("create result dir");
+
+        let run_id = "run-current-host-bridge-request";
+        let old_request_path = requests_dir.join("old.json");
+        let current_request_path = requests_dir.join("current.json");
+        let current_result_path = results_dir.join("current.json");
+        let blocked_contract = serde_json::json!({
+            "execution_state": "blocked",
+            "decision": "rework_required",
+            "verdict": "rework_required",
+            "required_result_fields": [
+                "decision",
+                "verdict",
+                "blocker_codes",
+                "rework_target",
+                "allowed_next_node"
+            ],
+            "rework_target_required_when_blocked": true,
+            "rework_target": "coder",
+            "allowed_next_node": "coder",
+            "blocker_codes": ["host_agent_execution_failed"],
+            "allowed_blocker_codes": ["host_agent_execution_failed"]
+        });
+        for (path, status) in [
+            (&old_request_path, "retryable_blocked"),
+            (&current_request_path, "pending"),
+        ] {
+            fs::write(
+                path,
+                serde_json::json!({
+                    "schema_version": 1,
+                    "status": status,
+                    "request_id": path.file_stem().unwrap().to_string_lossy(),
+                    "run_id": run_id,
+                    "task_id": run_id,
+                    "dispatch_target": "coder",
+                    "dispatch_transport": "host_tool_bridge",
+                    "request_path": path.display().to_string(),
+                    "result_path": path.with_file_name("result.json").display().to_string(),
+                    "receipt_path": path.with_file_name("receipt.json").display().to_string(),
+                    "blocked_result_contract": blocked_contract,
+                })
+                .to_string(),
+            )
+            .expect("write host bridge request");
+        }
+        fs::write(
+            &current_result_path,
+            serde_json::json!({
+                "host_tool_bridge_request": {
+                    "request_path": current_request_path.display().to_string()
+                }
+            })
+            .to_string(),
+        )
+        .expect("write current dispatch result");
+
+        let mut receipt = sample_receipt("blocked");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "coder".to_string();
+        receipt.blocker_code = Some("host_agent_execution_failed".to_string());
+        receipt.dispatch_result_path = Some(current_result_path.display().to_string());
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+
+        let action = pending_host_bridge_next_action(&summary, None)
+            .expect("current dispatch result should produce a host bridge action");
+        assert!(action.command.contains(&current_request_path.display().to_string()));
+        assert!(!action.command.contains(&old_request_path.display().to_string()));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
