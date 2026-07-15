@@ -7684,6 +7684,23 @@ pub(crate) fn lawful_explicit_rework_dispatch_target_for_completed_target(
     }
     let completed_resolution =
         resolve_runtime_dispatch_target(execution_plan, completed_dispatch_target)?;
+    let normalized_completed_target =
+        normalized_dispatch_target_token(&completed_resolution.dispatch_target);
+    if normalized_rework_target == normalized_completed_target {
+        if let Some(explicit_resolution) =
+            resolve_runtime_dispatch_target(execution_plan, explicit_target)
+        {
+            if normalized_dispatch_target_token(&explicit_resolution.dispatch_target)
+                == normalized_completed_target
+            {
+                // A blocked host-bridge completion may explicitly request a retry of
+                // the same lane. The packet/result identity and retry evidence are
+                // validated by the caller; this branch only resolves that retry
+                // target instead of treating it as a forward transition.
+                return Some(explicit_resolution.dispatch_target);
+            }
+        }
+    }
     let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
     if !matches!(
         crate::team_flow_state_machine::validate_dispatch_contract_rework_transition(
