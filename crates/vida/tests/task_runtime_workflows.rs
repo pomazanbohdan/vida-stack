@@ -25,6 +25,25 @@ fn run_json_success(fixture: &PersistentRuntimeFixture, args: &[&str]) -> Value 
     fixture.json_success(args)
 }
 
+fn zombie_d_matrix_note(doubts: Value) -> String {
+    let matrix = serde_json::json!({
+        "schema_version": 1,
+        "categories": {
+            "Z": {"status": "pass", "evidence_refs": ["z"]},
+            "O": {"status": "pass", "evidence_refs": ["o"]},
+            "M": {"status": "na", "reason": "single fixture contract"},
+            "B": {"status": "pass", "evidence_refs": ["b"]},
+            "I": {"status": "pass", "evidence_refs": ["i"]},
+            "E": {"status": "pass", "evidence_refs": ["e"]},
+            "S": {"status": "pass", "evidence_refs": ["s"]}
+        },
+        "doubts": doubts
+    });
+    format!(
+        "task_proof_evidence:\n  proof_target: zombie_d_matrix\n  result: pass\n  evidence: {matrix}"
+    )
+}
+
 fn assert_zombie_d_operator_shape(value: &Value, label: &str) {
     vida_test_support::assert_release1_operator_shape(label, value);
     assert!(matches!(
@@ -1073,6 +1092,71 @@ fn task_runtime_workflows_cover_isolated_task_lifecycle_and_reimport() {
         imported["task"]["planner_metadata"]["owned_paths"][0],
         "crates/vida/tests/task_runtime_workflows.rs"
     );
+}
+
+#[test]
+fn task_close_uses_latest_valid_persisted_zombie_d_matrix() {
+    let fixture = PersistentRuntimeFixture::state_only("latest-valid-zombie-d-close");
+    fixture.boot();
+
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "create",
+            "latest-valid-zombie-d-epic",
+            "Latest valid ZOMBIE-D epic",
+            "--type",
+            "epic",
+            "--execution-mode",
+            "container_only",
+            "--json",
+        ],
+    );
+    let older = zombie_d_matrix_note(serde_json::json!([{"id": "resolved-doubt"}]));
+    let latest = zombie_d_matrix_note(serde_json::json!([]));
+    let notes = format!("{older}\n\n{latest}");
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "create",
+            "latest-valid-zombie-d-task",
+            "Latest valid ZOMBIE-D task",
+            "--parent-id",
+            "latest-valid-zombie-d-epic",
+            "--labels",
+            "zombie-d",
+            "--owned-path",
+            "crates/vida/src/zombie_d_gate.rs",
+            "--notes",
+            &notes,
+            "--execution-mode",
+            "sequential",
+            "--json",
+        ],
+    );
+
+    let close = run_json_success(
+        &fixture,
+        &[
+            "task",
+            "close",
+            "latest-valid-zombie-d-task",
+            "--reason",
+            "latest valid ZOMBIE-D matrix supersedes resolved historical doubt",
+            "--json",
+        ],
+    );
+    assert_eq!(close["status"], "pass");
+    let show = run_json_success(
+        &fixture,
+        &["task", "show", "latest-valid-zombie-d-task", "--json"],
+    );
+    assert_eq!(show["task"]["status"], "closed");
+    assert!(show["task"]["notes"]
+        .as_str()
+        .is_some_and(|notes| notes.contains("resolved-doubt") && notes.matches("task_proof_evidence:").count() == 2));
 }
 
 #[test]
