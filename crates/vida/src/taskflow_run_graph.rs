@@ -6565,7 +6565,7 @@ pub(crate) fn validate_run_graph_resume_gate(status: &RunGraphStatus) -> Result<
     }
     if !status.delegation_gate().delegated_cycle_open
         && !is_receipt_backed_materialized_dispatch_ready(status)
-        && !is_seeded_implementation_dispatch_ready(status)
+        && !is_seeded_dispatch_ready(status)
     {
         return Err(format!(
             "Run-graph resume gate denied for `{}`: delegated cycle is not open",
@@ -6934,16 +6934,29 @@ fn next_seeded_implementation_lane(sequence: &[String], current_node: &str) -> O
     sequence.get(current_index + 1).cloned()
 }
 
-fn is_seeded_implementation_dispatch_ready(status: &RunGraphStatus) -> bool {
-    status.task_class == "implementation"
-        && status.route_task_class == "implementation"
-        && status.active_node == "planning"
+fn is_seeded_dispatch_ready(status: &RunGraphStatus) -> bool {
+    let Some(next_node) = status.next_node.as_deref().map(str::trim) else {
+        return false;
+    };
+    if next_node.is_empty() || next_node == "none" || next_node == "unknown" {
+        return false;
+    }
+    status.active_node == "planning"
         && status.status == "ready"
-        && status.next_node.as_deref().is_some_and(|node| {
-            !node.trim().is_empty() && node != "none" && node != "unknown"
-        })
-        && status.lifecycle_stage.ends_with("_dispatch_ready")
+        && status.lane_id == format!("{next_node}_lane")
+        && status.lifecycle_stage == format!("{next_node}_dispatch_ready")
+        && status.policy_gate == "not_required"
+        && status.handoff_state == format!("awaiting_{next_node}")
+        && status.context_state == "ready"
+        && status.checkpoint_kind == "execution_cursor"
+        && status.resume_target == format!("dispatch.{next_node}")
         && status.recovery_ready
+}
+
+fn is_seeded_implementation_dispatch_ready(status: &RunGraphStatus) -> bool {
+    is_seeded_dispatch_ready(status)
+        && status.task_class == "implementation"
+        && status.route_task_class == "implementation"
 }
 
 fn implementation_verification_gate(
@@ -19050,6 +19063,30 @@ agent_system:
         };
 
         validate_run_graph_resume_gate(&status).expect("should pass");
+    }
+
+    #[test]
+    fn validate_run_graph_resume_gate_accepts_seeded_configured_route() {
+        let status = RunGraphStatus {
+            run_id: "run-configured-route".to_string(),
+            task_id: "task-configured-route".to_string(),
+            task_class: "verification".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("tester".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "verification".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "tester_lane".to_string(),
+            lifecycle_stage: "tester_dispatch_ready".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "awaiting_tester".to_string(),
+            context_state: "ready".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.tester".to_string(),
+            recovery_ready: true,
+        };
+
+        validate_run_graph_resume_gate(&status).expect("seeded configured route should pass");
     }
 
     #[test]
