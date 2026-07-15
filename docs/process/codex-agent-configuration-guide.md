@@ -501,5 +501,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/codex-agent-configuration-guide.md
 created_at: '2026-03-12T08:35:27+02:00'
-updated_at: 2026-06-13T01:35:00+03:00
+updated_at: 2026-07-15T09:39:57.777473Z
 changelog_ref: codex-agent-configuration-guide.changelog.jsonl
