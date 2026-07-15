@@ -4,7 +4,8 @@ use crate::task_cli_render::{
     print_task_bulk_reparent_result, print_task_closeout, print_task_defect_batch_rehome_result,
     print_task_dependency_bulk_add_result, print_task_dependency_bulk_add_result_for_surface,
     print_task_direct_children, print_task_show_missing, print_task_update_graph_blocked,
-    task_closeout_payload, task_read_metadata_value, task_ready_payload, task_show_payload,
+    print_task_show_with_selection, task_closeout_payload, task_read_metadata_value,
+    task_ready_payload, task_show_payload_with_selection, validate_json_field_selector,
 };
 use crate::taskflow_proxy::paths_intersect;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -3796,6 +3797,9 @@ fn task_tree_json_value(
         .collect::<Vec<_>>();
 
     let mut tree_value = serde_json::json!({
+        "id": tree.task.id,
+        "status": tree.task.status,
+        "title": tree.task.title,
         "root": {
             "id": tree.task.id,
             "status": tree.task.status,
@@ -3886,7 +3890,8 @@ fn print_task_tree_with_repeat_provenance(
     tree: &state_store::TaskDependencyTreeNode,
     include_full: bool,
     progress: Option<&state_store::TaskProgressSummary>,
-) {
+    fields: Option<&str>,
+) -> Result<(), String> {
     let mut entries = Vec::new();
     let tree_value = task_tree_json_value(tree, include_full, progress, &mut entries, "root", true);
     let repeat_provenance = task_tree_repeat_provenance_value(&entries);
@@ -3895,9 +3900,16 @@ fn print_task_tree_with_repeat_provenance(
     tree_value["diagnostics"]["repeated_count"] = repeat_provenance["repeat_count"].clone();
     tree_value["diagnostics"]["traversal_repeat_count"] =
         repeat_provenance["traversal_repeat_count"].clone();
-    let payload =
-        crate::task_cli_render::build_pass_operator_surface_payload("vida task tree", tree_value);
+    if let Err(error) = crate::task_cli_render::validate_json_field_selector(&tree_value, fields) {
+        return Err(error);
+    }
+    let tree_value = crate::task_cli_render::apply_json_field_selector(tree_value, fields);
+    let payload = crate::task_cli_render::build_pass_operator_surface_payload(
+        "vida task tree",
+        tree_value,
+    );
     crate::print_json_pretty(&payload);
+    Ok(())
 }
 
 fn print_task_tree_repeat_provenance_line(
@@ -4518,6 +4530,33 @@ async fn run_task_list_like(command: TaskListLikeInput<'_>) -> ExitCode {
                 "summary"
             };
             let view = if command.summary { "summary" } else { view };
+            let selector_source = if view == "full" {
+                tasks
+                    .first()
+                    .map(|task| {
+                        serde_json::to_value(task)
+                            .expect("task list selector source should serialize")
+                    })
+                    .unwrap_or_else(|| serde_json::json!({}))
+            } else {
+                serde_json::json!({
+                    "id": null,
+                    "display_id": null,
+                    "status": null,
+                    "title": null,
+                    "priority": null,
+                    "issue_type": null,
+                    "work_item_kind": null,
+                    "parent_id": null,
+                    "parent_edge": null,
+                })
+            };
+            if let Err(error) =
+                validate_json_field_selector(&selector_source, command.fields)
+            {
+                eprintln!("{error}");
+                return ExitCode::from(2);
+            }
             print_task_list(
                 command.surface,
                 command.render,
@@ -13434,19 +13473,23 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
-            let view = match command.view.trim() {
-                "compact" => "compact",
-                "summary" | "" => "summary",
-                "full" => "full",
-                other => {
-                    eprintln!(
-                        "Invalid task show view `{other}`. Supported views: compact, summary, full. Try `vida task show {} --view full`.",
-                        command.task_id
-                    );
-                    return ExitCode::from(2);
+            let view = if command.full {
+                "full"
+            } else {
+                match command.view.trim() {
+                    "compact" => "compact",
+                    "summary" | "" => "summary",
+                    "full" => "full",
+                    other => {
+                        eprintln!(
+                            "Invalid task show view `{other}`. Supported views: compact, summary, full. Try `vida task show {} --view full`.",
+                            command.task_id
+                        );
+                        return ExitCode::from(2);
+                    }
                 }
             };
-            let cache_allowed = command.json && view == "summary";
+            let cache_allowed = command.json && view == "summary" && command.fields.is_none();
             if cache_allowed {
                 let projection_name = task_show_projection_name(&command.task_id);
                 if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
@@ -13469,8 +13512,38 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             }
             match task_show_authoritative_first(state_dir.clone(), &command.task_id).await {
                 Ok((task, metadata)) => {
+                    let selector_source = if view == "compact" {
+                        serde_json::json!({
+                            "id": task.id.clone(),
+                            "display_id": task.display_id.clone(),
+                            "status": task.status.clone(),
+                            "title": task.title.clone(),
+                            "priority": task.priority,
+                            "issue_type": task.issue_type.clone(),
+                            "work_item_kind": serde_json::Value::Null,
+                            "parent_id": serde_json::Value::Null,
+                            "parent_edge": serde_json::Value::Null,
+                            "blocker_codes": serde_json::Value::Array(Vec::new()),
+                            "next_actions": serde_json::Value::Array(Vec::new()),
+                            "artifact_refs": serde_json::json!({}),
+                            "mutation_summary": serde_json::Value::Null,
+                        })
+                    } else {
+                        serde_json::to_value(&task).expect("task selector source should serialize")
+                    };
+                    if let Err(error) =
+                        validate_json_field_selector(&selector_source, command.fields.as_deref())
+                    {
+                        eprintln!("{error}");
+                        return ExitCode::from(2);
+                    }
                     if command.json {
-                        let payload = task_show_payload(&task, Some(&metadata), view);
+                        let payload = task_show_payload_with_selection(
+                            &task,
+                            Some(&metadata),
+                            view,
+                            command.fields.as_deref(),
+                        );
                         crate::print_json_pretty(&payload);
                         if cache_allowed {
                             crate::operator_projection_cache::write_json_projection(
@@ -13480,7 +13553,14 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             );
                         }
                     } else {
-                        print_task_show(command.render, &task, false, Some(&metadata), view);
+                        print_task_show_with_selection(
+                            command.render,
+                            &task,
+                            false,
+                            Some(&metadata),
+                            view,
+                            command.fields.as_deref(),
+                        );
                     }
                     ExitCode::SUCCESS
                 }
@@ -16347,19 +16427,27 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         None
                     };
                     if command.json {
-                        print_task_tree_with_repeat_provenance(
+                        if let Err(error) = print_task_tree_with_repeat_provenance(
                             &tree,
                             command.full,
                             progress.as_ref(),
-                        );
+                            command.fields.as_deref(),
+                        ) {
+                            eprintln!("{error}");
+                            return ExitCode::from(2);
+                        }
                     } else {
-                        print_task_dependency_tree(
+                        if let Err(error) = print_task_dependency_tree(
                             command.render,
                             &tree,
                             command.full,
                             progress.as_ref(),
                             false,
-                        );
+                            command.fields.as_deref(),
+                        ) {
+                            eprintln!("{error}");
+                            return ExitCode::from(2);
+                        }
                         print_task_tree_repeat_provenance_line(&tree, command.full);
                     }
                     ExitCode::SUCCESS

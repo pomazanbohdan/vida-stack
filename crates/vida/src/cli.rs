@@ -2297,6 +2297,18 @@ pub(crate) struct TaskShowArgs {
     )]
     pub(crate) view: String,
 
+    #[arg(
+        long = "fields",
+        help = "Comma-separated task fields to include, for example id,status,title"
+    )]
+    pub(crate) fields: Option<String>,
+
+    #[arg(
+        long = "full",
+        help = "Explicitly request the full task payload; equivalent to --view full"
+    )]
+    pub(crate) full: bool,
+
     #[arg(long = "json", help = "Emit machine-readable JSON output")]
     pub(crate) json: bool,
 }
