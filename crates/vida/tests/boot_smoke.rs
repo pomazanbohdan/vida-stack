@@ -5198,6 +5198,85 @@ fn bootstrap_init_surfaces_report_installed_vs_source_launcher_parity() {
 }
 
 #[test]
+fn orchestrator_init_summary_snapshot_contract() {
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "orchestrator-init-summary-snapshot",
+        "Orchestrator Init Summary Snapshot",
+    );
+
+    let run_summary = || {
+        run_command_with_state_lock_retry(|| {
+            let mut command = vida();
+            command
+                .args(["orchestrator-init", "--json"])
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir);
+            command
+        })
+    };
+
+    let assert_summary = |output: &std::process::Output| {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.len() <= 12 * 1024,
+            "summary JSON exceeds 12 KiB: {} bytes",
+            stdout.len()
+        );
+        assert!(
+            stdout.lines().count() <= 120,
+            "summary JSON exceeds 120 lines: {}",
+            stdout.lines().count()
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(&stdout).expect("summary snapshot JSON should parse");
+        assert_eq!(parsed["surface"], "vida orchestrator-init");
+        assert_eq!(parsed["view"], "summary");
+        assert_eq!(parsed["full_output_available"], true);
+        assert!(
+            parsed["active_bounded_unit"].is_object()
+                || parsed["active_bounded_unit"].is_null()
+        );
+        assert!(parsed["next_actions"].is_array());
+        assert!(parsed["sequential_vs_parallel_posture"].is_string());
+        assert!(parsed.get("dev_team_readiness").is_none());
+        assert!(parsed.get("orchestrator_runtime_contract").is_none());
+    };
+
+    assert_summary(&run_summary());
+    assert_summary(&run_summary());
+
+    let full = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args(["orchestrator-init", "--full", "--json"])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        full.status.success(),
+        "{}",
+        String::from_utf8_lossy(&full.stderr)
+    );
+    let full_json: serde_json::Value = serde_json::from_slice(&full.stdout)
+        .expect("full orchestrator-init JSON should parse");
+    assert_eq!(full_json["view"], "full");
+    assert!(full_json["dev_team_readiness"].is_object());
+    assert!(full_json["orchestrator_runtime_contract"].is_object());
+
+    fs::remove_dir_all(project_root).expect("summary snapshot project should be removed");
+}
+
+#[test]
 fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
     let (project_root, state_dir) = bootstrap_project_runtime(
         "agent-init-view-only-activation",

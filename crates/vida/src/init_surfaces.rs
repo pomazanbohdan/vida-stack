@@ -6117,11 +6117,13 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                             field_selection,
                         );
                         if args.json {
-                            println!(
-                                "{}",
+                            let rendered = if full_output {
                                 serde_json::to_string_pretty(&selected_payload)
-                                    .expect("orchestrator-init json should render")
-                            );
+                            } else {
+                                serde_json::to_string(&selected_payload)
+                            }
+                            .expect("orchestrator-init json should render");
+                            println!("{rendered}");
                         } else {
                             println!(
                                 "{}",
