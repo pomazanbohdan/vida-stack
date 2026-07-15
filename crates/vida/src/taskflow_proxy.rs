@@ -2406,9 +2406,11 @@ async fn persist_scheduler_execute_receipt(
                         .map_err(|error| {
                             format!("failed to open scheduler reservation store after packet dispatch failure: {error}")
                         })?;
-                    let (lease_owner, lease_token) =
-                        scheduler_reservation_lease_credentials(&store, &reservation.reservation_id)
-                            .await?;
+                    let (lease_owner, lease_token) = scheduler_reservation_lease_credentials(
+                        &store,
+                        &reservation.reservation_id,
+                    )
+                    .await?;
                     store
                         .release_scheduler_dispatch_reservation_with_blockers_checked(
                             &reservation.reservation_id,
@@ -5552,7 +5554,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         recovery.as_ref(),
         dispatch.as_ref(),
     );
-    let payload = serde_json::json!({
+    let payload = operator_output::next_actions::decorate_projection(serde_json::json!({
         "surface": "vida taskflow next",
         "status": decision.status,
         "artifact_refs": artifact_refs,
@@ -5579,7 +5581,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         },
         "shared_fields": shared_fields,
         "operator_contracts": operator_contracts,
-    });
+    }));
 
     if as_json {
         crate::print_json_pretty(&payload);
@@ -10187,6 +10189,26 @@ mod tests {
             projection["primary_ready_task"]["id"],
             "task-ready-after-terminal-closure"
         );
+        assert_eq!(
+            projection["next_action_reducer_version"],
+            operator_output::next_actions::NEXT_ACTION_REDUCER_SCHEMA_VERSION
+        );
+        let next_action = &projection["next_action"];
+        for field in ["kind", "action_id", "command", "surface", "reason"] {
+            assert!(
+                next_action[field]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty()),
+                "typed next action field `{field}` should be populated"
+            );
+        }
+        assert!(next_action["expected_output"].is_array());
+        assert!(next_action["approval_required"].is_boolean());
+        assert!(next_action["artifact_refs"].is_object());
+        assert_eq!(
+            projection["next_action_reducer"]["next_action"],
+            *next_action
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -11027,8 +11049,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scheduler_execute_releases_persisted_reservation_after_dispatch_preparation_failure()
-    {
+    async fn scheduler_execute_releases_persisted_reservation_after_dispatch_preparation_failure() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -12076,6 +12097,16 @@ mod tests {
 
     #[test]
     fn case_18_route_readiness_parity() {
+        let (selected_model_profile_id, selected_model_ref) =
+            super::current_project_model_profile_catalog()
+                .into_iter()
+                .find_map(|(profile_id, model_refs)| {
+                    model_refs
+                        .into_iter()
+                        .next()
+                        .map(|model_ref| (profile_id, model_ref))
+                })
+                .expect("the active project should expose at least one model profile");
         let execution_plan = serde_json::json!({
             "backend_admissibility_matrix": [
                 {
@@ -12105,10 +12136,10 @@ mod tests {
                         "selected_backend_id": "internal_subagents",
                         "selected_carrier_id": "internal_subagents",
                         "selected_agent_id": "internal_subagents",
-                        "selected_model_profile_id": "codex_gpt55_low_write",
-                        "selected_model_ref": "gpt-5.5",
+                        "selected_model_profile_id": selected_model_profile_id,
+                        "selected_model_ref": selected_model_ref,
                         "selected_model_provider": "openai-codex",
-                        "selected_reasoning_effort": "low",
+                        "selected_reasoning_effort": "configured",
                         "model_selection_enabled": true,
                         "candidate_scope": "unified_carrier_model_profiles",
                         "budget_policy": "tier_budget_guard",
@@ -12130,7 +12161,10 @@ mod tests {
             payload["selected_model_provider"].as_str(),
             Some("openai-codex")
         );
-        assert_eq!(payload["selected_model_ref"].as_str(), Some("gpt-5.5"));
+        assert_eq!(
+            payload["selected_model_ref"].as_str(),
+            Some(selected_model_ref.as_str())
+        );
         assert_eq!(payload["status"].as_str(), Some("pass"));
         assert!(payload["blocker_codes"].as_array().is_some_and(|codes| {
             !codes.contains(&serde_json::json!(

@@ -1,4 +1,531 @@
 use crate::command_text::human_command;
+use serde::{Deserialize, Serialize};
+
+pub const NEXT_ACTION_REDUCER_SCHEMA_VERSION: &str = "next-action-reducer-v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NextActionKind {
+    Bind,
+    Continue,
+    Execute,
+    Inspect,
+    Recompute,
+    Recover,
+}
+
+impl NextActionKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Bind => "bind",
+            Self::Continue => "continue",
+            Self::Execute => "execute",
+            Self::Inspect => "inspect",
+            Self::Recompute => "recompute",
+            Self::Recover => "recover",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedNextAction {
+    pub action_id: String,
+    pub kind: NextActionKind,
+    pub command: String,
+    pub expected_output: Vec<String>,
+    pub approval_required: bool,
+    pub artifact_refs: serde_json::Value,
+    pub surface: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct NextActionUnit {
+    pub id: String,
+    pub title: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct NextActionLane {
+    pub id: Option<String>,
+    pub role: Option<String>,
+    pub task_class: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct NextActionReferences {
+    pub run_id: Option<String>,
+    pub task_id: Option<String>,
+    pub packet_path: Option<String>,
+    pub result_path: Option<String>,
+    pub receipt_path: Option<String>,
+    pub source_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NextActionBlocker {
+    pub code: String,
+    pub next_action: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AfterSuccessContract {
+    pub next_command: String,
+    pub requires_receipt: bool,
+    pub invariant: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NextActionReducerInput {
+    pub status: String,
+    pub current_unit: Option<NextActionUnit>,
+    pub lane: Option<NextActionLane>,
+    pub next_action: Option<TypedNextAction>,
+    pub packet_refs: NextActionReferences,
+    pub context_refs: NextActionReferences,
+    pub blocker_codes: Vec<String>,
+    pub next_actions: Vec<String>,
+    pub after_success: Option<AfterSuccessContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NextActionReducerOutput {
+    pub schema_version: String,
+    pub status: String,
+    pub current_unit: Option<NextActionUnit>,
+    pub lane: Option<NextActionLane>,
+    pub next_action: Option<TypedNextAction>,
+    pub packet_refs: NextActionReferences,
+    pub context_refs: NextActionReferences,
+    pub blockers: Vec<NextActionBlocker>,
+    pub blocker_codes: Vec<String>,
+    pub next_actions: Vec<String>,
+    pub after_success: AfterSuccessContract,
+}
+
+pub fn reduce_next_action(input: NextActionReducerInput) -> NextActionReducerOutput {
+    let blocker_codes = input
+        .blocker_codes
+        .into_iter()
+        .map(|code| code.trim().to_ascii_lowercase())
+        .filter(|code| !code.is_empty())
+        .collect::<Vec<_>>();
+    let next_actions = input
+        .next_actions
+        .into_iter()
+        .map(|action| action.trim().to_string())
+        .filter(|action| !action.is_empty())
+        .collect::<Vec<_>>();
+    let blockers = blocker_codes
+        .iter()
+        .enumerate()
+        .map(|(index, code)| NextActionBlocker {
+            code: code.clone(),
+            next_action: next_actions.get(index).cloned(),
+        })
+        .collect();
+    let after_success = input.after_success.unwrap_or_else(|| AfterSuccessContract {
+        next_command: "vida task next".to_string(),
+        requires_receipt: input
+            .packet_refs
+            .packet_path
+            .as_ref()
+            .is_some_and(|path| !path.trim().is_empty()),
+        invariant: "reconcile the receipt-backed result before selecting another bounded unit"
+            .to_string(),
+    });
+
+    NextActionReducerOutput {
+        schema_version: NEXT_ACTION_REDUCER_SCHEMA_VERSION.to_string(),
+        status: input.status,
+        current_unit: input.current_unit,
+        lane: input.lane,
+        next_action: input.next_action,
+        packet_refs: input.packet_refs,
+        context_refs: input.context_refs,
+        blockers,
+        blocker_codes,
+        next_actions,
+        after_success,
+    }
+}
+
+fn non_empty_string(value: Option<&serde_json::Value>) -> Option<String> {
+    value
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn first_object(value: &serde_json::Value, path: &[&str]) -> Option<serde_json::Value> {
+    let value = path.iter().try_fold(value, |value, key| value.get(*key))?;
+    value
+        .as_array()
+        .and_then(|values| values.first())
+        .cloned()
+        .or_else(|| value.is_object().then(|| value.clone()))
+}
+
+fn first_string(value: &serde_json::Value, paths: &[&[&str]]) -> Option<String> {
+    paths.iter().find_map(|path| {
+        let value = path
+            .iter()
+            .fold(value.clone(), |value: serde_json::Value, key: &&str| {
+                value.get(*key).cloned().unwrap_or(serde_json::Value::Null)
+            });
+        non_empty_string(Some(&value))
+    })
+}
+
+fn first_bool(value: &serde_json::Value, paths: &[&[&str]]) -> Option<bool> {
+    paths.iter().find_map(|path| {
+        let value = path
+            .iter()
+            .fold(value.clone(), |value: serde_json::Value, key: &&str| {
+                value.get(*key).cloned().unwrap_or(serde_json::Value::Null)
+            });
+        value.as_bool()
+    })
+}
+
+fn string_list(value: Option<&serde_json::Value>) -> Vec<String> {
+    match value {
+        Some(value) if value.is_array() => value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        Some(value) => non_empty_string(Some(value)).into_iter().collect(),
+        None => Vec::new(),
+    }
+}
+
+fn expected_output_from_projection(value: &serde_json::Value) -> Vec<String> {
+    let expected_output = value
+        .get("next_action")
+        .and_then(|action| action.get("expected_output"))
+        .or_else(|| value.get("expected_output"))
+        .or_else(|| {
+            value
+                .get("flow_projection")
+                .and_then(|projection| projection.get("expected_output"))
+        });
+    let expected_output = string_list(expected_output);
+    if !expected_output.is_empty() {
+        return expected_output;
+    }
+    value
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(|status| vec![format!("status={status}")])
+        .unwrap_or_else(|| vec!["operator_projection".to_string()])
+}
+
+fn approval_required_from_projection(value: &serde_json::Value) -> bool {
+    first_bool(
+        value,
+        &[
+            &["next_action", "approval_required"],
+            &["approval_required"],
+            &["requires_user_approval"],
+            &["flow_projection", "current_step", "approval_required"],
+            &["flow_projection", "current_step", "requires_user_approval"],
+        ],
+    )
+    .or_else(|| {
+        value
+            .get("selected_lanes")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|lanes| lanes.first())
+            .and_then(|lane| lane.get("requires_user_approval"))
+            .and_then(serde_json::Value::as_bool)
+    })
+    .unwrap_or(false)
+}
+
+fn artifact_refs_from_projection(value: &serde_json::Value) -> serde_json::Value {
+    if let Some(artifact_refs) = value.get("artifact_refs").filter(|value| !value.is_null()) {
+        return artifact_refs.clone();
+    }
+    if let Some(artifacts) = value
+        .get("packet_materialization")
+        .and_then(|materialization| materialization.get("artifacts"))
+        .filter(|value| !value.is_null())
+    {
+        return serde_json::json!({"packet_materialization": artifacts});
+    }
+    serde_json::json!({})
+}
+
+fn action_id(kind: &NextActionKind, command: &str, surface: &str) -> String {
+    let raw = format!("next_action_{}_{}_{}", kind.as_str(), surface, command);
+    let mut normalized = String::with_capacity(raw.len());
+    for character in raw.chars() {
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character.to_ascii_lowercase());
+        } else if !normalized.ends_with('_') {
+            normalized.push('_');
+        }
+    }
+    normalized.trim_end_matches('_').to_string()
+}
+
+fn infer_action_kind(command: &str, surface: &str) -> NextActionKind {
+    let haystack = format!("{command} {surface}").to_ascii_lowercase();
+    if haystack.contains("bind") {
+        NextActionKind::Bind
+    } else if haystack.contains("continue") {
+        NextActionKind::Continue
+    } else if haystack.contains("recover") || haystack.contains("retire") {
+        NextActionKind::Recover
+    } else if haystack.contains("recompute") || haystack.contains("refresh") {
+        NextActionKind::Recompute
+    } else if haystack.contains("dispatch") || haystack.contains("execute") {
+        NextActionKind::Execute
+    } else {
+        NextActionKind::Inspect
+    }
+}
+
+fn action_from_projection(value: &serde_json::Value) -> Option<TypedNextAction> {
+    let action = value.get("next_action").filter(|value| value.is_object());
+    let command = first_string(
+        value,
+        &[
+            &["next_action", "command"],
+            &["flow_projection", "current_step", "dispatch_command"],
+            &[
+                "packet_materialization",
+                "artifacts",
+                "0",
+                "agent_init_execute_command",
+            ],
+        ],
+    )?;
+    let surface = action
+        .and_then(|value| non_empty_string(value.get("surface")))
+        .or_else(|| {
+            first_string(
+                value,
+                &[&["recommended_surface"], &["dispatch", "dispatch_surface"]],
+            )
+        })
+        .unwrap_or_else(|| "vida task next".to_string());
+    let reason = action
+        .and_then(|value| non_empty_string(value.get("reason")))
+        .or_else(|| {
+            value
+                .get("next_actions")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|actions| actions.first())
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| {
+            "continue the current bounded unit from authoritative runtime evidence".to_string()
+        });
+    let kind = action
+        .and_then(|value| non_empty_string(value.get("kind")))
+        .and_then(|kind| match kind.as_str() {
+            "bind" => Some(NextActionKind::Bind),
+            "continue" => Some(NextActionKind::Continue),
+            "execute" => Some(NextActionKind::Execute),
+            "inspect" => Some(NextActionKind::Inspect),
+            "recompute" => Some(NextActionKind::Recompute),
+            "recover" => Some(NextActionKind::Recover),
+            _ => None,
+        })
+        .unwrap_or_else(|| infer_action_kind(&command, &surface));
+    Some(TypedNextAction {
+        action_id: action_id(&kind, &command, &surface),
+        kind,
+        command,
+        expected_output: expected_output_from_projection(value),
+        approval_required: approval_required_from_projection(value),
+        artifact_refs: artifact_refs_from_projection(value),
+        surface,
+        reason,
+    })
+}
+
+pub fn reduce_projection(value: &serde_json::Value) -> NextActionReducerOutput {
+    let current = first_object(value, &["current_unit"])
+        .or_else(|| first_object(value, &["primary_ready_task"]))
+        .or_else(|| first_object(value, &["candidate_task_context", "ready_head"]))
+        .or_else(|| first_object(value, &["selected_lanes"]));
+    let current_unit = current.as_ref().and_then(|value| {
+        let id = first_string(value, &[&["id"], &["task_id"]])?;
+        Some(NextActionUnit {
+            id,
+            title: non_empty_string(value.get("title")),
+            status: non_empty_string(value.get("status")),
+        })
+    });
+    let lane_value = first_object(value, &["lane"])
+        .or_else(|| first_object(value, &["selected_lanes"]))
+        .or_else(|| {
+            value
+                .get("dispatch")
+                .cloned()
+                .filter(|value| value.is_object())
+        });
+    let lane = lane_value.as_ref().and_then(|value| {
+        let id = first_string(
+            value,
+            &[&["id"], &["lane_id"], &["role_label"], &["dispatch_target"]],
+        );
+        let role = first_string(
+            value,
+            &[
+                &["role"],
+                &["runtime_role"],
+                &["activation_runtime_role"],
+                &["dispatch_target"],
+            ],
+        );
+        let task_class = first_string(value, &[&["task_class"]]);
+        let status = first_string(
+            value,
+            &[&["status"], &["lane_status"], &["dispatch_status"]],
+        );
+        (id.is_some() || role.is_some() || task_class.is_some() || status.is_some()).then_some(
+            NextActionLane {
+                id,
+                role,
+                task_class,
+                status,
+            },
+        )
+    });
+    let packet = value.get("packet_materialization");
+    let packet_artifact = packet.and_then(|packet| first_object(packet, &["artifacts"]));
+    let dispatch = value.get("dispatch");
+    let packet_refs = NextActionReferences {
+        run_id: first_string(
+            value,
+            &[
+                &["dispatch", "run_id"],
+                &["run_id"],
+                &["current_unit", "id"],
+            ],
+        ),
+        task_id: current_unit.as_ref().map(|unit| unit.id.clone()),
+        packet_path: packet_artifact
+            .as_ref()
+            .and_then(|artifact| non_empty_string(artifact.get("dispatch_packet_path")))
+            .or_else(|| {
+                dispatch.and_then(|value| non_empty_string(value.get("dispatch_packet_path")))
+            }),
+        result_path: packet_artifact
+            .as_ref()
+            .and_then(|artifact| non_empty_string(artifact.get("dispatch_result_path")))
+            .or_else(|| {
+                dispatch.and_then(|value| non_empty_string(value.get("dispatch_result_path")))
+            }),
+        receipt_path: dispatch.and_then(|value| non_empty_string(value.get("receipt_path"))),
+        source_refs: value
+            .get("source_surfaces")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect(),
+    };
+    let context_refs = NextActionReferences {
+        run_id: packet_refs.run_id.clone(),
+        task_id: packet_refs.task_id.clone(),
+        packet_path: None,
+        result_path: None,
+        receipt_path: None,
+        source_refs: [
+            first_string(
+                value,
+                &[&["scope_task_id"], &["flow_projection", "flow_id"]],
+            ),
+            first_string(value, &[&["candidate_task_context", "admissibility_gate"]]),
+            first_string(value, &[&["projection_source"], &["truth_source"]]),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    };
+    let blocker_codes = value
+        .get("blocker_codes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect();
+    let next_actions = value
+        .get("next_actions")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect();
+    reduce_next_action(NextActionReducerInput {
+        status: non_empty_string(value.get("status")).unwrap_or_else(|| "blocked".to_string()),
+        current_unit,
+        lane,
+        next_action: action_from_projection(value),
+        packet_refs,
+        context_refs,
+        blocker_codes,
+        next_actions,
+        after_success: None,
+    })
+}
+
+pub fn decorate_projection(mut value: serde_json::Value) -> serde_json::Value {
+    let reduced = reduce_projection(&value);
+    let reduced_value =
+        serde_json::to_value(&reduced).expect("next action reducer should serialize");
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "next_action_reducer_version".to_string(),
+            serde_json::json!(NEXT_ACTION_REDUCER_SCHEMA_VERSION),
+        );
+        object.insert("next_action_reducer".to_string(), reduced_value.clone());
+        for key in [
+            "current_unit",
+            "lane",
+            "next_action",
+            "packet_refs",
+            "context_refs",
+            "blockers",
+            "after_success",
+        ] {
+            if let Some(field) = reduced_value.get(key) {
+                object.insert(key.to_string(), field.clone());
+            }
+        }
+    }
+    value
+}
+
+pub fn cached_projection_admissible(cached: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(cached)
+        .ok()
+        .is_some_and(|value| {
+            value
+                .get("next_action_reducer_version")
+                .and_then(serde_json::Value::as_str)
+                == Some(NEXT_ACTION_REDUCER_SCHEMA_VERSION)
+                && value
+                    .get("next_action_reducer")
+                    .is_some_and(serde_json::Value::is_object)
+        })
+}
 
 fn shell_quote(value: &str) -> String {
     if value.is_empty() {
@@ -126,5 +653,62 @@ mod tests {
             human_closed_run_reconcile_command(),
             "vida task reconcile-closed-runs --limit 25"
         );
+    }
+
+    #[test]
+    fn decorated_projection_emits_complete_typed_next_action_contract() {
+        let projection = serde_json::json!({
+            "status": "blocked",
+            "next_action": {
+                "command": "vida task ready",
+                "surface": "vida task ready",
+                "reason": "inspect the authoritative ready projection"
+            },
+            "expected_output": ["status", "blocker_codes"],
+            "approval_required": true,
+            "artifact_refs": {"surface": "vida taskflow next", "task_id": "task-1"},
+            "blocker_codes": ["NoReadyTasks"],
+            "next_actions": ["Run vida task ready"]
+        });
+
+        let decorated = decorate_projection(projection);
+        let action = &decorated["next_action"];
+        assert!(action["action_id"]
+            .as_str()
+            .is_some_and(|id| { id.starts_with("next_action_inspect_vida_task_ready") }));
+        assert_eq!(action["kind"], "inspect");
+        assert_eq!(action["command"], "vida task ready");
+        assert_eq!(
+            action["expected_output"],
+            serde_json::json!(["status", "blocker_codes"])
+        );
+        assert_eq!(action["approval_required"], true);
+        assert_eq!(action["artifact_refs"]["task_id"], "task-1");
+        assert_eq!(action["surface"], "vida task ready");
+        assert_eq!(
+            action["reason"],
+            "inspect the authoritative ready projection"
+        );
+        assert!(cached_projection_admissible(
+            &serde_json::to_string(&decorated).expect("decorated projection should serialize")
+        ));
+    }
+
+    #[test]
+    fn cached_projection_requires_reducer_schema() {
+        assert!(!cached_projection_admissible(
+            r#"{"status":"blocked","next_action":{"command":"vida task ready"}}"#
+        ));
+        let decorated = decorate_projection(serde_json::json!({
+            "status": "pass",
+            "next_action": {
+                "command": "vida task show task-1",
+                "surface": "vida task show",
+                "reason": "inspect the ready task"
+            }
+        }));
+        assert!(cached_projection_admissible(
+            &serde_json::to_string(&decorated).expect("decorated projection should serialize")
+        ));
     }
 }
