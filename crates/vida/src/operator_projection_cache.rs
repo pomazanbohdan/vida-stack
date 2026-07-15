@@ -313,13 +313,24 @@ pub(crate) fn write_json_projection(
             }),
         );
     }
-    let Ok(body) = serde_json::to_string_pretty(&payload) else {
+    let Ok(body) = serialize_projection_payload(projection_name, &payload) else {
         return;
     };
     if path_is_symlink(&path) {
         return;
     }
     let _ = write_json_without_following_symlinks(&path, &body);
+}
+
+fn serialize_projection_payload(
+    projection_name: &str,
+    payload: &serde_json::Value,
+) -> serde_json::Result<String> {
+    if projection_name == "orchestrator-init-summary-latest" {
+        serde_json::to_string(payload)
+    } else {
+        serde_json::to_string_pretty(payload)
+    }
 }
 
 pub(crate) fn projection_cache_control_payload(
