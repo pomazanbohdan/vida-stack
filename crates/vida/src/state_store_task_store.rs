@@ -4777,6 +4777,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_task_snapshot_persists_state_generation_identity() {
+        let root = unique_task_store_temp_root("vida-task-snapshot-generation-writer");
+        let store = StateStore::open(root.clone())
+            .await
+            .expect("store should open");
+        store
+            .persist_task_record(test_task_record("snapshot-generation-task", "task", "open"))
+            .await
+            .expect("task should persist");
+
+        let snapshot_path = store
+            .refresh_task_snapshot()
+            .await
+            .expect("canonical snapshot should refresh");
+        let meta_path = StateStore::task_snapshot_meta_path_for_snapshot_path(&snapshot_path);
+        let meta: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(meta_path).expect("snapshot metadata"))
+                .expect("snapshot metadata should be valid JSON");
+        assert!(meta["state_generation_id"].as_str().is_some());
+
+        let generation_path =
+            StateStore::canonical_task_snapshot_state_generation_path_for_state_root(&root);
+        fs::write(&generation_path, "restored-generation")
+            .expect("restored generation should write");
+        let error = StateStore::read_fresh_tasks_from_jsonl_snapshot(&root)
+            .expect_err("restored generation must reject the pre-restore snapshot");
+        assert!(error.to_string().contains(
+            "task snapshot state generation does not match authoritative state generation"
+        ));
+
+        store.close().await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn persist_task_record_invalidates_preexisting_fresh_snapshot() {
         let root = unique_task_store_temp_root("vida-task-snapshot-persist-invalidates");
         let state_root = root.join(".vida").join("data").join("state");
