@@ -31,8 +31,7 @@ use taskflow_host_bridge::{
     HostBridgeProvenanceInput, HostBridgeRequest, HostBridgeRequestPath,
     build_host_bridge_adapter_payload, build_host_bridge_normalized_implementation_artifact,
     decide_host_bridge_completion_authority, host_bridge_artifact_file,
-    host_bridge_artifact_has_retryable_completion_blocker, host_bridge_blocked_result_contract,
-    host_bridge_blocked_result_contract_is_retryable, host_bridge_changed_files_from_artifact,
+    host_bridge_artifact_has_retryable_completion_blocker, host_bridge_changed_files_from_artifact,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_has_preview_refresh_evidence,
     host_bridge_completed_result_status_is_admissible, host_bridge_completion_retryable_blocker,
@@ -1157,20 +1156,6 @@ fn retryable_host_bridge_completion_request_for_state_root(
     request: &serde_json::Value,
 ) -> bool {
     if completed_host_bridge_completion_request_for_state_root(state_root, request) {
-        return true;
-    }
-    let nested_contract_retryable = host_bridge_blocked_result_contract(request)
-        .is_some_and(host_bridge_blocked_result_contract_is_retryable);
-    let nested_contract_has_artifact = [
-        ("result_path", ArtifactPathKind::HostBridgeResult),
-        ("receipt_path", ArtifactPathKind::HostBridgeReceipt),
-    ]
-    .into_iter()
-    .filter_map(|(field, kind)| {
-        host_bridge_request_string(request, field).map(|raw_path| (raw_path, kind))
-    })
-    .any(|(raw_path, kind)| canonical_state_artifact_path(state_root, raw_path, kind, true).is_ok());
-    if nested_contract_retryable && nested_contract_has_artifact {
         return true;
     }
     if !matches!(
@@ -11393,6 +11378,76 @@ mod tests {
                 .expect("blockers")
                 .iter()
                 .any(|code| code == "host_bridge_request_not_pending")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_bridge_adapter_payload_rejects_self_attested_contract_with_invalid_retry_artifact() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-self-attested-invalid-artifact-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let result_path = state_root.join("host-tool-bridge/results/result.json");
+        for path in [&request_path, &result_path] {
+            std::fs::create_dir_all(path.parent().expect("artifact parent"))
+                .expect("artifact parent should be created");
+        }
+        std::fs::write(&result_path, b"not json").expect("invalid result should be written");
+        let request = serde_json::json!({
+            "schema_version": 1,
+            "status": "cancelled",
+            "request_id": "req-self-attested-invalid-artifact",
+            "run_id": "run-self-attested-invalid-artifact",
+            "dispatch_target": "quality_gate",
+            "packet_path": state_root.join("packets/run.json").display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": state_root.join("host-tool-bridge/receipts/missing-receipt.json").display().to_string(),
+            "blocked_result_contract": {
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "allowed_next_node": "repair_rework"
+            }
+        });
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("request file should be written");
+
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            Vec::new(),
+            Some(&state_root),
+            false,
+        );
+
+        assert_eq!(payload["status"], "blocked");
+        assert!(
+            payload["blocker_codes"]
+                .as_array()
+                .expect("blockers")
+                .iter()
+                .any(|code| code == "host_bridge_request_not_pending")
+        );
+        assert!(
+            !payload["host_bridge"]["completion_command"]
+                .as_str()
+                .expect("completion command")
+                .contains("--retry-completion")
         );
         let _ = std::fs::remove_dir_all(&root);
     }
