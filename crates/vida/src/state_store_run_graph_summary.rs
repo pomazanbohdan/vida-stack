@@ -6032,6 +6032,97 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn blocked_host_bridge_receipt_does_not_promote_from_stale_packet_rework_result() {
+        let root = temp_run_graph_root("host-bridge-stale-packet-rework");
+        let state_root = root.join(".vida/data/state");
+        let packet_dir = state_root.join("runtime-consumption/dispatch-packets");
+        let result_dir = state_root.join("runtime-consumption/dispatch-results");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        fs::create_dir_all(&result_dir).expect("create result dir");
+        let run_id = "run-host-bridge-stale-packet-rework";
+        let packet_path = packet_dir.join("current.json");
+        let stale_result_path = result_dir.join("stale-rework.json");
+        let current_result_path = result_dir.join("current-blocked.json");
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "coder": {"dispatch_target": "coder", "task_class": "implementation"},
+                        "tester": {"dispatch_target": "tester", "task_class": "verification"}
+                    },
+                    "execution_lane_sequence": ["coder", "tester"]
+                }
+            }
+        });
+        fs::write(
+            &stale_result_path,
+            serde_json::json!({
+                "status": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "rework_target": "coder",
+                "allowed_next_node": "coder",
+                "execution_evidence": {"receipt_backed": true}
+            })
+            .to_string(),
+        )
+        .expect("write stale rework result");
+        fs::write(
+            &current_result_path,
+            serde_json::json!({
+                "status": "blocked",
+                "execution_state": "blocked",
+                "blocker_code": "host_tool_bridge_adapter_required"
+            })
+            .to_string(),
+        )
+        .expect("write current blocked result");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "dispatch_target": "coder",
+                "role_selection_full": {"execution_plan": execution_plan},
+                "downstream_dispatch_result_path": stale_result_path
+            })
+            .to_string(),
+        )
+        .expect("write current packet");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = run_id.to_string();
+        status.task_id = run_id.to_string();
+        status.active_node = "coder".to_string();
+        status.next_node = Some("coder".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "coder_dispatch_ready".to_string();
+        status.handoff_state = "awaiting_coder".to_string();
+        status.resume_target = "dispatch.coder".to_string();
+        status.recovery_ready = true;
+
+        let mut receipt = RunGraphDispatchReceiptStored::from(sample_dispatch_receipt(run_id));
+        receipt.dispatch_target = "coder".to_string();
+        receipt.dispatch_status = "blocked".to_string();
+        receipt.lane_status = Some("lane_blocked".to_string());
+        receipt.dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.dispatch_result_path = Some(current_result_path.display().to_string());
+        receipt.blocker_code = Some("host_tool_bridge_adapter_required".to_string());
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_blockers =
+            vec!["host_tool_bridge_adapter_required".to_string()];
+
+        let reconciled = reconcile_run_graph_status_with_dispatch_receipt(status, Some(&receipt))
+            .expect("blocked host bridge receipt should reconcile");
+
+        assert_eq!(reconciled.status, "blocked");
+        assert_eq!(reconciled.active_node, "coder");
+        assert_eq!(reconciled.lifecycle_stage, "coder_blocked");
+        assert_eq!(reconciled.resume_target, "none");
+        assert!(!reconciled.recovery_ready);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[tokio::test]
     async fn recovery_summary_exposes_host_bridge_completion_retry_target() {
         let root = temp_run_graph_root("host-bridge-completion-retry-recovery");

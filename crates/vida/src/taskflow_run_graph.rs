@@ -223,14 +223,66 @@ fn host_bridge_string_from_result(result: &serde_json::Value, result_key: &str) 
         .and_then(|value| compact_optional_string(Some(value)))
 }
 
+fn state_artifact_path_in_root(
+    state_root: &std::path::Path,
+    value: &str,
+) -> Option<std::path::PathBuf> {
+    fn path_without_extended_prefix(path: &std::path::Path) -> std::path::PathBuf {
+        let value = path.to_string_lossy();
+        std::path::PathBuf::from(value.strip_prefix(r"\\?\").unwrap_or(&value))
+    }
+
+    fn path_is_under_root(path: &std::path::Path, root: &std::path::Path) -> bool {
+        path_without_extended_prefix(path).starts_with(path_without_extended_prefix(root))
+    }
+
+    let state_root = std::fs::canonicalize(state_root).ok()?;
+    let raw = std::path::Path::new(value.trim());
+    if raw.as_os_str().is_empty() {
+        return None;
+    }
+    let lexical_candidate = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        state_root.join(raw)
+    };
+    if lexical_candidate
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
+        || !path_is_under_root(&lexical_candidate, &state_root)
+    {
+        return None;
+    }
+    match std::fs::canonicalize(&lexical_candidate) {
+        Ok(candidate) if path_is_under_root(&candidate, &state_root) => Some(candidate),
+        Ok(_) => None,
+        Err(_) => Some(lexical_candidate),
+    }
+}
+
 fn host_bridge_artifact_ref_from_result(
     refs: &mut serde_json::Map<String, serde_json::Value>,
     key: &str,
     result: &serde_json::Value,
     result_key: &str,
+    state_root: Option<&std::path::Path>,
+    expected_key: &str,
 ) {
     let value = host_bridge_string_from_result(result, result_key);
-    insert_string_artifact_ref(refs, key, value.as_deref());
+    let Some(value) = value else {
+        return;
+    };
+    let Some(state_root) = state_root else {
+        insert_string_artifact_ref(refs, key, Some(&value));
+        return;
+    };
+    if let Some(path) = state_artifact_path_in_root(state_root, &value)
+        .filter(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()))
+    {
+        insert_string_artifact_ref(refs, key, path.to_str());
+    } else if state_artifact_path_in_root(state_root, &value).is_some() {
+        insert_string_artifact_ref(refs, expected_key, Some(&value));
+    }
 }
 
 fn active_repair_summary_result_json(
@@ -548,18 +600,24 @@ fn run_graph_state_operator_artifact_refs(
                     "host_bridge_request_path",
                     result,
                     "request_path",
+                    Some(root),
+                    "expected_host_bridge_request_path",
                 );
                 host_bridge_artifact_ref_from_result(
                     &mut refs,
                     "host_bridge_result_path",
                     result,
                     "result_path",
+                    Some(root),
+                    "expected_host_bridge_result_path",
                 );
                 host_bridge_artifact_ref_from_result(
                     &mut refs,
                     "host_bridge_receipt_path",
                     result,
                     "receipt_path",
+                    Some(root),
+                    "expected_host_bridge_receipt_path",
                 );
                 insert_string_artifact_ref(
                     &mut refs,
@@ -14430,8 +14488,15 @@ agent_system:
             payload["artifact_refs"]["dispatch_result_path"],
             serde_json::json!(result_path.display().to_string())
         );
+        assert!(
+            state_artifact_path_in_root(&root, &receipt_path.display().to_string()).is_some(),
+            "missing expected artifact path scope root={} receipt={}",
+            root.display(),
+            receipt_path.display()
+        );
+        assert!(payload["artifact_refs"]["host_bridge_receipt_path"].is_null());
         assert_eq!(
-            payload["artifact_refs"]["host_bridge_receipt_path"],
+            payload["artifact_refs"]["expected_host_bridge_receipt_path"],
             serde_json::json!(receipt_path.display().to_string())
         );
         assert_eq!(

@@ -140,10 +140,14 @@ pub(crate) fn authorized_dispatch_rework_route_from_receipt_fields(
     let packet = dispatch_packet_path.and_then(read_dispatch_packet_json)?;
     let execution_plan = packet_role_selection_execution_plan(&packet)?;
     let completed_target = completed_result_target(&packet, completed_dispatch_target);
+    let packet_fallback_path = (downstream_dispatch_result_path.is_none()
+        && dispatch_result_path.is_none())
+        .then_some(dispatch_packet_path)
+        .flatten();
     for result_path in dispatch_result_path_candidates_from_receipt_fields(
         downstream_dispatch_result_path,
         dispatch_result_path,
-        dispatch_packet_path,
+        packet_fallback_path,
     ) {
         if let Some(route) = dispatch_rework_route_from_result_path(&result_path) {
             if rework_route_is_authorized(&execution_plan, &completed_target, &route) {
@@ -723,6 +727,73 @@ mod tests {
         };
 
         assert!(rework_route_is_authorized(&plan, "coder", &route));
+    }
+
+    #[test]
+    fn explicit_receipt_result_path_does_not_fall_back_to_stale_packet_rework() {
+        let root = unique_test_dir("dispatch-result-explicit-path");
+        std::fs::create_dir_all(&root).expect("test dir should be created");
+        let packet_path = root.join("current-packet.json");
+        let stale_result_path = root.join("stale-result.json");
+        let current_result_path = root.join("current-result.json");
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_catalog": {
+                        "coder": {"dispatch_target": "coder", "task_class": "implementation"},
+                        "tester": {"dispatch_target": "tester", "task_class": "verification"}
+                    },
+                    "execution_lane_sequence": ["coder", "tester"]
+                }
+            }
+        });
+        std::fs::write(
+            &stale_result_path,
+            serde_json::json!({
+                "status": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "rework_target": "coder",
+                "allowed_next_node": "coder",
+                "execution_evidence": {"receipt_backed": true}
+            })
+            .to_string(),
+        )
+        .expect("stale result should write");
+        std::fs::write(
+            &current_result_path,
+            serde_json::json!({
+                "status": "blocked",
+                "execution_state": "blocked",
+                "blocker_code": "host_tool_bridge_adapter_required"
+            })
+            .to_string(),
+        )
+        .expect("current result should write");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": "run-current",
+                "dispatch_target": "coder",
+                "role_selection_full": {"execution_plan": execution_plan},
+                "downstream_dispatch_result_path": stale_result_path
+            })
+            .to_string(),
+        )
+        .expect("current packet should write");
+
+        assert!(
+            authorized_dispatch_rework_route_from_receipt_fields(
+                None,
+                Some(&current_result_path.display().to_string()),
+                Some(&packet_path.display().to_string()),
+                "coder",
+            )
+            .is_none(),
+            "stale packet rework must not supersede an explicit current result"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
