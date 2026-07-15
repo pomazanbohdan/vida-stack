@@ -273,7 +273,7 @@ party_chat:
   enabled: true
   replaces_problem_party: true
   execution_mode: multi_agent
-  model_routing_strategy: by_role
+  model_routing_strategy: capability_first_then_score_then_cost
   default_board_size: small
   min_experts: 2
   max_experts: 16
@@ -282,55 +282,22 @@ party_chat:
   single_agent:
     backend: internal_subagents
     model: codex_gpt56_luna_xhigh_write
-  role_model_bindings:
-    party_chat_facilitator:
-      backend: internal_subagents
-      model: codex_gpt56_luna_xhigh_write
-    party_chat_architect:
-      backend: internal_subagents
-      model: codex_gpt56_sol_medium_arch
-    party_chat_runtime_systems:
-      backend: internal_subagents
-      model: codex_gpt56_sol_medium_arch
-    party_chat_quality_verification:
-      backend: internal_subagents
-      model: codex_gpt56_luna_max_readonly
-    party_chat_delivery_cost:
-      backend: internal_subagents
-      model: codex_gpt56_luna_max_readonly
-    party_chat_product_scope:
-      backend: internal_subagents
-      model: codex_gpt56_luna_xhigh_write
-    party_chat_system_analyst:
-      backend: internal_subagents
-      model: codex_gpt56_luna_xhigh_write
-    party_chat_product_designer:
-      backend: internal_subagents
-      model: codex_gpt56_luna_xhigh_write
-    party_chat_security_safety:
-      backend: internal_subagents
-      model: codex_gpt56_luna_max_readonly
-    party_chat_sre_observability:
-      backend: internal_subagents
-      model: codex_gpt56_luna_max_readonly
-    party_chat_qa_tester:
-      backend: internal_subagents
-      model: codex_gpt56_luna_max_readonly
-    party_chat_accessibility_ux:
-      backend: internal_subagents
-      model: codex_gpt56_luna_max_readonly
-    party_chat_data_contracts:
-      backend: internal_subagents
-      model: codex_gpt56_sol_medium_arch
-    party_chat_dx_tooling:
-      backend: internal_subagents
-      model: codex_gpt56_luna_xhigh_write
-    party_chat_pm_process:
-      backend: internal_subagents
-      model: codex_gpt56_luna_xhigh_write
-    party_chat_release_manager:
-      backend: internal_subagents
-      model: codex_gpt56_luna_max_readonly
+  carrier_selection:
+    source: host_environment.codex.agents
+    strategy: capability_first_then_score_guard_then_cheapest_eligible
+    role_binding: runtime_role_compatibility
+    task_class_binding: task_class_compatibility
+    model_binding: resolved_profile_capability_metadata
+    reasoning_binding: resolved_profile_capability_metadata
+    allowed_profile_bands:
+      - write_xhigh
+      - readonly_max
+    carrier_tiers:
+      - junior
+      - middle
+      - senior
+      - architect
+    role_binding_mode: capability_only
 
 requirement_analysis:
   party_chat_route:
@@ -409,6 +376,7 @@ agent_extensions:
     - verifier
     - prover
   enabled_standard_flow_sets:
+    - adaptive-task-flow
     - minimal
     - reviewed
     - verified
@@ -482,7 +450,7 @@ agent_extensions:
     - command_timing_summary
     - approval_wait
     - approval_complete
-  default_flow_set: verified
+  default_flow_set: adaptive-task-flow
   role_selection:
     mode: auto
     fallback_role: orchestrator
@@ -513,7 +481,7 @@ dev_team:
   contract_doc: docs/process/team-development-and-orchestration-protocol.md
   preserve_existing_agent_extensions: true
   preserve_existing_flow_sets: true
-  default_flow_id: quick-two-pack-flow
+  default_flow_id: adaptive-task-flow
   zombie_d_gate:
     enabled: true
     gate_id: zombie_d_test_writing
@@ -537,19 +505,27 @@ dev_team:
     root_orchestrator_role: orchestrator
     role_sequence_for_runtime_defect:
       - coder
-      - cleaner
+    adaptive_policy:
+      default_sequence: bind_implement_focused_proof_merge_close_cleanup
+      default_posture: sequential
+      review_trigger: runtime_contract_or_cross_boundary_or_failed_proof
+      architecture_trigger: ownership_conflict_or_security_or_migration_or_unresolved_proof
+      merge_before_close: true
+      cleanup_after_merge: true
+      release_install: final_coherent_pack_or_epic_only
+      snapshot_reads_per_bounded_cycle: 1
   work_item_flow_bindings:
-    epic: quick-two-pack-flow
-    defect: quick-two-pack-flow
-    runtime_defect: quick-two-pack-flow
-    pull_request: quick-two-pack-flow
-    pr_repair: quick-two-pack-flow
-    architecture: quick-two-pack-flow
-    release_readiness: quick-two-pack-flow
-    service_tui: quick-two-pack-flow
-    internal_agent_development: quick-two-pack-flow
-    task: quick-two-pack-flow
-    debug: quick-two-pack-flow
+    epic: adaptive-task-flow
+    defect: adaptive-task-flow
+    runtime_defect: adaptive-task-flow
+    pull_request: adaptive-task-flow
+    pr_repair: adaptive-task-flow
+    architecture: adaptive-task-flow
+    release_readiness: release_readiness_gate
+    service_tui: service_tui_orchestration
+    internal_agent_development: hook_enabled_internal_agent_development
+    task: adaptive-task-flow
+    debug: adaptive-task-flow
   validation:
     require_role_contracts: true
     require_flow_definitions: true
@@ -571,8 +547,6 @@ dev_team:
       completion_blocker: pending_specification_evidence
       inclusion_rule: always
       default_carrier: middle
-      default_model: codex_gpt56_luna_xhigh_write
-      default_model_reasoning_effort: xhigh
       cost_policy:
         budget_units: 4
         selection_rule: cheapest_eligible_specification_carrier
@@ -598,8 +572,6 @@ dev_team:
       completion_blocker: pending_specification_evidence
       inclusion_rule: always
       default_carrier: middle
-      default_model: codex_gpt56_luna_xhigh_write
-      default_model_reasoning_effort: xhigh
       cost_policy:
         budget_units: 4
         selection_rule: cheapest_eligible_specification_carrier
@@ -625,8 +597,6 @@ dev_team:
       completion_blocker: pending_execution_preparation_evidence
       inclusion_rule: always
       default_carrier: architect
-      default_model: codex_gpt56_sol_medium_arch
-      default_model_reasoning_effort: medium
       cost_policy:
         budget_units: 16
         selection_rule: high_architecture_carrier_for_execution_preparation
@@ -650,8 +620,6 @@ dev_team:
       completion_blocker: pending_implementation_evidence
       inclusion_rule: always
       default_carrier: junior
-      default_model: codex_gpt56_luna_high_write
-      default_model_reasoning_effort: high
       cost_policy:
         budget_units: 1
         fallback_carrier: middle
@@ -676,8 +644,6 @@ dev_team:
       completion_blocker: pending_implementation_evidence
       inclusion_rule: always
       default_carrier: middle
-      default_model: codex_gpt56_luna_xhigh_write
-      default_model_reasoning_effort: xhigh
       cost_policy:
         budget_units: 4
         selection_rule: configured_cleaner_middle_write_carrier
@@ -954,6 +920,77 @@ dev_team:
           - follow_up_actions
         fail_closed_on_missing_handoff: true
   flows:
+    adaptive-task-flow:
+      enabled: true
+      description: Adaptive routine flow with one implementer, focused proof, evidence-triggered review or architecture escalation, and serialized integration gates.
+      flow_class: development
+      work_item_bindings:
+        - epic
+        - defect
+        - runtime_defect
+        - pull_request
+        - pr_repair
+        - architecture
+        - task
+        - debug
+        - feature
+        - requirements_change
+        - review
+        - quality_gate
+        - small_patch
+      sequential: true
+      allow_parallel_handoffs: false
+      fail_closed_on_missing_step_contract: true
+      lifecycle_hook_templates:
+        - command_timing_summary
+      adapter_projection:
+        host_agent_bridge_contract: required
+        process_carrier_requires_explicit_backend: true
+      adaptive_policy:
+        default_sequence: bind_implement_focused_proof_merge_close_cleanup
+        default_posture: sequential
+        review_trigger: runtime_contract_or_cross_boundary_or_failed_proof
+        architecture_trigger: ownership_conflict_or_security_or_migration_or_unresolved_proof
+        merge_before_close: true
+        cleanup_after_merge: true
+        release_install: final_coherent_pack_or_epic_only
+      steps:
+        - step_id: adaptive-implementation
+          role_id: coder
+          runtime_role: worker
+          task_class: implementation
+          command_ref: agent-init-worker
+          lifecycle_hook_templates: [command_timing_summary]
+          inclusion_rule: always
+          proof_gates:
+            required_outputs: [changed_files, verification_notes, explicit_blockers]
+        - step_id: adaptive-focused-proof
+          role_id: tester
+          runtime_role: verifier
+          task_class: verification
+          command_ref: agent-init-verifier
+          lifecycle_hook_templates: [command_timing_summary]
+          inclusion_rule: when_proof_required
+          proof_gates:
+            required_outputs: [verification_evidence, failing_or_passing_checks]
+        - step_id: adaptive-conditional-review
+          role_id: coach_validator
+          runtime_role: coach
+          task_class: review
+          command_ref: agent-init-coach
+          lifecycle_hook_templates: [command_timing_summary]
+          inclusion_rule: when_review_triggered
+          proof_gates:
+            required_outputs: [root_cause_validation, false_green_risk_review, rework_or_approve_decision]
+        - step_id: adaptive-architecture-escalation
+          role_id: architect
+          runtime_role: solution_architect
+          task_class: architecture
+          command_ref: agent-init-solution-architect
+          lifecycle_hook_templates: [command_timing_summary]
+          inclusion_rule: when_architecture_triggered
+          proof_gates:
+            required_outputs: [implementation_plan, architecture_decisions, explicit_blockers]
     quick-two-pack-flow:
       enabled: true
       description: Configured two-worker development flow for coder implementation followed by cleaner verification and cleanup.
@@ -1546,7 +1583,6 @@ agent_system:
     root_orchestrator_default_posture: synthesize_not_research
     default_readonly_prefetch: true
     prefer_internal_low_medium_for_write_carriers:
-      - internal_subagents:codex_gpt56_luna_high_write
       - internal_subagents:codex_gpt56_luna_xhigh_write
     high_cost_carriers_reserved_for:
       - architecture_boundary_decision
@@ -1575,16 +1611,16 @@ agent_system:
         fallback: internal_subagents:codex_gpt56_luna_max_readonly
       review:
         primary: internal_subagents:codex_gpt56_luna_max_readonly
-        fallback: internal_subagents:codex_gpt56_sol_medium_arch
+        fallback: internal_subagents:codex_gpt56_luna_max_readonly
       coach:
         primary: internal_subagents:codex_gpt56_luna_xhigh_write
         fallback: internal_subagents:codex_gpt56_luna_max_readonly
       implementation:
-        primary: internal_subagents:codex_gpt56_luna_high_write
+        primary: internal_subagents:codex_gpt56_luna_xhigh_write
         fallback: internal_subagents:codex_gpt56_luna_xhigh_write
       regression_test:
         primary: internal_subagents:codex_gpt56_luna_xhigh_write
-        fallback: internal_subagents:codex_gpt56_luna_high_write
+        fallback: internal_subagents:codex_gpt56_luna_xhigh_write
       verification:
         primary: internal_subagents:codex_gpt56_luna_max_readonly
         fallback: internal_subagents:codex_gpt56_luna_xhigh_write
@@ -1808,7 +1844,7 @@ agent_system:
       attempts:
         - attempt_id: implementation-internal-low-write
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_luna_high_write
+          model_profile_id: codex_gpt56_luna_xhigh_write
           conversation_role: developer
           runtime_role: worker
           task_class: implementation
@@ -1873,7 +1909,7 @@ agent_system:
       orchestration_tier: senior
       cost_priority: premium
       budget_cost_units: 10
-      profiles: codex_gpt56_luna_high_write,codex_gpt56_luna_xhigh_write,codex_gpt56_luna_max_readonly,codex_gpt56_sol_medium_arch
+      profiles: codex_gpt56_luna_xhigh_write,codex_gpt56_luna_max_readonly
       default_profile: codex_gpt56_luna_xhigh_write
       default_model_profile: codex_gpt56_luna_xhigh_write
       capability_band: implementation_safe,architecture_safe,review_safe
@@ -1909,30 +1945,6 @@ agent_system:
         - test_authoring
         - regression_test
       model_profiles:
-        codex_gpt56_luna_high_legacy:
-          provider: openai-codex
-          model_ref: gpt-5.6-luna
-          reasoning_effort: high
-          normalized_cost_units: 1
-          pricing:
-            price_source_kind: provider_catalog
-            source_paths:
-              - docs/process/codex-agent-configuration-guide.md
-            freshness:
-              required: false
-              diagnostic_only: true
-              enforced: false
-          speed_tier: fast
-          quality_tier: medium_high
-          write_scope: orchestrator_native
-          runtime_roles:
-            - worker
-          task_classes:
-            - implementation
-            - delivery_task
-          readiness:
-            mode: codex_profile
-            required: true
         codex_gpt56_luna_xhigh_analysis_legacy:
           provider: openai-codex
           model_ref: gpt-5.6-luna
@@ -2000,23 +2012,6 @@ agent_system:
             - verification
             - coach
             - release_readiness
-          readiness:
-            mode: codex_profile
-            required: true
-        codex_gpt56_sol_medium_arch_legacy:
-          provider: openai-codex
-          model_ref: gpt-5.6-sol
-          reasoning_effort: medium
-          normalized_cost_units: 48
-          speed_tier: medium
-          quality_tier: very_high
-          write_scope: architecture_safe
-          runtime_roles:
-            - solution_architect
-          task_classes:
-            - architecture
-            - execution_preparation
-            - hard_escalation
           readiness:
             mode: codex_profile
             required: true
@@ -2641,7 +2636,7 @@ agent_system:
       executor_backend: internal_subagents
       subagents: internal_subagents
       profiles:
-        internal_subagents: codex_gpt56_sol_medium_arch
+        internal_subagents: codex_gpt56_luna_max_readonly
       fanout_executor_backends:
         - internal_subagents
       fanout_subagents: internal_subagents

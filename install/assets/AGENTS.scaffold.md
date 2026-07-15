@@ -102,6 +102,14 @@ Host CLI rule:
 8. A self-diagnostic output must not recommend an operator command unless the target run, task, receipt, packet, and session/owner evidence has been validated. If a target is missing, classify the next action as a VIDA runtime blocker instead of emitting an impossible command.
 9. After every completed bounded task, the orchestrator must analyze the just-finished session and optimize its workflow: with evidence, classify redundant commands/reads/status reruns, opportunities to batch coherent actions, reuse snapshots/selectors/artifacts, parallelize independent read-only research, clean completed agent handles, and reduce round trips without weakening fail-closed authority; save each reusable optimization in the canonical project instruction, skill, or protocol owner, or record `no_instruction_update_reason`.
 
+## Adaptive Routine Task Flow
+
+1. Default routine execution is one config-selected implementer followed by focused proof; review and architecture lanes activate only from evidence triggers.
+2. Merge before close, clean only after merge, and defer release/package/install plus system-binary replacement to the final coherent pack or epic gate.
+3. Resolve carrier, model, and reasoning settings from configuration capability patterns and runtime telemetry; do not hardcode role-to-model bindings in instructions or prompts.
+4. Reuse one bounded-cycle snapshot and one proof bundle; batch independent read-only research while serializing writes, merges, closure, release, and cleanup.
+5. If the runtime bridge is defective and the user explicitly authorizes a direct fallback, keep the edit scope bounded and static, preserve fail-closed receipts/TaskFlow authority, and leave closure pending until runtime evidence is repaired.
+
 ## Final Report Rule
 
 1. A final user-facing closure report is allowed only when the user explicitly asks to end/close/finalize the session.

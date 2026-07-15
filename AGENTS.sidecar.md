@@ -151,6 +151,16 @@ Project-routing rule:
 5. Cleanup is last: after task merge and TaskFlow close remove merged task worktrees and obsolete branches; retain any integration worktree needed for the final pack/epic release gate; never remove dirty or unmerged worktrees.
 6. Parallel implementation is allowed only for disjoint owned paths; authoritative merge, final release/package/install, system-binary replacement, TaskFlow closure, and cleanup are serialized integration gates.
 
+## Adaptive Routine Task Flow
+
+1. The default routine path is `Bind -> one capable implementer -> focused proof -> merge -> close -> cleanup`.
+2. Select the implementer from configured capability, task-class, scope, telemetry, and cost patterns; do not bind a role directly to a model or reasoning level in prompts or flow logic.
+3. Add a coach/reviewer only for a runtime-contract change, cross-module boundary, security/data risk, failed focused proof, or explicit review requirement.
+4. Add an architect only for ownership conflict, security/data migration, unresolved proof, or an architectural boundary decision; routine tasks do not pay that lane cost.
+5. Reuse one bounded-cycle runtime snapshot and one consolidated proof bundle; batch independent read-only discovery, but keep writes, merge, TaskFlow closure, release, and cleanup serialized.
+6. Release/package/install and system-binary replacement run once at the final coherent pack/epic gate, never between sibling fixes.
+7. When the runtime/host bridge blocks dispatch and the user explicitly authorizes a direct fallback, use only the known bounded owned paths with static file proof and script checks; do not mutate runtime state, fabricate receipts, or close the TaskFlow item until canonical authority is restored.
+
 ## Working Rule
 
 1. Use `AGENTS.md` for lane routing and hard invariants.

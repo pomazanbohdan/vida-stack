@@ -76,7 +76,7 @@ optimization loop:
 
 1. select the wave with the smallest verified closure distance,
 2. bind only the next child task or bounded child batch inside that wave,
-3. run the three-step task loop (`Bind -> Delegate -> Close`),
+3. run the adaptive routine task loop (`Bind -> Implement -> Focused Proof -> Merge -> Close -> Cleanup`),
 4. after each task, update the model-routing scorecard and parent/wave closure
    state before selecting the next child,
 5. close the wave parent before moving to an unrelated wave when its children,
@@ -95,6 +95,18 @@ For every self-contained delivery task, the task-level closure sequence is:
 7. close the parent/epic only after the final release gate passes, then remove merged task worktrees and obsolete branches.
 
 A task with a verified but unmerged worktree commit is not closed. Keep it `in_progress` with a `verified_pending_integration` evidence note/label until merge. If merge, focused proof, PR, or runtime authority fails, keep the task `in_progress`/`blocked`, preserve the worktree, and record the blocker. A failed final release gate keeps the parent/epic open. Disjoint implementation may run in parallel, but authoritative merge, final release/install, system-binary update, parent/epic closure, and cleanup are serialized.
+
+## Adaptive Routine Execution Contract
+
+Routine work uses the smallest lawful path:
+
+1. `Bind` one bounded task with invariant, owned paths, proof target, non-goals, and posture.
+2. `Implement` with one cheapest capable config-selected worker; do not pre-dispatch duplicate coder/cleaner lanes.
+3. `Focused Proof` runs the smallest complete proof bundle for the changed public surface.
+4. `Review` or `Architecture` is conditional on runtime-contract impact, cross-boundary ownership, security/data risk, failed proof, or explicit escalation evidence.
+5. `Merge`, `Close`, and `Cleanup` are serialized integration gates; a verified unmerged worktree remains open.
+6. Use one runtime snapshot per bounded cycle, one consolidated proof bundle per coherent pack, and one final release/install gate after all selected tasks merge.
+7. If a host/runtime blocker prevents dispatch and the user explicitly authorizes direct fallback, static bounded edits and script proof may continue without runtime-state mutation; receipt-backed closure remains unavailable until the runtime path is repaired.
 
 Generic owner references:
 

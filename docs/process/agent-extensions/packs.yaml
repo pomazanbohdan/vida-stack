@@ -1,10 +1,41 @@
 version: 1
 packs:
+  - pack_id: adaptive-taskflow-pack
+    flow_id: adaptive-task-flow
+    enabled: true
+    default: true
+    description: Default low-friction TaskFlow pack with one implementer and evidence-triggered proof/review/escalation.
+    work_item_bindings: [epic, defect, runtime_defect, pull_request, pr_repair, architecture, task, debug, feature, requirements_change, review, quality_gate, small_patch]
+    ordered_steps:
+      - role_id: coder
+        task_class: implementation
+        dispatch_alias: development_implementer
+        command_ref: agent-init-worker
+        inclusion_rule: always
+        proof_target: agent:adaptive-taskflow:implementer
+      - role_id: tester
+        task_class: verification
+        dispatch_alias: development_verifier
+        command_ref: agent-init-verifier
+        inclusion_rule: when_proof_required
+        proof_target: agent:adaptive-taskflow:focused-proof
+      - role_id: coach_validator
+        task_class: coach
+        dispatch_alias: development_coach
+        command_ref: agent-init-coach
+        inclusion_rule: when_review_triggered
+        proof_target: agent:adaptive-taskflow:review
+      - role_id: architect
+        task_class: architecture
+        dispatch_alias: development_solution_architect
+        command_ref: agent-init-solution-architect
+        inclusion_rule: when_architecture_triggered
+        proof_target: agent:adaptive-taskflow:architecture
   - pack_id: quick-two-pack
     flow_id: quick-two-pack-flow
     enabled: true
-    default: true
-    description: Fast two-role implementation cleanup pack.
+    default: false
+    description: Legacy explicit two-role implementation cleanup pack; retained for explicit compatibility routing.
     work_item_bindings: [epic, defect, runtime_defect, pull_request, pr_repair, architecture, release_readiness, service_tui, internal_agent_development, task, debug, feature, requirements_change, review, quality_gate, small_patch]
     ordered_steps:
       - role_id: coder
