@@ -296,6 +296,18 @@ fn task_list_row_value(task: &TaskRecord, full: bool) -> serde_json::Value {
     })
 }
 
+fn task_show_compact_value(task: &TaskRecord) -> serde_json::Value {
+    let mut value = task_list_row_value(task, false);
+    value["blocker_codes"] = serde_json::json!([]);
+    value["next_actions"] = serde_json::json!([]);
+    value["artifact_refs"] = serde_json::json!({
+        "surface": "vida task show",
+        "task_id": task.id,
+    });
+    value["mutation_summary"] = serde_json::Value::Null;
+    value
+}
+
 pub(crate) fn print_task_list(
     surface: &str,
     render: RenderMode,
@@ -367,8 +379,48 @@ pub(crate) fn print_task_list(
     }
 }
 
-fn apply_json_field_selector(value: serde_json::Value, fields: Option<&str>) -> serde_json::Value {
+pub(crate) fn apply_json_field_selector(
+    value: serde_json::Value,
+    fields: Option<&str>,
+) -> serde_json::Value {
     operator_output::toon_report::select_fields(value, fields)
+}
+
+pub(crate) fn validate_json_field_selector(
+    value: &serde_json::Value,
+    fields: Option<&str>,
+) -> Result<(), String> {
+    let Some(fields) = fields else {
+        return Ok(());
+    };
+    let requested = fields
+        .split(',')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+        .collect::<Vec<_>>();
+    let unknown = requested
+        .iter()
+        .copied()
+        .filter(|field| {
+            field
+                .split('.')
+                .try_fold(value, |current, segment| current.get(segment.trim()))
+                .is_none()
+        })
+        .collect::<Vec<_>>();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    let available = value
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
+    Err(format!(
+        "invalid field selector `{}`; unknown field(s): {}; available fields: {}",
+        fields,
+        unknown.join(", "),
+        available
+    ))
 }
 
 fn limited_ready_tasks(tasks: &[TaskRecord], limit: Option<usize>) -> &[TaskRecord] {
@@ -507,13 +559,39 @@ pub(crate) fn task_show_payload(
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
     view: &str,
 ) -> serde_json::Value {
+    task_show_payload_with_selection(task, read_metadata, view, None)
+}
+
+pub(crate) fn task_show_payload_with_selection(
+    task: &TaskRecord,
+    read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+    view: &str,
+    fields: Option<&str>,
+) -> serde_json::Value {
+    let view = match view {
+        "compact" => "compact",
+        "full" => "full",
+        _ => "summary",
+    };
+    let task_value = if view == "compact" {
+        task_show_compact_value(task)
+    } else {
+        task_record_value(task)
+    };
+    let task_value = apply_json_field_selector(task_value, fields);
     build_pass_operator_surface_payload(
         "vida task show",
         serde_json::json!({
             "state_access": task_read_metadata_value(read_metadata),
+            "output_policy": task_list_output_policy(view, view == "full"),
+            "fields": fields,
             "view": view,
             "task_id": task.id,
-            "task": task_record_value(task),
+            "id": task.id,
+            "title": task.title,
+            "task_status": task.status,
+            "mutation_summary": serde_json::Value::Null,
+            "task": task_value,
         }),
     )
 }
@@ -564,6 +642,10 @@ fn task_show_toon_value(task: &TaskRecord, view: &str) -> serde_json::Value {
         return task_record_value(task);
     }
 
+    if view == "compact" {
+        return task_show_compact_value(task);
+    }
+
     serde_json::json!({
         "id": task.id,
         "display_id": task.display_id,
@@ -602,7 +684,18 @@ pub(crate) fn print_task_show(
     read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
     view: &str,
 ) {
-    let payload = task_show_payload(task, read_metadata, view);
+    print_task_show_with_selection(render, task, as_json, read_metadata, view, None);
+}
+
+pub(crate) fn print_task_show_with_selection(
+    render: RenderMode,
+    task: &TaskRecord,
+    as_json: bool,
+    read_metadata: Option<&crate::task_surface::TaskReadMetadata>,
+    view: &str,
+    fields: Option<&str>,
+) {
+    let payload = task_show_payload_with_selection(task, read_metadata, view, fields);
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -612,7 +705,17 @@ pub(crate) fn print_task_show(
     }
 
     if matches!(render, RenderMode::Plain) {
-        println!("{}", task_show_toon_text(task, view));
+        let value = apply_json_field_selector(
+            serde_json::json!({
+                "view": view,
+                "task": task_show_toon_value(task, view),
+            }),
+            fields,
+        );
+        println!(
+            "{}",
+            taskflow_format_toon::render_value_section("vida task show", &value)
+        );
         return;
     }
 
@@ -1405,7 +1508,8 @@ pub(crate) fn print_task_dependency_tree(
     include_full: bool,
     progress: Option<&TaskProgressSummary>,
     as_json: bool,
-) {
+    fields: Option<&str>,
+) -> Result<(), String> {
     let dependency_cycle_count = tree.dependencies.iter().filter(|edge| edge.cycle).count();
     let child_cycle_count = tree.children.iter().filter(|child| child.cycle).count();
     let dependency_missing_count = tree.dependencies.iter().filter(|edge| edge.missing).count();
@@ -1460,6 +1564,9 @@ pub(crate) fn print_task_dependency_tree(
         })
         .collect::<Vec<_>>();
     let mut tree_value = serde_json::json!({
+        "id": tree.task.id,
+        "status": tree.task.status,
+        "title": tree.task.title,
         "root": {
             "id": tree.task.id,
             "status": tree.task.status,
@@ -1486,16 +1593,27 @@ pub(crate) fn print_task_dependency_tree(
     if let Some(summary) = progress {
         tree_value["progress"] = task_tree_progress_value(summary);
     }
-    let payload = build_pass_operator_surface_payload("vida task tree", tree_value.clone());
+    if let Err(error) = validate_json_field_selector(&tree_value, fields) {
+        return Err(error);
+    }
+    let selected_tree_value = apply_json_field_selector(tree_value.clone(), fields);
+    let payload = build_pass_operator_surface_payload("vida task tree", selected_tree_value.clone());
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
         "task dependency tree should render as json",
     ) {
-        return;
+        return Ok(());
     }
 
     if matches!(render, RenderMode::Plain) {
+        if fields.is_some() {
+            println!(
+                "{}",
+                taskflow_format_toon::render_value_section("vida task tree", &selected_tree_value)
+            );
+            return Ok(());
+        }
         let dependency_rows = tree
             .dependencies
             .iter()
@@ -1556,7 +1674,7 @@ pub(crate) fn print_task_dependency_tree(
             "{}",
             taskflow_format_toon::render_value_section("vida task tree", &value)
         );
-        return;
+        return Ok(());
     }
 
     print_surface_header(render, "vida task tree");
@@ -1578,7 +1696,7 @@ pub(crate) fn print_task_dependency_tree(
 
     if tree.children.is_empty() {
         print_surface_line(render, "children", "none");
-        return;
+        return Ok(());
     }
 
     print_surface_line(render, "children", &tree.children.len().to_string());
@@ -1598,6 +1716,7 @@ pub(crate) fn print_task_dependency_tree(
             ),
         );
     }
+    Ok(())
 }
 
 fn task_tree_progress_value(summary: &TaskProgressSummary) -> serde_json::Value {

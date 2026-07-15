@@ -3359,6 +3359,98 @@ fn task_list_fields_and_default_toon_shape_are_binary_visible() {
 }
 
 #[test]
+fn task_operator_field_selector_matrix() {
+    let state_dir = unique_state_dir();
+    let jsonl_path = format!("{state_dir}/issues.jsonl");
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    sample_jsonl(&jsonl_path);
+    let import_stdout =
+        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
+    assert_json_status_pass(&import_stdout);
+
+    let compact = run_command_json(&[
+        "task",
+        "show",
+        "vida-a",
+        "--view",
+        "compact",
+        "--fields",
+        "id,status,title",
+        "--json",
+    ], &state_dir);
+    assert_eq!(compact["surface"], "vida task show");
+    assert_eq!(compact["status"], "pass");
+    assert_eq!(compact["view"], "compact");
+    assert_eq!(compact["fields"], "id,status,title");
+    assert_eq!(compact["task"], serde_json::json!({
+        "id": "vida-a",
+        "status": "open",
+        "title": "Task A",
+    }));
+    assert!(compact["task"].get("planner_metadata").is_none());
+    assert!(compact["task"].get("dependencies").is_none());
+
+    let stable = run_command_json(&[
+        "task",
+        "show",
+        "vida-a",
+        "--view",
+        "compact",
+        "--fields",
+        "id,status,title,blocker_codes,next_actions,artifact_refs,mutation_summary",
+        "--json",
+    ], &state_dir);
+    for field in [
+        "id",
+        "status",
+        "title",
+        "blocker_codes",
+        "next_actions",
+        "artifact_refs",
+        "mutation_summary",
+    ] {
+        assert!(stable["task"].get(field).is_some(), "missing {field}: {stable}");
+    }
+
+    let full = run_command_json(&["task", "show", "vida-a", "--full", "--json"], &state_dir);
+    assert_eq!(full["view"], "full");
+    assert!(full["task"].get("planner_metadata").is_some());
+    assert!(full["task"].get("dependencies").is_some());
+
+    let tree = run_command_json(&[
+        "task",
+        "tree",
+        "vida-b",
+        "--fields",
+        "root_task_id,dependency_count,view",
+        "--json",
+    ], &state_dir);
+    assert_eq!(tree["surface"], "vida task tree");
+    assert_eq!(tree["root_task_id"], "vida-b");
+    assert!(tree["dependency_count"].as_u64().unwrap_or(0) >= 1);
+    assert_eq!(tree["view"], "summary");
+    assert!(tree.get("dependencies").is_none());
+
+    let invalid = run_command_capture(
+        &[
+            "task",
+            "show",
+            "vida-a",
+            "--view",
+            "compact",
+            "--fields",
+            "unknown_field",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("invalid field selector"));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn critical_operator_default_toon_golden_matrix_keeps_json_explicit() {
     let state_dir = unique_state_dir();
     let jsonl_path = format!("{state_dir}/issues.jsonl");
