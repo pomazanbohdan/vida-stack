@@ -3,6 +3,66 @@
 Purpose: define the project-local protocol that agents must use before writing
 or updating tests in `vida-stack`.
 
+## Purpose
+
+Make test planning, proof coverage, and closure evidence explicit across the
+Z/O/M/B/I/E/S categories.
+
+## Trigger
+
+Use this protocol for any test, fixture, snapshot, golden, coverage, or runtime
+defect proof change.
+
+## Scope
+
+Rust, CLI, persisted-state, TaskFlow, runtime, and operator-surface test work in
+this repository.
+
+## Authority
+
+This document owns the project ZOMBIE-D test-writing matrix; command timing and
+runtime authority remain with their mapped process documents.
+
+## Inputs
+
+Read the active task, owned paths, acceptance targets, existing tests, fixtures,
+runtime commands, and current state evidence.
+
+## Outputs
+
+Produce focused tests, the Z/O/M/B/I/E/S matrix, proof commands, artifact refs,
+and a closure-ready TaskFlow evidence record.
+
+## Rules
+
+Use public contract tests for operator-visible behavior and focused unit tests
+for pure helpers; batch related proofs before broad verification.
+
+## Forbidden
+
+Do not mark an uncovered category as pass, infer evidence from a green build, or
+replace a blocked proof with an unverified note.
+
+## Escalation
+
+Create a follow-up or stop when a category remains blocked, authority conflicts,
+or the required runtime fixture cannot be reproduced.
+
+## Validation
+
+Run the focused proof, the required broader suite, `git diff --check`, and the
+mapped DocFlow/runtime checks before closure.
+
+## Token Budget
+
+No fixed token target; compactness is preferred only while preserving proof and
+authority atoms.
+
+## Metadata
+
+Canonical artifact: `process/zombie-d-test-writing-protocol`; source and
+changelog are the owning surfaces.
+
 ## Activation Triggers
 
 Activate this protocol for any task that writes, rewrites, deletes, or plans:
@@ -130,6 +190,21 @@ The closure evidence must name the focused tests run during shaping, the broader
 or full verification run after the batch, and any remaining uncovered category
 with a TaskFlow follow-up or documented non-goal.
 
+### Canonical Evidence Record
+
+Before retrying closure after a ZOMBIE-D gate failure:
+
+1. inspect `vida task proof status <task-id> --json` and the task notes;
+2. keep one canonical `zombie_d_matrix` pass record before closure;
+3. encode `schema_version: 1`, `categories: {Z,O,M,B,I,E,S}`, and non-empty
+   `evidence_refs` for every `pass` category;
+4. replace stale or invalid earlier pass records, because the runtime parser
+   selects the first matching pass record;
+5. retry `vida task close` and require `closed=true` with `proof_verdict=pass`.
+
+Evidence normalization must not promote a category from `blocked` to `pass`
+without a concrete test, artifact, or explicit non-applicable reason.
+
 ## Relationship To Existing Docs
 
 This protocol extends the project-local testing and runtime proof rules without
@@ -149,10 +224,10 @@ replacing their owner documents:
 artifact_path: process/zombie-d-test-writing-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-06-30'
+artifact_revision: '2026-07-15'
 schema_version: '1'
 status: canonical
 source_path: docs/process/zombie-d-test-writing-protocol.md
 created_at: '2026-06-30T00:00:00+03:00'
-updated_at: 2026-06-30T00:00:00+03:00
+updated_at: 2026-07-15T20:00:00+03:00
 changelog_ref: zombie-d-test-writing-protocol.changelog.jsonl
