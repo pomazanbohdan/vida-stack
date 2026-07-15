@@ -51,8 +51,6 @@ use taskflow_host_bridge::{
     write_host_bridge_normalized_implementation_artifact, write_host_bridge_request,
 };
 
-const AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE: std::time::Duration =
-    std::time::Duration::from_secs(300);
 const HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(1_500);
 
@@ -5575,7 +5573,10 @@ fn agent_dispatch_next_effective_materialize_packets(
 ) -> bool {
     command.materialize_packets
         || (command.dev_team
-            && activation_bundle_default_args_include(activation_bundle, "--materialize-packets"))
+            && (activation_bundle_default_args_include(activation_bundle, "--materialize-packets")
+                || activation_bundle_host_bridge_policy_requires_packet_materialization(
+                    activation_bundle,
+                )))
 }
 
 fn activation_bundle_default_args_include(
@@ -5597,6 +5598,19 @@ fn activation_bundle_default_args_include(
                         .any(|arg| arg == expected_arg)
                 })
         })
+}
+
+fn activation_bundle_host_bridge_policy_requires_packet_materialization(
+    activation_bundle: &serde_json::Value,
+) -> bool {
+    ["dev_team", "dev_team_readiness"].into_iter().any(|section| {
+        activation_bundle
+            .get(section)
+            .and_then(|value| value.get("orchestrator_command_contract"))
+            .and_then(|value| value.get("host_bridge_policy"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|policy| policy.starts_with("materialize_packet_before_execute"))
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5942,6 +5956,8 @@ async fn emit_agent_dispatch_existing_packet_fast_path(
     store: &StateStore,
     state_dir: &std::path::Path,
     projection_name: &str,
+    cache_mode: &str,
+    max_age: std::time::Duration,
 ) -> Option<ExitCode> {
     let current_task_id = command.current_task_id.as_deref()?;
     let receipt = match store.run_graph_dispatch_receipt(current_task_id).await {
@@ -5949,17 +5965,33 @@ async fn emit_agent_dispatch_existing_packet_fast_path(
         _ => return None,
     };
     let payload = agent_dispatch_existing_packet_fast_path_payload(command, state_dir, &receipt)?;
+    let cache_report = crate::operator_projection_cache::projection_cache_control_payload(
+        state_dir,
+        projection_name,
+        cache_mode,
+        false,
+        "packet_fast_path",
+        max_age,
+        Some("existing_receipt_backed_dispatch_packet"),
+    );
+    let mut payload = payload;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("projection_cache".to_string(), cache_report.clone());
+    }
     if command.json {
         crate::print_json_pretty(&payload);
-        crate::operator_projection_cache::write_json_projection(
-            state_dir,
-            projection_name,
-            &payload,
-        );
+        if cache_mode != "off" {
+            crate::operator_projection_cache::write_json_projection(state_dir, projection_name, &payload);
+        }
     } else {
         println!("agent dispatch-next: {}", release1_pass_status());
         println!("lanes selected: 1");
         println!("packet materialization: {}", release1_pass_status());
+        println!(
+            "cache: {} / {}",
+            cache_report["mode"].as_str().unwrap_or("auto"),
+            cache_report["freshness"].as_str().unwrap_or("packet_fast_path")
+        );
         if let Some(next) =
             payload["packet_materialization"]["artifacts"][0]["agent_init_execute_command"].as_str()
         {
@@ -5974,22 +6006,29 @@ fn emit_agent_dispatch_next_preview(
     state_dir: &std::path::Path,
     projection_name: &str,
     preview: AgentDispatchNextPreview,
+    cache_report: serde_json::Value,
 ) -> ExitCode {
     if command.json {
-        let payload = if command.full {
+        let mut payload = if command.full {
             serde_json::to_value(&preview).expect("agent dispatch-next preview should serialize")
         } else {
             agent_dispatch_next_compact_payload(&preview)
         };
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("projection_cache".to_string(), cache_report.clone());
+        }
         crate::print_json_pretty(&payload);
-        crate::operator_projection_cache::write_json_projection(
-            state_dir,
-            projection_name,
-            &payload,
-        );
+        if command.cache != "off" {
+            crate::operator_projection_cache::write_json_projection(state_dir, projection_name, &payload);
+        }
     } else {
         println!("agent dispatch-next: {}", preview.status);
         println!("lanes selected: {}", preview.lanes_selected);
+        println!(
+            "cache: {} / {}",
+            cache_report["mode"].as_str().unwrap_or("auto"),
+            cache_report["freshness"].as_str().unwrap_or("recomputed")
+        );
         if preview.packet_materialization["requested"]
             .as_bool()
             .unwrap_or(false)
@@ -6914,52 +6953,35 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
         .clone()
         .unwrap_or_else(crate::taskflow_task_bridge::proxy_state_dir);
     let explicit_state_dir = command.state_dir.as_deref();
+    let cache_mode = command.cache.as_str();
+    let max_age = std::time::Duration::from_secs(command.max_age_seconds);
     let projection_name =
         agent_dispatch_next_projection_name(&command, command.materialize_packets);
     let cache_read_allowed = command.current_task_id.is_some()
         && !command.materialize_packets
         && !command.dev_team
-        && !command.full;
+        && !command.full
+        && cache_mode == "auto";
     if command.json && cache_read_allowed {
-        if let Some(cached) = crate::operator_projection_cache::read_fresh_json_projection(
+        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
             &state_dir,
             &projection_name,
+            max_age,
         ) {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_launcher_stale_state_fresh_recent_json_projection(
-                &state_dir,
-                &projection_name,
-                AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE,
-            )
-        {
-            println!("{cached}");
-            return ExitCode::SUCCESS;
-        }
-        if let Some(cached) =
-            crate::operator_projection_cache::read_state_stale_recent_json_projection(
-                &state_dir,
-                &projection_name,
-                AGENT_DISPATCH_NEXT_RECENT_PROJECTION_MAX_AGE,
-            )
-        {
-            if let Some(overlay) =
-                crate::operator_projection_cache::read_runtime_continuation_binding_overlay(
+            if let Some(rendered) =
+                crate::operator_projection_cache::annotate_projection_cache_control(
                     &state_dir,
+                    &projection_name,
+                    &cached,
+                    cache_mode,
+                    true,
+                    "fresh",
+                    max_age,
+                    None,
                 )
             {
-                if let Some(rendered) =
-                    crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
-                        &state_dir,
-                        &cached,
-                        &overlay,
-                    )
-                {
-                    println!("{rendered}");
-                    return ExitCode::SUCCESS;
-                }
+                println!("{rendered}");
+                return ExitCode::SUCCESS;
             }
         }
     }
@@ -6970,6 +6992,8 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 &store,
                 &state_dir,
                 &projection_name,
+                cache_mode,
+                max_age,
             )
             .await
             {
@@ -7228,7 +7252,49 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
             } else {
                 preview
             };
-            emit_agent_dispatch_next_preview(&command, &state_dir, &projection_name, preview)
+            let recompute_reason = if cache_mode == "refresh" {
+                Some("refresh_requested".to_string())
+            } else if cache_mode == "off" {
+                Some("cache_disabled".to_string())
+            } else if effective_materialize_packets {
+                Some("materialization_required_by_config".to_string())
+            } else if command.full {
+                Some("full_diagnostics_requested".to_string())
+            } else if command.dev_team {
+                Some("dev_team_materialization_policy".to_string())
+            } else if command.current_task_id.is_none() {
+                Some("unscoped_projection".to_string())
+            } else {
+                Some(crate::operator_projection_cache::projection_cache_recompute_reason(
+                    &state_dir,
+                    &projection_name,
+                    max_age,
+                ))
+            };
+            let cache_report = crate::operator_projection_cache::projection_cache_control_payload(
+                &state_dir,
+                &projection_name,
+                cache_mode,
+                false,
+                if effective_materialize_packets {
+                    "materialized"
+                } else if cache_mode == "refresh" {
+                    "refreshed"
+                } else if cache_mode == "off" {
+                    "disabled"
+                } else {
+                    "recomputed"
+                },
+                max_age,
+                recompute_reason.as_deref(),
+            );
+            emit_agent_dispatch_next_preview(
+                &command,
+                &state_dir,
+                &projection_name,
+                preview,
+                cache_report,
+            )
         }
         Err(error) => {
             if command.dev_team {
@@ -7326,7 +7392,40 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
                 } else {
                     preview
                 };
-                emit_agent_dispatch_next_preview(&command, &state_dir, &projection_name, preview)
+                let recompute_reason = if cache_mode == "refresh" {
+                    Some("refresh_requested".to_string())
+                } else if cache_mode == "off" {
+                    Some("cache_disabled".to_string())
+                } else if effective_materialize_packets {
+                    Some("materialization_required_by_config".to_string())
+                } else {
+                    Some("authoritative_open_fallback".to_string())
+                };
+                let cache_report =
+                    crate::operator_projection_cache::projection_cache_control_payload(
+                        &state_dir,
+                        &projection_name,
+                        cache_mode,
+                        false,
+                        if effective_materialize_packets {
+                            "materialized"
+                        } else if cache_mode == "refresh" {
+                            "refreshed"
+                        } else if cache_mode == "off" {
+                            "disabled"
+                        } else {
+                            "recomputed"
+                        },
+                        max_age,
+                        recompute_reason.as_deref(),
+                    );
+                emit_agent_dispatch_next_preview(
+                    &command,
+                    &state_dir,
+                    &projection_name,
+                    preview,
+                    cache_report,
+                )
             } else {
                 eprintln!("Failed to open authoritative state store: {error}");
                 ExitCode::from(1)
@@ -8001,6 +8100,8 @@ mod tests {
             full: false,
             dev_team: true,
             materialize_packets: true,
+            cache: "auto".to_string(),
+            max_age_seconds: 300,
         };
         let receipt = RunGraphDispatchReceipt {
             run_id: "run-fast".to_string(),
@@ -17078,6 +17179,8 @@ mod tests {
             full: false,
             dev_team: true,
             materialize_packets: false,
+            cache: "auto".to_string(),
+            max_age_seconds: 300,
         };
         assert!(
             agent_dispatch_next_effective_materialize_packets(&preview_command, &activation_bundle),
@@ -17089,6 +17192,34 @@ mod tests {
         assert!(agent_dispatch_next_effective_materialize_packets(
             &materialize_command,
             &activation_bundle
+        ));
+
+        let policy_bundle = serde_json::json!({
+            "dev_team": {
+                "orchestrator_command_contract": {
+                    "host_bridge_policy": "materialize_packet_before_execute"
+                }
+            }
+        });
+        let policy_command = AgentDispatchNextArgs {
+            materialize_packets: false,
+            ..preview_command
+        };
+        assert!(agent_dispatch_next_effective_materialize_packets(
+            &policy_command,
+            &policy_bundle
+        ));
+
+        let dispatch_policy_bundle = serde_json::json!({
+            "dev_team_readiness": {
+                "orchestrator_command_contract": {
+                    "host_bridge_policy": "materialize_packet_before_execute_dispatch"
+                }
+            }
+        });
+        assert!(agent_dispatch_next_effective_materialize_packets(
+            &policy_command,
+            &dispatch_policy_bundle
         ));
     }
 
@@ -17103,6 +17234,8 @@ mod tests {
             full: false,
             dev_team: false,
             materialize_packets: false,
+            cache: "auto".to_string(),
+            max_age_seconds: 300,
         };
         let compact_name = agent_dispatch_next_projection_name(&command, false);
         command.full = true;

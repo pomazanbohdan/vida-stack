@@ -322,6 +322,133 @@ pub(crate) fn write_json_projection(
     let _ = write_json_without_following_symlinks(&path, &body);
 }
 
+pub(crate) fn projection_cache_control_payload(
+    state_dir: &Path,
+    projection_name: &str,
+    mode: &str,
+    hit: bool,
+    freshness: &str,
+    max_age: Duration,
+    recompute_reason: Option<&str>,
+) -> serde_json::Value {
+    let mode = match mode {
+        "auto" | "refresh" | "off" => mode,
+        _ => "auto",
+    };
+    let path = projection_path(state_dir, projection_name);
+    let (age_millis, cached_invalidation_tuple) = std::fs::metadata(&path)
+        .ok()
+        .and_then(|metadata| {
+            let age_millis = metadata
+                .modified()
+                .ok()
+                .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+                .map(|age| age.as_millis());
+            let cached_invalidation_tuple = read_json_without_following_symlinks(&path)
+                .ok()
+                .and_then(|body| {
+                    serde_json::from_str::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|payload| {
+                            payload.get("projection_cache_dependencies").cloned()
+                        })
+                })
+                .unwrap_or(serde_json::Value::Null);
+            Some((age_millis, cached_invalidation_tuple))
+        })
+        .unwrap_or((None, serde_json::Value::Null));
+    serde_json::json!({
+        "status": if hit { "hit" } else if mode == "off" { "disabled" } else { "miss" },
+        "projection_name": projection_name,
+        "mode": mode,
+        "hit": hit,
+        "freshness": freshness,
+        "age_millis": age_millis,
+        "max_age_millis": max_age.as_millis(),
+        "invalidation_tuple": {
+            "task_snapshot_marker": task_snapshot_marker_value(state_dir),
+        },
+        "cached_invalidation_tuple": cached_invalidation_tuple,
+        "recompute_reason": recompute_reason
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null),
+        "read_allowed": mode == "auto",
+        "write_allowed": mode != "off",
+    })
+}
+
+pub(crate) fn annotate_projection_cache_control(
+    state_dir: &Path,
+    projection_name: &str,
+    body: &str,
+    mode: &str,
+    hit: bool,
+    freshness: &str,
+    max_age: Duration,
+    recompute_reason: Option<&str>,
+) -> Option<String> {
+    let mut payload = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    let object = payload.as_object_mut()?;
+    object.insert(
+        "projection_cache".to_string(),
+        projection_cache_control_payload(
+            state_dir,
+            projection_name,
+            mode,
+            hit,
+            freshness,
+            max_age,
+            recompute_reason,
+        ),
+    );
+    serde_json::to_string_pretty(&payload).ok()
+}
+
+pub(crate) fn projection_cache_recompute_reason(
+    state_dir: &Path,
+    projection_name: &str,
+    max_age: Duration,
+) -> String {
+    let path = projection_path(state_dir, projection_name);
+    if path_is_symlink(&path) {
+        return "cache_symlink_rejected".to_string();
+    }
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return "cache_missing".to_string();
+    };
+    let Ok(cache_modified) = metadata.modified() else {
+        return "cache_mtime_unreadable".to_string();
+    };
+    if SystemTime::now()
+        .duration_since(cache_modified)
+        .ok()
+        .is_some_and(|age| age > max_age)
+    {
+        return "max_age_exceeded".to_string();
+    }
+    if latest_state_mutation_marker(state_dir)
+        .ok()
+        .is_some_and(|modified| cache_modified <= modified)
+    {
+        return "state_marker_newer".to_string();
+    }
+    if current_operator_dependency_mutation_marker(state_dir)
+        .is_some_and(|modified| cache_modified <= modified)
+    {
+        return "dependency_marker_newer".to_string();
+    }
+    let Ok(body) = read_json_without_following_symlinks(&path) else {
+        return "cache_unreadable".to_string();
+    };
+    if serde_json::from_str::<serde_json::Value>(&body).is_err() {
+        return "cache_invalid_json".to_string();
+    }
+    if !projection_task_snapshot_marker_matches(state_dir, &body) {
+        return "invalidation_tuple_mismatch".to_string();
+    }
+    "cache_read_rejected".to_string()
+}
+
 pub(crate) fn write_runtime_continuation_binding_overlay(
     state_dir: &Path,
     binding: &crate::state_store::RunGraphContinuationBinding,
@@ -898,6 +1025,8 @@ fn write_bytes_without_following_symlinks(path: &Path, body: &[u8]) -> std::io::
 #[cfg(test)]
 mod tests {
     use super::{
+        annotate_projection_cache_control, projection_cache_control_payload,
+        projection_cache_recompute_reason,
         projection_path, read_fresh_json_projection,
         read_fresh_json_projection_with_dependency_marker,
         read_launcher_stale_state_fresh_recent_json_projection, read_recent_json_projection,
@@ -923,6 +1052,103 @@ mod tests {
             sanitize_projection_component(&"a".repeat(121), "none", 120).len(),
             120
         );
+    }
+
+    #[test]
+    fn projection_cache_control_reports_policy_age_and_invalidation_tuple() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-control-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        let marker = crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(&root);
+        fs::write(&marker, "cache-marker-1").expect("task marker should write");
+        write_json_projection(
+            &root,
+            "agent-dispatch-next-control",
+            &serde_json::json!({"status": "pass"}),
+        );
+
+        let report = projection_cache_control_payload(
+            &root,
+            "agent-dispatch-next-control",
+            "auto",
+            true,
+            "fresh",
+            Duration::from_secs(300),
+            None,
+        );
+        assert_eq!(report["mode"], "auto");
+        assert_eq!(report["hit"], true);
+        assert_eq!(report["freshness"], "fresh");
+        assert!(report["age_millis"].is_number());
+        assert_eq!(report["max_age_millis"], 300_000);
+        assert_eq!(
+            report["invalidation_tuple"]["task_snapshot_marker"],
+            "cache-marker-1"
+        );
+        assert_eq!(report["read_allowed"], true);
+        assert_eq!(report["write_allowed"], true);
+
+        let body = fs::read_to_string(projection_path(&root, "agent-dispatch-next-control"))
+            .expect("projection should be readable");
+        let annotated = annotate_projection_cache_control(
+            &root,
+            "agent-dispatch-next-control",
+            &body,
+            "refresh",
+            false,
+            "refreshed",
+            Duration::from_secs(42),
+            Some("refresh_requested"),
+        )
+        .expect("cache control should annotate valid json");
+        let annotated: serde_json::Value =
+            serde_json::from_str(&annotated).expect("annotated projection should remain json");
+        assert_eq!(annotated["projection_cache"]["mode"], "refresh");
+        assert_eq!(annotated["projection_cache"]["recompute_reason"], "refresh_requested");
+        assert_eq!(annotated["projection_cache"]["max_age_millis"], 42_000);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn projection_cache_recompute_reason_is_explicit_for_missing_and_age_bound_cache() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-operator-projection-cache-reason-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("test clock should support unique ids")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("state root should be writable");
+        assert_eq!(
+            projection_cache_recompute_reason(
+                &root,
+                "agent-dispatch-next-missing",
+                Duration::from_secs(300)
+            ),
+            "cache_missing"
+        );
+        write_json_projection(
+            &root,
+            "agent-dispatch-next-old",
+            &serde_json::json!({"status": "pass"}),
+        );
+        assert_eq!(
+            projection_cache_recompute_reason(
+                &root,
+                "agent-dispatch-next-old",
+                Duration::ZERO
+            ),
+            "max_age_exceeded"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

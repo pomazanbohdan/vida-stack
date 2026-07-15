@@ -1263,6 +1263,22 @@ pub(crate) struct AgentDispatchNextArgs {
         help = "Write receipt-backed dispatch packets for the selected lanes instead of returning only a preview"
     )]
     pub(crate) materialize_packets: bool,
+
+    #[arg(
+        long = "cache",
+        value_parser = ["auto", "refresh", "off"],
+        default_value = "auto",
+        help = "Projection cache policy: auto reuses bounded fresh state, refresh recomputes and rewrites, off bypasses cache"
+    )]
+    pub(crate) cache: String,
+
+    #[arg(
+        long = "max-age-seconds",
+        value_parser = clap::value_parser!(u64),
+        default_value_t = 300,
+        help = "Maximum projection-cache age accepted by --cache auto"
+    )]
+    pub(crate) max_age_seconds: u64,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -5154,6 +5170,11 @@ mod tests {
         assert!(dispatch_help.contains("--json"));
         assert!(dispatch_help.contains("--full"));
         assert!(dispatch_help.contains("--dev-team"));
+        assert!(dispatch_help.contains("--cache"));
+        assert!(dispatch_help.contains("auto"));
+        assert!(dispatch_help.contains("refresh"));
+        assert!(dispatch_help.contains("off"));
+        assert!(dispatch_help.contains("--max-age-seconds"));
 
         let parsed = Cli::try_parse_from([
             "vida",
@@ -5167,6 +5188,10 @@ mod tests {
             "/tmp/vida-state",
             "--json",
             "--full",
+            "--cache",
+            "refresh",
+            "--max-age-seconds",
+            "42",
         ])
         .expect("agent dispatch-next should parse");
         let Some(super::Command::Agent(agent_args)) = parsed.command else {
@@ -5187,6 +5212,8 @@ mod tests {
         assert!(!dispatch.dev_team);
         assert!(dispatch.json);
         assert!(dispatch.full);
+        assert_eq!(dispatch.cache, "refresh");
+        assert_eq!(dispatch.max_age_seconds, 42);
 
         let dispatch_dev_team = Cli::try_parse_from([
             "vida",
