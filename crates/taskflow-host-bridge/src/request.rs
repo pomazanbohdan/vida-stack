@@ -185,6 +185,28 @@ pub fn host_bridge_blocked_result_contract_is_retryable(
         && host_bridge_blocked_result_contract_field_is_retryable(contract, "verdict")
 }
 
+pub fn host_bridge_blocked_result_contract_has_retry_evidence(
+    contract: &serde_json::Map<String, Value>,
+) -> bool {
+    if !host_bridge_blocked_result_contract_is_retryable(contract) {
+        return false;
+    }
+    let has_rework_target = contract
+        .get("rework_target")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty() && !matches!(value, "none" | "null" | "closure"));
+    let has_blocker_codes = ["blocker_codes", "allowed_blocker_codes"]
+        .into_iter()
+        .any(|field| {
+            contract
+                .get(field)
+                .and_then(Value::as_array)
+                .is_some_and(|codes| !codes.is_empty())
+        });
+    has_rework_target && has_blocker_codes
+}
+
 fn host_bridge_blocked_result_contract_field_is_retryable(
     contract: &serde_json::Map<String, Value>,
     field: &str,
@@ -621,6 +643,29 @@ mod tests {
             Some("alpha_rework")
         );
         assert!(host_bridge_blocked_result_contract_is_retryable(contract));
+    }
+
+    #[test]
+    fn blocked_result_contract_retry_evidence_requires_target_and_blockers() {
+        let complete = serde_json::json!({
+            "decision": "rework_required",
+            "verdict": "rework_required",
+            "allowed_next_node": "alpha_rework",
+            "rework_target": "alpha",
+            "blocker_codes": ["host_agent_execution_failed"]
+        });
+        assert!(host_bridge_blocked_result_contract_has_retry_evidence(
+            complete.as_object().expect("contract object")
+        ));
+
+        let incomplete = serde_json::json!({
+            "decision": "rework_required",
+            "verdict": "rework_required",
+            "allowed_next_node": "alpha_rework"
+        });
+        assert!(!host_bridge_blocked_result_contract_has_retry_evidence(
+            incomplete.as_object().expect("contract object")
+        ));
     }
 
     #[test]

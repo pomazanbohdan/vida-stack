@@ -32,6 +32,7 @@ use taskflow_host_bridge::{
     build_host_bridge_adapter_payload, build_host_bridge_normalized_implementation_artifact,
     decide_host_bridge_completion_authority, host_bridge_artifact_file,
     host_bridge_artifact_has_retryable_completion_blocker, host_bridge_blocked_result_contract,
+    host_bridge_blocked_result_contract_has_retry_evidence,
     host_bridge_blocked_result_contract_is_retryable, host_bridge_changed_files_from_artifact,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_has_preview_refresh_evidence,
@@ -1161,6 +1162,11 @@ fn retryable_host_bridge_completion_request_for_state_root(
     }
     let nested_contract_retryable = host_bridge_blocked_result_contract(request)
         .is_some_and(host_bridge_blocked_result_contract_is_retryable);
+    let nested_contract_has_retry_evidence = host_bridge_blocked_result_contract(request)
+        .is_some_and(host_bridge_blocked_result_contract_has_retry_evidence);
+    if nested_contract_has_retry_evidence {
+        return true;
+    }
     let nested_contract_has_artifact = [
         ("result_path", ArtifactPathKind::HostBridgeResult),
         ("receipt_path", ArtifactPathKind::HostBridgeReceipt),

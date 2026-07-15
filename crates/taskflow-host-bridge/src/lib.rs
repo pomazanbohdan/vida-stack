@@ -75,6 +75,7 @@ pub use request::{
     HOST_BRIDGE_REQUIRED_RESULT_FIELDS, HostBridgeRequest, HostBridgeRequestPath,
     default_host_bridge_required_result_fields, effective_host_bridge_request,
     host_bridge_blocked_result_contract, host_bridge_blocked_result_contract_allowed_next_node,
+    host_bridge_blocked_result_contract_has_retry_evidence,
     host_bridge_blocked_result_contract_is_retryable, host_bridge_path_array,
     host_bridge_request_owned_paths, host_bridge_request_proof_artifact_paths,
     host_bridge_request_string, host_bridge_request_task_class, host_bridge_required_result_fields,

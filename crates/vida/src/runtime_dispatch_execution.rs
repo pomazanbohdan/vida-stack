@@ -2407,6 +2407,47 @@ fn add_proof_artifact_scope_to_implementation_isolation(
     }
 }
 
+fn configured_lane_rework_target(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_target: &str,
+) -> Option<String> {
+    crate::dispatch_contract_lane(&role_selection.execution_plan, dispatch_target)?
+        .get("rework_transitions")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flat_map(|transitions| transitions.values())
+        .find_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .map(str::to_string)
+}
+
+fn host_bridge_blocked_result_contract(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_target: &str,
+) -> serde_json::Value {
+    let rework_target = configured_lane_rework_target(role_selection, dispatch_target);
+    serde_json::json!({
+        "execution_state": "blocked",
+        "decision": "rework_required",
+        "verdict": "rework_required",
+        "required_result_fields": default_host_bridge_required_result_fields(),
+        "rework_target_required_when_blocked": true,
+        "rework_target": rework_target,
+        "allowed_next_node": rework_target,
+        "blocker_codes": [
+            "host_agent_capacity_unavailable",
+            "host_tool_capability_missing",
+            "host_agent_execution_failed"
+        ],
+        "allowed_blocker_codes": [
+            "host_agent_capacity_unavailable",
+            "host_tool_capability_missing",
+            "host_agent_execution_failed"
+        ]
+    })
+}
+
 fn host_tool_bridge_request_id_segment(value: &str) -> String {
     let mut segment = value
         .chars()
@@ -2827,6 +2868,10 @@ fn materialize_host_tool_bridge_request(
         "expected_implementation_artifact_kinds": expected_implementation_artifact_kinds,
         "implementation_artifacts": [],
         "required_result_fields": default_host_bridge_required_result_fields(),
+        "blocked_result_contract": host_bridge_blocked_result_contract(
+            role_selection,
+            &receipt.dispatch_target,
+        ),
         "owned_paths": request_owned_paths,
         "proof_artifact_paths": proof_artifact_paths,
         "proof_artifact_scope": proof_artifact_paths,
@@ -6559,6 +6604,85 @@ host_tool_bridge:
         assert_eq!(rearmed_request["owned_paths"], serde_json::json!(["src/lib.rs"]));
         assert!(!result_path.exists(), "old blocked result must not be reused");
         assert!(!receipt_path.exists(), "old blocked receipt must not be reused");
+        let _ = std::fs::remove_dir_all(project_root);
+    }
+
+    #[test]
+    fn host_bridge_request_projects_configured_rework_contract() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-rework-contract-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let state_root = project_root.join(".vida/data/state");
+        let packet_path = project_root.join(".vida/dispatch.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent"))
+            .expect("create packet parent");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({"owned_paths": ["src/lib.rs"]}).to_string(),
+        )
+        .expect("write dispatch packet");
+
+        let role_selection = internal_codex_fallback_role_selection(serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "lane_sequence": ["coder", "tester"],
+                    "execution_lane_sequence": ["coder", "tester"],
+                    "lane_catalog": {
+                        "coder": {
+                            "runtime_role": "worker",
+                            "task_class": "implementation",
+                            "stage": "execution",
+                            "rework_transitions": {"rework": "coder"}
+                        },
+                        "tester": {
+                            "runtime_role": "verifier",
+                            "task_class": "verification",
+                            "stage": "execution"
+                        }
+                    }
+                }
+            }
+        }));
+        let mut receipt = internal_codex_fallback_receipt(
+            packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+        );
+        receipt.dispatch_target = "coder".to_string();
+        receipt.activation_runtime_role = Some("worker".to_string());
+
+        let request = materialize_host_tool_bridge_request(
+            &project_root,
+            &state_root,
+            None,
+            packet_path
+                .to_str()
+                .expect("dispatch packet path should render"),
+            "internal_subagents",
+            "junior",
+            &receipt,
+            &role_selection,
+        )
+        .expect("host bridge request should materialize");
+
+        assert_eq!(
+            request["blocked_result_contract"]["allowed_next_node"],
+            "coder"
+        );
+        assert_eq!(
+            request["blocked_result_contract"]["rework_target_required_when_blocked"],
+            true
+        );
+        assert_eq!(
+            request["blocked_result_contract"]["allowed_blocker_codes"][2],
+            "host_agent_execution_failed"
+        );
+
         let _ = std::fs::remove_dir_all(project_root);
     }
 

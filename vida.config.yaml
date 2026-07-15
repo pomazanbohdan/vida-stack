@@ -964,6 +964,8 @@ dev_team:
           command_ref: agent-init-worker
           lifecycle_hook_templates: [command_timing_summary]
           inclusion_rule: always
+          rework_transitions:
+            rework: coder
           proof_gates:
             required_outputs: [changed_files, verification_notes, explicit_blockers]
         - step_id: adaptive-focused-proof
@@ -973,6 +975,8 @@ dev_team:
           command_ref: agent-init-verifier
           lifecycle_hook_templates: [command_timing_summary]
           inclusion_rule: when_proof_required
+          rework_transitions:
+            rework: coder
           proof_gates:
             required_outputs: [verification_evidence, failing_or_passing_checks]
         - step_id: adaptive-conditional-review
@@ -982,6 +986,8 @@ dev_team:
           command_ref: agent-init-coach
           lifecycle_hook_templates: [command_timing_summary]
           inclusion_rule: when_review_triggered
+          rework_transitions:
+            rework: coder
           proof_gates:
             required_outputs: [root_cause_validation, false_green_risk_review, rework_or_approve_decision]
         - step_id: adaptive-architecture-escalation
@@ -991,6 +997,8 @@ dev_team:
           command_ref: agent-init-solution-architect
           lifecycle_hook_templates: [command_timing_summary]
           inclusion_rule: when_architecture_triggered
+          rework_transitions:
+            rework: coder
           proof_gates:
             required_outputs: [implementation_plan, architecture_decisions, explicit_blockers]
     quick-two-pack-flow:
