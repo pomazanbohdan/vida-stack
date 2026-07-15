@@ -634,6 +634,9 @@ fn lane_template_included(
         "when_execution_preparation_required" => requires_execution_preparation,
         "when_flow_requires_coach" => true,
         "when_flow_requires_verification" => true,
+        "when_proof_required" => false,
+        "when_review_triggered" => false,
+        "when_architecture_triggered" => false,
         _ => true,
     }
 }
@@ -1413,6 +1416,60 @@ mod tests {
                 .contains(&json!("packet_template_kind")),
             "missing configured policy fields must be reported explicitly"
         );
+    }
+
+    #[test]
+    fn adaptive_triggered_lanes_are_excluded_until_required() {
+        let bundle = json!({
+            "dev_team_readiness": {
+                "roles": [
+                    {"role_id": "coder", "runtime_role": "worker", "task_classes": ["implementation"]},
+                    {"role_id": "tester", "runtime_role": "verifier", "task_classes": ["verification"]},
+                    {"role_id": "coach_validator", "runtime_role": "coach", "task_classes": ["review"]},
+                    {"role_id": "architect", "runtime_role": "solution_architect", "task_classes": ["architecture"]}
+                ],
+                "flows": [
+                    {
+                        "flow_id": "adaptive-task-flow",
+                        "enabled": true,
+                        "ordered_steps": [
+                            {"role_id": "coder", "inclusion_rule": "always"},
+                            {"role_id": "tester", "inclusion_rule": "when_proof_required"},
+                            {"role_id": "coach_validator", "inclusion_rule": "when_review_triggered"},
+                            {"role_id": "architect", "inclusion_rule": "when_architecture_triggered"}
+                        ]
+                    }
+                ]
+            },
+            "carrier_runtime": {
+                "dispatch_aliases": []
+            }
+        });
+        let selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "configured".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "routine adaptive flow".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "test".to_string(),
+            matched_terms: vec!["dev_team_flow_id:adaptive-task-flow".to_string()],
+            compiled_bundle: bundle.clone(),
+            execution_plan: serde_json::Value::Null,
+            reason: "test".to_string(),
+        };
+
+        let contract = build_resolved_development_dispatch_contract(&bundle, &selection, false);
+
+        assert_eq!(contract["lane_sequence"], json!(["coder"]));
+        assert_eq!(contract["execution_lane_sequence"], json!(["coder"]));
+        assert!(contract["lane_catalog"]["tester"].is_null());
+        assert!(contract["lane_catalog"]["coach_validator"].is_null());
+        assert!(contract["lane_catalog"]["architect"].is_null());
     }
 
     #[test]
