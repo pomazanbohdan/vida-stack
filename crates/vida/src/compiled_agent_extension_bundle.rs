@@ -97,6 +97,31 @@ pub(crate) fn build_compiled_agent_extension_bundle_for_root(
                 .map(|path| format!("vida.config.yaml -> agent_extensions.registries.hook_templates ({path})"))
                 .unwrap_or_else(|| "vida.config.yaml -> agent_extensions.registries.hook_templates".to_string()),
         },
+        "lane_work_context_contract": {
+            "schema_version": "lane-work-context.v1",
+            "required_fields": [
+                "task",
+                "role_profile",
+                "objective",
+                "owned_paths",
+                "read_paths",
+                "proof_targets",
+                "constraints",
+                "source_refs",
+                "result_schema",
+                "artifact_refs",
+                "context_budget"
+            ],
+            "artifact_ref_fields": ["hash", "summary", "load_when"],
+            "omitted_sections": [
+                "carrier_selection",
+                "pricing",
+                "unrelated_boot_diagnostics",
+                "full_runtime_bundle",
+                "conversation_transcript"
+            ],
+            "source_of_truth": "compiled_agent_extension_bundle"
+        },
         "agent_system": serde_json::to_value(crate::yaml_lookup(config, &["agent_system"]).cloned().unwrap_or(serde_yaml::Value::Null))
             .unwrap_or(serde_json::Value::Null),
         "autonomous_execution": serde_json::to_value(crate::yaml_lookup(config, &["autonomous_execution"]).cloned().unwrap_or(serde_yaml::Value::Null))
@@ -258,6 +283,13 @@ mod tests {
         let bundle = build_compiled_agent_extension_bundle_for_root(&overlay, root)
             .expect("bundle should compile");
         assert_eq!(bundle["project_roles"][0]["description"], "overridden");
+        assert_eq!(
+            bundle["lane_work_context_contract"]["schema_version"],
+            "lane-work-context.v1"
+        );
+        assert!(bundle["lane_work_context_contract"]["omitted_sections"]
+            .as_array()
+            .is_some_and(|sections| sections.iter().any(|value| value == "pricing")));
     }
 
     #[test]

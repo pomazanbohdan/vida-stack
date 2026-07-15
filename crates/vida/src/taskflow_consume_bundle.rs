@@ -932,10 +932,155 @@ pub(crate) fn build_dev_team_readiness(
         "roles": roles,
         "sequence": sequence,
         "flows": flows,
+        "lane_work_context_contract": activation_bundle
+            .get("lane_work_context_contract")
+            .cloned()
+            .unwrap_or_else(default_lane_work_context_contract),
         "zombie_d_gate": zombie_d_gate,
         "blockers": blockers,
         "source_paths": source_paths,
     })
+}
+
+pub(crate) fn lane_role_profile_for_context(
+    activation_bundle: &serde_json::Value,
+    role_label: &str,
+    runtime_role: &str,
+    task_class: &str,
+) -> serde_json::Value {
+    let roles = activation_bundle["dev_team_readiness"]["roles"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let role_label = role_label.trim();
+    let runtime_role = runtime_role.trim();
+    let task_class = task_class.trim();
+    let selected = roles
+        .iter()
+        .find(|role| role["role_id"].as_str() == Some(role_label))
+        .or_else(|| {
+            roles.iter().find(|role| {
+                role["runtime_role"].as_str() == Some(runtime_role)
+                    && role["task_classes"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|value| value.as_str() == Some(task_class))
+            })
+        });
+    let Some(role) = selected else {
+        return serde_json::json!({
+            "status": "unavailable",
+            "profile_id": role_label,
+            "runtime_role": runtime_role,
+            "task_class": task_class,
+            "field_set": default_lane_work_context_field_set(),
+            "role_specific_fields": [],
+            "omitted_sections": default_lane_work_context_omitted_sections(),
+            "context_budget": {"max_tokens": 512},
+            "source_refs": ["dev_team_readiness.roles"],
+            "blocker_code": "lane_role_profile_missing"
+        });
+    };
+    let role_id = role["role_id"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(role_label);
+    let task_classes = role["task_classes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let required_outputs = role["handoff"]["required_outputs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let configured_fields = role["context"]["fields"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let field_set = if configured_fields.is_empty() {
+        default_lane_work_context_field_set()
+    } else {
+        configured_fields
+    };
+    let max_tokens = role["context"]["max_tokens"]
+        .as_u64()
+        .filter(|value| *value > 0)
+        .unwrap_or(512);
+    let mut source_refs = activation_bundle["dev_team_readiness"]["source_paths"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    source_refs.push("dev_team_readiness.roles".to_string());
+    source_refs.sort();
+    source_refs.dedup();
+    let omitted_sections = activation_bundle
+        .get("lane_work_context_contract")
+        .and_then(|contract| contract.get("omitted_sections"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!(default_lane_work_context_omitted_sections()));
+    serde_json::json!({
+        "status": "configured",
+        "profile_id": role_id,
+        "runtime_role": role["runtime_role"],
+        "task_classes": task_classes,
+        "field_set": field_set,
+        "role_specific_fields": required_outputs.clone(),
+        "packet_template_kind": role["packet_template_kind"],
+        "closure_class": role["closure_class"],
+        "handoff": {"required_outputs": required_outputs},
+        "omitted_sections": omitted_sections,
+        "context_budget": {"max_tokens": max_tokens},
+        "source_refs": source_refs
+    })
+}
+
+fn default_lane_work_context_contract() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": "lane-work-context.v1",
+        "required_fields": default_lane_work_context_field_set(),
+        "artifact_ref_fields": ["hash", "summary", "load_when"],
+        "omitted_sections": default_lane_work_context_omitted_sections(),
+        "source_of_truth": "taskflow_consume_bundle"
+    })
+}
+
+fn default_lane_work_context_field_set() -> Vec<String> {
+    vec![
+        "task".to_string(),
+        "role_profile".to_string(),
+        "objective".to_string(),
+        "owned_paths".to_string(),
+        "read_paths".to_string(),
+        "proof_targets".to_string(),
+        "constraints".to_string(),
+        "source_refs".to_string(),
+        "result_schema".to_string(),
+        "artifact_refs".to_string(),
+        "context_budget".to_string(),
+    ]
+}
+
+fn default_lane_work_context_omitted_sections() -> Vec<&'static str> {
+    vec![
+        "carrier_selection",
+        "pricing",
+        "unrelated_boot_diagnostics",
+        "full_runtime_bundle",
+        "conversation_transcript",
+    ]
 }
 
 fn dev_team_source_paths(config_path: &str, contract_doc: Option<&str>) -> Vec<String> {
@@ -1773,6 +1918,7 @@ mod tests {
         fail_fast_with_timeout, normalize_agent_system_max_parallel_agents,
         normalize_consume_bundle_blocker_codes, push_unique_string,
         taskflow_docflow_seam_receipt_backed_check,
+        lane_role_profile_for_context,
     };
     use crate::{
         DoctorLauncherSummary, RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence,
@@ -1852,6 +1998,61 @@ mod tests {
         };
 
         build_docflow_receipt_evidence(&readiness, &proof)
+    }
+
+    #[test]
+    fn lane_role_profiles_are_minimal_and_omit_carrier_runtime_details() {
+        let activation_bundle = serde_json::json!({
+            "lane_work_context_contract": {
+                "omitted_sections": ["carrier_selection", "pricing", "boot_diagnostics"]
+            },
+            "dev_team_readiness": {
+                "source_paths": ["vida.config.yaml"],
+                "roles": [
+                    {
+                        "role_id": "writer_lane",
+                        "runtime_role": "writer",
+                        "task_classes": ["implementation"],
+                        "packet_template_kind": "delivery_task_packet",
+                        "handoff": {"required_outputs": ["changed_files"]}
+                    },
+                    {
+                        "role_id": "review_lane",
+                        "runtime_role": "reviewer",
+                        "task_classes": ["verification"],
+                        "packet_template_kind": "coach_review_packet",
+                        "handoff": {"required_outputs": ["verification_evidence"]}
+                    }
+                ]
+            }
+        });
+        let writer = lane_role_profile_for_context(
+            &activation_bundle,
+            "writer_lane",
+            "writer",
+            "implementation",
+        );
+        let reviewer = lane_role_profile_for_context(
+            &activation_bundle,
+            "review_lane",
+            "reviewer",
+            "verification",
+        );
+        assert_eq!(writer["status"], "configured");
+        assert_eq!(
+            writer["handoff"]["required_outputs"],
+            serde_json::json!(["changed_files"])
+        );
+        assert_ne!(
+            writer["role_specific_fields"],
+            reviewer["role_specific_fields"]
+        );
+        let rendered = serde_json::to_string(&writer).expect("profile should serialize");
+        assert!(!rendered.contains("selected_model"));
+        assert!(!rendered.contains("selected_carrier"));
+        assert!(!rendered.contains("normalized_cost"));
+        assert_eq!(writer["omitted_sections"][1], "pricing");
+        assert_eq!(writer["context_budget"]["max_tokens"], 512);
     }
 
     #[test]

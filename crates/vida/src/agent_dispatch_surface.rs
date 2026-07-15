@@ -163,6 +163,7 @@ struct AgentDispatchLanePreview {
     ready_parallel_safe: bool,
     selection_reason: String,
     selection_truth: AgentDispatchLaneSelectionTruth,
+    work_context: serde_json::Value,
     requires_user_approval: bool,
     approval_gate: serde_json::Value,
 }
@@ -2840,6 +2841,7 @@ fn build_dev_team_flow_projection(
                 "task_id": lane.task_id,
                 "dispatch_command": lane.dispatch_command,
                 "dispatch_command_kind": lane.dispatch_command_kind,
+                "work_context": lane.work_context,
                 "receipt_status": {
                     "receipt_backed": false,
                     "receipt_path": null,
@@ -3298,6 +3300,165 @@ fn blocked_candidate(
     }
 }
 
+fn bounded_context_text(value: &str, max_chars: usize) -> String {
+    let value = value.trim();
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut bounded = value
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    bounded.push('…');
+    bounded
+}
+
+fn lane_work_context_artifact_ref(
+    reference: &str,
+    payload: &serde_json::Value,
+    summary: &str,
+    load_when: &str,
+) -> serde_json::Value {
+    let digest = serde_json::to_string(payload)
+        .map(|value| blake3::hash(value.as_bytes()).to_hex().to_string())
+        .unwrap_or_else(|_| "unavailable".to_string());
+    serde_json::json!({
+        "ref": reference,
+        "hash": format!("blake3:{digest}"),
+        "summary": summary,
+        "load_when": load_when
+    })
+}
+
+fn lane_work_context(
+    activation_bundle: &serde_json::Value,
+    task: &state_store::TaskRecord,
+    role_label: &str,
+    runtime_role: &str,
+    task_class: &str,
+) -> serde_json::Value {
+    let role_profile = crate::taskflow_consume_bundle::lane_role_profile_for_context(
+        activation_bundle,
+        role_label,
+        runtime_role,
+        task_class,
+    );
+    let mut read_paths = Vec::new();
+    task.planner_metadata
+        .proof_targets
+        .iter()
+        .chain(task.planner_metadata.acceptance_targets.iter())
+        .for_each(|target| collect_test_like_paths_from_text(&mut read_paths, target));
+    read_paths.sort();
+    read_paths.dedup();
+    let owned_paths = task.planner_metadata.owned_paths.clone();
+    read_paths.retain(|path| !owned_paths.iter().any(|owned| owned == path));
+    let mut constraints = Vec::new();
+    if let Some(mode) = task.execution_semantics.execution_mode.as_deref() {
+        constraints.push(format!("execution_mode={mode}"));
+    }
+    if let Some(bucket) = task.execution_semantics.order_bucket.as_deref() {
+        constraints.push(format!("order_bucket={bucket}"));
+    }
+    if let Some(domain) = task.execution_semantics.conflict_domain.as_deref() {
+        constraints.push(format!("conflict_domain={domain}"));
+    }
+    if let Some(risk) = task.planner_metadata.risk.as_deref() {
+        constraints.push(format!("risk={risk}"));
+    }
+    if owned_paths.is_empty() {
+        constraints.push("owned_paths_must_remain_bounded_to_task_record".to_string());
+    }
+    let objective = if task.description.trim().is_empty() {
+        task.title.clone()
+    } else {
+        bounded_context_text(&task.description, 512)
+    };
+    let task_projection = serde_json::json!({
+        "id": task.id,
+        "title": task.title,
+        "status": task.status,
+    });
+    let proof_projection = serde_json::json!({
+        "proof_targets": task.planner_metadata.proof_targets,
+        "acceptance_targets": task.planner_metadata.acceptance_targets,
+    });
+    let source_refs = role_profile["source_refs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .chain([
+            format!("taskflow:task:{}", task.id),
+            "vida agent dispatch-next".to_string(),
+            "compiled_agent_extension_bundle:lane_work_context_contract".to_string(),
+        ])
+        .collect::<Vec<_>>();
+    let result_schema = serde_json::json!({
+        "required_outputs": role_profile["handoff"]["required_outputs"],
+        "accepted_statuses": ["pass", "blocked"],
+        "artifact_refs_required": true
+    });
+    let mut context = serde_json::json!({
+        "schema_version": "lane-work-context.v1",
+        "task": task_projection,
+        "role_profile": role_profile,
+        "objective": objective,
+        "owned_paths": owned_paths,
+        "read_paths": read_paths,
+        "proof_targets": task.planner_metadata.proof_targets,
+        "constraints": constraints,
+        "source_refs": source_refs,
+        "result_schema": result_schema,
+        "artifact_refs": [
+            lane_work_context_artifact_ref(
+                &format!("task:{}:objective", task.id),
+                &serde_json::json!({"task": task_projection, "objective": objective}),
+                "bounded task objective and identity",
+                "always"
+            ),
+            lane_work_context_artifact_ref(
+                &format!("task:{}:proof", task.id),
+                &proof_projection,
+                "acceptance and proof targets",
+                "when verifying or handing off"
+            )
+        ],
+        "context_budget": {
+            "estimated_tokens": 0,
+            "max_tokens": role_profile["context_budget"]["max_tokens"].as_u64().unwrap_or(512),
+            "omitted_sections": role_profile["omitted_sections"]
+        }
+    });
+    let estimated_tokens = serde_json::to_string(&context)
+        .map(|value| value.len().saturating_add(3) / 4)
+        .unwrap_or(0);
+    if let Some(budget) = context
+        .get_mut("context_budget")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        budget.insert(
+            "estimated_tokens".to_string(),
+            serde_json::json!(estimated_tokens),
+        );
+        budget.insert(
+            "budget_verdict".to_string(),
+            serde_json::json!(if estimated_tokens
+                <= budget
+                    .get("max_tokens")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(512) as usize
+            {
+                "within_limit"
+            } else {
+                "over_limit"
+            }),
+        );
+    }
+    context
+}
+
 fn materialization_owned_paths_for_lane_task(
     task: state_store::TaskRecord,
     lane: &AgentDispatchLanePreview,
@@ -3556,7 +3717,14 @@ fn build_agent_dispatch_next_preview_standard(
                 ),
                 ready_parallel_safe: primary.ready_parallel_safe,
                 selection_reason: "primary_ready_task".to_string(),
-                selection_truth,
+                selection_truth: selection_truth.clone(),
+                work_context: lane_work_context(
+                    activation_bundle,
+                    &primary.task,
+                    "default",
+                    &selection_truth.runtime_role,
+                    &selection_truth.task_class,
+                ),
                 requires_user_approval: false,
                 approval_gate: serde_json::json!({"required": false, "status": "not_required"}),
             }),
@@ -3594,7 +3762,14 @@ fn build_agent_dispatch_next_preview_standard(
                         ),
                         ready_parallel_safe: candidate.ready_parallel_safe,
                         selection_reason: "parallel_safe_ready_task".to_string(),
-                        selection_truth,
+                        selection_truth: selection_truth.clone(),
+                        work_context: lane_work_context(
+                            activation_bundle,
+                            &candidate.task,
+                            "parallel",
+                            &selection_truth.runtime_role,
+                            &selection_truth.task_class,
+                        ),
                         requires_user_approval: false,
                         approval_gate: serde_json::json!({"required": false, "status": "not_required"}),
                     });
@@ -4233,7 +4408,14 @@ fn build_agent_dispatch_next_preview_dev_team(
                 ),
                 ready_parallel_safe: candidate.ready_parallel_safe,
                 selection_reason: format!("dev_team_step_{}:{}", step_index + 1, step.role_label),
-                selection_truth,
+                selection_truth: selection_truth.clone(),
+                work_context: lane_work_context(
+                    activation_bundle,
+                    &candidate.task,
+                    &step.role_label,
+                    &selection_truth.runtime_role,
+                    &selection_truth.task_class,
+                ),
                 requires_user_approval: step.requires_user_approval,
                 approval_gate: serde_json::json!({
                     "required": step.requires_user_approval,
@@ -4506,7 +4688,14 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan_with_diagnostics(
                 } else {
                     "scheduler_parallel_safe_ready_task".to_string()
                 },
-                selection_truth,
+                selection_truth: selection_truth.clone(),
+                work_context: lane_work_context(
+                    activation_bundle,
+                    task,
+                    &reservation.launch_role,
+                    &selection_truth.runtime_role,
+                    &selection_truth.task_class,
+                ),
                 requires_user_approval: false,
                 approval_gate: serde_json::json!({"required": false, "status": "not_required"}),
             }),
@@ -4883,6 +5072,18 @@ fn validate_materialized_agent_dispatch_packet(
             receipt.dispatch_target
         ));
     }
+    let packet_context = packet
+        .get("role_selection_full")
+        .and_then(|value| value.get("execution_plan"))
+        .and_then(|value| value.get("lane_work_context"))
+        .ok_or_else(|| "materialized packet lane_work_context is missing".to_string())?;
+    if packet_context["task"]["id"].as_str() != Some(lane.task_id.as_str()) {
+        return Err(format!(
+            "materialized packet lane_work_context task mismatch: expected `{}`, got `{}`",
+            lane.task_id,
+            packet_context["task"]["id"].as_str().unwrap_or("<missing>")
+        ));
+    }
     if receipt.dispatch_status != "routed" {
         return Err(format!(
             "dispatch receipt is not routed: status `{}`",
@@ -4969,6 +5170,9 @@ async fn materialize_configured_agent_dispatch_lane(
             &role_selection,
         );
     apply_configured_lane_runtime_assignment(&mut role_selection, activation_bundle, lane)?;
+    if let Some(execution_plan) = role_selection.execution_plan.as_object_mut() {
+        execution_plan.insert("lane_work_context".to_string(), lane.work_context.clone());
+    }
     let run_graph_bootstrap = serde_json::json!({
         "status": "dispatch_init_ready",
         "handoff_ready": true,
@@ -4982,7 +5186,8 @@ async fn materialize_configured_agent_dispatch_lane(
             "route_task_class": lane.task_class,
             "dispatch_ready": true,
             "dispatch_blockers": [],
-        }
+        },
+        "lane_work_context": lane.work_context
     });
     let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
     let mut dispatch_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
@@ -5538,6 +5743,7 @@ fn agent_dispatch_next_compact_payload(preview: &AgentDispatchNextPreview) -> se
                 "receipt_backed_execution_command": &lane.receipt_backed_execution_command,
                 "ready_parallel_safe": lane.ready_parallel_safe,
                 "selection_reason": &lane.selection_reason,
+                "work_context": &lane.work_context,
                 "requires_user_approval": lane.requires_user_approval,
                 "selected_carrier": &lane.selection_truth.selected_carrier,
                 "selected_backend": &lane.selection_truth.selected_backend,
@@ -7153,6 +7359,7 @@ mod tests {
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path, materialize_configured_agent_dispatch_lane,
+        lane_work_context,
         read_canonical_host_bridge_json_artifact, read_host_bridge_request, release1_pass_status,
         resolve_agent_dispatch_next_current_task_ids, run_agent_host_bridge,
         single_in_progress_task_id_from_rows, state_store,
@@ -7166,6 +7373,55 @@ mod tests {
     use crate::test_cli_support::{EnvVarGuard, cli, guard_current_dir};
     use crate::{AgentDispatchNextArgs, AgentHostBridgeArgs};
     use std::process::ExitCode;
+
+    #[test]
+    fn lane_work_context_is_bounded_packet_scoped_and_budgeted() {
+        let mut task = task_with_labels("lane-context", "Lane context", &["architecture"]);
+        task.description = "Bound the worker context to the selected task.".to_string();
+        task.planner_metadata.owned_paths =
+            vec!["crates/vida/src/agent_dispatch_surface.rs".to_string()];
+        task.planner_metadata.acceptance_targets = vec!["agent dispatch context output".to_string()];
+        task.planner_metadata.proof_targets = vec![
+            "cargo test -p vida lane_work_context_is_bounded_packet_scoped_and_budgeted".to_string(),
+        ];
+        let activation_bundle = serde_json::json!({
+            "lane_work_context_contract": {
+                "omitted_sections": ["carrier_selection", "pricing", "full_runtime_bundle"]
+            },
+            "dev_team_readiness": {
+                "source_paths": ["vida.config.yaml"],
+                "roles": [{
+                    "role_id": "writer_lane",
+                    "runtime_role": "writer",
+                    "task_classes": ["implementation"],
+                    "packet_template_kind": "delivery_task_packet",
+                    "handoff": {"required_outputs": ["changed_files"]}
+                }]
+            }
+        });
+        let context = lane_work_context(
+            &activation_bundle,
+            &task,
+            "writer_lane",
+            "writer",
+            "implementation",
+        );
+        assert_eq!(context["schema_version"], "lane-work-context.v1");
+        assert_eq!(context["task"]["id"], "lane-context");
+        assert_eq!(context["owned_paths"][0], "crates/vida/src/agent_dispatch_surface.rs");
+        assert_eq!(context["result_schema"]["artifact_refs_required"], true);
+        assert!(context["artifact_refs"][0]["hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("blake3:"));
+        assert!(context["context_budget"]["estimated_tokens"]
+            .as_u64()
+            .unwrap()
+            > 0);
+        let rendered = serde_json::to_string(&context).expect("context should serialize");
+        assert!(!rendered.contains("selected_model"));
+        assert!(!rendered.contains("pricing_readiness"));
+    }
 
     #[test]
     fn agent_dispatch_contract_status_is_table_driven_by_preview_and_assignment_blockers() {
@@ -7388,6 +7644,7 @@ mod tests {
                 task_class: "coach".to_string(),
                 carrier_policy_blockers: Vec::new(),
             },
+            work_context: serde_json::Value::Null,
             requires_user_approval: false,
             approval_gate: serde_json::json!({
                 "required": false,
@@ -7832,7 +8089,14 @@ mod tests {
                 serde_json::json!({
                     "run_id": lane.task_id,
                     "dispatch_target": dispatch_target,
-                    "packet_template_kind": "coach_review_packet"
+                    "packet_template_kind": "coach_review_packet",
+                    "role_selection_full": {
+                        "execution_plan": {
+                            "lane_work_context": {
+                                "task": {"id": lane.task_id}
+                            }
+                        }
+                    }
                 })
                 .to_string(),
             )
