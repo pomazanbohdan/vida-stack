@@ -36,7 +36,7 @@ Treat this bundle as the compact project `always_on_core` startup set for routin
 8. runtime development environment skill and issue-processing routing from `vida-runtime-development-environment.md`.
 9. wave-first epic optimization, three-step task execution, and post-task
    scorecard/checklist routing from `project-orchestrator-operating-protocol.md`.
-10. codebase graph/search routing: use `codebase-memory-mcp` for fresh indexed symbol, call graph, impact, snippet, schema, and ADR work; use `lean-ctx` for current file reads, shell commands, compressed logs, and stale-index fallback.
+10. codebase graph/search routing: use `ccc` for semantic discovery after index-freshness checks; run `ctx_compose` before `ctx_search` for confirmation/context; use `rg` for exact/high-recall fallback; keep `codebase-memory-mcp` optional for fresh graph/call/architecture context and `lean-ctx` authoritative for current file reads, shell commands, and compressed logs. Search output is not proof.
 
 ## Runtime Summary
 
@@ -58,7 +58,7 @@ After reading this bundle, the orchestrator should be able to answer:
     task,
 13. which post-task checklist items must be proven before selecting unrelated
     work.
-14. whether codebase discovery should start from `codebase-memory-mcp` or fall back to `lean-ctx` because the index is absent, stale, or contaminated by generated paths.
+14. whether codebase discovery should start with `ccc`, continue through `ctx_compose` and `ctx_search`, or use `rg` fallback; `codebase-memory-mcp` remains optional graph/call/architecture context and `lean-ctx` remains current-worktree authority.
 
 ## Expansion Rule
 
@@ -88,7 +88,7 @@ Expand beyond it only when:
 7. for timing evidence, slow-gate classification, and script/gate optimization, read `docs/process/command-timing-and-gate-optimization-protocol.md`,
 8. for runtime blockers, multi-defect pools, ownership conflicts, receipt/proof contradictions, routing blockers, or CI defect clusters, read `docs/process/project-error-search-runtime-diagnostics-protocol.md`.
 9. for runtime development environment, project-local skill activation, GitHub issue processing, or operator-efficiency follow-up routing, read `docs/process/vida-runtime-development-environment.md`.
-10. for codebase graph discovery, start with `codebase-memory-mcp list_projects` and `index_status`; if the index is ready, use graph tools before broad text search, and if it is stale or contaminated, record the blocker and use `lean-ctx` for current filesystem truth.
+10. for codebase discovery, start with `ccc` semantic search after initialization and index-freshness checks; run `ctx_compose` before `ctx_search` for confirmation/context; use `rg` for exact symbols, strings, paths, `rg --files`, and high-recall fallback. Use `codebase-memory-mcp` only as optional fresh graph/call/architecture context, and keep search output separate from proof.
 
 -----
 artifact_path: process/project-orchestrator-startup-bundle
