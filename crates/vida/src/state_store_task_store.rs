@@ -20,6 +20,7 @@ use taskflow_core::task::aggregate::{
 use taskflow_core::task::lifecycle::{TaskLifecycleEvent, TaskLifecycleInput, TaskLifecycleStatus};
 
 const TASK_SNAPSHOT_META_SCHEMA_VERSION: &str = "task-snapshot-meta-v1";
+const TASK_SNAPSHOT_STATE_GENERATION_FILE: &str = ".task-snapshot-state-generation";
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct TaskSnapshotMeta {
@@ -29,6 +30,8 @@ struct TaskSnapshotMeta {
     content_hash_blake3: String,
     task_count: usize,
     generated_at_unix_nanos: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state_generation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -864,6 +867,12 @@ impl StateStore {
         state_root.join(".task-snapshot-state-marker")
     }
 
+    pub(crate) fn canonical_task_snapshot_state_generation_path_for_state_root(
+        state_root: &Path,
+    ) -> PathBuf {
+        state_root.join(TASK_SNAPSHOT_STATE_GENERATION_FILE)
+    }
+
     pub(crate) fn touch_task_snapshot_state_marker(state_root: &Path) {
         let marker_path = Self::canonical_task_snapshot_marker_path_for_state_root(state_root);
         if Self::path_is_symlink(&marker_path) {
@@ -876,6 +885,42 @@ impl StateStore {
         }
         let body = unix_timestamp_nanos().to_string();
         let _ = Self::write_jsonl_export_file(&marker_path, body.as_bytes());
+    }
+
+    fn task_snapshot_state_generation(
+        state_root: &Path,
+    ) -> Result<Option<String>, StateStoreError> {
+        let generation_path =
+            Self::canonical_task_snapshot_state_generation_path_for_state_root(state_root);
+        if Self::path_is_symlink(&generation_path) {
+            return Err(Self::invalid_task_snapshot_reason(
+                "refusing to read task snapshot state generation through symlink path",
+            ));
+        }
+        match fs::read_to_string(generation_path) {
+            Ok(raw) => {
+                let generation = raw.trim();
+                if generation.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(generation.to_string()))
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn ensure_task_snapshot_state_generation(state_root: &Path) -> Result<String, StateStoreError> {
+        if let Some(generation) = Self::task_snapshot_state_generation(state_root)? {
+            return Ok(generation);
+        }
+        let generation_path =
+            Self::canonical_task_snapshot_state_generation_path_for_state_root(state_root);
+        fs::create_dir_all(state_root)?;
+        let generation = format!("{}-{}", unix_timestamp_nanos(), std::process::id());
+        Self::write_jsonl_export_file(&generation_path, generation.as_bytes())?;
+        Ok(generation)
     }
 
     fn task_snapshot_meta_path_for_snapshot_path(snapshot_path: &Path) -> PathBuf {
@@ -920,6 +965,17 @@ impl StateStore {
             return Err(Self::invalid_task_snapshot_reason(
                 "task snapshot metadata path does not match canonical snapshot path",
             ));
+        }
+
+        if let (Some(snapshot_generation), Some(authoritative_generation)) = (
+            meta.state_generation_id.as_deref(),
+            Self::task_snapshot_state_generation(state_root)?.as_deref(),
+        ) {
+            if snapshot_generation != authoritative_generation {
+                return Err(Self::invalid_task_snapshot_reason(
+                    "task snapshot state generation does not match authoritative state generation",
+                ));
+            }
         }
 
         let raw = fs::read_to_string(&snapshot_path)?;
@@ -1048,7 +1104,12 @@ impl StateStore {
         if let Some(parent) = snapshot_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        Self::write_jsonl_export_file_with_meta(&snapshot_path, body.as_bytes(), task_count)?;
+        Self::write_jsonl_export_file_with_meta_for_state_root(
+            &snapshot_path,
+            body.as_bytes(),
+            task_count,
+            self.root(),
+        )?;
         Ok(snapshot_path)
     }
 
@@ -2107,7 +2168,16 @@ impl StateStore {
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        Self::write_jsonl_export_file_with_meta(target_path, body.as_bytes(), task_count)?;
+        if target_path == Self::canonical_task_snapshot_path_for_state_root(self.root()) {
+            Self::write_jsonl_export_file_with_meta_for_state_root(
+                target_path,
+                body.as_bytes(),
+                task_count,
+                self.root(),
+            )?;
+        } else {
+            Self::write_jsonl_export_file_with_meta(target_path, body.as_bytes(), task_count)?;
+        }
         Ok(task_count)
     }
 
@@ -2116,17 +2186,42 @@ impl StateStore {
         body: &[u8],
         task_count: usize,
     ) -> Result<(), StateStoreError> {
+        Self::write_jsonl_export_file_with_meta_and_generation(target_path, body, task_count, None)
+    }
+
+    fn write_jsonl_export_file_with_meta_for_state_root(
+        target_path: &Path,
+        body: &[u8],
+        task_count: usize,
+        state_root: &Path,
+    ) -> Result<(), StateStoreError> {
+        let generation = Self::ensure_task_snapshot_state_generation(state_root)?;
+        Self::write_jsonl_export_file_with_meta_and_generation(
+            target_path,
+            body,
+            task_count,
+            Some(&generation),
+        )
+    }
+
+    fn write_jsonl_export_file_with_meta_and_generation(
+        target_path: &Path,
+        body: &[u8],
+        task_count: usize,
+        state_generation_id: Option<&str>,
+    ) -> Result<(), StateStoreError> {
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }
         Self::write_jsonl_export_file(target_path, body)?;
-        Self::write_task_snapshot_meta_file(target_path, body, task_count)
+        Self::write_task_snapshot_meta_file(target_path, body, task_count, state_generation_id)
     }
 
     fn write_task_snapshot_meta_file(
         target_path: &Path,
         body: &[u8],
         task_count: usize,
+        state_generation_id: Option<&str>,
     ) -> Result<(), StateStoreError> {
         let meta_path = Self::task_snapshot_meta_path_for_snapshot_path(target_path);
         let meta = TaskSnapshotMeta {
@@ -2136,6 +2231,7 @@ impl StateStore {
             content_hash_blake3: blake3::hash(body).to_hex().to_string(),
             task_count,
             generated_at_unix_nanos: unix_timestamp_nanos().to_string(),
+            state_generation_id: state_generation_id.map(str::to_string),
         };
         let body = serde_json::to_vec_pretty(&meta).map_err(|error| {
             StateStoreError::InvalidTaskRecord {
@@ -4606,6 +4702,72 @@ mod tests {
                 .to_string()
                 .contains("task snapshot metadata is older than latest state mutation marker")
         );
+        let _ = fs::remove_dir_all(
+            state_root
+                .ancestors()
+                .find(|path| path.file_name().and_then(|name| name.to_str()) != Some("state"))
+                .unwrap_or(&state_root),
+        );
+    }
+
+    #[test]
+    fn fresh_task_snapshot_metadata_rejects_restored_state_generation_mismatch() {
+        let state_root = unique_task_store_temp_root("vida-task-snapshot-state-generation")
+            .join(".vida")
+            .join("data")
+            .join("state");
+        let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(&state_root);
+        let generation_path =
+            StateStore::canonical_task_snapshot_state_generation_path_for_state_root(&state_root);
+        let body = sample_snapshot_body();
+        fs::create_dir_all(&state_root).expect("state root should exist");
+        fs::write(&generation_path, "checkpoint-generation-a")
+            .expect("checkpoint generation should write");
+        StateStore::write_jsonl_export_file_with_meta_for_state_root(
+            &snapshot_path,
+            body.as_bytes(),
+            1,
+            &state_root,
+        )
+        .expect("snapshot and generation metadata should write");
+        fs::write(&generation_path, "checkpoint-generation-b")
+            .expect("restored generation should write");
+
+        let error = StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_root)
+            .expect_err("snapshot from another state generation must reject");
+        assert!(error.to_string().contains(
+            "task snapshot state generation does not match authoritative state generation"
+        ));
+        let _ = fs::remove_dir_all(
+            state_root
+                .ancestors()
+                .find(|path| path.file_name().and_then(|name| name.to_str()) != Some("state"))
+                .unwrap_or(&state_root),
+        );
+    }
+
+    #[test]
+    fn fresh_task_snapshot_metadata_preserves_missing_generation_marker_recovery() {
+        let state_root = unique_task_store_temp_root("vida-task-snapshot-generation-recovery")
+            .join(".vida")
+            .join("data")
+            .join("state");
+        let snapshot_path = StateStore::canonical_task_snapshot_path_for_state_root(&state_root);
+        let generation_path =
+            StateStore::canonical_task_snapshot_state_generation_path_for_state_root(&state_root);
+        let body = sample_snapshot_body();
+        StateStore::write_jsonl_export_file_with_meta_for_state_root(
+            &snapshot_path,
+            body.as_bytes(),
+            1,
+            &state_root,
+        )
+        .expect("snapshot and generation metadata should write");
+        fs::remove_file(&generation_path).expect("generation marker should be removable");
+
+        let rows = StateStore::read_fresh_tasks_from_jsonl_snapshot(&state_root)
+            .expect("missing generation marker should use legacy freshness recovery");
+        assert_eq!(rows.len(), 1);
         let _ = fs::remove_dir_all(
             state_root
                 .ancestors()
