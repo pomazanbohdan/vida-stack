@@ -32,7 +32,6 @@ use taskflow_host_bridge::{
     build_host_bridge_adapter_payload, build_host_bridge_normalized_implementation_artifact,
     decide_host_bridge_completion_authority, host_bridge_artifact_file,
     host_bridge_artifact_has_retryable_completion_blocker, host_bridge_blocked_result_contract,
-    host_bridge_blocked_result_contract_has_retry_evidence,
     host_bridge_blocked_result_contract_is_retryable, host_bridge_changed_files_from_artifact,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_has_preview_refresh_evidence,
@@ -1162,11 +1161,6 @@ fn retryable_host_bridge_completion_request_for_state_root(
     }
     let nested_contract_retryable = host_bridge_blocked_result_contract(request)
         .is_some_and(host_bridge_blocked_result_contract_is_retryable);
-    let nested_contract_has_retry_evidence = host_bridge_blocked_result_contract(request)
-        .is_some_and(host_bridge_blocked_result_contract_has_retry_evidence);
-    if nested_contract_has_retry_evidence {
-        return true;
-    }
     let nested_contract_has_artifact = [
         ("result_path", ArtifactPathKind::HostBridgeResult),
         ("receipt_path", ArtifactPathKind::HostBridgeReceipt),
@@ -1175,7 +1169,9 @@ fn retryable_host_bridge_completion_request_for_state_root(
     .filter_map(|(field, kind)| {
         host_bridge_request_string(request, field).map(|raw_path| (raw_path, kind))
     })
-    .any(|(raw_path, kind)| canonical_state_artifact_path(state_root, raw_path, kind, true).is_ok());
+    .any(|(raw_path, kind)| {
+        canonical_state_artifact_path(state_root, raw_path, kind, true).is_ok()
+    });
     if nested_contract_retryable && nested_contract_has_artifact {
         return true;
     }
@@ -11044,7 +11040,7 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_blocked_result_contract_allows_retry_without_stale_receipt_evidence() {
+    fn host_bridge_blocked_result_contract_does_not_retry_without_receipt_evidence() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time should be after epoch")
@@ -11105,7 +11101,7 @@ mod tests {
             false,
         ));
 
-        assert!(!blockers.contains(&"host_bridge_request_not_pending".to_string()));
+        assert!(blockers.contains(&"host_bridge_request_not_pending".to_string()));
         assert!(blockers.contains(&"host_bridge_dispatch_receipt_missing".to_string()));
         let payload = host_bridge_adapter_payload(
             &request_path,
@@ -11115,7 +11111,7 @@ mod tests {
             false,
         );
         assert!(
-            payload["host_bridge"]["completion_command"]
+            !payload["host_bridge"]["completion_command"]
                 .as_str()
                 .expect("completion command")
                 .contains("--retry-completion")
