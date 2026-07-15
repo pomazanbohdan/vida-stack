@@ -265,30 +265,35 @@ pub(crate) fn dispatch_contract_allowed_next_lane_sequence(
         .filter_map(serde_json::Value::as_str)
         .map(canonical_dispatch_target_name)
         .collect::<Vec<_>>();
-    if let Some(mut sequence) =
+    let mut sequence = if let Some(sequence) =
         resolve_dispatch_contract_lane_sequence(dispatch_contract, "lane_sequence")
     {
-        let execution_sequence = dispatch_contract_execution_lane_sequence(dispatch_contract);
-        if let Some(last_lane) = sequence.last() {
-            if let Some(last_index) = execution_sequence
-                .iter()
-                .position(|target| target == last_lane)
-            {
-                for target in execution_sequence.iter().skip(last_index + 1) {
-                    if is_terminal_closure_dispatch_target(target)
-                        && !sequence.iter().any(|existing| existing == target)
-                    {
-                        sequence.push(target.clone());
-                    }
+        sequence
+    } else if dispatch_contract.get("lane_catalog").is_none()
+        && !configured_lane_sequence.is_empty()
+    {
+        configured_lane_sequence
+    } else {
+        return dispatch_contract_execution_lane_sequence(dispatch_contract);
+    };
+    let execution_sequence = dispatch_contract_execution_lane_sequence(dispatch_contract);
+    if let Some(last_lane) = sequence.last() {
+        if let Some(last_index) = execution_sequence
+            .iter()
+            .rposition(|target| target == last_lane)
+        {
+            if let Some(next_lane) = execution_sequence.get(last_index + 1) {
+                let is_final_successor = last_index + 2 == execution_sequence.len();
+                if is_final_successor
+                    && is_terminal_closure_dispatch_target(next_lane)
+                    && !sequence.iter().any(|existing| existing == next_lane)
+                {
+                    sequence.push(next_lane.clone());
                 }
             }
         }
-        return sequence;
     }
-    if dispatch_contract.get("lane_catalog").is_none() && !configured_lane_sequence.is_empty() {
-        return configured_lane_sequence;
-    }
-    dispatch_contract_execution_lane_sequence(dispatch_contract)
+    sequence
 }
 
 fn is_terminal_closure_dispatch_target(target: &str) -> bool {
@@ -1792,6 +1797,36 @@ mod tests {
         assert_eq!(
             dispatch_contract_allowed_next_lane_sequence(&invalid_catalog_contract),
             vec!["analyst".to_string(), "autotester".to_string()]
+        );
+    }
+
+    #[test]
+    fn dispatch_contract_does_not_bypass_later_required_lane_after_terminal_closure() {
+        let dispatch_contract = serde_json::json!({
+            "lane_sequence": ["implementer"],
+            "execution_lane_sequence": ["implementer", "terminal_closure", "tester"]
+        });
+
+        assert_eq!(
+            dispatch_contract_allowed_next_lane_sequence(&dispatch_contract),
+            vec!["implementer".to_string()]
+        );
+    }
+
+    #[test]
+    fn dispatch_contract_appends_terminal_closure_only_as_final_immediate_successor() {
+        let dispatch_contract = serde_json::json!({
+            "lane_sequence": ["implementer", "tester"],
+            "execution_lane_sequence": ["implementer", "tester", "terminal_closure"]
+        });
+
+        assert_eq!(
+            dispatch_contract_allowed_next_lane_sequence(&dispatch_contract),
+            vec![
+                "implementer".to_string(),
+                "tester".to_string(),
+                "terminal_closure".to_string()
+            ]
         );
     }
 
