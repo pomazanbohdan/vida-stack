@@ -4191,10 +4191,17 @@ impl StateStore {
             let terminal_task_active = self
                 .run_graph_latest_row_points_to_terminal_task_active(&latest)
                 .await?;
-            let task_exists = self.show_task(&latest.task_id).await.is_ok();
+            let task = self.show_task(&latest.task_id).await.ok();
+            let task_exists = task.is_some();
             let active_receipt = self
                 .run_graph_dispatch_receipt_has_active_lane_evidence(&latest.run_id)
                 .await?;
+            if task
+                .as_ref()
+                .is_some_and(|task| StateStore::task_status_is_closed_like(&task.status))
+            {
+                continue;
+            }
             if terminal_task_active && (task_exists || !active_receipt) {
                 continue;
             }
@@ -4227,6 +4234,14 @@ impl StateStore {
             }
             match self.run_graph_status_from_task_rows(run_id, &[]).await {
                 Ok(status) => {
+                    if self
+                        .show_task(&status.task_id)
+                        .await
+                        .ok()
+                        .is_some_and(|task| StateStore::task_status_is_closed_like(&task.status))
+                    {
+                        continue;
+                    }
                     if !self
                         .run_graph_status_points_to_terminal_task_active(&status)
                         .await?
@@ -4261,6 +4276,14 @@ impl StateStore {
             if self
                 .run_graph_latest_receipt_row_supersedes_lane(&latest.run_id)
                 .await?
+            {
+                continue;
+            }
+            if self
+                .show_task(&latest.task_id)
+                .await
+                .ok()
+                .is_some_and(|task| StateStore::task_status_is_closed_like(&task.status))
             {
                 continue;
             }
@@ -9964,6 +9987,111 @@ mod tests {
 
         close_store_and_remove_root(store, root).await;
         restore_vida_session_id(saved_session_id);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_status_skips_archived_closed_task_with_stale_blocked_receipt() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-latest-run-graph-skips-archived-closed-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        for (task_id, status) in [("task-open", "in_progress"), ("task-closed", "closed")] {
+            store
+                .create_task_with_fixture_parent(CreateTaskRequest {
+                    task_id,
+                    title: "Run graph projection task",
+                    display_id: None,
+                    description: "",
+                    issue_type: "task",
+                    status,
+                    priority: 0,
+                    parent_id: None,
+                    labels: &labels,
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    planner_metadata: crate::state_store::TaskPlannerMetadata::default(),
+                    created_by: "test",
+                    source_repo: "test",
+                })
+                .await
+                .expect("create task fixture");
+        }
+
+        let mut open_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-open",
+            "task-open",
+            "implementation",
+        );
+        open_status.task_id = "task-open".to_string();
+        store
+            .record_run_graph_status(&open_status)
+            .await
+            .expect("persist open run graph status");
+
+        let mut archived_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-z-archived-closed",
+            "task-closed",
+            "closure",
+        );
+        archived_status.task_id = "task-closed".to_string();
+        archived_status.status = "completed".to_string();
+        archived_status.lifecycle_stage = "closure_complete".to_string();
+        archived_status.next_node = None;
+        archived_status.resume_target = "none".to_string();
+        archived_status.recovery_ready = false;
+        store
+            .record_run_graph_status(&archived_status)
+            .await
+            .expect("persist archived closed-task status");
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-z-archived-closed".to_string(),
+                dispatch_target: "coder".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_blocked".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init --dispatch-packet packet.json".to_string()),
+                dispatch_packet_path: Some("packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: Some("host_tool_bridge_adapter_required".to_string()),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("coder".to_string()),
+                downstream_dispatch_last_target: Some("coder".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-07-15T23:00:08Z".to_string(),
+            })
+            .await
+            .expect("persist stale closed-task receipt");
+
+        let latest = store
+            .latest_run_graph_status()
+            .await
+            .expect("latest status should load")
+            .expect("open run should remain after archived closed-task run is skipped");
+        assert_eq!(latest.run_id, "run-open");
+        assert_eq!(latest.task_id, "task-open");
+
+        close_store_and_remove_root(store, root).await;
     }
 
     #[tokio::test]
