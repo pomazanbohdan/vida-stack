@@ -30,7 +30,8 @@ use taskflow_core::task::verify::{
     task_browser_proof_target, task_reports_runtime_proof_blocker, task_verify_labels,
     TaskBrowserProofArtifact,
 };
-use std::io::Read;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct TaskReplaceJsonlContinuationSummary {
@@ -7901,6 +7902,69 @@ fn task_update_bulk_payload(
     .expect("task update-bulk output should satisfy release-1 operator contract")
 }
 
+fn write_task_update_bulk_artifact(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    if path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "refusing to write task update-bulk artifact through a symlink",
+        ));
+    }
+
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+
+    let mut file = options.open(path)?;
+    file.write_all(contents)
+}
+
+#[cfg(test)]
+mod task_update_bulk_artifact_tests {
+    use super::*;
+
+    #[test]
+    fn task_update_bulk_artifact_rejects_symlink_path() {
+        let temp = std::env::temp_dir().join(format!(
+            "vida-task-update-bulk-artifact-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir(&temp).expect("create tempdir");
+        let victim = temp.join("victim.txt");
+        let artifact = temp.join("update-result.json");
+        std::fs::write(&victim, "ORIGINAL_SENTINEL_DO_NOT_CLOBBER").expect("write victim");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&victim, &artifact).expect("symlink artifact");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&victim, &artifact).expect("symlink artifact");
+
+        let error =
+            write_task_update_bulk_artifact(&artifact, br#"{"surface":"vida task update-bulk"}"#)
+                .expect_err("symlink artifact should be rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read_to_string(&victim).expect("read victim"),
+            "ORIGINAL_SENTINEL_DO_NOT_CLOBBER"
+        );
+        assert!(artifact
+            .symlink_metadata()
+            .expect("artifact metadata")
+            .file_type()
+            .is_symlink());
+        std::fs::remove_file(&artifact).expect("remove artifact symlink");
+        std::fs::remove_dir_all(&temp).expect("remove tempdir");
+    }
+}
+
 fn emit_task_update_bulk_result(
     command: &TaskUpdateBulkArgs,
     source_path: &str,
@@ -7923,9 +7987,9 @@ fn emit_task_update_bulk_result(
             Some(path),
             true,
         );
-        std::fs::write(
+        write_task_update_bulk_artifact(
             path,
-            serde_json::to_vec_pretty(&full_payload)
+            &serde_json::to_vec_pretty(&full_payload)
                 .expect("task update-bulk artifact should serialize"),
         )
         .err()
