@@ -14776,9 +14776,10 @@ fn run_graph_readonly_surfaces_accept_state_dir_override() {
 fn run_graph_diagnose_json_surfaces_are_public_cli_covered() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
-    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let session_id = unique_test_id("run-graph-diagnose-session");
+    let _ = run_and_assert_success_with_session(&["boot"], &state_dir, &session_id);
     create_run_graph_backing_task(&state_dir, "diagnose-run");
-    let _ = run_and_assert_success(
+    let _ = run_and_assert_success_with_session(
         &[
             "taskflow",
             "run-graph",
@@ -14787,7 +14788,22 @@ fn run_graph_diagnose_json_surfaces_are_public_cli_covered() {
             "implementation",
         ],
         &state_dir,
+        &session_id,
     );
+    let continuation = run_command_json_with_session(
+        &[
+            "taskflow",
+            "continuation",
+            "bind",
+            "diagnose-run",
+            "--task-id",
+            "diagnose-run",
+            "--json",
+        ],
+        &state_dir,
+        &session_id,
+    );
+    assert_eq!(continuation["status"], "ok", "{continuation}");
 
     let diagnose = run_command_json(
         &[
@@ -14840,9 +14856,10 @@ fn run_graph_diagnose_json_surfaces_are_public_cli_covered() {
         "diagnose-run",
     );
 
-    let latest = run_command_json(
+    let latest = run_command_json_with_session(
         &["taskflow", "run-graph", "diagnose-latest", "--json"],
         &state_dir,
+        &session_id,
     );
     assert_eq!(latest["surface"], "vida taskflow run-graph diagnose-latest");
     assert_eq!(latest["run_id"], "diagnose-run");
@@ -14856,8 +14873,11 @@ fn run_graph_diagnose_json_surfaces_are_public_cli_covered() {
         diagnose["active_repair_summary"]
     );
 
-    let latest_plain =
-        run_and_assert_success(&["taskflow", "run-graph", "diagnose-latest"], &state_dir);
+    let latest_plain = run_and_assert_success_with_session(
+        &["taskflow", "run-graph", "diagnose-latest"],
+        &state_dir,
+        &session_id,
+    );
     assert_run_graph_diagnose_active_repair_plain(
         &latest_plain,
         "vida taskflow run-graph diagnose-latest",

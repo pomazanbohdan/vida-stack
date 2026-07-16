@@ -1440,11 +1440,11 @@ async fn latest_recovery_summary_for_operator_surface(
     store: &StateStore,
 ) -> Result<Option<crate::state_store::RunGraphRecoverySummary>, crate::state_store::StateStoreError>
 {
-    let current_session_scope_is_explicit = store.current_session_identity_is_explicit()?;
+    let current_session_scope_is_present = store.current_session_identity_is_present()?;
     let scoped = store
         .latest_run_graph_recovery_summary_for_current_session()
         .await?;
-    if scoped.is_some() || current_session_scope_is_explicit {
+    if scoped.is_some() || current_session_scope_is_present {
         return Ok(scoped);
     }
     store.latest_run_graph_recovery_summary().await
@@ -1453,7 +1453,7 @@ async fn latest_recovery_summary_for_operator_surface(
 async fn latest_run_graph_status_for_operator_surface(
     store: &StateStore,
 ) -> Result<Option<RunGraphStatus>, crate::state_store::StateStoreError> {
-    if store.current_session_identity_is_explicit()? {
+    if store.current_session_identity_is_present()? {
         store.latest_run_graph_status_for_current_session().await
     } else {
         store.latest_run_graph_status().await
@@ -5745,7 +5745,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         [head, subcommand] if head == "run-graph" && subcommand == "diagnose-latest" => {
             let state_dir = proxy_state_dir();
             match StateStore::open_existing_read_only(state_dir.clone()).await {
-                Ok(store) => match store.latest_run_graph_status().await {
+                Ok(store) => match latest_run_graph_status_for_operator_surface(&store).await {
                     Ok(Some(status)) => {
                         match build_run_graph_diagnosis(&store, &status.run_id).await {
                             Ok(diagnosis) => {
@@ -5818,7 +5818,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         [head, subcommand] if head == "run-graph" && subcommand == "latest" => {
             let state_dir = proxy_state_dir();
             match StateStore::open_existing_read_only(state_dir.clone()).await {
-                Ok(store) => match store.latest_run_graph_status().await {
+                Ok(store) => match latest_run_graph_status_for_operator_surface(&store).await {
                     Ok(Some(status)) => {
                         let projection_truth =
                             match run_graph_projection_truth(&store, &status).await {
@@ -5901,7 +5901,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         {
             let state_dir = proxy_state_dir();
             match StateStore::open_existing_read_only(state_dir.clone()).await {
-                Ok(store) => match store.latest_run_graph_status().await {
+                Ok(store) => match latest_run_graph_status_for_operator_surface(&store).await {
                     Ok(Some(status)) => {
                         match build_run_graph_diagnosis(&store, &status.run_id).await {
                             Ok(diagnosis) => {
@@ -5971,7 +5971,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         {
             let state_dir = proxy_state_dir();
             match StateStore::open_existing_read_only(state_dir.clone()).await {
-                Ok(store) => match store.latest_run_graph_status().await {
+                Ok(store) => match latest_run_graph_status_for_operator_surface(&store).await {
                     Ok(status) => {
                         let projection_truth = match status.as_ref() {
                             Some(status) => {

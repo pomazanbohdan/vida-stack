@@ -2188,11 +2188,11 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
     else {
         return false;
     };
-    let current_session_scope_is_explicit = match store.current_session_identity_is_explicit() {
+    let current_session_scope_is_present = match store.current_session_identity_is_present() {
         Ok(present) => present,
         Err(_) => return false,
     };
-    let latest_terminal_task_active_run_graph_status = if current_session_scope_is_explicit {
+    let latest_terminal_task_active_run_graph_status = if current_session_scope_is_present {
         None
     } else {
         match store.latest_terminal_task_active_run_graph_status().await {
@@ -2215,7 +2215,7 @@ async fn cached_orchestrator_init_payload_is_currently_admissible(
             return false;
         }
     }
-    let latest_run_graph_status = match if current_session_scope_is_explicit {
+    let latest_run_graph_status = match if current_session_scope_is_present {
         store.latest_run_graph_status_for_current_session().await
     } else {
         store.latest_run_graph_status().await

@@ -1967,7 +1967,7 @@ async fn cached_status_projection_current_runtime_admissible_with_store(
     if payload_has_closed_task_active_run_projection_mismatch(&payload) {
         return false;
     }
-    let current_session_scope_is_explicit = match store.current_session_identity_is_explicit() {
+    let current_session_scope_is_present = match store.current_session_identity_is_present() {
         Ok(explicit) => explicit,
         Err(_) => return false,
     };
@@ -1981,7 +1981,7 @@ async fn cached_status_projection_current_runtime_admissible_with_store(
         return false;
     }
     if cached_active_unit_is_null {
-        if current_session_scope_is_explicit {
+        if current_session_scope_is_present {
             return store
                 .latest_run_graph_status_for_current_session()
                 .await
@@ -1994,7 +1994,7 @@ async fn cached_status_projection_current_runtime_admissible_with_store(
             .iter()
             .any(|task| task.status.as_str() == "in_progress");
     }
-    let latest_terminal_task_active_run_graph_status = if current_session_scope_is_explicit {
+    let latest_terminal_task_active_run_graph_status = if current_session_scope_is_present {
         None
     } else {
         match store.latest_terminal_task_active_run_graph_status().await {
@@ -2005,7 +2005,7 @@ async fn cached_status_projection_current_runtime_admissible_with_store(
     if latest_terminal_task_active_run_graph_status.is_some() {
         return false;
     }
-    let latest_run_graph_status = match if current_session_scope_is_explicit {
+    let latest_run_graph_status = match if current_session_scope_is_present {
         store.latest_run_graph_status_for_current_session().await
     } else {
         store.latest_run_graph_status().await
