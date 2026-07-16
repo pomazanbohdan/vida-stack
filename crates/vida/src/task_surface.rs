@@ -7939,9 +7939,21 @@ mod task_update_bulk_artifact_tests {
         std::fs::write(&victim, "ORIGINAL_SENTINEL_DO_NOT_CLOBBER").expect("write victim");
 
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&victim, &artifact).expect("symlink artifact");
+        let symlink_created = {
+            std::os::unix::fs::symlink(&victim, &artifact).expect("symlink artifact");
+            true
+        };
         #[cfg(windows)]
-        std::os::windows::fs::symlink_file(&victim, &artifact).expect("symlink artifact");
+        let symlink_created = match std::os::windows::fs::symlink_file(&victim, &artifact) {
+            Ok(()) => true,
+            Err(error) if error.raw_os_error() == Some(1314) => false,
+            Err(error) => panic!("symlink artifact: {error}"),
+        };
+
+        if !symlink_created {
+            std::fs::remove_dir_all(&temp).expect("remove tempdir after symlink skip");
+            return;
+        }
 
         let error =
             write_task_update_bulk_artifact(&artifact, br#"{"surface":"vida task update-bulk"}"#)
