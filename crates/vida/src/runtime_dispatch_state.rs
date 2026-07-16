@@ -21835,7 +21835,7 @@ fn terminalize_internal_host_bridge_pending_result_closes_orphaned_cycle_without
         let gate = advanced.delegation_gate();
 
         assert_eq!(advanced.status, "blocked");
-        assert_eq!(advanced.lifecycle_stage, "coder_blocked");
+        assert_eq!(advanced.lifecycle_stage, "coder_terminal_blocked");
         assert_eq!(advanced.handoff_state, "blocked");
         assert_eq!(advanced.resume_target, "none");
         assert!(!gate.delegated_cycle_open);
@@ -29417,6 +29417,12 @@ pub(crate) fn apply_first_handoff_execution_to_run_graph_status(
         receipt.dispatch_status.as_str(),
         "blocked" | "bridge_request_pending"
     ) || canonical_lane_status_str(&receipt.lane_status) == Some("lane_blocked");
+    let terminal_blocked_dispatch = blocked_dispatch
+        && (receipt.blocker_code.as_deref() == Some("host_tool_bridge_adapter_required")
+            || receipt
+                .downstream_dispatch_blockers
+                .iter()
+                .any(|blocker| blocker == "host_tool_bridge_adapter_required"));
     let (handoff_state, resume_target) = if blocked_dispatch {
         ("blocked".to_string(), "none".to_string())
     } else if let Some(next_target) = next_node.as_deref() {
@@ -29448,7 +29454,9 @@ pub(crate) fn apply_first_handoff_execution_to_run_graph_status(
         } else {
             format!("{dispatch_target}_lane")
         },
-        lifecycle_stage: if blocked_dispatch {
+        lifecycle_stage: if terminal_blocked_dispatch {
+            format!("{dispatch_target}_terminal_blocked")
+        } else if blocked_dispatch {
             format!("{dispatch_target}_blocked")
         } else {
             format!("{dispatch_target}_active")
