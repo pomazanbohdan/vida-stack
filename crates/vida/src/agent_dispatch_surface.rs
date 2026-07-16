@@ -3334,6 +3334,7 @@ fn lane_work_context(
     role_label: &str,
     runtime_role: &str,
     task_class: &str,
+    state_root: Option<&Path>,
 ) -> serde_json::Value {
     let role_profile = crate::taskflow_consume_bundle::lane_role_profile_for_context(
         activation_bundle,
@@ -3349,7 +3350,12 @@ fn lane_work_context(
         .for_each(|target| collect_test_like_paths_from_text(&mut read_paths, target));
     read_paths.sort();
     read_paths.dedup();
-    let owned_paths = task.planner_metadata.owned_paths.clone();
+    let mut owned_paths = Vec::new();
+    crate::runtime_dispatch_state::append_unique_explicit_owned_scope_paths(
+        &mut owned_paths,
+        &task.planner_metadata.owned_paths,
+        state_root,
+    );
     read_paths.retain(|path| !owned_paths.iter().any(|owned| owned == path));
     let mut constraints = Vec::new();
     if let Some(mode) = task.execution_semantics.execution_mode.as_deref() {
@@ -3722,6 +3728,7 @@ fn build_agent_dispatch_next_preview_standard(
                     "default",
                     &selection_truth.runtime_role,
                     &selection_truth.task_class,
+                    explicit_state_dir,
                 ),
                 requires_user_approval: false,
                 approval_gate: serde_json::json!({"required": false, "status": "not_required"}),
@@ -3767,6 +3774,7 @@ fn build_agent_dispatch_next_preview_standard(
                             "parallel",
                             &selection_truth.runtime_role,
                             &selection_truth.task_class,
+                            explicit_state_dir,
                         ),
                         requires_user_approval: false,
                         approval_gate: serde_json::json!({"required": false, "status": "not_required"}),
@@ -4413,6 +4421,7 @@ fn build_agent_dispatch_next_preview_dev_team(
                     &step.role_label,
                     &selection_truth.runtime_role,
                     &selection_truth.task_class,
+                    explicit_state_dir,
                 ),
                 requires_user_approval: step.requires_user_approval,
                 approval_gate: serde_json::json!({
@@ -4693,6 +4702,7 @@ fn build_agent_dispatch_next_preview_from_scheduler_plan_with_diagnostics(
                     &reservation.launch_role,
                     &selection_truth.runtime_role,
                     &selection_truth.task_class,
+                    explicit_state_dir,
                 ),
                 requires_user_approval: false,
                 approval_gate: serde_json::json!({"required": false, "status": "not_required"}),
@@ -7514,6 +7524,7 @@ mod tests {
             "writer_lane",
             "writer",
             "implementation",
+            None,
         );
         assert_eq!(context["schema_version"], "lane-work-context.v1");
         assert_eq!(context["task"]["id"], "lane-context");
@@ -7530,6 +7541,47 @@ mod tests {
         let rendered = serde_json::to_string(&context).expect("context should serialize");
         assert!(!rendered.contains("selected_model"));
         assert!(!rendered.contains("pricing_readiness"));
+    }
+
+    #[test]
+    fn lane_work_context_filters_unsafe_owned_paths_like_dispatch_packet_scope() {
+        let mut task = task_with_labels("lane-context-scope", "Lane context scope", &["security"]);
+        task.planner_metadata.owned_paths = vec![
+            "crates/vida/src/agent_dispatch_surface.rs".to_string(),
+            "/tmp/outside-project".to_string(),
+            "../outside/project".to_string(),
+            "C:/Users/alice/secrets".to_string(),
+            ".vida/data/state".to_string(),
+            "docs/process/".to_string(),
+            "crates/vida/src/agent_dispatch_surface.rs".to_string(),
+        ];
+        let activation_bundle = serde_json::json!({
+            "dev_team_readiness": {
+                "roles": [{
+                    "role_id": "writer_lane",
+                    "runtime_role": "writer",
+                    "task_classes": ["implementation"],
+                    "handoff": {"required_outputs": ["changed_files"]}
+                }]
+            }
+        });
+
+        let context = lane_work_context(
+            &activation_bundle,
+            &task,
+            "writer_lane",
+            "writer",
+            "implementation",
+            None,
+        );
+
+        assert_eq!(
+            context["owned_paths"],
+            serde_json::json!([
+                "crates/vida/src/agent_dispatch_surface.rs",
+                "docs/process"
+            ])
+        );
     }
 
     #[test]

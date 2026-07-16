@@ -8476,7 +8476,7 @@ fn normalize_explicit_owned_scope_path_candidate(
     Some(normalized)
 }
 
-fn append_unique_explicit_owned_scope_paths(
+pub(crate) fn append_unique_explicit_owned_scope_paths(
     target: &mut Vec<String>,
     source: &[String],
     state_root: Option<&Path>,
