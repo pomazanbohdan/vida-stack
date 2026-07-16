@@ -1856,7 +1856,7 @@ agent_system:
       attempts:
         - attempt_id: analysis-internal-medium-readonly
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_luna_xhigh_write
+          model_profile_id: codex_gpt56_luna_xhigh_readonly
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: analysis
@@ -1864,7 +1864,7 @@ agent_system:
       consolidator:
         attempt_id: analysis-root-consolidator
         carrier_id: internal_subagents
-        model_profile_id: codex_gpt56_luna_xhigh_write
+        model_profile_id: codex_gpt56_luna_xhigh_readonly
         conversation_role: analyst
         runtime_role: business_analyst
         task_class: analysis
@@ -1876,7 +1876,7 @@ agent_system:
       attempts:
         - attempt_id: specification-internal-medium-readonly
           carrier_id: internal_subagents
-          model_profile_id: codex_gpt56_luna_xhigh_write
+          model_profile_id: codex_gpt56_luna_xhigh_readonly
           conversation_role: analyst
           runtime_role: business_analyst
           task_class: specification
@@ -2022,6 +2022,31 @@ agent_system:
           speed_tier: fast
           quality_tier: medium
           write_scope: workspace-write
+          runtime_roles:
+            - business_analyst
+            - pm
+            - coach
+            - worker
+          task_classes:
+            - research
+            - analysis
+            - specification
+            - planning
+            - coach
+            - implementation_medium
+            - test_authoring
+            - regression_test
+          readiness:
+            mode: codex_profile
+            required: true
+        codex_gpt56_luna_xhigh_readonly:
+          provider: openai-codex
+          model_ref: gpt-5.6-luna
+          reasoning_effort: xhigh
+          normalized_cost_units: 4
+          speed_tier: fast
+          quality_tier: medium
+          write_scope: read-only
           runtime_roles:
             - business_analyst
             - pm
