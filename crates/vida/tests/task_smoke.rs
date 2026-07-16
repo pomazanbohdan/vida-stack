@@ -4123,6 +4123,90 @@ fn task_close_feedback_treats_successful_evidence_words_as_context() {
 }
 
 #[test]
+fn task_close_feedback_ignores_tracked_out_of_scope_failure_context() {
+    let (project_root, state_dir) = project_bound_state_dir();
+    create_epic_parent(
+        &state_dir,
+        "feedback-out-of-scope-parent",
+        "Feedback out-of-scope parent",
+        "open",
+    );
+    for (task_id, title) in [
+        (
+            "feedback-out-of-scope-success-task",
+            "Feedback out-of-scope success task",
+        ),
+        (
+            "feedback-out-of-scope-blocked-task",
+            "Feedback out-of-scope blocked task",
+        ),
+    ] {
+        let created = run_command_json(
+            &[
+                "task",
+                "create",
+                task_id,
+                title,
+                "--parent-id",
+                "feedback-out-of-scope-parent",
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(created["status"], "pass");
+    }
+
+    let successful_close = run_command_json(
+        &[
+            "task",
+            "close",
+            "feedback-out-of-scope-success-task",
+            "--reason",
+            "Implementation merged and pushed d96cb0377. Configured proof targets satisfied: local resolver quick gate and remote Windows toolchain plus compile gates. Focused host-bridge contract test failure is recorded on runtime-defect-blocked-rework-resume-convergence and is outside this task owned paths.",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(successful_close["status"], "pass");
+    assert_eq!(successful_close["task"]["status"], "closed");
+    assert_eq!(successful_close["blocker_codes"], serde_json::json!([]));
+    assert_eq!(
+        successful_close["host_agent_telemetry"]["feedback"]["recorded_outcome"],
+        "success"
+    );
+    assert_eq!(
+        successful_close["host_agent_telemetry"]["feedback_outcome_inference"]["failure_markers"],
+        serde_json::json!([])
+    );
+
+    let blocked_close = run_command_capture(
+        &[
+            "task",
+            "close",
+            "feedback-out-of-scope-blocked-task",
+            "--reason",
+            "Task remains blocked pending operator evidence.",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!blocked_close.status.success());
+    let blocked_json: serde_json::Value =
+        serde_json::from_slice(&blocked_close.stdout).expect("blocked close json should parse");
+    assert_eq!(blocked_json["status"], "blocked");
+    assert_eq!(blocked_json["task"]["status"], "open");
+    assert_eq!(
+        blocked_json["blocker_codes"],
+        serde_json::json!([
+            "canonical_gate_blocked",
+            "close_feedback_canonical_status_blocked"
+        ])
+    );
+
+    let _ = fs::remove_dir_all(project_root);
+}
+
+#[test]
 fn task_close_feedback_ignores_historical_blocker_words_in_success_reason() {
     let (project_root, state_dir) = project_bound_state_dir();
     create_epic_parent(

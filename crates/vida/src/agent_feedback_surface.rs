@@ -732,8 +732,31 @@ fn has_historical_or_success_evidence_context(normalized: &str) -> bool {
     ]
     .iter()
     .any(|phrase| normalized.contains(phrase));
+    let has_recorded_or_tracked_context = [
+        "recorded on",
+        "recorded by",
+        "tracked on",
+        "tracked by",
+        "reported on",
+        "reported by",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
+    let has_scoped_follow_up_context = [
+        "follow-up",
+        "follow up",
+        "outside this task",
+        "outside the task",
+        "outside this bounded task",
+        "separate owner",
+        "existing owner",
+        "related owner",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
 
     has_historical_context
+        || (has_recorded_or_tracked_context && has_scoped_follow_up_context)
         || (has_evidence_context
             && has_success_context
             && has_failure_state_artifact_language(normalized))
@@ -828,6 +851,8 @@ fn has_current_failure_outcome_language(normalized: &str) -> bool {
         || has_concrete_canonical_close_phrase(trimmed)
         || trimmed.contains("current blocker")
         || trimmed.contains("current blocked")
+        || trimmed.contains("current failure")
+        || trimmed.contains("current failed")
         || trimmed.contains("currently blocked")
         || trimmed.contains("currently failing")
         || has_active_blocker_action_language(trimmed)
@@ -2517,6 +2542,26 @@ mod tests {
             .iter()
             .any(|phrase| phrase == "actionable blocked output"));
         assert!(ignored.iter().any(|phrase| phrase == "genuinely blocked"));
+    }
+
+    #[test]
+    fn close_feedback_inference_ignores_tracked_out_of_scope_failure_context() {
+        let reason = "Implementation merged and pushed d96cb0377. Configured proof targets satisfied: local resolver quick gate and remote Windows toolchain plus compile gates. Focused host-bridge contract test failure is recorded on runtime-defect-blocked-rework-resume-convergence and is outside this task owned paths.";
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(super::canonical_close_status_from_reason(reason), None);
+        assert_eq!(outcome, "success");
+        assert_eq!(score, 88);
+        assert_eq!(inference["failure_markers"], serde_json::json!([]));
+        assert!(inference["ignored_meta_language"]
+            .as_array()
+            .expect("ignored meta language should render")
+            .iter()
+            .any(|phrase| phrase.as_str().is_some_and(|value| {
+                value.contains("focused host-bridge contract test failure")
+            })));
     }
 
     #[test]
