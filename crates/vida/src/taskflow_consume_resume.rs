@@ -1177,41 +1177,10 @@ async fn validate_run_graph_resume_state(
 async fn validate_authorized_rework_resume_state(
     store: &super::StateStore,
     run_id: &str,
-    source_receipt: &crate::state_store::RunGraphDispatchReceipt,
-    rework_route: &crate::runtime_dispatch_result_evidence::DispatchReworkRoute,
+    _source_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    _rework_route: &crate::runtime_dispatch_result_evidence::DispatchReworkRoute,
 ) -> Result<(), String> {
-    match validate_run_graph_resume_state(store, run_id).await {
-        Ok(()) => Ok(()),
-        Err(original_error) => {
-            let status = store.run_graph_status(run_id).await.map_err(|error| {
-                format!(
-                    "Failed to read run-graph status for authorized rework resume `{run_id}`: {error}"
-                )
-            })?;
-            let next_node = rework_route.allowed_next_node.trim().replace('-', "_");
-            let policy_gate_matches = rework_route
-                .blocker_code
-                .as_deref()
-                .is_none_or(|blocker| {
-                    status.policy_gate == blocker || status.policy_gate == "not_required"
-                });
-            let rework_dispatch_ready = status.status == "ready"
-                && status.active_node == source_receipt.dispatch_target
-                && status.next_node.as_deref() == Some(next_node.as_str())
-                && status.lifecycle_stage == format!("{next_node}_dispatch_ready")
-                && policy_gate_matches
-                && status.handoff_state == format!("awaiting_{next_node}")
-                && status.context_state == "sealed"
-                && status.checkpoint_kind == "execution_cursor"
-                && status.resume_target == format!("dispatch.{next_node}")
-                && status.recovery_ready;
-            if rework_dispatch_ready {
-                Ok(())
-            } else {
-                Err(original_error)
-            }
-        }
-    }
+    validate_run_graph_resume_state(store, run_id).await
 }
 
 async fn validate_run_graph_resume_state_for_dispatch_receipt(
@@ -16827,6 +16796,187 @@ agent_system:
         assert_eq!(rework_packet["dispatch_target"], "developer");
         assert_eq!(rework_packet["packet_kind"], "runtime_dispatch_packet");
         assert!(resolved.dispatch_packet_path.contains("run-rework-result"));
+
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        let _ = fs::remove_dir_all(&project_root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resolve_runtime_consumption_resume_inputs_rejects_rework_result_when_task_authority_is_stale(
+    ) {
+        let _guard = env_lock().lock().expect("env lock should be acquired");
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-rework-stale-authority-{}-{nanos}",
+            std::process::id()
+        ));
+        let configured_project_root =
+            crate::resolve_runtime_project_root().expect("resolve configured project root");
+        fs::create_dir_all(&project_root).expect("create project root");
+        fs::copy(
+            configured_project_root.join("vida.config.yaml"),
+            project_root.join("vida.config.yaml"),
+        )
+        .expect("copy canonical carrier config into isolated test project");
+        let state_root = project_root.join(".vida").join("data").join("state");
+        fs::create_dir_all(&state_root).expect("create state root");
+        crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(state_root.clone()));
+        let store = StateStore::open(state_root.clone())
+            .await
+            .expect("open store");
+
+        let run_id = "run-rework-stale-authority";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "tester", "coach");
+        status.task_id = "missing-task-authority".to_string();
+        status.active_node = "tester".to_string();
+        status.next_node = Some("developer_rework".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "developer_rework_dispatch_ready".to_string();
+        status.policy_gate = "verification_rework_required".to_string();
+        status.handoff_state = "awaiting_developer_rework".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.developer_rework".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist rework-ready stale-authority status");
+
+        let source_packet_dir = state_root.join("runtime-consumption/downstream-dispatch-packets");
+        let result_dir = state_root.join("runtime-consumption/dispatch-results");
+        fs::create_dir_all(&source_packet_dir).expect("create source packet dir");
+        fs::create_dir_all(&result_dir).expect("create result dir");
+        let source_packet_path = source_packet_dir.join(format!("{run_id}-tester.json"));
+        let result_path = result_dir.join(format!("{run_id}-tester.json"));
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "runtime".to_string(),
+            fallback_role: "worker".to_string(),
+            request: "route tester rework to developer".to_string(),
+            selected_role: "verifier".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["tester".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "developer": {
+                                "dispatch_target": "developer",
+                                "task_class": "implementation",
+                                "activation": {
+                                    "activation_agent_type": "junior",
+                                    "activation_runtime_role": "worker"
+                                }
+                            },
+                            "tester": {
+                                "dispatch_target": "tester",
+                                "task_class": "verification",
+                                "activation": {
+                                    "activation_agent_type": "senior",
+                                    "activation_runtime_role": "verifier"
+                                }
+                            }
+                        },
+                        "execution_lane_sequence": ["developer", "tester"]
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "artifact_kind": "runtime_lane_completion_result",
+                "status": "blocked",
+                "execution_state": "blocked",
+                "decision": "rework_required",
+                "verdict": "rework_required",
+                "blocker_code": "verification_rework_required",
+                "blocker_codes": ["verification_rework_required"],
+                "rework_target": "developer",
+                "allowed_next_node": "developer_rework",
+                "completion_verdict": "rework_required",
+                "run_id": run_id,
+                "completed_target": "tester",
+                "source_dispatch_packet_path": source_packet_path.display().to_string()
+            }))
+            .expect("encode result"),
+        )
+        .expect("write result");
+        fs::write(
+            &source_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "verifier_proof_packet",
+                "run_id": run_id,
+                "dispatch_target": "tester",
+                "downstream_dispatch_target": "tester",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_status": "blocked",
+                "downstream_dispatch_blockers": ["verification_rework_required"],
+                "downstream_dispatch_result_path": result_path.display().to_string(),
+                "role_selection_full": role_selection.clone(),
+                "run_graph_bootstrap": {
+                    "run_id": run_id,
+                    "latest_status": status
+                }
+            }))
+            .expect("encode source packet"),
+        )
+        .expect("write source packet");
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "tester".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_takeover".to_string(),
+            supersedes_receipt_id: Some("rework-exception".to_string()),
+            exception_path_receipt_id: Some("rework-exception".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some(source_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("missing_packet".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: Some("tester".to_string()),
+            activation_agent_type: Some("senior".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-06-15T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist tester receipt");
+
+        let error = resolve_runtime_consumption_resume_inputs(&store, Some(run_id), None, None)
+            .await
+            .expect_err("rework resume must preserve stale TaskFlow authority failure");
+        assert!(
+            error.contains("Stale missing-task run graph"),
+            "unexpected rework stale-authority error: {error}"
+        );
 
         crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
         let _ = fs::remove_dir_all(&project_root);
