@@ -538,7 +538,15 @@ fn projection_cache_contract_admissible(value: &serde_json::Value) -> bool {
     let Some(cache) = value.get("projection_cache") else {
         return false;
     };
-    cache.get("status").and_then(serde_json::Value::as_str).is_some()
+    projection_cache_control_contract_admissible(cache)
+        || read_side_projection_cache_annotation_admissible(cache)
+}
+
+fn projection_cache_control_contract_admissible(cache: &serde_json::Value) -> bool {
+    cache
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .is_some()
         && matches!(
             cache.get("mode").and_then(serde_json::Value::as_str),
             Some("auto" | "refresh" | "off")
@@ -549,6 +557,27 @@ fn projection_cache_contract_admissible(value: &serde_json::Value) -> bool {
             .and_then(serde_json::Value::as_str)
             .is_some_and(|freshness| !freshness.trim().is_empty())
         && cache.get("recompute_reason").is_some()
+}
+
+fn read_side_projection_cache_annotation_admissible(cache: &serde_json::Value) -> bool {
+    cache
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|status| !status.trim().is_empty())
+        && cache
+            .get("projection_name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|projection_name| !projection_name.trim().is_empty())
+        && cache
+            .get("age_millis")
+            .is_some_and(serde_json::Value::is_number)
+        && cache
+            .get("max_age_millis")
+            .is_some_and(serde_json::Value::is_number)
+        && cache
+            .get("freshness_contract")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|freshness_contract| !freshness_contract.trim().is_empty())
 }
 
 fn shell_quote(value: &str) -> String {
@@ -704,9 +733,11 @@ mod tests {
 
         let decorated = decorate_projection(projection);
         let action = &decorated["next_action"];
-        assert!(action["action_id"]
-            .as_str()
-            .is_some_and(|id| { id.starts_with("next_action_inspect_vida_task_ready") }));
+        assert!(
+            action["action_id"]
+                .as_str()
+                .is_some_and(|id| { id.starts_with("next_action_inspect_vida_task_ready") })
+        );
         assert_eq!(action["kind"], "inspect");
         assert_eq!(action["command"], "vida task ready");
         assert_eq!(
@@ -725,6 +756,29 @@ mod tests {
             action["reason"],
             "inspect the authoritative ready projection"
         );
+        assert!(cached_projection_admissible(
+            &serde_json::to_string(&decorated).expect("decorated projection should serialize")
+        ));
+    }
+
+    #[test]
+    fn cached_projection_accepts_read_side_recent_projection_annotation() {
+        let decorated = decorate_projection(serde_json::json!({
+            "status": "pass",
+            "next_action": {
+                "command": "vida agent-dispatch next --json",
+                "surface": "vida agent-dispatch next",
+                "reason": "serve the cached dispatch projection"
+            },
+            "projection_cache": {
+                "status": "recent_projection",
+                "projection_name": "agent-dispatch-next-full-json",
+                "age_millis": 17,
+                "max_age_millis": 60000,
+                "freshness_contract": "recent_bounded_stale_ok_for_read_only_operator_query"
+            }
+        }));
+
         assert!(cached_projection_admissible(
             &serde_json::to_string(&decorated).expect("decorated projection should serialize")
         ));
