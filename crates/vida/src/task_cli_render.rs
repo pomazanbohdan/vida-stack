@@ -153,6 +153,17 @@ pub(crate) fn build_pass_operator_surface_payload(
     build_operator_surface_payload(surface, Vec::new(), Vec::new(), extra_fields)
 }
 
+pub(crate) fn build_task_tree_operator_surface_payload(
+    selected_tree_value: serde_json::Value,
+) -> serde_json::Value {
+    let selected_status = selected_tree_value.get("status").cloned();
+    let mut payload = build_pass_operator_surface_payload("vida task tree", selected_tree_value);
+    if let Some(status) = selected_status {
+        payload["status"] = status;
+    }
+    payload
+}
+
 pub(crate) fn print_task_graph_blocked(surface: &str, issue: &TaskGraphIssue, as_json: bool) {
     let quoted_issue_id = crate::shell_quote(issue.issue_id.trim());
     let next_actions = match issue.issue_type.as_str() {
@@ -1597,7 +1608,7 @@ pub(crate) fn print_task_dependency_tree(
         return Err(error);
     }
     let selected_tree_value = apply_json_field_selector(tree_value.clone(), fields);
-    let payload = build_pass_operator_surface_payload("vida task tree", selected_tree_value.clone());
+    let payload = build_task_tree_operator_surface_payload(selected_tree_value.clone());
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -2254,8 +2265,8 @@ pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPa
 mod tests {
     use super::{
         build_pass_operator_surface_payload, build_task_graph_issues_payload,
-        task_children_toon_text, task_mutation_payload, task_progress_payload,
-        task_progress_toon_text, task_record_list_toon_text,
+        build_task_tree_operator_surface_payload, task_children_toon_text, task_mutation_payload,
+        task_progress_payload, task_progress_toon_text, task_record_list_toon_text,
     };
     use crate::release1_operator_output::shared_operator_output_contract_parity_error;
     use crate::state_store::{
@@ -2381,6 +2392,18 @@ mod tests {
         assert_eq!(payload["operator_contracts"]["status"], "pass");
         assert_eq!(payload["artifact_refs"]["surface"], "vida task tree");
         assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
+    }
+
+    #[test]
+    fn task_tree_payload_preserves_selected_root_status() {
+        let payload = build_task_tree_operator_surface_payload(serde_json::json!({
+            "status": "in_progress",
+        }));
+
+        assert_eq!(payload["status"], "in_progress");
+        assert_eq!(payload["shared_fields"]["status"], "pass");
+        assert_eq!(payload["operator_contracts"]["status"], "pass");
+        assert_eq!(payload["artifact_refs"]["surface"], "vida task tree");
     }
 
     #[test]

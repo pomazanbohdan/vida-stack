@@ -3905,10 +3905,7 @@ fn print_task_tree_with_repeat_provenance(
         return Err(error);
     }
     let tree_value = crate::task_cli_render::apply_json_field_selector(tree_value, fields);
-    let payload = crate::task_cli_render::build_pass_operator_surface_payload(
-        "vida task tree",
-        tree_value,
-    );
+    let payload = crate::task_cli_render::build_task_tree_operator_surface_payload(tree_value);
     crate::print_json_pretty(&payload);
     Ok(())
 }
