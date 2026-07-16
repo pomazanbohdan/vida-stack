@@ -559,8 +559,23 @@ pub(crate) fn apply_runtime_continuation_binding_overlay_to_payload(
     cached: &str,
     overlay: &serde_json::Value,
 ) -> Option<String> {
+    apply_runtime_continuation_binding_overlay_to_payload_for_projection(
+        state_dir,
+        "operator_projection",
+        cached,
+        overlay,
+    )
+}
+
+pub(crate) fn apply_runtime_continuation_binding_overlay_to_payload_for_projection(
+    state_dir: &Path,
+    projection_name: &str,
+    cached: &str,
+    overlay: &serde_json::Value,
+) -> Option<String> {
     apply_runtime_continuation_binding_overlay_to_payload_with_cache_status(
         state_dir,
+        projection_name,
         cached,
         overlay,
         "state_marker_stale_recent_projection_with_runtime_continuation_overlay",
@@ -573,8 +588,23 @@ pub(crate) fn apply_runtime_continuation_binding_overlay_to_fresh_payload(
     cached: &str,
     overlay: &serde_json::Value,
 ) -> Option<String> {
+    apply_runtime_continuation_binding_overlay_to_fresh_payload_for_projection(
+        state_dir,
+        "operator_projection",
+        cached,
+        overlay,
+    )
+}
+
+pub(crate) fn apply_runtime_continuation_binding_overlay_to_fresh_payload_for_projection(
+    state_dir: &Path,
+    projection_name: &str,
+    cached: &str,
+    overlay: &serde_json::Value,
+) -> Option<String> {
     apply_runtime_continuation_binding_overlay_to_payload_with_cache_status(
         state_dir,
+        projection_name,
         cached,
         overlay,
         "state_marker_fresh_projection_with_runtime_continuation_overlay",
@@ -584,6 +614,7 @@ pub(crate) fn apply_runtime_continuation_binding_overlay_to_fresh_payload(
 
 fn apply_runtime_continuation_binding_overlay_to_payload_with_cache_status(
     state_dir: &Path,
+    projection_name: &str,
     cached: &str,
     overlay: &serde_json::Value,
     cache_status: &str,
@@ -675,7 +706,7 @@ fn apply_runtime_continuation_binding_overlay_to_payload_with_cache_status(
     if let Some(binding) = binding {
         object.insert("explicit_continuation_binding".to_string(), binding);
     }
-    serde_json::to_string_pretty(&payload).ok()
+    serialize_projection_payload(projection_name, &payload).ok()
 }
 
 fn clear_stale_root_session_write_guard_after_continuation_overlay(
@@ -1893,9 +1924,17 @@ mod tests {
         )
         .expect("projection should be readable");
 
-        let rendered =
-            super::apply_runtime_continuation_binding_overlay_to_payload(&root, &cached, &overlay)
-                .expect("overlay should update payload");
+        let rendered = super::apply_runtime_continuation_binding_overlay_to_payload_for_projection(
+            &root,
+            "orchestrator-init-summary-latest",
+            &cached,
+            &overlay,
+        )
+        .expect("overlay should update payload");
+        assert!(
+            !rendered.contains('\n'),
+            "orchestrator-init summary overlay must preserve compact JSON"
+        );
         let rendered: serde_json::Value =
             serde_json::from_str(&rendered).expect("rendered overlay should parse");
 
@@ -1990,10 +2029,17 @@ mod tests {
         let cached = read_fresh_json_projection(&root, "orchestrator-init-summary-latest")
             .expect("fresh projection should be readable");
 
-        let rendered = super::apply_runtime_continuation_binding_overlay_to_fresh_payload(
-            &root, &cached, &overlay,
+        let rendered = super::apply_runtime_continuation_binding_overlay_to_fresh_payload_for_projection(
+            &root,
+            "orchestrator-init-summary-latest",
+            &cached,
+            &overlay,
         )
         .expect("fresh overlay should update payload");
+        assert!(
+            !rendered.contains('\n'),
+            "fresh orchestrator-init summary overlay must preserve compact JSON"
+        );
         let rendered: serde_json::Value =
             serde_json::from_str(&rendered).expect("rendered overlay should parse");
 
