@@ -1089,7 +1089,12 @@ fn configured_backend_dispatch_blocker_verdict_for_candidate(
 fn task_class_requires_write_scope(task_class: &str) -> bool {
     matches!(
         task_class,
-        "implementation" | "implementation_medium" | "delivery_task" | "execution_block"
+        "implementation"
+            | "implementation_medium"
+            | "delivery_task"
+            | "execution_block"
+            | "test_authoring"
+            | "regression_test"
     )
 }
 
@@ -4051,6 +4056,79 @@ mod tests {
                 .iter()
                 .any(|row| {
                     row["carrier_id"] == "opencode_cli"
+                        && row["reasons"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|reason| {
+                                reason.as_str() == Some("write_scope_inadmissible_for_task_class")
+                            })
+                })
+        );
+    }
+
+    #[test]
+    fn readonly_profile_is_rejected_for_regression_test_task_class() {
+        let compiled_bundle = compiled_bundle_with_roles(vec![serde_json::json!({
+            "role_id": "internal_subagents",
+            "tier": "senior",
+            "rate": 4,
+            "normalized_cost_units": 4,
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["regression_test"],
+            "reasoning_band": "xhigh",
+            "default_model_profile": "codex_gpt56_luna_xhigh_write",
+            "model_profiles": {
+                "codex_gpt56_luna_xhigh_readonly": {
+                    "profile_id": "codex_gpt56_luna_xhigh_readonly",
+                    "model_ref": "gpt-5.6-luna",
+                    "provider": "openai-codex",
+                    "reasoning_effort": "xhigh",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "read-only",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["regression_test"],
+                    "readiness": { "required": true, "ready": true }
+                },
+                "codex_gpt56_luna_xhigh_write": {
+                    "profile_id": "codex_gpt56_luna_xhigh_write",
+                    "model_ref": "gpt-5.6-luna",
+                    "provider": "openai-codex",
+                    "reasoning_effort": "xhigh",
+                    "normalized_cost_units": 4,
+                    "speed_tier": "fast",
+                    "quality_tier": "medium",
+                    "write_scope": "workspace-write",
+                    "runtime_roles": ["worker"],
+                    "task_classes": ["regression_test"],
+                    "readiness": { "required": true, "ready": true }
+                }
+            }
+        })]);
+
+        let assignment = build_runtime_assignment_from_resolved_constraints(
+            &compiled_bundle,
+            "worker",
+            "regression_test",
+            "worker",
+        );
+
+        assert_eq!(assignment["enabled"], true);
+        assert_eq!(assignment["selected_carrier_id"], "internal_subagents");
+        assert_eq!(
+            assignment["selected_model_profile_id"],
+            "codex_gpt56_luna_xhigh_write"
+        );
+        assert!(
+            assignment["rejected_candidates"]
+                .as_array()
+                .expect("rejected candidates should render")
+                .iter()
+                .any(|row| {
+                    row["model_profile_id"] == "codex_gpt56_luna_xhigh_readonly"
                         && row["reasons"]
                             .as_array()
                             .into_iter()
