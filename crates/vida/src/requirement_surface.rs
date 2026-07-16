@@ -542,6 +542,10 @@ fn requirement_analysis_payload(artifact: Value) -> Value {
     payload
 }
 
+fn compact_terminal_field(value: &str) -> String {
+    value.chars().flat_map(char::escape_default).collect()
+}
+
 fn print_compact_contract(artifact: &Value) {
     println!("vida requirement analyze");
     println!(
@@ -560,12 +564,14 @@ fn print_compact_contract(artifact: &Value) {
     );
     println!(
         "readiness_verdict: {}",
-        artifact["readiness_verdict"]
-            .as_str()
-            .unwrap_or("needs_questions")
+        compact_terminal_field(
+            artifact["readiness_verdict"]
+                .as_str()
+                .unwrap_or("needs_questions"),
+        )
     );
     if let Some(path) = artifact["artifact_path"].as_str() {
-        println!("artifact_path: {path}");
+        println!("artifact_path: {}", compact_terminal_field(path));
     }
     println!("required_fields[22]{{name,meaning}}:");
     for (name, meaning) in REQUIRED_FIELD_SUMMARY {
@@ -576,7 +582,7 @@ fn print_compact_contract(artifact: &Value) {
         println!(
             "  {},{}",
             status,
-            artifact["readiness_states"][status].as_str().unwrap_or("")
+            compact_terminal_field(artifact["readiness_states"][status].as_str().unwrap_or(""))
         );
     }
     println!("output_modes[2]{{mode,contract}}:");
@@ -588,17 +594,19 @@ fn print_compact_contract(artifact: &Value) {
     {
         println!(
             "allowed_next_node: {}",
-            route["allowed_next_node"]
-                .as_str()
-                .unwrap_or("unconfigured")
+            compact_terminal_field(
+                route["allowed_next_node"]
+                    .as_str()
+                    .unwrap_or("unconfigured"),
+            )
         );
         println!(
             "downstream_routes: {}",
-            route["route_id"].as_str().unwrap_or("unconfigured")
+            compact_terminal_field(route["route_id"].as_str().unwrap_or("unconfigured"))
         );
     }
     if let Some(summary) = artifact["handoff"]["summary"].as_str() {
-        println!("handoff: {summary}");
+        println!("handoff: {}", compact_terminal_field(summary));
     }
 }
 
@@ -758,6 +766,21 @@ fn party_chat_trigger_matches(
     }
 
     matches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compact_terminal_field;
+
+    #[test]
+    fn compact_terminal_field_escapes_control_characters() {
+        let rendered = compact_terminal_field("ready\nstatus: pass\x1b]0;VIDA_PWNED\x07");
+
+        assert_eq!(rendered, "ready\\nstatus: pass\\u{1b}]0;VIDA_PWNED\\u{7}");
+        assert!(!rendered.contains('\n'));
+        assert!(!rendered.contains('\x1b'));
+        assert!(!rendered.contains('\x07'));
+    }
 }
 
 const REQUIRED_FIELD_SUMMARY: [(&str, &str); 22] = [
