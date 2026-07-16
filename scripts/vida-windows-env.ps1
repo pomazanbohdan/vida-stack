@@ -354,6 +354,67 @@ function Assert-VidaWindowsBuildTools {
     Assert-VidaWritableTemp $env:TEMP
 }
 
+function Resolve-VidaVcVars64Path {
+    param([switch]$Required)
+
+    $candidatePaths = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($env:VIDA_VCVARS64)) {
+        $candidatePaths.Add($env:VIDA_VCVARS64)
+    }
+
+    $vswhereCandidates = @()
+    foreach ($programFilesRoot in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ([string]::IsNullOrWhiteSpace($programFilesRoot)) {
+            continue
+        }
+        $vswhereCandidates += Join-Path $programFilesRoot "Microsoft Visual Studio\Installer\vswhere.exe"
+    }
+    foreach ($vswherePath in ($vswhereCandidates | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $vswherePath -PathType Leaf)) {
+            continue
+        }
+        try {
+            $installationPaths = @(& $vswherePath -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null)
+            foreach ($installationPath in $installationPaths) {
+                if (-not [string]::IsNullOrWhiteSpace($installationPath)) {
+                    $candidatePaths.Add((Join-Path $installationPath.Trim() "VC\Auxiliary\Build\vcvars64.bat"))
+                }
+            }
+        } catch {
+            continue
+        }
+    }
+
+    foreach ($programFilesRoot in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ([string]::IsNullOrWhiteSpace($programFilesRoot)) {
+            continue
+        }
+        foreach ($edition in @("BuildTools", "Community", "Professional", "Enterprise")) {
+            $candidatePaths.Add((Join-Path $programFilesRoot "Microsoft Visual Studio\2022\$edition\VC\Auxiliary\Build\vcvars64.bat"))
+        }
+    }
+
+    $seen = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($candidatePath in $candidatePaths) {
+        if ([string]::IsNullOrWhiteSpace($candidatePath)) {
+            continue
+        }
+        try {
+            $fullPath = [System.IO.Path]::GetFullPath($candidatePath)
+        } catch {
+            $fullPath = $candidatePath
+        }
+        if ($seen.Add($fullPath) -and (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+            return $fullPath
+        }
+    }
+
+    if ($Required) {
+        throw "[vida-windows-env] Visual Studio vcvars64.bat was not found. Install a Visual Studio C++ workload, set VIDA_VCVARS64, or make vswhere.exe discoverable."
+    }
+    return $null
+}
+
 function Import-VidaMsvcEnvironment {
     if (-not (Test-VidaWindowsHost)) {
         return
@@ -367,17 +428,7 @@ function Import-VidaMsvcEnvironment {
         return
     }
 
-    $vcvarsCandidates = @(
-        $env:VIDA_VCVARS64,
-        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"),
-        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"),
-        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat"),
-        (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat")
-    )
-    $vcvarsPath = $vcvarsCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
-    if (-not $vcvarsPath) {
-        throw "[vida-windows-env] Visual Studio vcvars64.bat was not found. Install Visual Studio Build Tools with the C++ workload or set VIDA_VCVARS64."
-    }
+    $vcvarsPath = Resolve-VidaVcVars64Path -Required
 
     $cmdPath = Resolve-VidaCommandPath "cmd.exe" @((Join-Path $env:SystemRoot "System32\cmd.exe")) -Required
     & $cmdPath /d /s /c "`"$vcvarsPath`" >nul && set" | ForEach-Object {
