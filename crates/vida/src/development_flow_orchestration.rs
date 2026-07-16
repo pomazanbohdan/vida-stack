@@ -634,9 +634,9 @@ fn lane_template_included(
         "when_execution_preparation_required" => requires_execution_preparation,
         "when_flow_requires_coach" => true,
         "when_flow_requires_verification" => true,
-        "when_proof_required" => false,
-        "when_review_triggered" => false,
-        "when_architecture_triggered" => false,
+        "when_proof_required" => true,
+        "when_review_triggered" => true,
+        "when_architecture_triggered" => true,
         _ => true,
     }
 }
@@ -1419,7 +1419,7 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_triggered_lanes_are_excluded_until_required() {
+    fn adaptive_triggered_lanes_remain_routable_without_trigger_state() {
         let bundle = json!({
             "dev_team_readiness": {
                 "roles": [
@@ -1465,11 +1465,26 @@ mod tests {
 
         let contract = build_resolved_development_dispatch_contract(&bundle, &selection, false);
 
-        assert_eq!(contract["lane_sequence"], json!(["coder"]));
-        assert_eq!(contract["execution_lane_sequence"], json!(["coder"]));
-        assert!(contract["lane_catalog"]["tester"].is_null());
-        assert!(contract["lane_catalog"]["coach_validator"].is_null());
-        assert!(contract["lane_catalog"]["architect"].is_null());
+        assert_eq!(
+            contract["lane_sequence"],
+            json!(["coder", "tester", "coach_validator", "architect"])
+        );
+        assert_eq!(
+            contract["execution_lane_sequence"],
+            json!(["coder", "tester", "coach_validator", "architect"])
+        );
+        assert_eq!(
+            contract["lane_catalog"]["tester"]["inclusion_rule"],
+            json!("when_proof_required")
+        );
+        assert_eq!(
+            contract["lane_catalog"]["coach_validator"]["inclusion_rule"],
+            json!("when_review_triggered")
+        );
+        assert_eq!(
+            contract["lane_catalog"]["architect"]["inclusion_rule"],
+            json!("when_architecture_triggered")
+        );
     }
 
     #[test]
