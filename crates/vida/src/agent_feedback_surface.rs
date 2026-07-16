@@ -525,7 +525,9 @@ fn ignored_historical_failure_state_segments(reason: &str) -> Vec<String> {
                     || has_resolved_failure_artifact_action_context(
                         &normalized,
                         &full_reason_normalized,
-                    ))
+                    )
+                    || (has_scoped_recorded_follow_up_context(&normalized)
+                        && has_proof_or_success_context(&full_reason_normalized)))
                 || has_current_failure_outcome_language_for_historical_segment(&normalized)
             {
                 return None;
@@ -732,6 +734,13 @@ fn has_historical_or_success_evidence_context(normalized: &str) -> bool {
     ]
     .iter()
     .any(|phrase| normalized.contains(phrase));
+    has_historical_context
+        || (has_evidence_context
+            && has_success_context
+            && has_failure_state_artifact_language(normalized))
+}
+
+fn has_scoped_recorded_follow_up_context(normalized: &str) -> bool {
     let has_recorded_or_tracked_context = [
         "recorded on",
         "recorded by",
@@ -755,11 +764,7 @@ fn has_historical_or_success_evidence_context(normalized: &str) -> bool {
     .iter()
     .any(|phrase| normalized.contains(phrase));
 
-    has_historical_context
-        || (has_recorded_or_tracked_context && has_scoped_follow_up_context)
-        || (has_evidence_context
-            && has_success_context
-            && has_failure_state_artifact_language(normalized))
+    has_recorded_or_tracked_context && has_scoped_follow_up_context
 }
 
 fn has_stale_or_superseded_context(normalized: &str) -> bool {
@@ -1994,6 +1999,26 @@ mod tests {
         assert_eq!(
             super::canonical_close_status_from_reason(reason),
             Some(("blocked", "blocked"))
+        );
+    }
+
+    #[test]
+    fn canonical_close_status_preserves_scoped_recorded_active_blockers() {
+        let reason = "Task has a blocker recorded on ISSUE-123 outside this task.";
+
+        assert_eq!(
+            super::canonical_close_status_from_reason(reason),
+            Some(("blocked", "blocked"))
+        );
+        let outcome = super::infer_feedback_outcome_from_close_reason(reason);
+        let score = super::default_feedback_score(outcome, "verification");
+        let inference = super::close_feedback_outcome_inference(reason, outcome, score);
+
+        assert_eq!(outcome, "failure");
+        assert_eq!(score, 35);
+        assert_eq!(
+            inference["failure_markers"],
+            serde_json::json!(["blocker"])
         );
     }
 
