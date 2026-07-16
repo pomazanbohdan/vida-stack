@@ -5791,12 +5791,12 @@ fn dispatch_result_is_trusted_receipt_completion(
     result: &serde_json::Value,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    dispatch_result_is_pass_completion(result)
-        && dispatch_result_receipt_backed(result)
-        && result["run_id"].as_str() == Some(receipt.run_id.as_str())
-        && dispatch_result_matches_receipt_target(result, receipt)
-        && dispatch_result_matches_receipt_source_packet(result, receipt)
-        && receipt
+    let pass_completion = dispatch_result_is_pass_completion(result);
+    let receipt_backed = dispatch_result_receipt_backed(result);
+    let run_matches = result["run_id"].as_str() == Some(receipt.run_id.as_str());
+    let target_matches = dispatch_result_matches_receipt_target(result, receipt);
+    let packet_matches = dispatch_result_matches_receipt_source_packet(result, receipt);
+    let request_matches = receipt
             .dispatch_packet_path
             .as_deref()
             .is_some_and(|packet_path| {
@@ -5812,7 +5812,8 @@ fn dispatch_result_is_trusted_receipt_completion(
                             packet_path,
                         )
                     })
-            })
+            });
+    pass_completion && receipt_backed && run_matches && target_matches && packet_matches && request_matches
 }
 
 fn receipt_result_allowed_next_target(
@@ -8072,7 +8073,10 @@ pub(crate) async fn refresh_downstream_dispatch_preview_with_owned_paths(
         ));
         downstream_dispatch_ready = false;
         downstream_dispatch_blockers = vec![invalid_allowed_next_node_for_execution_plan_blocker()];
-    } else if receipt_has_terminal_lane_evidence && downstream_dispatch_target.is_none() {
+    } else if receipt_has_terminal_lane_evidence
+        && (downstream_dispatch_target.is_none()
+            || result_explicit_downstream_dispatch_target.is_some())
+    {
         if let Some(explicit_target) = result_explicit_downstream_dispatch_target {
             let missing_owned_scope =
                 dispatch_target_requires_owned_write_scope(role_selection, &explicit_target)

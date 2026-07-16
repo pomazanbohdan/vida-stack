@@ -2561,6 +2561,36 @@ impl StateStore {
         }
     }
 
+    pub(crate) async fn current_session_has_run_graph_claim(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, StateStoreError> {
+        let evidence = self.current_runtime_owner_evidence()?;
+        let Some(current_session_id) = evidence["current_session"]["session_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(false);
+        };
+        let current_stable_fallback = evidence["current_session"]
+            ["fallback_replaces_legacy_stable_worktree_state_hash"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        Ok(self.active_orchestrator_claims().await?.into_iter().any(|claim| {
+            let matches_session = claim.orchestrator_session_id == current_session_id
+                || current_stable_fallback.is_some_and(|fallback| {
+                    claim.orchestrator_session_id == fallback
+                });
+            matches_session
+                && claim
+                    .run_id
+                    .as_deref()
+                    .is_some_and(|claim_run_id| claim_run_id.trim() == run_id.trim())
+        }))
+    }
+
     async fn run_graph_task_id_for_mutation_claim(
         &self,
         run_id: &str,
