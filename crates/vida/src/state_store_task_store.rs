@@ -7046,6 +7046,32 @@ mod tests {
         let packet_dir = root.join("runtime-consumption/dispatch-packets");
         fs::create_dir_all(&packet_dir).expect("create dispatch packet dir");
         let implementer_packet_path = packet_dir.join("run-close-task-implementer.json");
+        let project_root = crate::resolve_runtime_project_root().expect("resolve project root");
+        let config = crate::load_project_overlay_yaml().expect("load project overlay");
+        let compiled_bundle = crate::build_compiled_agent_extension_bundle_for_root(
+            &config,
+            &project_root,
+        )
+        .expect("compile agent extension bundle");
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: compiled_bundle.clone(),
+            execution_plan: serde_json::Value::Null,
+            reason: "test".to_string(),
+        };
+        let execution_plan =
+            crate::build_runtime_execution_plan_from_snapshot(&compiled_bundle, &role_selection);
         fs::write(
             &implementer_packet_path,
             serde_json::to_string_pretty(&serde_json::json!({
@@ -7064,7 +7090,7 @@ mod tests {
                     "confidence": "high",
                     "matched_terms": ["implementation"],
                     "compiled_bundle": null,
-                    "execution_plan": null,
+                    "execution_plan": execution_plan,
                     "reason": "test"
                 },
                 "run_graph_bootstrap": { "run_id": "run-close-task" },
