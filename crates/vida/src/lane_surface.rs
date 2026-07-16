@@ -6273,11 +6273,15 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 }
                 None
             };
-            let persisted_completed_target = packet
-                .get("downstream_dispatch_active_target")
-                .and_then(serde_json::Value::as_str)
-                .or(receipt.downstream_dispatch_active_target.as_deref())
+            let persisted_completed_target = receipt
+                .downstream_dispatch_active_target
+                .as_deref()
                 .or(receipt.downstream_dispatch_last_target.as_deref())
+                .or_else(|| {
+                    packet
+                        .get("downstream_dispatch_active_target")
+                        .and_then(serde_json::Value::as_str)
+                })
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or(receipt.dispatch_target.as_str())
                 .to_string();
@@ -6640,7 +6644,11 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 if let Some(target) = host_bridge_result_file_allowed_next_node(
                     &completion_result_path,
                 )
-                .or_else(|| (!completed_target.trim().is_empty()).then(|| completed_target.clone()))
+                .or_else(|| {
+                    (!completed_target.trim().is_empty()
+                        && !terminal_closure_route(&completed_target))
+                    .then(|| completed_target.clone())
+                })
                 {
                     receipt.downstream_dispatch_target = Some(target);
                 }
@@ -7730,6 +7738,33 @@ mod tests {
         .expect("stale current-lane marker must not block the concrete next lane");
 
         assert_eq!(target.as_deref(), Some("developer"));
+    }
+
+    #[test]
+    fn lane_completion_ignores_packet_terminal_alias_when_receipt_has_persisted_lane() {
+        let packet = serde_json::json!({
+            "downstream_dispatch_active_target": "terminal_closure"
+        });
+        let mut receipt = sample_receipt("bridge_request_pending");
+        receipt.dispatch_target = "developer".to_string();
+        receipt.downstream_dispatch_active_target = Some("developer".to_string());
+        receipt.downstream_dispatch_last_target = Some("developer".to_string());
+
+        let persisted_completed_target = receipt
+            .downstream_dispatch_active_target
+            .as_deref()
+            .or(receipt.downstream_dispatch_last_target.as_deref())
+            .or_else(|| {
+                packet
+                    .get("downstream_dispatch_active_target")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(receipt.dispatch_target.as_str())
+            .to_string();
+
+        assert_eq!(persisted_completed_target, "developer");
+        assert!(!terminal_closure_route(&persisted_completed_target));
     }
 
     #[test]
