@@ -4871,11 +4871,17 @@ impl StateStore {
                 .await?;
         }
         let mut receipt: RunGraphDispatchReceipt = receipt.into();
-        if crate::runtime_dispatch_state::normalize_stale_in_flight_dispatch_receipt(
-            self.root(),
-            &mut receipt,
-        )
-        .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?
+        let pre_execution_packet_ready =
+            crate::runtime_dispatch_receipt_helpers::dispatch_receipt_has_pre_execution_packet_ready(
+                &receipt,
+                Some(run_id),
+            );
+        if !pre_execution_packet_ready
+            && crate::runtime_dispatch_state::normalize_stale_in_flight_dispatch_receipt(
+                self.root(),
+                &mut receipt,
+            )
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?
         {
             self.record_run_graph_dispatch_receipt(&receipt).await?;
         }
