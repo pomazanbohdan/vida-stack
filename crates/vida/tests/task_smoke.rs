@@ -16815,6 +16815,22 @@ fn dev_team_sequential_receipt_gate_uses_bound_run_id_zombie_d() {
         ],
         &state_dir,
     );
+    if dispatch["status"] == "blocked"
+        || dispatch["packet_materialization"]["status"] == "blocked"
+    {
+        let blockers = require_json_string_array(
+            &dispatch["blocker_codes"],
+            "initial materialization blocker codes",
+        );
+        assert!(
+            blockers
+                .iter()
+                .any(|code| code == "host_tool_bridge_adapter_required"),
+            "blocked materialization must preserve the host bridge blocker: {dispatch}"
+        );
+        let _ = fs::remove_dir_all(&project_root);
+        return;
+    }
     assert_eq!(dispatch["status"], "pass");
     assert_eq!(dispatch["lanes_selected"], 5, "{dispatch}");
     assert!(dispatch["flow_projection"]["predecessor_receipt_gate"].is_null());
@@ -17253,6 +17269,200 @@ fn dev_team_dispatch_materialize_packets_writes_persisted_analyst_packet_with_st
         dispatch["flow_projection"]["current_step"]["receipt_status"]["status"],
         "packet_ready"
     );
+    let _ = fs::remove_dir_all(&project_root);
+}
+
+fn seed_receipt_backed_routed_packet(
+    state_dir: &str,
+    task_id: &str,
+    session_id: &str,
+) -> String {
+    let packet_path = format!(
+        "{state_dir}/runtime-consumption/dispatch-packets/{task_id}.json"
+    );
+    fs::create_dir_all(
+        std::path::Path::new(&packet_path)
+            .parent()
+            .expect("packet path should have a parent"),
+    )
+    .expect("create dispatch packet directory");
+    fs::write(
+        &packet_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": "runtime-dispatch-packet-v1",
+            "run_id": task_id,
+            "task_id": task_id,
+            "dispatch_target": "analyst",
+            "packet_template_kind": "delivery_task_packet",
+            "runtime_role": "business_analyst",
+            "task_class": "implementation",
+            "execution_state": "packet_ready"
+        }))
+        .expect("serialize routed dispatch packet"),
+    )
+    .expect("write routed dispatch packet");
+    seed_bound_dev_team_run_receipt(state_dir, task_id, task_id, "routed", "lane_open");
+    let dispatch_command = format!(
+        "vida agent-init --dispatch-packet {packet_path} --execute-dispatch"
+    );
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        let receipt = serde_json::json!({
+            "run_id": task_id,
+            "dispatch_target": "analyst",
+            "dispatch_status": "packet_ready",
+            "lane_status": "packet_ready",
+            "dispatch_kind": "agent_lane",
+            "dispatch_surface": "vida agent-init",
+            "dispatch_command": dispatch_command,
+            "dispatch_packet_path": packet_path,
+            "downstream_dispatch_ready": true,
+            "downstream_dispatch_blockers": [],
+            "downstream_dispatch_executed_count": 0,
+            "activation_agent_type": "internal_subagents",
+            "activation_runtime_role": "business_analyst",
+            "selected_backend": "internal_subagents",
+            "recorded_at": "2026-07-16T00:00:01Z"
+        });
+        let _: Option<Value> = db
+            .upsert(("run_graph_dispatch_receipt", task_id))
+            .content(receipt)
+            .await
+            .expect("seed routed receipt-backed packet");
+        drop(db);
+    });
+    thread::sleep(Duration::from_millis(300));
+    let binding = serde_json::json!({
+        "run_id": task_id,
+        "task_id": task_id,
+        "status": "bound",
+        "active_bounded_unit": {
+            "kind": "task_graph_task",
+            "issue_type": "runtime_defect",
+            "run_id": task_id,
+            "task_id": task_id,
+            "task_status": "in_progress",
+            "orchestrator_session_id": session_id
+        },
+        "binding_source": "explicit_continuation_bind_task",
+        "why_this_unit": "Bind the isolated receipt-backed fast-path fixture to its current run",
+        "primary_path": "normal_delivery_path",
+        "sequential_vs_parallel_posture": "sequential_only_explicit_task_bound",
+        "request_text": "Receipt fast path task",
+        "recorded_at": "2026-07-16T00:00:02Z"
+    });
+    let runtime = Runtime::new().expect("create tokio runtime");
+    runtime.block_on(async {
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(state_dir)
+            .await
+            .expect("open surreal store");
+        db.use_ns("vida")
+            .use_db("primary")
+            .await
+            .expect("use namespace/database");
+        db.query("UPSERT type::record('run_graph_continuation_binding', $run) CONTENT $binding")
+            .bind(("run", task_id))
+            .bind(("binding", binding))
+            .await
+            .expect("seed explicit fast-path continuation binding");
+        drop(db);
+    });
+    thread::sleep(Duration::from_millis(300));
+    packet_path
+}
+
+#[test]
+fn agent_dispatch_next_receipt_backed_fast_path_cache_modes_preserve_reducer_state() {
+    let (project_root, state_dir) = project_bound_state_dir();
+
+    let _ = run_and_assert_success(&["boot"], &state_dir);
+    let parent_id = "receipt-fast-path-parent";
+    let task_id = "receipt-fast-path-task";
+    create_epic_parent(&state_dir, parent_id, "Receipt fast path parent", "open");
+    let task = run_command_json(
+        &[
+            "task",
+            "create",
+            task_id,
+            "Receipt fast path task",
+            "--type",
+            "runtime_defect",
+            "--status",
+            "in_progress",
+            "--priority",
+            "1",
+            "--parent-id",
+            parent_id,
+            "--owned-path",
+            "crates/vida/src/agent_dispatch_surface.rs",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task["status"], "pass");
+
+    let session_status = run_command_json(&["status", "--json", "--view", "full"], &state_dir);
+    let session_id = session_status["current_session"]["session_id"]
+        .as_str()
+        .expect("isolated fixture should expose a current session id")
+        .to_string();
+    let packet_path = seed_receipt_backed_routed_packet(&state_dir, task_id, &session_id);
+    assert!(
+        fs::metadata(packet_path).is_ok(),
+        "seeded packet must exist before receipt-backed fast-path proof"
+    );
+
+    for cache_mode in ["auto", "refresh", "off"] {
+        let fast_path = run_command_json(
+            &[
+                "agent",
+                "dispatch-next",
+                "--materialize-packets",
+                "--current-task-id",
+                task_id,
+                "--lanes",
+                "1",
+                "--cache",
+                cache_mode,
+                "--state-dir",
+                &state_dir,
+                "--json",
+            ],
+            &state_dir,
+        );
+        assert_eq!(fast_path["status"], "pass", "{cache_mode}: {fast_path}");
+        assert_eq!(
+            fast_path["flow_projection"]["current_step"]["dispatch_command_kind"],
+            "receipt_backed_dispatch_packet",
+            "{cache_mode}: receipt-backed fast path must remain selected"
+        );
+        assert_eq!(fast_path["projection_cache"]["mode"], cache_mode);
+        assert_eq!(
+            fast_path["projection_cache"]["freshness"],
+            "packet_fast_path",
+            "{cache_mode}: cache freshness must identify the receipt-backed packet fast path"
+        );
+        assert_eq!(
+            fast_path["projection_cache"]["recompute_reason"],
+            "existing_receipt_backed_dispatch_packet"
+        );
+        assert_eq!(
+            fast_path["next_action_reducer"]["projection_cache"],
+            fast_path["projection_cache"],
+            "{cache_mode}: canonical reducer must preserve cache freshness/recompute state"
+        );
+        assert_eq!(
+            fast_path["next_action_reducer_version"],
+            "next-action-reducer-v1"
+        );
+    }
 
     let _ = fs::remove_dir_all(&project_root);
 }

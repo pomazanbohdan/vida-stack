@@ -5978,6 +5978,7 @@ async fn emit_agent_dispatch_existing_packet_fast_path(
     if let Some(object) = payload.as_object_mut() {
         object.insert("projection_cache".to_string(), cache_report.clone());
     }
+    payload = operator_output::next_actions::decorate_projection(payload);
     if command.json {
         crate::print_json_pretty(&payload);
         if cache_mode != "off" {
@@ -6017,6 +6018,7 @@ fn emit_agent_dispatch_next_preview(
         if let Some(object) = payload.as_object_mut() {
             object.insert("projection_cache".to_string(), cache_report.clone());
         }
+        payload = operator_output::next_actions::decorate_projection(payload);
         crate::print_json_pretty(&payload);
         if command.cache != "off" {
             crate::operator_projection_cache::write_json_projection(state_dir, projection_name, &payload);
@@ -6962,29 +6964,6 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
         && !command.dev_team
         && !command.full
         && cache_mode == "auto";
-    if command.json && cache_read_allowed {
-        if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
-            &state_dir,
-            &projection_name,
-            max_age,
-        ) {
-            if let Some(rendered) =
-                crate::operator_projection_cache::annotate_projection_cache_control(
-                    &state_dir,
-                    &projection_name,
-                    &cached,
-                    cache_mode,
-                    true,
-                    "fresh",
-                    max_age,
-                    None,
-                )
-            {
-                println!("{rendered}");
-                return ExitCode::SUCCESS;
-            }
-        }
-    }
     match StateStore::open_existing_read_only(state_dir.clone()).await {
         Ok(store) => {
             if let Some(exit_code) = emit_agent_dispatch_existing_packet_fast_path(
@@ -6998,6 +6977,37 @@ async fn run_agent_dispatch_next(command: AgentDispatchNextArgs) -> ExitCode {
             .await
             {
                 return exit_code;
+            }
+            if command.json && cache_read_allowed {
+                if let Some(cached) = crate::operator_projection_cache::read_recent_json_projection(
+                    &state_dir,
+                    &projection_name,
+                    max_age,
+                ) {
+                    if operator_output::next_actions::cached_projection_admissible(&cached) {
+                        if let Some(rendered) =
+                            crate::operator_projection_cache::annotate_projection_cache_control(
+                                &state_dir,
+                                &projection_name,
+                                &cached,
+                                cache_mode,
+                                true,
+                                "fresh",
+                                max_age,
+                                None,
+                            )
+                        {
+                            let rendered = serde_json::from_str::<serde_json::Value>(&rendered)
+                                .map(operator_output::next_actions::decorate_projection)
+                                .ok()
+                                .and_then(|value| serde_json::to_string_pretty(&value).ok());
+                            if let Some(rendered) = rendered {
+                                println!("{rendered}");
+                                return ExitCode::SUCCESS;
+                            }
+                        }
+                    }
+                }
             }
             let mut activation_bundle =
                 match crate::read_or_sync_launcher_activation_snapshot(&store).await {

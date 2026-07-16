@@ -530,7 +530,25 @@ pub fn cached_projection_admissible(cached: &str) -> bool {
                 && value
                     .get("next_action_reducer")
                     .is_some_and(serde_json::Value::is_object)
+                && projection_cache_contract_admissible(&value)
         })
+}
+
+fn projection_cache_contract_admissible(value: &serde_json::Value) -> bool {
+    let Some(cache) = value.get("projection_cache") else {
+        return false;
+    };
+    cache.get("status").and_then(serde_json::Value::as_str).is_some()
+        && matches!(
+            cache.get("mode").and_then(serde_json::Value::as_str),
+            Some("auto" | "refresh" | "off")
+        )
+        && cache.get("hit").is_some_and(serde_json::Value::is_boolean)
+        && cache
+            .get("freshness")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|freshness| !freshness.trim().is_empty())
+        && cache.get("recompute_reason").is_some()
 }
 
 fn shell_quote(value: &str) -> String {
@@ -673,6 +691,7 @@ mod tests {
             "projection_cache": {
                 "status": "hit",
                 "mode": "auto",
+                "hit": true,
                 "freshness": "fresh",
                 "recompute_reason": null
             },
@@ -722,6 +741,13 @@ mod tests {
                 "command": "vida task show task-1",
                 "surface": "vida task show",
                 "reason": "inspect the ready task"
+            },
+            "projection_cache": {
+                "status": "miss",
+                "mode": "auto",
+                "hit": false,
+                "freshness": "recomputed",
+                "recompute_reason": "cache_missing"
             }
         }));
         assert!(cached_projection_admissible(
