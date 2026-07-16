@@ -156,12 +156,7 @@ pub(crate) fn build_pass_operator_surface_payload(
 pub(crate) fn build_task_tree_operator_surface_payload(
     selected_tree_value: serde_json::Value,
 ) -> serde_json::Value {
-    let selected_status = selected_tree_value.get("status").cloned();
-    let mut payload = build_pass_operator_surface_payload("vida task tree", selected_tree_value);
-    if let Some(status) = selected_status {
-        payload["status"] = status;
-    }
-    payload
+    build_pass_operator_surface_payload("vida task tree", selected_tree_value)
 }
 
 pub(crate) fn print_task_graph_blocked(surface: &str, issue: &TaskGraphIssue, as_json: bool) {
@@ -2395,15 +2390,16 @@ mod tests {
     }
 
     #[test]
-    fn task_tree_payload_preserves_selected_root_status() {
+    fn task_tree_payload_keeps_release1_operator_contract_parity_with_selected_root_status() {
         let payload = build_task_tree_operator_surface_payload(serde_json::json!({
             "status": "in_progress",
         }));
 
-        assert_eq!(payload["status"], "in_progress");
+        assert_eq!(payload["status"], "pass");
         assert_eq!(payload["shared_fields"]["status"], "pass");
         assert_eq!(payload["operator_contracts"]["status"], "pass");
         assert_eq!(payload["artifact_refs"]["surface"], "vida task tree");
+        assert_eq!(shared_operator_output_contract_parity_error(&payload), None);
     }
 
     #[test]
