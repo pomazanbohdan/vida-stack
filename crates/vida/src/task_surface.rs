@@ -30,6 +30,7 @@ use taskflow_core::task::verify::{
     task_browser_proof_target, task_reports_runtime_proof_blocker, task_verify_labels,
     TaskBrowserProofArtifact,
 };
+use std::io::Read;
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct TaskReplaceJsonlContinuationSummary {
@@ -7454,6 +7455,830 @@ async fn rollback_task_bulk_import(
         })
 }
 
+const TASK_UPDATE_BULK_SURFACE: &str = "vida task update-bulk";
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct TaskUpdateBulkItem {
+    #[serde(alias = "id")]
+    task_id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    priority: Option<u32>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    parent_id: Option<Option<String>>,
+    #[serde(default)]
+    clear_parent_id: bool,
+    #[serde(default)]
+    add_labels: Vec<String>,
+    #[serde(default)]
+    remove_labels: Vec<String>,
+    #[serde(default)]
+    set_labels: Option<Vec<String>>,
+    #[serde(default)]
+    execution_mode: Option<String>,
+    #[serde(default)]
+    order_bucket: Option<String>,
+    #[serde(default)]
+    parallel_group: Option<String>,
+    #[serde(default)]
+    conflict_domain: Option<String>,
+    #[serde(default)]
+    clear_execution_mode: bool,
+    #[serde(default)]
+    clear_order_bucket: bool,
+    #[serde(default)]
+    clear_parallel_group: bool,
+    #[serde(default)]
+    clear_conflict_domain: bool,
+    #[serde(default)]
+    planner_metadata: Option<state_store::TaskPlannerMetadata>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct TaskUpdateBulkMutationSummary {
+    task_id: String,
+    status: String,
+    title: String,
+    changed: bool,
+}
+
+fn task_update_bulk_normalize_labels(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn task_update_bulk_item_has_mutation(item: &TaskUpdateBulkItem) -> bool {
+    item.title.is_some()
+        || item.status.is_some()
+        || item.priority.is_some()
+        || item.notes.is_some()
+        || item.description.is_some()
+        || item.parent_id.is_some()
+        || item.clear_parent_id
+        || !item.add_labels.is_empty()
+        || !item.remove_labels.is_empty()
+        || item.set_labels.is_some()
+        || item.execution_mode.is_some()
+        || item.order_bucket.is_some()
+        || item.parallel_group.is_some()
+        || item.conflict_domain.is_some()
+        || item.clear_execution_mode
+        || item.clear_order_bucket
+        || item.clear_parallel_group
+        || item.clear_conflict_domain
+        || item.planner_metadata.is_some()
+}
+
+fn task_update_bulk_parent_request<'a>(
+    item: &'a TaskUpdateBulkItem,
+) -> Result<Option<Option<&'a str>>, String> {
+    if item.clear_parent_id && matches!(item.parent_id, Some(Some(_))) {
+        return Err("parent_id and clear_parent_id cannot both set a parent".to_string());
+    }
+    if item.clear_parent_id {
+        return Ok(Some(None));
+    }
+    match item.parent_id.as_ref() {
+        None => Ok(None),
+        Some(None) => Ok(Some(None)),
+        Some(Some(value)) => {
+            let value = value.trim();
+            if value.is_empty() {
+                Err("parent_id cannot be empty".to_string())
+            } else {
+                Ok(Some(Some(value)))
+            }
+        }
+    }
+}
+
+fn task_update_bulk_semantics_request<'a>(
+    value: &'a Option<String>,
+    clear: bool,
+    field: &str,
+) -> Result<Option<Option<&'a str>>, String> {
+    if clear && value.is_some() {
+        return Err(format!("{field} and clear_{field} cannot both be set"));
+    }
+    if clear {
+        return Ok(Some(None));
+    }
+    match value.as_deref() {
+        None => Ok(None),
+        Some(value) if value.trim().is_empty() => Err(format!("{field} cannot be empty")),
+        Some(value) => Ok(Some(Some(value.trim()))),
+    }
+}
+
+fn task_update_bulk_apply_candidate(
+    task: &mut state_store::TaskRecord,
+    item: &TaskUpdateBulkItem,
+    parent_request: Option<Option<&str>>,
+    execution_mode: Option<Option<&str>>,
+    order_bucket: Option<Option<&str>>,
+    parallel_group: Option<Option<&str>>,
+    conflict_domain: Option<Option<&str>>,
+) {
+    if let Some(title) = item.title.as_deref() {
+        task.title = title.trim().to_string();
+    }
+    if let Some(status) = item.status.as_deref() {
+        task.status = status.trim().to_string();
+    }
+    if let Some(priority) = item.priority {
+        task.priority = priority;
+    }
+    if let Some(notes) = item.notes.as_deref() {
+        task.notes = Some(notes.to_string());
+    }
+    if let Some(description) = item.description.as_deref() {
+        task.description = description.to_string();
+    }
+    if let Some(parent_request) = parent_request {
+        let previous_parent = task
+            .dependencies
+            .iter()
+            .find(|dependency| dependency.edge_type == "parent-child")
+            .cloned();
+        task.dependencies
+            .retain(|dependency| dependency.edge_type != "parent-child");
+        if let Some(parent_id) = parent_request {
+            task.dependencies.push(state_store::TaskDependencyRecord {
+                issue_id: task.id.clone(),
+                depends_on_id: parent_id.to_string(),
+                edge_type: "parent-child".to_string(),
+                created_at: previous_parent
+                    .as_ref()
+                    .map(|dependency| dependency.created_at.clone())
+                    .unwrap_or_else(|| task.updated_at.clone()),
+                created_by: previous_parent
+                    .as_ref()
+                    .map(|dependency| dependency.created_by.clone())
+                    .unwrap_or_else(|| TASK_UPDATE_BULK_SURFACE.to_string()),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            });
+        }
+    }
+    if let Some(set_labels) = item.set_labels.as_deref() {
+        task.labels = task_update_bulk_normalize_labels(set_labels);
+    }
+    let add_labels = task_update_bulk_normalize_labels(&item.add_labels);
+    for label in add_labels {
+        if !task.labels.iter().any(|existing| existing == &label) {
+            task.labels.push(label);
+        }
+    }
+    let remove_labels = task_update_bulk_normalize_labels(&item.remove_labels);
+    task.labels
+        .retain(|label| !remove_labels.iter().any(|remove| remove == label));
+    task.labels.sort();
+    task.labels.dedup();
+    if let Some(value) = execution_mode {
+        task.execution_semantics.execution_mode = value.map(ToOwned::to_owned);
+    }
+    if let Some(value) = order_bucket {
+        task.execution_semantics.order_bucket = value.map(ToOwned::to_owned);
+    }
+    if let Some(value) = parallel_group {
+        task.execution_semantics.parallel_group = value.map(ToOwned::to_owned);
+    }
+    if let Some(value) = conflict_domain {
+        task.execution_semantics.conflict_domain = value.map(ToOwned::to_owned);
+    }
+    if let Some(metadata) = item.planner_metadata.clone() {
+        task.planner_metadata = metadata;
+    }
+}
+
+fn task_update_bulk_prepare_rows(
+    before: &[state_store::TaskRecord],
+    items: &[(usize, TaskUpdateBulkItem)],
+) -> (
+    Vec<state_store::TaskRecord>,
+    Vec<String>,
+    Vec<state_store::TaskGraphIssue>,
+) {
+    let known_ids = before
+        .iter()
+        .map(|task| task.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen_ids = BTreeSet::new();
+    let mut candidate = before.to_vec();
+    let mut touched_ids = BTreeSet::new();
+    let mut errors = Vec::new();
+
+    for (line_no, item) in items {
+        let task_id = item.task_id.trim();
+        let prefix = format!("line {line_no}");
+        if task_id.is_empty() {
+            errors.push(format!("{prefix}: task_id cannot be empty"));
+            continue;
+        }
+        if !seen_ids.insert(task_id.to_string()) {
+            errors.push(format!("{prefix}: duplicate task_id `{task_id}`"));
+            continue;
+        }
+        let Some(task_index) = before.iter().position(|task| task.id == task_id) else {
+            errors.push(format!("{prefix}: task `{task_id}` was not found"));
+            continue;
+        };
+        let current = &before[task_index];
+        if StateStore::task_status_is_closed_like(&current.status) {
+            errors.push(format!(
+                "{prefix}: closed task `{task_id}` cannot be mutated by update-bulk"
+            ));
+            continue;
+        }
+        if !task_update_bulk_item_has_mutation(item) {
+            errors.push(format!("{prefix}: task `{task_id}` has no mutation fields"));
+            continue;
+        }
+        if item
+            .title
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            errors.push(format!("{prefix}: title cannot be empty"));
+            continue;
+        }
+        if item
+            .status
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            errors.push(format!("{prefix}: status cannot be empty"));
+            continue;
+        }
+        let parent_request = match task_update_bulk_parent_request(item) {
+            Ok(value) => value,
+            Err(error) => {
+                errors.push(format!("{prefix}: {error}"));
+                continue;
+            }
+        };
+        if let Some(Some(parent_id)) = parent_request {
+            if parent_id == task_id {
+                errors.push(format!(
+                    "{prefix}: task `{task_id}` cannot be its own parent"
+                ));
+                continue;
+            }
+            if !known_ids.contains(parent_id) {
+                errors.push(format!("{prefix}: parent task `{parent_id}` was not found"));
+                continue;
+            }
+        }
+        let execution_mode = match task_update_bulk_semantics_request(
+            &item.execution_mode,
+            item.clear_execution_mode,
+            "execution_mode",
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                errors.push(format!("{prefix}: {error}"));
+                continue;
+            }
+        };
+        let order_bucket = match task_update_bulk_semantics_request(
+            &item.order_bucket,
+            item.clear_order_bucket,
+            "order_bucket",
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                errors.push(format!("{prefix}: {error}"));
+                continue;
+            }
+        };
+        let parallel_group = match task_update_bulk_semantics_request(
+            &item.parallel_group,
+            item.clear_parallel_group,
+            "parallel_group",
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                errors.push(format!("{prefix}: {error}"));
+                continue;
+            }
+        };
+        let conflict_domain = match task_update_bulk_semantics_request(
+            &item.conflict_domain,
+            item.clear_conflict_domain,
+            "conflict_domain",
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                errors.push(format!("{prefix}: {error}"));
+                continue;
+            }
+        };
+
+        let old_parent = StateStore::parent_id_for_task(current);
+        task_update_bulk_apply_candidate(
+            &mut candidate[task_index],
+            item,
+            parent_request,
+            execution_mode,
+            order_bucket,
+            parallel_group,
+            conflict_domain,
+        );
+        touched_ids.insert(task_id.to_string());
+        if let Some(parent_id) = old_parent {
+            touched_ids.insert(parent_id);
+        }
+        if let Some(parent_id) = StateStore::parent_id_for_task(&candidate[task_index]) {
+            touched_ids.insert(parent_id);
+        }
+    }
+
+    if !errors.is_empty() {
+        return (candidate, errors, Vec::new());
+    }
+    let graph_issues =
+        StateStore::validate_task_graph_rows_for_mutation(before, &candidate, &touched_ids);
+    (candidate, errors, graph_issues)
+}
+
+fn read_task_update_bulk_items(
+    path: &std::path::Path,
+) -> Result<(String, Vec<(usize, TaskUpdateBulkItem)>), String> {
+    let source_path = path.display().to_string();
+    let mut body = String::new();
+    if path == std::path::Path::new("-") {
+        std::io::stdin()
+            .read_to_string(&mut body)
+            .map_err(|error| format!("failed to read JSONL from stdin: {error}"))?;
+    } else {
+        body = std::fs::read_to_string(path)
+            .map_err(|error| format!("failed to read `{source_path}`: {error}"))?;
+    }
+    let mut items = Vec::new();
+    for (index, line) in body.lines().enumerate() {
+        let line_no = index + 1;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let item = serde_json::from_str::<TaskUpdateBulkItem>(line)
+            .map_err(|error| format!("line {line_no}: invalid JSONL update object: {error}"))?;
+        items.push((line_no, item));
+    }
+    if items.is_empty() {
+        return Err("JSONL input contains no update objects".to_string());
+    }
+    Ok((source_path, items))
+}
+
+fn task_update_bulk_payload(
+    source_path: &str,
+    dry_run: bool,
+    applied: bool,
+    requested_count: usize,
+    summaries: &[TaskUpdateBulkMutationSummary],
+    validation_errors: &[String],
+    graph_issues: &[state_store::TaskGraphIssue],
+    artifact_path: Option<&std::path::Path>,
+    include_details: bool,
+) -> serde_json::Value {
+    let mut blocker_codes = Vec::new();
+    if !validation_errors.is_empty() {
+        blocker_codes.push("schema_contract_missing".to_string());
+    }
+    if !graph_issues.is_empty() {
+        blocker_codes.push("dependency_graph_issues".to_string());
+    }
+    let next_actions = if blocker_codes.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "Repair `{source_path}` and rerun `vida task update-bulk --file {}` with --dry-run.",
+            crate::shell_quote(source_path)
+        )]
+    };
+    let mut extra = serde_json::json!({
+        "surface": TASK_UPDATE_BULK_SURFACE,
+        "source_path": source_path,
+        "input_format": "jsonl",
+        "dry_run": dry_run,
+        "applied": applied,
+        "atomic": true,
+        "requested_count": requested_count,
+        "updated_count": summaries.len(),
+        "mutation_summary": summaries,
+        "graph_validation": {
+            "status": if graph_issues.is_empty() { "pass" } else { "blocked" },
+            "issue_count": graph_issues.len(),
+        },
+    });
+    if include_details {
+        extra["validation_errors"] = serde_json::json!(validation_errors);
+        extra["graph_issues"] = serde_json::json!(graph_issues);
+    }
+    crate::release1_operator_output::build_release1_operator_output_payload(
+        TASK_UPDATE_BULK_SURFACE,
+        blocker_codes,
+        next_actions,
+        serde_json::json!({
+            "full_result_path": artifact_path.map(|path| path.display().to_string()),
+        }),
+        extra,
+    )
+    .expect("task update-bulk output should satisfy release-1 operator contract")
+}
+
+fn emit_task_update_bulk_result(
+    command: &TaskUpdateBulkArgs,
+    source_path: &str,
+    dry_run: bool,
+    applied: bool,
+    requested_count: usize,
+    summaries: Vec<TaskUpdateBulkMutationSummary>,
+    mut validation_errors: Vec<String>,
+    graph_issues: Vec<state_store::TaskGraphIssue>,
+) -> ExitCode {
+    let artifact_error = if let Some(path) = command.artifact_path.as_deref() {
+        let full_payload = task_update_bulk_payload(
+            source_path,
+            dry_run,
+            applied,
+            requested_count,
+            &summaries,
+            &validation_errors,
+            &graph_issues,
+            Some(path),
+            true,
+        );
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(&full_payload)
+                .expect("task update-bulk artifact should serialize"),
+        )
+        .err()
+        .map(|error| format!("artifact `{}` write failed: {error}", path.display()))
+    } else {
+        None
+    };
+    if let Some(error) = artifact_error {
+        validation_errors.push(error);
+    }
+    let payload = task_update_bulk_payload(
+        source_path,
+        dry_run,
+        applied,
+        requested_count,
+        &summaries,
+        &validation_errors,
+        &graph_issues,
+        command.artifact_path.as_deref(),
+        false,
+    );
+    if command.json {
+        println!(
+            "{}",
+            serde_json::to_string(&payload).expect("task update-bulk payload should serialize")
+        );
+    } else {
+        print_surface_header(command.render, TASK_UPDATE_BULK_SURFACE);
+        print_surface_line(
+            command.render,
+            "status",
+            if validation_errors.is_empty() && graph_issues.is_empty() {
+                "pass"
+            } else {
+                "blocked"
+            },
+        );
+        print_surface_line(command.render, "source", source_path);
+        print_surface_line(
+            command.render,
+            "dry_run",
+            if dry_run { "true" } else { "false" },
+        );
+        print_surface_line(
+            command.render,
+            "applied",
+            if applied { "true" } else { "false" },
+        );
+        print_surface_line(command.render, "requested", &requested_count.to_string());
+        print_surface_line(command.render, "updated", &summaries.len().to_string());
+        print_surface_line(command.render, "atomic", "true");
+        print_surface_line(
+            command.render,
+            "graph_validation",
+            if graph_issues.is_empty() {
+                "pass"
+            } else {
+                "blocked"
+            },
+        );
+        if let Some(path) = command.artifact_path.as_deref() {
+            print_surface_line(command.render, "artifact", &path.display().to_string());
+        }
+        if let Some(error) = validation_errors.first() {
+            print_surface_line(command.render, "first_blocker", error);
+        }
+    }
+    if validation_errors.is_empty() && graph_issues.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    }
+}
+
+async fn run_task_update_bulk(command: TaskUpdateBulkArgs) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    let (source_path, items) = match read_task_update_bulk_items(&command.file) {
+        Ok(value) => value,
+        Err(error) => {
+            return emit_task_update_bulk_result(
+                &command,
+                &command.file.display().to_string(),
+                command.dry_run,
+                false,
+                0,
+                Vec::new(),
+                vec![error],
+                Vec::new(),
+            );
+        }
+    };
+    let store = match StateStore::open_existing(state_dir.clone()).await {
+        Ok(store) => store,
+        Err(error) => {
+            return emit_task_update_bulk_result(
+                &command,
+                &source_path,
+                command.dry_run,
+                false,
+                items.len(),
+                Vec::new(),
+                vec![format!("failed to open authoritative state store: {error}")],
+                Vec::new(),
+            );
+        }
+    };
+    let existing_rows = match store.all_tasks().await {
+        Ok(rows) => rows,
+        Err(error) => {
+            return emit_task_update_bulk_result(
+                &command,
+                &source_path,
+                command.dry_run,
+                false,
+                items.len(),
+                Vec::new(),
+                vec![format!("failed to read task rows: {error}")],
+                Vec::new(),
+            );
+        }
+    };
+    let (_candidate_rows, validation_errors, graph_issues) =
+        task_update_bulk_prepare_rows(&existing_rows, &items);
+    if !validation_errors.is_empty() || !graph_issues.is_empty() || command.dry_run {
+        return emit_task_update_bulk_result(
+            &command,
+            &source_path,
+            command.dry_run,
+            false,
+            items.len(),
+            Vec::new(),
+            validation_errors,
+            graph_issues,
+        );
+    }
+
+    let rollback_path = task_bulk_import_rollback_path(&state_dir);
+    if let Err(error) = store.export_tasks_to_jsonl(&rollback_path).await {
+        return emit_task_update_bulk_result(
+            &command,
+            &source_path,
+            false,
+            false,
+            items.len(),
+            Vec::new(),
+            vec![format!(
+                "failed to create atomic rollback snapshot: {error}"
+            )],
+            Vec::new(),
+        );
+    }
+    let mut summaries = Vec::with_capacity(items.len());
+    for (line_no, item) in &items {
+        let parent_id = match task_update_bulk_parent_request(item) {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = rollback_task_bulk_import(&store, &rollback_path).await;
+                let _ = std::fs::remove_file(&rollback_path);
+                return emit_task_update_bulk_result(
+                    &command,
+                    &source_path,
+                    false,
+                    false,
+                    items.len(),
+                    Vec::new(),
+                    vec![format!("line {line_no}: {error}")],
+                    Vec::new(),
+                );
+            }
+        };
+        let execution_mode = match task_update_bulk_semantics_request(
+            &item.execution_mode,
+            item.clear_execution_mode,
+            "execution_mode",
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = rollback_task_bulk_import(&store, &rollback_path).await;
+                let _ = std::fs::remove_file(&rollback_path);
+                return emit_task_update_bulk_result(
+                    &command,
+                    &source_path,
+                    false,
+                    false,
+                    items.len(),
+                    Vec::new(),
+                    vec![format!("line {line_no}: {error}")],
+                    Vec::new(),
+                );
+            }
+        };
+        let order_bucket = task_update_bulk_semantics_request(
+            &item.order_bucket,
+            item.clear_order_bucket,
+            "order_bucket",
+        );
+        let parallel_group = task_update_bulk_semantics_request(
+            &item.parallel_group,
+            item.clear_parallel_group,
+            "parallel_group",
+        );
+        let conflict_domain = task_update_bulk_semantics_request(
+            &item.conflict_domain,
+            item.clear_conflict_domain,
+            "conflict_domain",
+        );
+        let (order_bucket, parallel_group, conflict_domain) =
+            match (order_bucket, parallel_group, conflict_domain) {
+                (Ok(order_bucket), Ok(parallel_group), Ok(conflict_domain)) => {
+                    (order_bucket, parallel_group, conflict_domain)
+                }
+                _ => {
+                    let _ = rollback_task_bulk_import(&store, &rollback_path).await;
+                    let _ = std::fs::remove_file(&rollback_path);
+                    return emit_task_update_bulk_result(
+                        &command,
+                        &source_path,
+                        false,
+                        false,
+                        items.len(),
+                        Vec::new(),
+                        vec![format!("line {line_no}: invalid execution semantics")],
+                        Vec::new(),
+                    );
+                }
+            };
+        let add_labels = task_update_bulk_normalize_labels(&item.add_labels);
+        let remove_labels = task_update_bulk_normalize_labels(&item.remove_labels);
+        let set_labels = item
+            .set_labels
+            .as_deref()
+            .map(task_update_bulk_normalize_labels);
+        let request = state_store::UpdateTaskRequest {
+            task_id: item.task_id.trim(),
+            title: item.title.as_deref(),
+            status: item.status.as_deref(),
+            priority: item.priority,
+            notes: item.notes.as_deref(),
+            description: item.description.as_deref(),
+            parent_id,
+            add_labels: &add_labels,
+            remove_labels: &remove_labels,
+            set_labels: set_labels.as_deref(),
+            execution_mode,
+            order_bucket,
+            parallel_group,
+            conflict_domain,
+            planner_metadata: item.planner_metadata.clone(),
+        };
+        let updated = match store.update_task(request).await {
+            Ok(updated) => updated,
+            Err(error) => {
+                let rollback = rollback_task_bulk_import(&store, &rollback_path).await;
+                let _ = std::fs::remove_file(&rollback_path);
+                let mut errors = vec![format!("line {line_no}: task update failed: {error}")];
+                if let Err(rollback_error) = rollback {
+                    errors.push(format!("rollback failed: {rollback_error}"));
+                }
+                return emit_task_update_bulk_result(
+                    &command,
+                    &source_path,
+                    false,
+                    false,
+                    items.len(),
+                    Vec::new(),
+                    errors,
+                    Vec::new(),
+                );
+            }
+        };
+        summaries.push(TaskUpdateBulkMutationSummary {
+            task_id: updated.id,
+            status: updated.status,
+            title: updated.title,
+            changed: true,
+        });
+    }
+    let post_graph_issues = match store.validate_task_graph().await {
+        Ok(issues) => issues,
+        Err(error) => {
+            let rollback = rollback_task_bulk_import(&store, &rollback_path).await;
+            let _ = std::fs::remove_file(&rollback_path);
+            let mut errors = vec![format!("post-batch graph validation failed: {error}")];
+            if let Err(rollback_error) = rollback {
+                errors.push(format!("rollback failed: {rollback_error}"));
+            }
+            return emit_task_update_bulk_result(
+                &command,
+                &source_path,
+                false,
+                false,
+                items.len(),
+                Vec::new(),
+                errors,
+                Vec::new(),
+            );
+        }
+    };
+    if !post_graph_issues.is_empty() {
+        let rollback = rollback_task_bulk_import(&store, &rollback_path).await;
+        let _ = std::fs::remove_file(&rollback_path);
+        let mut errors = Vec::new();
+        if let Err(rollback_error) = rollback {
+            errors.push(format!("rollback failed: {rollback_error}"));
+        }
+        return emit_task_update_bulk_result(
+            &command,
+            &source_path,
+            false,
+            false,
+            items.len(),
+            Vec::new(),
+            errors,
+            post_graph_issues,
+        );
+    }
+    if refresh_task_snapshot_after_mutation(&store, TASK_UPDATE_BULK_SURFACE)
+        .await
+        .is_err()
+    {
+        let rollback = rollback_task_bulk_import(&store, &rollback_path).await;
+        let _ = std::fs::remove_file(&rollback_path);
+        let mut errors = vec!["canonical task snapshot refresh failed".to_string()];
+        if let Err(rollback_error) = rollback {
+            errors.push(format!("rollback failed: {rollback_error}"));
+        }
+        return emit_task_update_bulk_result(
+            &command,
+            &source_path,
+            false,
+            false,
+            items.len(),
+            Vec::new(),
+            errors,
+            Vec::new(),
+        );
+    }
+    let _ = std::fs::remove_file(&rollback_path);
+    emit_task_update_bulk_result(
+        &command,
+        &source_path,
+        false,
+        true,
+        items.len(),
+        summaries,
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
 async fn run_task_bulk_import(command: TaskBulkImportArgs) -> ExitCode {
     let state_dir = command
         .state_dir
@@ -13429,6 +14254,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 | "create"
                 | "ensure"
                 | "update"
+                | "update-bulk"
                 | "reset"
                 | "close"
                 | "pack-finalize"
@@ -15301,6 +16127,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
         }
         TaskCommand::Create(command) => run_task_create_like(command, false).await,
         TaskCommand::Ensure(command) => run_task_create_like(command, true).await,
+        TaskCommand::UpdateBulk(command) => run_task_update_bulk(command).await,
         TaskCommand::Reset(command) => run_task_reset(command).await,
         TaskCommand::Update(command) => {
             let state_dir = command

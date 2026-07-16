@@ -9755,6 +9755,145 @@ fn task_update_rejects_closed_task_proof_target_mutation() {
 }
 
 #[test]
+fn task_update_bulk_atomic_jsonl_contract() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let parent_id = unique_test_id("update-bulk-parent");
+    let task_a = unique_test_id("update-bulk-a");
+    let task_b = unique_test_id("update-bulk-b");
+    create_epic_parent(&state_dir, &parent_id, "Update bulk parent", "open");
+    create_task_fixture_row(
+        &state_dir,
+        &task_a,
+        "Update bulk A",
+        "task",
+        "open",
+        Some(&parent_id),
+    );
+    create_task_fixture_row(
+        &state_dir,
+        &task_b,
+        "Update bulk B",
+        "task",
+        "open",
+        Some(&parent_id),
+    );
+
+    let valid_path = format!("{state_dir}/updates-valid.jsonl");
+    fs::write(
+        &valid_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({
+                "task_id": task_a.clone(),
+                "status": "in_progress",
+                "priority": 1
+            }),
+            serde_json::json!({
+                "task_id": task_b.clone(),
+                "title": "Update bulk B changed",
+                "add_labels": ["operator-projection"]
+            })
+        ),
+    )
+    .expect("write valid JSONL");
+
+    let dry_run = run_command_json(
+        &[
+            "task",
+            "update-bulk",
+            "--file",
+            &valid_path,
+            "--dry-run",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dry_run["surface"], "vida task update-bulk");
+    assert_eq!(dry_run["status"], "pass");
+    assert_eq!(dry_run["atomic"], true);
+    assert_eq!(dry_run["dry_run"], true);
+    assert_eq!(dry_run["applied"], false);
+    assert_eq!(dry_run["requested_count"], 2);
+    assert_eq!(dry_run["updated_count"], 0);
+
+    let invalid_path = format!("{state_dir}/updates-invalid.jsonl");
+    let invalid_artifact = format!("{state_dir}/updates-invalid-result.json");
+    fs::write(
+        &invalid_path,
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({"task_id": task_a.clone(), "priority": 9}),
+            serde_json::json!({"task_id": "missing-update-bulk-task", "title": "must not apply"})
+        ),
+    )
+    .expect("write invalid JSONL");
+    let (blocked, success) = run_command_json_allow_failure(
+        &[
+            "task",
+            "update-bulk",
+            "--file",
+            &invalid_path,
+            "--artifact-path",
+            &invalid_artifact,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert!(!success);
+    assert_eq!(blocked["status"], "blocked");
+    assert_eq!(blocked["applied"], false);
+    assert_eq!(blocked["updated_count"], 0);
+    assert!(
+        blocked["blocker_codes"]
+            .as_array()
+            .expect("bulk blockers should be an array")
+            .contains(&serde_json::json!("schema_contract_missing")),
+        "blocked={blocked}"
+    );
+    assert!(std::path::Path::new(&invalid_artifact).is_file());
+    let unchanged = run_command_json(&["task", "show", &task_a, "--json"], &state_dir);
+    assert_eq!(unchanged["task"]["priority"], 1);
+
+    let result_artifact = format!("{state_dir}/updates-result.json");
+    let applied = run_command_json(
+        &[
+            "task",
+            "update-bulk",
+            "--file",
+            &valid_path,
+            "--artifact-path",
+            &result_artifact,
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(applied["status"], "pass");
+    assert_eq!(applied["applied"], true);
+    assert_eq!(applied["updated_count"], 2);
+    assert_eq!(applied["graph_validation"]["status"], "pass");
+    assert_eq!(
+        applied["mutation_summary"]
+            .as_array()
+            .expect("mutation summary should be an array")
+            .len(),
+        2
+    );
+    assert!(std::path::Path::new(&result_artifact).is_file());
+    let updated_a = run_command_json(&["task", "show", &task_a, "--json"], &state_dir);
+    let updated_b = run_command_json(&["task", "show", &task_b, "--json"], &state_dir);
+    assert_eq!(updated_a["task"]["status"], "in_progress");
+    assert_eq!(updated_a["task"]["priority"], 1);
+    assert_eq!(updated_b["task"]["title"], "Update bulk B changed");
+    assert!(updated_b["task"]["labels"]
+        .as_array()
+        .expect("updated labels should be an array")
+        .contains(&serde_json::json!("operator-projection")));
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn task_closeout_json_bundles_blocked_proof_closure_graph_and_temp_scan() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -11760,10 +11899,7 @@ fn task_close_compact_projection_regression() {
 
     assert_eq!(closed["status"], "pass");
     assert_eq!(closed["parent_epic_progress"]["closed_task_id"], "child-a");
-    assert_eq!(
-        closed["parent_epic_progress"]["scope"],
-        "all_epics"
-    );
+    assert_eq!(closed["parent_epic_progress"]["scope"], "all_epics");
     assert_eq!(
         closed["parent_epic_progress"]["epics"][0]["epic_id"],
         "parent-epic"
