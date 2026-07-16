@@ -1728,6 +1728,13 @@ pub(crate) enum TaskCommand {
     )]
     Update(TaskUpdateArgs),
     #[command(
+        name = "update-bulk",
+        about = "atomically update many tasks from a JSONL file",
+        long_about = "Read one task update object per JSONL line, validate the complete batch before mutation, apply updates atomically, run one graph validation, and emit compact mutation summaries.",
+        after_help = "Examples:\n  vida task update-bulk --file updates.jsonl --dry-run --json\n  vida task update-bulk --file updates.jsonl --artifact-path update-result.json --json\n\nEach line accepts task_id (or id), title, status, priority, notes, description, parent_id, clear_parent_id, add_labels, remove_labels, set_labels, execution_mode, order_bucket, parallel_group, conflict_domain, clear_* flags, and planner_metadata."
+    )]
+    UpdateBulk(TaskUpdateBulkArgs),
+    #[command(
         about = "reset a task/subtask subtree to its initial open state",
         long_about = "Reset the selected task or subtask subtree back to open state while preserving task records, dependencies, planner metadata, labels, and notes. Closed timestamps and close reasons are cleared. Execution steps are excluded by default; pass --include-steps only when you intentionally want to replay step state too.",
         after_help = "Examples:\n  vida task reset <task-id>\n  vida task reset <task-id> --dry-run\n  vida task reset <task-id> --include-steps --json"
@@ -2116,6 +2123,39 @@ pub(crate) struct TaskBulkImportArgs {
         default_value_t = RenderMode::Plain,
         help = "Render output mode for human-readable command output"
     )]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json", help = "Emit machine-readable JSON output")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskUpdateBulkArgs {
+    #[arg(
+        long = "file",
+        short = 'f',
+        value_name = "PATH",
+        help = "JSONL file with one task update object per line; use - to read stdin"
+    )]
+    pub(crate) file: PathBuf,
+
+    #[arg(
+        long = "dry-run",
+        help = "Validate the complete batch without mutating TaskFlow state"
+    )]
+    pub(crate) dry_run: bool,
+
+    #[arg(
+        long = "artifact-path",
+        value_name = "PATH",
+        help = "Write the full batch result artifact to this path"
+    )]
+    pub(crate) artifact_path: Option<PathBuf>,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
     pub(crate) render: RenderMode,
 
     #[arg(long = "json", help = "Emit machine-readable JSON output")]

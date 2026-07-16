@@ -315,6 +315,7 @@ fn task_command_explicit_state_dir(args: &TaskArgs) -> Option<&std::path::Path> 
         TaskCommand::NextDisplayId(command) => command.state_dir.as_deref(),
         TaskCommand::Create(command) | TaskCommand::Ensure(command) => command.state_dir.as_deref(),
         TaskCommand::Update(command) => command.state_dir.as_deref(),
+        TaskCommand::UpdateBulk(command) => command.state_dir.as_deref(),
         TaskCommand::Reset(command) => command.state_dir.as_deref(),
         TaskCommand::Note(command) => match &command.command {
             super::TaskNoteCommand::Append(command) => command.state_dir.as_deref(),
