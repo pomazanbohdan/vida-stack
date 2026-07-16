@@ -5969,8 +5969,9 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                     projection_name,
                 )
             {
-                crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_fresh_payload(
+                crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_fresh_payload_for_projection(
                     &state_dir,
+                    projection_name,
                     &cached,
                     &overlay,
                 )
@@ -5997,8 +5998,9 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                 )
             {
                 if let Some(rendered) =
-                    crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload(
+                    crate::operator_projection_cache::apply_runtime_continuation_binding_overlay_to_payload_for_projection(
                         &state_dir,
+                        orchestrator_init_projection_name(full_output),
                         &cached,
                         &overlay,
                     )
