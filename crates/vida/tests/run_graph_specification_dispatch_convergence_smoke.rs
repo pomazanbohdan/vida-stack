@@ -65,7 +65,7 @@ fn run_graph_specification_dispatch_convergence_smoke() {
     );
     assert_eq!(seed["payload"]["status"]["status"], "ready");
 
-    let meta = r#"{"next_node":"coder","lane_id":"coder_lane","lifecycle_stage":"coder_dispatch_ready","handoff_state":"awaiting_coder","resume_target":"dispatch.coder","context_state":"ready","checkpoint_kind":"dispatch_ready","recovery_ready":true}"#;
+    let meta = r#"{"next_node":"coder","lane_id":"coder_lane","lifecycle_stage":"coder_dispatch_ready","handoff_state":"awaiting_coder","resume_target":"dispatch.coder_lane","context_state":"sealed","checkpoint_kind":"execution_cursor","policy_gate":"not_required","recovery_ready":true}"#;
     run_text(
         &[
             "taskflow",
@@ -73,7 +73,7 @@ fn run_graph_specification_dispatch_convergence_smoke() {
             "update",
             task_id.as_str(),
             "specification",
-            "reviewer",
+            "coder",
             "ready",
             "specification",
             meta,
@@ -97,15 +97,15 @@ fn run_graph_specification_dispatch_convergence_smoke() {
     );
     assert_eq!(
         dispatch["run_graph_bootstrap"]["latest_status"]["active_node"],
-        "reviewer"
+        "coder"
     );
     assert_eq!(
         dispatch["run_graph_bootstrap"]["latest_status"]["context_state"],
-        "ready"
+        "sealed"
     );
     assert_eq!(
         dispatch["run_graph_bootstrap"]["latest_status"]["resume_target"],
-        "dispatch.coder"
+        "dispatch.coder_lane"
     );
     assert_eq!(dispatch["dispatch_receipt"]["dispatch_target"], "coder");
     assert!(
