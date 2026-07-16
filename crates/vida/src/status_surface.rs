@@ -159,6 +159,29 @@ fn effective_latest_run_graph_status(
     current_session_status
 }
 
+fn explicit_binding_matches_current_session_status(
+    binding: Option<&state_store::RunGraphContinuationBinding>,
+    status: Option<&crate::state_store::RunGraphStatus>,
+) -> bool {
+    let Some(binding) = binding else {
+        return false;
+    };
+    let Some(status) = status else {
+        return false;
+    };
+    let bound_run_id = binding
+        .active_bounded_unit
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(binding.run_id.as_str());
+    matches!(
+        binding.binding_source.as_str(),
+        "explicit_continuation_bind" | "explicit_continuation_bind_task"
+    ) && bound_run_id == status.run_id
+}
+
 pub(crate) struct CurrentRuntimeProjection {
     pub(crate) current_session_status: Option<crate::state_store::RunGraphStatus>,
     pub(crate) session_identity_ambiguous: bool,
@@ -183,14 +206,25 @@ pub(crate) async fn current_runtime_projection(
     store: &StateStore,
 ) -> Result<CurrentRuntimeProjection, state_store::StateStoreError> {
     let current_session_status = store.latest_run_graph_status_for_current_session().await?;
-    let current_session_scope_is_explicit = store.current_session_identity_is_explicit()?;
+    let explicit_continuation_binding = store
+        .latest_explicit_run_graph_continuation_binding_for_current_session()
+        .await?;
+    let explicit_binding_matches_current = explicit_binding_matches_current_session_status(
+        explicit_continuation_binding.as_ref(),
+        current_session_status.as_ref(),
+    );
+    let current_session_scope_is_explicit =
+        store.current_session_identity_is_explicit()? || explicit_binding_matches_current;
     let global_status = store.latest_run_graph_status().await?;
-    let mut competing_run_id = global_status.as_ref().and_then(|global| {
-        current_session_status
-            .as_ref()
-            .is_none_or(|current| current.run_id != global.run_id)
-            .then(|| global.run_id.clone())
-    });
+    let mut competing_run_id = (!explicit_binding_matches_current)
+        .then_some(())
+        .and_then(|_| global_status.as_ref())
+        .and_then(|global| {
+            current_session_status
+                .as_ref()
+                .is_none_or(|current| current.run_id != global.run_id)
+                .then(|| global.run_id.clone())
+        });
     let active_exception_takeover_receipt =
         store.latest_active_exception_takeover_dispatch_receipt().await?;
     let active_exception_takeover_owned = match active_exception_takeover_receipt.as_ref() {
@@ -199,7 +233,8 @@ pub(crate) async fn current_runtime_projection(
             .await
         {
             Ok(owns_run) => {
-                if !owns_run
+                if !explicit_binding_matches_current
+                    && !owns_run
                     && current_session_status
                         .as_ref()
                         .is_none_or(|current| current.run_id != receipt.run_id)
@@ -209,7 +244,9 @@ pub(crate) async fn current_runtime_projection(
                 owns_run
             }
             Err(state_store::StateStoreError::InvalidTaskRecord { .. }) => {
-                competing_run_id = Some(receipt.run_id.clone());
+                if !explicit_binding_matches_current {
+                    competing_run_id = Some(receipt.run_id.clone());
+                }
                 false
             }
             Err(error) => return Err(error),
@@ -3522,6 +3559,130 @@ mod tests {
         );
 
         assert!(super::effective_latest_run_graph_status(None).is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn explicit_session_binding_is_orthogonal_to_global_active_flow() {
+        let _guard = env_lock().lock().expect("env lock should be available");
+        let saved_session_id = std::env::var("VIDA_SESSION_ID").ok();
+        let session_id = "status-parallel-session-scoped";
+        unsafe {
+            std::env::set_var("VIDA_SESSION_ID", session_id);
+        }
+        let root = unique_status_packet_test_root("vida-status-parallel-session-scoped");
+        let store = state_store::StateStore::open(root.clone())
+            .await
+            .expect("open state store");
+        create_status_overlay_parent(&store, "task-parallel-parent").await;
+        create_status_overlay_task(
+            &store,
+            "task-scoped-flow",
+            "Scoped session flow",
+            "in_progress",
+            Some("task-parallel-parent"),
+        )
+        .await;
+        create_status_overlay_task(
+            &store,
+            "task-global-flow",
+            "Global competing flow",
+            "in_progress",
+            Some("task-parallel-parent"),
+        )
+        .await;
+
+        let mut scoped_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-scoped-flow",
+            "implementation",
+            "implementation",
+        );
+        scoped_status.task_id = "task-scoped-flow".to_string();
+        scoped_status.status = "in_progress".to_string();
+        store
+            .record_run_graph_status(&scoped_status)
+            .await
+            .expect("record scoped run graph status");
+
+        let mut global_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-global-flow",
+            "implementation",
+            "implementation",
+        );
+        global_status.task_id = "task-global-flow".to_string();
+        global_status.status = "in_progress".to_string();
+        store
+            .record_run_graph_status(&global_status)
+            .await
+            .expect("record global run graph status");
+        store
+            .record_run_graph_continuation_binding(&state_store::RunGraphContinuationBinding {
+                run_id: "run-scoped-flow".to_string(),
+                task_id: "task-scoped-flow".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "run_graph_task",
+                    "run_id": "run-scoped-flow",
+                    "task_id": "task-scoped-flow",
+                    "orchestrator_session_id": session_id
+                }),
+                binding_source: "explicit_continuation_bind_task".to_string(),
+                why_this_unit: "test explicit session scope".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_taskflow_active".to_string(),
+                request_text: None,
+                recorded_at: "2026-07-16T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("record explicit session binding");
+
+        let projection = super::current_runtime_projection(&store)
+            .await
+            .expect("load current runtime projection");
+        assert_eq!(
+            projection
+                .current_session_status
+                .as_ref()
+                .expect("scoped status should be selected")
+                .run_id,
+            "run-scoped-flow"
+        );
+        assert_eq!(
+            projection
+                .global_status
+                .as_ref()
+                .expect("global status should remain observable")
+                .run_id,
+            "run-global-flow"
+        );
+        assert!(!projection.session_identity_ambiguous);
+        assert!(projection.competing_run_id.is_none());
+
+        store
+            .record_run_graph_dispatch_receipt(&exception_takeover_receipt(
+                "run-global-flow",
+                "coder",
+                "foreign-exception",
+                "2026-07-16T00:00:01Z",
+            ))
+            .await
+            .expect("record foreign exception takeover receipt");
+        let projection_with_foreign_exception = super::current_runtime_projection(&store)
+            .await
+            .expect("reload current runtime projection");
+        assert_eq!(
+            projection_with_foreign_exception
+                .current_session_status
+                .as_ref()
+                .expect("scoped status should remain selected")
+                .run_id,
+            "run-scoped-flow"
+        );
+        assert!(!projection_with_foreign_exception.session_identity_ambiguous);
+        assert!(projection_with_foreign_exception.competing_run_id.is_none());
+
+        store.close().await;
+        let _ = fs::remove_dir_all(root);
+        restore_vida_session_id(saved_session_id);
     }
 
     #[test]
