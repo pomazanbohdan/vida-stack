@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+pub(crate) const MAX_DISPATCH_CACHE_AGE_SECONDS: u64 = u64::MAX / 1_000;
+
 const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task --help\n  vida taskflow help parallelism\n  vida route explain --json\n  vida state reset --archive --reinit --json\n  vida docflow help\n  vida docs update --json";
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
@@ -1274,7 +1276,7 @@ pub(crate) struct AgentDispatchNextArgs {
 
     #[arg(
         long = "max-age-seconds",
-        value_parser = clap::value_parser!(u64),
+        value_parser = clap::value_parser!(u64).range(0..=MAX_DISPATCH_CACHE_AGE_SECONDS),
         default_value_t = 300,
         help = "Maximum projection-cache age accepted by --cache auto"
     )]
@@ -5272,6 +5274,40 @@ mod tests {
         assert!(dispatch.full);
         assert_eq!(dispatch.cache, "refresh");
         assert_eq!(dispatch.max_age_seconds, 42);
+
+        let max_safe_cache_age = super::MAX_DISPATCH_CACHE_AGE_SECONDS.to_string();
+        let parsed_max_safe = Cli::try_parse_from([
+            "vida",
+            "agent",
+            "dispatch-next",
+            "--max-age-seconds",
+            max_safe_cache_age.as_str(),
+        ])
+        .expect("largest JSON-safe cache age should parse");
+        let Some(super::Command::Agent(agent_args)) = parsed_max_safe.command else {
+            panic!("agent command should parse");
+        };
+        let crate::AgentCommand::DispatchNext(dispatch_max_safe) = agent_args.command else {
+            panic!("agent dispatch-next command should parse");
+        };
+        assert_eq!(
+            dispatch_max_safe.max_age_seconds,
+            super::MAX_DISPATCH_CACHE_AGE_SECONDS
+        );
+
+        let too_large_cache_age = (super::MAX_DISPATCH_CACHE_AGE_SECONDS + 1).to_string();
+        let too_large_error = Cli::try_parse_from([
+            "vida",
+            "agent",
+            "dispatch-next",
+            "--max-age-seconds",
+            too_large_cache_age.as_str(),
+        ])
+        .expect_err("cache age that overflows JSON milliseconds should be rejected");
+        assert!(
+            too_large_error.to_string().contains("18446744073709551"),
+            "error should describe the accepted upper bound: {too_large_error}"
+        );
 
         let dispatch_dev_team = Cli::try_parse_from([
             "vida",
