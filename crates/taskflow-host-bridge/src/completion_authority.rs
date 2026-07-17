@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 pub const MODULE: &str = "completion_authority";
 
 pub const BLOCKER_OUTCOME_CONTRADICTION: &str = "host_bridge_completion_outcome_contradiction";
@@ -6,6 +8,352 @@ pub const BLOCKER_RECEIPT_NOT_BOUND: &str = "host_bridge_completion_receipt_not_
 pub const BLOCKER_TYPED_BLOCKED_OUTCOME: &str = "host_bridge_completion_blocked";
 pub const BLOCKER_TYPED_FAILED_OUTCOME: &str = "host_bridge_completion_failed";
 pub const BLOCKER_SUMMARY_DERIVED: &str = "host_bridge_completion_summary_blocked";
+
+pub const BLOCKER_ATTEMPT_SCOPE_INCOMPLETE: &str = "implementation_attempt_scope_incomplete";
+pub const BLOCKER_ATTEMPT_EMPTY_PATCH: &str = "implementation_artifact_has_no_changed_files";
+pub const BLOCKER_ATTEMPT_SCOPE_GUARD: &str = "implementation_attempt_scope_guard_violation";
+pub const BLOCKER_ATTEMPT_CANONICAL_WORKTREE: &str =
+    "isolated_worktree_canonical_worktree_touched";
+pub const BLOCKER_ATTEMPT_CANONICAL_EVIDENCE: &str =
+    "isolated_worktree_canonical_worktree_evidence_missing";
+pub const BLOCKER_ATTEMPT_LINE_ENDING_CHURN: &str =
+    "implementation_artifact_broad_line_ending_churn";
+pub const BLOCKER_ATTEMPT_CAPABILITY: &str = "host_bridge_capability_blocked";
+pub const BLOCKER_ATTEMPT_NO_REPEAT: &str = "host_bridge_retry_no_repeat";
+pub const BLOCKER_ATTEMPT_RETRY_RECEIPT: &str = "host_bridge_retry_receipt_mismatch";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostBridgeImplementationAttemptAdmission {
+    pub decision: String,
+    pub verdict: String,
+    pub blocker_codes: Vec<String>,
+    pub reroute_allowed: bool,
+    pub reroute_carrier_id: Option<String>,
+    pub fingerprint: String,
+}
+
+impl HostBridgeImplementationAttemptAdmission {
+    #[must_use]
+    pub fn admit(request: &Value, artifacts: Option<&Value>) -> Self {
+        let mut blockers = Vec::new();
+        let isolation = request
+            .get("implementation_isolation")
+            .filter(|value| value.is_object());
+        let implementation_request = request
+            .get("task_class")
+            .and_then(Value::as_str)
+            .is_some_and(|value| {
+                matches!(
+                    value.trim(),
+                    "implementation"
+                        | "implementation_medium"
+                        | "delivery_task"
+                        | "execution_block"
+                        | "writer"
+                )
+            });
+        if implementation_request {
+            let Some(isolation) = isolation.and_then(Value::as_object) else {
+                push_unique(&mut blockers, BLOCKER_ATTEMPT_SCOPE_INCOMPLETE);
+                return Self::terminal(blockers, fingerprint(request, &[]));
+            };
+            let owned_paths = string_array(isolation.get("owned_paths"));
+            let scope_policy_ok = isolation
+                .get("scope_policy")
+                .and_then(Value::as_object)
+                .and_then(|policy| {
+                    policy
+                        .get("changed_files_must_be_subset_of_owned_paths")
+                        .and_then(Value::as_bool)
+                })
+                == Some(true);
+            if owned_paths.is_empty()
+                || isolation
+                    .get("canonical_worktree_writes_allowed")
+                    .and_then(Value::as_bool)
+                    != Some(false)
+                || !scope_policy_ok
+            {
+                push_unique(&mut blockers, BLOCKER_ATTEMPT_SCOPE_INCOMPLETE);
+            }
+
+            if let Some(artifacts) = artifacts {
+                validate_artifacts(artifacts, &owned_paths, &mut blockers);
+            }
+        }
+
+        let capability_blockers = capability_blockers(request);
+        let current_fingerprint = fingerprint(request, &capability_blockers);
+        if !capability_blockers.is_empty() {
+            push_unique(&mut blockers, BLOCKER_ATTEMPT_CAPABILITY);
+            if retry_receipt_is_present(request) && !retry_receipt_matches(request) {
+                push_unique(&mut blockers, BLOCKER_ATTEMPT_RETRY_RECEIPT);
+            }
+            let retry_count = request
+                .get("retry_count")
+                .and_then(Value::as_u64)
+                .or_else(|| request.pointer("/retry_context/retry_count").and_then(Value::as_u64))
+                .unwrap_or_default();
+            let previous_fingerprint = request
+                .get("previous_attempt_fingerprint")
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    request
+                        .pointer("/retry_context/previous_fingerprint")
+                        .and_then(Value::as_str)
+                });
+            if retry_count > 0 && previous_fingerprint == Some(current_fingerprint.as_str()) {
+                push_unique(&mut blockers, BLOCKER_ATTEMPT_NO_REPEAT);
+            }
+            if !blockers.iter().any(|code| {
+                matches!(
+                    code.as_str(),
+                    BLOCKER_ATTEMPT_SCOPE_INCOMPLETE
+                        | BLOCKER_ATTEMPT_EMPTY_PATCH
+                        | BLOCKER_ATTEMPT_SCOPE_GUARD
+                        | BLOCKER_ATTEMPT_CANONICAL_WORKTREE
+                        | BLOCKER_ATTEMPT_CANONICAL_EVIDENCE
+                        | BLOCKER_ATTEMPT_LINE_ENDING_CHURN
+                        | BLOCKER_ATTEMPT_RETRY_RECEIPT
+                        | BLOCKER_ATTEMPT_NO_REPEAT
+                )
+            }) && retry_count == 0
+            {
+                if let Some(carrier_id) = cheapest_eligible_carrier(request) {
+                    return Self {
+                        decision: "reroute_once".to_string(),
+                        verdict: "capability_blocked".to_string(),
+                        blocker_codes: blockers,
+                        reroute_allowed: true,
+                        reroute_carrier_id: Some(carrier_id),
+                        fingerprint: current_fingerprint,
+                    };
+                }
+            }
+        }
+
+        if blockers.is_empty() {
+            Self {
+                decision: "admit".to_string(),
+                verdict: "pass".to_string(),
+                blocker_codes: blockers,
+                reroute_allowed: false,
+                reroute_carrier_id: None,
+                fingerprint: current_fingerprint,
+            }
+        } else {
+            Self::terminal(blockers, current_fingerprint)
+        }
+    }
+
+    fn terminal(blocker_codes: Vec<String>, fingerprint: String) -> Self {
+        Self {
+            decision: "terminal_blocker".to_string(),
+            verdict: "blocked".to_string(),
+            blocker_codes,
+            reroute_allowed: false,
+            reroute_carrier_id: None,
+            fingerprint,
+        }
+    }
+}
+
+#[must_use]
+pub fn admit_host_bridge_implementation_attempt(
+    request: &Value,
+    artifacts: Option<&Value>,
+) -> HostBridgeImplementationAttemptAdmission {
+    HostBridgeImplementationAttemptAdmission::admit(request, artifacts)
+}
+
+fn string_array(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn validate_artifacts(artifacts: &Value, owned_paths: &[String], blockers: &mut Vec<String>) {
+    let Some(rows) = artifacts.as_array() else {
+        push_unique(blockers, BLOCKER_ATTEMPT_SCOPE_INCOMPLETE);
+        return;
+    };
+    if rows.is_empty() {
+        push_unique(blockers, BLOCKER_ATTEMPT_EMPTY_PATCH);
+    }
+    for artifact in rows {
+        let kind = artifact
+            .get("artifact_kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let changed_files = string_array(artifact.get("changed_files"));
+        if matches!(kind, "patch_proposal" | "isolated_worktree_manifest")
+            && changed_files.is_empty()
+        {
+            push_unique(blockers, BLOCKER_ATTEMPT_EMPTY_PATCH);
+        }
+        if kind == "isolated_worktree_manifest" {
+            if artifact
+                .get("canonical_worktree_touched")
+                .and_then(Value::as_bool)
+                == Some(true)
+                || artifact
+                    .get("canonical_worktree_changed")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            {
+                push_unique(blockers, BLOCKER_ATTEMPT_CANONICAL_WORKTREE);
+            } else if !canonical_worktree_untouched_is_proven(artifact) {
+                push_unique(blockers, BLOCKER_ATTEMPT_CANONICAL_EVIDENCE);
+            }
+        }
+        if changed_files
+            .iter()
+            .any(|path| !owned_paths.iter().any(|owned| path_within(path, owned)))
+        {
+            push_unique(blockers, BLOCKER_ATTEMPT_SCOPE_GUARD);
+        }
+        if reports_broad_line_ending_churn(artifact) {
+            push_unique(blockers, BLOCKER_ATTEMPT_LINE_ENDING_CHURN);
+        }
+    }
+}
+
+fn canonical_worktree_untouched_is_proven(artifact: &Value) -> bool {
+    artifact
+        .get("canonical_worktree_unchanged")
+        .and_then(Value::as_bool)
+        == Some(true)
+        || artifact
+            .get("canonical_worktree_touched")
+            .and_then(Value::as_bool)
+            == Some(false)
+        || artifact
+            .get("canonical_worktree_changed")
+            .and_then(Value::as_bool)
+            == Some(false)
+        || artifact
+            .get("canonical_worktree")
+            .and_then(Value::as_str)
+            .is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "unchanged" | "untouched" | "clean"
+                )
+            })
+}
+
+fn path_within(path: &str, owned: &str) -> bool {
+    let path = path.trim().replace('\\', "/");
+    let owned = owned.trim().replace('\\', "/");
+    path == owned || path.starts_with(&(owned + "/"))
+}
+
+fn reports_broad_line_ending_churn(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            let key = key.to_ascii_lowercase().replace(['-', ' '], "_");
+            ((key.contains("line") && key.contains("ending")) || key.contains("churn"))
+                && (value.as_bool() == Some(true)
+                    || value.as_u64().is_some_and(|count| count > 1_000)
+                    || value.as_str().is_some_and(|text| {
+                        let text = text.to_ascii_lowercase();
+                        text.contains("line-ending")
+                            || text.contains("line ending")
+                            || text.contains("normalization")
+                            || text.contains("churn")
+                    }))
+                || reports_broad_line_ending_churn(value)
+        }),
+        Value::Array(values) => values.iter().any(reports_broad_line_ending_churn),
+        _ => false,
+    }
+}
+
+fn capability_blockers(request: &Value) -> Vec<String> {
+    let mut blockers = string_array(request.get("capability_blockers"));
+    blockers.extend(string_array(request.get("blocker_codes")).into_iter().filter(|code| {
+        code.contains("capability") || code.contains("host_tool") || code.contains("host_agent")
+    }));
+    blockers.sort();
+    blockers.dedup();
+    blockers
+}
+
+fn retry_receipt_is_present(request: &Value) -> bool {
+    request.get("retry_receipt").is_some() || request.get("retry_receipt_id").is_some()
+}
+
+fn retry_receipt_matches(request: &Value) -> bool {
+    let Some(receipt) = request.get("retry_receipt").and_then(Value::as_object) else {
+        return false;
+    };
+    receipt.get("receipt_backed").and_then(Value::as_bool) == Some(true)
+        && ["run_id", "task_id", "dispatch_target", "backend_id", "carrier_id"]
+            .iter()
+            .all(|field| {
+                request.get(*field).and_then(Value::as_str).is_none()
+                    || receipt.get(*field) == request.get(*field)
+            })
+        && request
+            .get("retry_receipt_id")
+            .and_then(Value::as_str)
+            .is_none_or(|expected| {
+                receipt.get("receipt_id").and_then(Value::as_str) == Some(expected)
+            })
+}
+
+fn cheapest_eligible_carrier(request: &Value) -> Option<String> {
+    request
+        .get("eligible_carriers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|carrier| carrier.get("status").and_then(Value::as_str) != Some("blocked"))
+        .filter_map(|carrier| {
+            let id = carrier
+                .get("carrier_id")
+                .or_else(|| carrier.get("id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())?;
+            let cost = carrier
+                .get("normalized_cost_units")
+                .or_else(|| carrier.get("cost"))
+                .or_else(|| carrier.get("rate"))
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX);
+            Some((cost, id.to_string()))
+        })
+        .min_by(|left, right| left.cmp(right))
+        .map(|(_, id)| id)
+}
+
+fn fingerprint(request: &Value, blocker_codes: &[String]) -> String {
+    [
+        request.get("backend_fingerprint").and_then(Value::as_str),
+        request.get("backend_id").and_then(Value::as_str),
+        request.get("carrier_fingerprint").and_then(Value::as_str),
+        request.get("carrier_id").and_then(Value::as_str),
+        request.get("capability_fingerprint").and_then(Value::as_str),
+        request
+            .get("adapter_capability_id")
+            .and_then(Value::as_str),
+        request.get("blocker_fingerprint").and_then(Value::as_str),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .chain(blocker_codes.iter().map(String::as_str))
+    .collect::<Vec<_>>()
+    .join("|")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostBridgeCompletionState {
@@ -587,11 +935,15 @@ fn input<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_SUMMARY_DERIVED, BLOCKER_TYPED_BLOCKED_OUTCOME,
-        BLOCKER_TYPED_FAILED_OUTCOME, HostBridgeCompletionEffectIntent, HostBridgeCompletionEvent,
-        HostBridgeCompletionFsm, HostBridgeCompletionState, completion_authority_transition_matrix,
+        admit_host_bridge_implementation_attempt, fingerprint, BLOCKER_ATTEMPT_CANONICAL_WORKTREE,
+        BLOCKER_ATTEMPT_EMPTY_PATCH, BLOCKER_ATTEMPT_LINE_ENDING_CHURN,
+        BLOCKER_ATTEMPT_NO_REPEAT, BLOCKER_ATTEMPT_RETRY_RECEIPT, BLOCKER_OUTCOME_CONTRADICTION,
+        BLOCKER_SUMMARY_DERIVED, BLOCKER_TYPED_BLOCKED_OUTCOME, BLOCKER_TYPED_FAILED_OUTCOME,
+        HostBridgeCompletionEffectIntent, HostBridgeCompletionEvent, HostBridgeCompletionFsm,
+        HostBridgeCompletionState, completion_authority_transition_matrix,
         decide_host_bridge_completion_authority, input,
     };
+    use serde_json::{json, Value};
 
     #[test]
     fn passed_with_empty_blockers_cannot_emit_blocked_event_or_blocker() {
@@ -839,5 +1191,116 @@ mod tests {
                 .any(|blocker| blocker == BLOCKER_OUTCOME_CONTRADICTION)
         );
         assert!(!decision.next_step_packet_admitted);
+    }
+
+    fn implementation_request() -> Value {
+        json!({
+            "task_class": "implementation",
+            "run_id": "run-1",
+            "task_id": "run-1",
+            "dispatch_target": "coder",
+            "backend_id": "internal_subagents",
+            "carrier_id": "coder",
+            "implementation_isolation": {
+                "canonical_worktree_writes_allowed": false,
+                "owned_paths": ["crates/vida/src/lib.rs"],
+                "scope_policy": {
+                    "changed_files_must_be_subset_of_owned_paths": true
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn implementation_attempt_admission_fails_closed_for_empty_scope_and_churn() {
+        let request = implementation_request();
+        let artifacts = json!([{
+            "artifact_kind": "isolated_worktree_manifest",
+            "changed_files": [],
+            "canonical_worktree_touched": true,
+            "line_ending_churn": true
+        }]);
+        let admission = admit_host_bridge_implementation_attempt(&request, Some(&artifacts));
+
+        assert_eq!(admission.decision, "terminal_blocker");
+        assert!(admission
+            .blocker_codes
+            .contains(&BLOCKER_ATTEMPT_EMPTY_PATCH.to_string()));
+        assert!(admission
+            .blocker_codes
+            .contains(&BLOCKER_ATTEMPT_CANONICAL_WORKTREE.to_string()));
+        assert!(admission
+            .blocker_codes
+            .contains(&BLOCKER_ATTEMPT_LINE_ENDING_CHURN.to_string()));
+    }
+
+    #[test]
+    fn implementation_attempt_admission_reroutes_once_to_cheapest_carrier() {
+        let mut request = implementation_request();
+        request["capability_blockers"] = json!(["host_tool_capability_missing"]);
+        request["eligible_carriers"] = json!([
+            {"carrier_id": "expensive", "normalized_cost_units": 5},
+            {"carrier_id": "cheap", "normalized_cost_units": 1}
+        ]);
+        let admission = admit_host_bridge_implementation_attempt(&request, None);
+
+        assert_eq!(admission.decision, "reroute_once");
+        assert!(admission.reroute_allowed);
+        assert_eq!(admission.reroute_carrier_id.as_deref(), Some("cheap"));
+    }
+
+    #[test]
+    fn unchanged_capability_fingerprint_is_terminal_and_retry_receipt_must_match() {
+        let mut request = implementation_request();
+        request["capability_blockers"] = json!(["host_tool_capability_missing"]);
+        request["retry_count"] = json!(1);
+        let fingerprint = fingerprint(&request, &["host_tool_capability_missing".to_string()]);
+        request["previous_attempt_fingerprint"] = json!(fingerprint);
+        request["retry_receipt"] = json!({
+            "receipt_backed": false,
+            "run_id": "other-run"
+        });
+        let admission = admit_host_bridge_implementation_attempt(&request, None);
+
+        assert_eq!(admission.decision, "terminal_blocker");
+        assert!(admission
+            .blocker_codes
+            .contains(&BLOCKER_ATTEMPT_NO_REPEAT.to_string()));
+        assert!(admission
+            .blocker_codes
+            .contains(&BLOCKER_ATTEMPT_RETRY_RECEIPT.to_string()));
+    }
+
+    #[test]
+    fn scoped_untouched_manifest_is_admitted() {
+        let request = implementation_request();
+        let artifacts = json!([{
+            "artifact_kind": "isolated_worktree_manifest",
+            "changed_files": ["crates/vida/src/lib.rs"],
+            "canonical_worktree_unchanged": true,
+            "line_ending_churn": false
+        }]);
+        let admission = admit_host_bridge_implementation_attempt(&request, Some(&artifacts));
+
+        assert_eq!(admission.decision, "admit");
+        assert_eq!(admission.verdict, "pass");
+        assert!(admission.blocker_codes.is_empty());
+    }
+
+    #[test]
+    fn legacy_nonimplementation_isolation_does_not_activate_admission() {
+        let request = json!({
+            "task_class": "coach",
+            "dispatch_target": "coach",
+            "implementation_isolation": {
+                "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                "owned_paths": ["crates/vida/src/lib.rs"]
+            }
+        });
+        let admission = admit_host_bridge_implementation_attempt(&request, None);
+
+        assert_eq!(admission.decision, "admit");
+        assert_eq!(admission.verdict, "pass");
+        assert!(admission.blocker_codes.is_empty());
     }
 }

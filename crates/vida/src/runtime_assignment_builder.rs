@@ -992,6 +992,7 @@ fn configured_backend_readiness_verdict_for_candidate(
             "status": "configured_backend_dispatch_blocked",
             "blocked": true,
             "blocker_code": "configured_backend_dispatch_failed",
+            "implementation_attempt_admission": implementation_attempt_admission_policy(),
             "blocker_reason": blocker_reason,
             "selected_model_profile": selected_model_profile,
             "raw_provider_dispatch_forbidden": service_executor_backend_class(&backend_class),
@@ -1026,6 +1027,16 @@ fn configured_backend_readiness_verdict_for_candidate(
         }
     }
     Some(verdict)
+}
+
+fn implementation_attempt_admission_policy() -> serde_json::Value {
+    serde_json::json!({
+        "contract": "HostBridgeImplementationAttemptAdmission",
+        "preflight": true,
+        "max_reroutes": 1,
+        "reroute_selection": "cheapest_eligible_carrier",
+        "unchanged_fingerprint_retry": "terminal_no_repeat"
+    })
 }
 
 fn configured_backend_entry_for_role(
@@ -1077,6 +1088,7 @@ fn configured_backend_dispatch_blocker_verdict_for_candidate(
         "status": "configured_backend_dispatch_blocked",
         "blocked": true,
         "blocker_code": "configured_backend_dispatch_failed",
+        "implementation_attempt_admission": implementation_attempt_admission_policy(),
         "blocker_reason": blocker_reason,
         "selected_model_profile": selected_model_profile,
         "raw_provider_dispatch_forbidden": service_executor_backend_class(&backend_class),

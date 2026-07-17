@@ -2940,6 +2940,14 @@ fn materialize_host_tool_bridge_request(
         "result_path": paths.result_path.display().to_string(),
         "receipt_path": paths.receipt_path.display().to_string(),
     });
+    let attempt_admission = taskflow_host_bridge::completion_authority::
+        admit_host_bridge_implementation_attempt(&request, None);
+    if attempt_admission.decision == "terminal_blocker" {
+        return Err(format!(
+            "Host bridge implementation attempt admission failed before host execution: {}.",
+            attempt_admission.blocker_codes.join(",")
+        ));
+    }
     let mut replace_existing_request = false;
     if let Some(existing) = read_existing_host_bridge_request(&paths.request_path)? {
         if existing.get("run_id").and_then(serde_json::Value::as_str)

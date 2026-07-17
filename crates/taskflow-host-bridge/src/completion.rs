@@ -86,6 +86,7 @@ pub fn host_bridge_completion_retryable_blocker(blocker_code: &str) -> bool {
             | "review_rework_required"
             | "closure_evidence_blocked"
             | "host_bridge_request_task_mismatch"
+            | "host_bridge_capability_blocked"
             | "host_agent_execution_failed"
             | "host_agent_capacity_unavailable"
             | "host_tool_capability_missing"

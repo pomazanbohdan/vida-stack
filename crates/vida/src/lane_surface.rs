@@ -4356,6 +4356,21 @@ fn host_bridge_implementation_scope_validation(
         artifacts,
         authority,
     );
+    let admission = taskflow_host_bridge::artifact_scope::
+        host_bridge_implementation_attempt_scope_decision(request, artifacts);
+    let mut admission_blocker_codes = host_bridge_scope_validation_blocker_codes(&validation);
+    admission_blocker_codes.extend(admission.blocker_codes);
+    admission_blocker_codes.sort();
+    admission_blocker_codes.dedup();
+    if let Some(object) = validation.as_object_mut() {
+        if !admission_blocker_codes.is_empty() {
+            object.insert("status".to_string(), serde_json::json!("blocked"));
+            object.insert(
+                "blocker_codes".to_string(),
+                serde_json::json!(admission_blocker_codes),
+            );
+        }
+    }
     if !isolation_is_valid {
         let mut blocker_codes = host_bridge_scope_validation_blocker_codes(&validation);
         blocker_codes.push("implementation_artifact_contract_invalid".to_string());

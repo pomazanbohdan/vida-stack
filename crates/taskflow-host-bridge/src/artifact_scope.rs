@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::completion_authority::BLOCKER_ATTEMPT_SCOPE_GUARD;
 use crate::errors::HostBridgeError;
 use crate::request::HostBridgeRequest;
 use runtime_path_policy::atomic_write::write_json_replace;
@@ -402,6 +403,66 @@ pub fn validate_implementation_artifact_scope_with_proof_paths(
             blocker_codes: vec![blocker_code.to_string()],
             out_of_scope_paths,
         }
+    }
+}
+
+pub fn host_bridge_implementation_attempt_scope_decision(
+    request: &serde_json::Value,
+    artifacts: &serde_json::Value,
+) -> ImplementationArtifactScopeDecision {
+    let admission = crate::completion_authority::admit_host_bridge_implementation_attempt(
+        request,
+        Some(artifacts),
+    );
+    let owned_paths = request
+        .get("implementation_isolation")
+        .and_then(serde_json::Value::as_object)
+        .map(|isolation| {
+            isolation
+                .get("owned_paths")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(PathBuf::from)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let changed_files = artifacts
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|artifact| {
+            artifact
+                .get("changed_files")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(PathBuf::from)
+        })
+        .collect::<Vec<_>>();
+    let out_of_scope_paths = if admission
+        .blocker_codes
+        .iter()
+        .any(|code| code == BLOCKER_ATTEMPT_SCOPE_GUARD)
+    {
+        changed_files
+            .iter()
+            .filter(|path| {
+                !owned_paths
+                    .iter()
+                    .any(|owned| *path == owned || path.starts_with(owned))
+            })
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    ImplementationArtifactScopeDecision {
+        accepted: admission.blocker_codes.is_empty(),
+        blocker_codes: admission.blocker_codes,
+        out_of_scope_paths,
     }
 }
 
