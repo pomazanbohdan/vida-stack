@@ -5,6 +5,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use fs2::FileExt;
+use taskflow_host_bridge::effective_host_bridge_request_with_registry;
+
 #[path = "support/runtime_consumption.rs"]
 mod runtime_consumption;
 
@@ -2695,6 +2698,122 @@ fn agent_host_bridge_trusted_missing_receipt_fails_closed_within_latency_budget(
         payload["shared_fields"]["artifact_refs"],
         payload["operator_contracts"]["artifact_refs"]
     );
+}
+
+#[test]
+fn agent_host_bridge_json_retains_sanitized_lock_open_diagnostic() {
+    let state_dir = unique_state_dir();
+    let request_dir = format!("{state_dir}/host-tool-bridge/requests");
+    let packet_dir = format!("{state_dir}/runtime-consumption/dispatch-packets");
+    std::fs::create_dir_all(&request_dir).expect("host bridge request dir should exist");
+    std::fs::create_dir_all(&packet_dir).expect("dispatch packet dir should exist");
+    let request_path = format!("{request_dir}/request.json");
+    let packet_path = format!("{packet_dir}/packet.json");
+    let result_path = format!("{state_dir}/host-tool-bridge/results/result.json");
+    let receipt_path = format!("{state_dir}/host-tool-bridge/receipts/receipt.json");
+    std::fs::create_dir_all(
+        std::path::Path::new(&result_path)
+            .parent()
+            .expect("result parent should exist"),
+    )
+    .expect("result dir should exist");
+    std::fs::create_dir_all(
+        std::path::Path::new(&receipt_path)
+            .parent()
+            .expect("receipt parent should exist"),
+    )
+    .expect("receipt dir should exist");
+    std::fs::write(&packet_path, "{}").expect("dispatch packet should exist");
+    let request_base = serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-lock-diagnostic",
+            "run_id": "run-lock-diagnostic",
+            "task_id": "task-lock-diagnostic",
+            "attempt_id": "attempt-lock-diagnostic",
+            "packet_id": "packet-lock-diagnostic",
+            "dispatch_target": "implementer",
+            "packet_path": packet_path,
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "execution_boundary": "parent_host_session",
+            "dispatch_transport": "host_tool_bridge",
+            "request_path": request_path,
+            "result_path": result_path,
+            "receipt_path": receipt_path
+        });
+    let registry = serde_json::json!({
+        "adapter_kind": "codex_host_tools",
+        "adapter_capability_id": "codex.multi_agent_v1",
+        "invocation_mode": "parent_host_tool_api",
+        "dispatch_transport": "host_tool_bridge",
+        "receipt_mode": "host_bridge_receipt",
+        "operations": {
+            "spawn": "multi_agent_v1.spawn_agent",
+            "wait": "multi_agent_v1.wait_agent",
+            "dispose": "multi_agent_v1.close_agent"
+        },
+        "dispose_policy": "configured"
+    });
+    let mut request = effective_host_bridge_request_with_registry(&request_base, &registry)
+        .expect("configured registry should materialize current adapter contract");
+    let snapshot = request["adapter_operations"].clone();
+    request["adapter_contract_snapshot"] = snapshot.clone();
+    request["adapter_contract_hash"] = serde_json::Value::String(
+        blake3::hash(&serde_json::to_vec(&snapshot).expect("snapshot should serialize"))
+            .to_hex()
+            .to_string(),
+    );
+    std::fs::write(&request_path, request.to_string())
+    .expect("host bridge request should exist");
+
+    let lock_path = std::path::Path::new(&state_dir).join("LOCK");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("state lock should open");
+    std::fs::write(&lock_path, "999999").expect("state lock marker should be written");
+    lock_file
+        .lock_exclusive()
+        .expect("test should hold the state lock");
+
+    let output = vida()
+        .args([
+            "agent",
+            "host-bridge",
+            "--request",
+            &request_path,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ])
+        .output()
+        .expect("host bridge JSON should run");
+    assert!(!output.status.success(), "held state lock must fail closed");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("host bridge JSON should parse");
+    assert_eq!(payload["status"], "blocked");
+    assert!(
+        payload["blocker_codes"]
+            .as_array()
+            .expect("blocker codes")
+            .iter()
+            .any(|code| code == "authoritative_state_store_locked"),
+        "unexpected host bridge lock payload: {payload}"
+    );
+    assert_eq!(payload["state_access"]["error_kind"], "lock_contention");
+    assert_eq!(payload["state_access"]["retryable"], true);
+    assert_eq!(
+        payload["state_access"]["blocker_code"],
+        "authoritative_state_store_locked"
+    );
+    assert!(payload.get("error").is_none());
+    assert!(payload["state_access"].to_string().find(&state_dir).is_none());
+
+    let _ = lock_file.unlock();
+    let _ = std::fs::remove_dir_all(&state_dir);
 }
 
 #[derive(Debug)]

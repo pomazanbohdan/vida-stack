@@ -275,6 +275,39 @@ pub struct StateStoreOpenDiagnostic {
     pub silent_delete_allowed: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StateStoreOpenErrorKind {
+    LockContention,
+    PermissionAccess,
+    StorageCorruption,
+    Unknown,
+}
+
+impl StateStoreOpenErrorKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::LockContention => "lock_contention",
+            Self::PermissionAccess => "permission_access",
+            Self::StorageCorruption => "storage_corruption",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct StateStoreOpenErrorDiagnostic {
+    pub(crate) error_kind: StateStoreOpenErrorKind,
+    pub(crate) retryable: bool,
+    pub(crate) blocker_code: &'static str,
+}
+
+impl StateStoreOpenErrorDiagnostic {
+    pub(crate) const fn blocker_code(self) -> &'static str {
+        self.blocker_code
+    }
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
 pub struct TaskDependencyRecord {
     pub issue_id: String,
@@ -381,6 +414,25 @@ pub enum StateStoreError {
 }
 
 impl StateStoreError {
+    pub(crate) fn open_error_diagnostic(&self) -> StateStoreOpenErrorDiagnostic {
+        let kind = match self {
+            Self::Io(error) => classify_state_store_io_open_error(error),
+            Self::Db(error) => classify_state_store_open_error_message(&error.to_string()),
+            Self::InvalidStorageMetadata { reason }
+            | Self::InvalidStateSpineManifest { reason }
+            | Self::InvalidStateReset { reason }
+            | Self::InvalidInstructionRuntimeState { reason }
+            | Self::InvalidProtocolBinding { reason }
+            | Self::InvalidLauncherActivationSnapshot { reason }
+            | Self::InvalidTaskRecord { reason }
+            | Self::InvalidCanonicalTaskflowExport { reason }
+            | Self::InvalidPatchOperation { reason }
+            | Self::PatchConflict { reason } => classify_state_store_open_error_message(reason),
+            _ => StateStoreOpenErrorKind::Unknown,
+        };
+        state_store_open_error_diagnostic(kind)
+    }
+
     pub fn open_diagnostic(&self, state_dir: &Path) -> Option<StateStoreOpenDiagnostic> {
         let message = self.to_string();
         if !state_store_message_is_surrealkv_wal_replay_corruption(&message) {
@@ -397,6 +449,82 @@ impl StateStoreError {
             silent_delete_allowed: false,
         })
     }
+}
+
+fn state_store_open_error_diagnostic(
+    error_kind: StateStoreOpenErrorKind,
+) -> StateStoreOpenErrorDiagnostic {
+    let (retryable, blocker_code) = match error_kind {
+        StateStoreOpenErrorKind::LockContention => (
+            true,
+            taskflow_contracts::BlockerCode::AuthoritativeStateStoreLocked.as_str(),
+        ),
+        StateStoreOpenErrorKind::PermissionAccess
+        | StateStoreOpenErrorKind::StorageCorruption
+        | StateStoreOpenErrorKind::Unknown => (
+            false,
+            taskflow_contracts::BlockerCode::AuthoritativeStateStoreOpenFailed.as_str(),
+        ),
+    };
+    StateStoreOpenErrorDiagnostic {
+        error_kind,
+        retryable,
+        blocker_code,
+    }
+}
+
+fn classify_state_store_io_open_error(error: &io::Error) -> StateStoreOpenErrorKind {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+    ) || error
+        .raw_os_error()
+        .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN || code == 32 || code == 33)
+    {
+        return StateStoreOpenErrorKind::LockContention;
+    }
+    if error.kind() == io::ErrorKind::PermissionDenied {
+        return StateStoreOpenErrorKind::PermissionAccess;
+    }
+    classify_state_store_open_error_message(&error.to_string())
+}
+
+pub(crate) fn state_store_io_open_error_diagnostic(
+    error: &io::Error,
+) -> StateStoreOpenErrorDiagnostic {
+    state_store_open_error_diagnostic(classify_state_store_io_open_error(error))
+}
+
+fn classify_state_store_open_error_message(message: &str) -> StateStoreOpenErrorKind {
+    let normalized = message.to_ascii_lowercase();
+    if normalized.contains("surrealkv")
+        && (normalized.contains("wal")
+            || normalized.contains("memtable")
+            || normalized.contains("sst"))
+        && (normalized.contains("keys are not in order")
+            || normalized.contains("failed to flush memtable")
+            || normalized.contains("wal replay"))
+    {
+        return StateStoreOpenErrorKind::StorageCorruption;
+    }
+    if normalized.contains("timed out while waiting for authoritative datastore lock")
+        || normalized.contains("resource temporarily unavailable")
+        || normalized.contains("another process has locked")
+        || normalized.contains("being used by another process")
+        || normalized.contains("process cannot access the file")
+        || normalized.contains("portion of the file")
+        || normalized.contains("os error 32")
+        || normalized.contains("os error 33")
+    {
+        return StateStoreOpenErrorKind::LockContention;
+    }
+    if normalized.contains("permission denied")
+        || normalized.contains("access is denied")
+        || normalized.contains("os error 5")
+    {
+        return StateStoreOpenErrorKind::PermissionAccess;
+    }
+    StateStoreOpenErrorKind::Unknown
 }
 
 impl std::fmt::Display for StateStoreError {
@@ -9439,5 +9567,57 @@ hierarchy: framework,contracts
 
         store.close().await;
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn open_error_diagnostic_matrix_preserves_kind_and_retryability() {
+        let cases = [
+            (
+                StateStoreError::Io(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "authoritative datastore lock wait timed out",
+                )),
+                StateStoreOpenErrorKind::LockContention,
+                true,
+                "authoritative_state_store_locked",
+            ),
+            (
+                StateStoreError::Io(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "state root access denied",
+                )),
+                StateStoreOpenErrorKind::PermissionAccess,
+                false,
+                "authoritative_state_store_open_failed",
+            ),
+            (
+                StateStoreError::InvalidStorageMetadata {
+                    reason: "failed to open bounded SurrealKV datastore: Failed to flush memtable to SST: Keys are not in order".to_string(),
+                },
+                StateStoreOpenErrorKind::StorageCorruption,
+                false,
+                "authoritative_state_store_open_failed",
+            ),
+            (
+                StateStoreError::MissingStateDir(PathBuf::from("/tmp/vida-missing-state")),
+                StateStoreOpenErrorKind::Unknown,
+                false,
+                "authoritative_state_store_open_failed",
+            ),
+        ];
+        for (error, expected_kind, expected_retryable, expected_blocker) in cases {
+            let diagnostic = error.open_error_diagnostic();
+            assert_eq!(diagnostic.error_kind, expected_kind);
+            assert_eq!(diagnostic.retryable, expected_retryable);
+            assert_eq!(diagnostic.blocker_code(), expected_blocker);
+        }
+    }
+
+    #[test]
+    fn access_denied_message_is_not_lock_contention_without_lock_evidence() {
+        let error = io::Error::new(io::ErrorKind::Other, "Access is denied. (os error 5)");
+        let diagnostic = state_store_io_open_error_diagnostic(&error);
+        assert_eq!(diagnostic.error_kind, StateStoreOpenErrorKind::PermissionAccess);
+        assert!(!diagnostic.retryable);
     }
 }

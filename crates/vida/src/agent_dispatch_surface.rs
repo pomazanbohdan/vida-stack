@@ -56,11 +56,53 @@ use taskflow_host_bridge::{
 const HOST_BRIDGE_PROVENANCE_LOCK_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(1_500);
 
+#[derive(Debug, Clone, Default)]
+struct HostBridgeProvenanceResult {
+    blockers: Vec<String>,
+    state_access: Option<state_store::StateStoreOpenErrorDiagnostic>,
+    receipt_backed_retry_completion: bool,
+}
+
+impl HostBridgeProvenanceResult {
+    fn from_blockers(blockers: Vec<String>) -> Self {
+        Self {
+            blockers,
+            state_access: None,
+            receipt_backed_retry_completion: false,
+        }
+    }
+
+    fn with_blocker(blocker: impl Into<String>) -> Self {
+        Self {
+            blockers: vec![blocker.into()],
+            state_access: None,
+            receipt_backed_retry_completion: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_receipt_backed_retry_completion(mut self) -> Self {
+        self.receipt_backed_retry_completion = true;
+        self
+    }
+
+    fn push_blocker(&mut self, blocker: impl Into<String>) {
+        self.blockers.push(blocker.into());
+    }
+
+    fn set_state_access(&mut self, diagnostic: state_store::StateStoreOpenErrorDiagnostic) {
+        self.push_blocker(diagnostic.blocker_code());
+        self.state_access = Some(diagnostic);
+    }
+}
+
 fn blocker_code_value(code: taskflow_contracts::BlockerCode) -> String {
     code.as_str().to_string()
 }
 
-fn host_bridge_state_lock_blocker(state_root: &Path) -> Option<String> {
+fn host_bridge_state_lock_diagnostic(
+    state_root: &Path,
+) -> Option<state_store::StateStoreOpenErrorDiagnostic> {
     let lock_path = state_root.join("LOCK");
     let mut file = match std::fs::OpenOptions::new()
         .read(true)
@@ -69,14 +111,7 @@ fn host_bridge_state_lock_blocker(state_root: &Path) -> Option<String> {
     {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(error) => {
-            return Some(
-                taskflow_core::consume::continue_use_case::state_access_blocker_code(
-                    &error.to_string(),
-                )
-                .to_string(),
-            );
-        }
+        Err(error) => return Some(state_store::state_store_io_open_error_diagnostic(&error)),
     };
     let mut marker = String::new();
     if file.read_to_string(&mut marker).is_ok()
@@ -89,12 +124,7 @@ fn host_bridge_state_lock_blocker(state_root: &Path) -> Option<String> {
             let _ = FileExt::unlock(&file);
             None
         }
-        Err(error) => Some(
-            taskflow_core::consume::continue_use_case::state_access_blocker_code(
-                &error.to_string(),
-            )
-            .to_string(),
-        ),
+        Err(error) => Some(state_store::state_store_io_open_error_diagnostic(&error)),
     }
 }
 
@@ -518,7 +548,7 @@ async fn host_bridge_request_provenance_blockers(
     request: &serde_json::Value,
     state_root: Option<&Path>,
     _retry_completion_override: bool,
-) -> Vec<String> {
+) -> HostBridgeProvenanceResult {
     let state_root = match state_root {
         Some(provided) => provided.to_path_buf(),
         None => infer_host_bridge_state_root_from_request_path(request_path)
@@ -599,13 +629,13 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     request_path: &Path,
     request: &serde_json::Value,
     retry_completion_override: bool,
-) -> Vec<String> {
+) -> HostBridgeProvenanceResult {
     let mut blockers = Vec::new();
     if std::fs::canonicalize(&state_root).is_err() {
         blockers.push(blocker_code_value(
             taskflow_contracts::BlockerCode::HostBridgeStateRootMissing,
         ));
-        return blockers;
+        return HostBridgeProvenanceResult::from_blockers(blockers);
     };
     let canonical_request_path = match canonical_state_artifact_path(
         &state_root,
@@ -618,7 +648,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
             blockers.push(blocker_code_value(
                 taskflow_contracts::BlockerCode::HostBridgeRequestUntrustedPath,
             ));
-            return blockers;
+            return HostBridgeProvenanceResult::from_blockers(blockers);
         }
     };
     let declared_request_path = match host_bridge_request_string(request, "request_path") {
@@ -627,7 +657,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
             blockers.push(blocker_code_value(
                 taskflow_contracts::BlockerCode::HostBridgeRequestPathMissing,
             ));
-            return blockers;
+            return HostBridgeProvenanceResult::from_blockers(blockers);
         }
     };
     match canonical_state_artifact_path(
@@ -680,11 +710,12 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         }
     }
     let Some(run_id) = host_bridge_request_string(request, "run_id") else {
-        return blockers;
+        return HostBridgeProvenanceResult::from_blockers(blockers);
     };
-    if let Some(blocker) = host_bridge_state_lock_blocker(state_root) {
-        blockers.push(blocker);
-        return blockers;
+    if let Some(diagnostic) = host_bridge_state_lock_diagnostic(state_root) {
+        let mut result = HostBridgeProvenanceResult::from_blockers(blockers);
+        result.set_state_access(diagnostic);
+        return result;
     }
     let receipt_backed_retry_completion =
         match host_bridge_request_has_retryable_dispatch_receipt_for_state_root(
@@ -696,13 +727,9 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         {
             Ok(retryable) => retryable,
             Err(error) => {
-                blockers.push(
-                    taskflow_core::consume::continue_use_case::state_access_blocker_code(
-                        &error.to_string(),
-                    )
-                    .to_string(),
-                );
-                return blockers;
+                let mut result = HostBridgeProvenanceResult::from_blockers(blockers);
+                result.set_state_access(error.open_error_diagnostic());
+                return result;
             }
         };
     if let Ok(typed_request) = HostBridgeRequest::from_value(request.clone()) {
@@ -741,7 +768,7 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
         blockers.push(blocker_code_value(
             taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing,
         ));
-        return blockers;
+        return HostBridgeProvenanceResult::from_blockers(blockers);
     }
     let store = match StateStore::open_existing_read_only_with_strict_timeout(
         state_root.to_path_buf(),
@@ -751,13 +778,9 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     {
         Ok(store) => store,
         Err(error) => {
-            blockers.push(
-                taskflow_core::consume::continue_use_case::state_access_blocker_code(
-                    &error.to_string(),
-                )
-                .to_string(),
-            );
-            return blockers;
+            let mut result = HostBridgeProvenanceResult::from_blockers(blockers);
+            result.set_state_access(error.open_error_diagnostic());
+            return result;
         }
     };
     append_host_bridge_dispatch_receipt_blockers(
@@ -770,7 +793,11 @@ async fn host_bridge_request_provenance_blockers_for_state_root(
     )
     .await;
     store.close().await;
-    blockers
+    HostBridgeProvenanceResult {
+        blockers,
+        state_access: None,
+        receipt_backed_retry_completion,
+    }
 }
 
 async fn host_bridge_request_has_retryable_dispatch_receipt_for_state_root(
@@ -1584,11 +1611,15 @@ fn retryable_host_bridge_completion_request(
 fn host_bridge_adapter_payload(
     request_path: &Path,
     request: &serde_json::Value,
-    provenance_blockers: Vec<String>,
+    provenance: HostBridgeProvenanceResult,
     state_root: Option<&Path>,
-    receipt_backed_retry_completion_evidence: bool,
 ) -> serde_json::Value {
-    let retryable_completion_request = receipt_backed_retry_completion_evidence
+    let HostBridgeProvenanceResult {
+        blockers: provenance_blockers,
+        state_access,
+        receipt_backed_retry_completion: provenance_retry_completion,
+    } = provenance;
+    let retryable_completion_request = provenance_retry_completion
         || retryable_host_bridge_completion_request(request_path, request, state_root);
     let effective_request = taskflow_host_bridge::effective_host_bridge_request(request);
     let typed_request = HostBridgeRequest::from_value(effective_request.clone()).ok();
@@ -1655,6 +1686,17 @@ fn host_bridge_adapter_payload(
     attach_host_bridge_auto_invocation_scaffold(&mut payload);
     let identity = host_bridge_request_operator_identity(request, state_root);
     payload["current_request_identity"] = identity.clone();
+    if let Some(state_access) = state_access {
+        let state_access = serde_json::to_value(state_access)
+            .expect("state-store open diagnostic should serialize");
+        payload["state_access"] = state_access.clone();
+        if let Some(object) = payload
+            .get_mut("host_bridge")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            object.insert("state_access".to_string(), state_access);
+        }
+    }
     if let Some(object) = payload
         .get_mut("host_bridge")
         .and_then(serde_json::Value::as_object_mut)
@@ -6977,13 +7019,17 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
                     )),
                 }
             }
-            let mut provenance_blockers = host_bridge_request_provenance_blockers(
+            let provenance = host_bridge_request_provenance_blockers(
                 &command.request,
                 &request,
                 command.state_dir.as_deref(),
                 command.retry_completion,
             )
             .await;
+            let mut provenance_blockers = provenance.blockers;
+            let state_access = provenance.state_access;
+            let receipt_backed_retry_completion_evidence =
+                provenance.receipt_backed_retry_completion;
             provenance_blockers.extend(request_identity_repair_blockers);
             if !command.attach_artifacts.is_empty() {
                 provenance_blockers.retain(|code| {
@@ -6996,52 +7042,15 @@ async fn run_agent_host_bridge(mut command: AgentHostBridgeArgs) -> ExitCode {
             {
                 provenance_blockers.clear();
             }
-            let retry_packet_path =
-                host_bridge_request_string(&request, "packet_path").and_then(|path| {
-                    canonical_state_artifact_path(
-                        &retry_state_root,
-                        path,
-                        ArtifactPathKind::HostBridgePacket,
-                        true,
-                    )
-                    .ok()
-                });
-            let receipt_probe_is_already_blocked = provenance_blockers.iter().any(|code| {
-                matches!(
-                    code.as_str(),
-                    "host_bridge_dispatch_receipt_missing"
-                        | "authoritative_state_store_locked"
-                        | "authoritative_state_store_open_failed"
-                )
-            });
-            let receipt_backed_retry_completion_evidence = if receipt_probe_is_already_blocked {
-                false
-            } else {
-                match host_bridge_request_has_retryable_dispatch_receipt_for_state_root(
-                    &retry_state_root,
-                    &request,
-                    retry_packet_path.as_deref(),
-                )
-                .await
-                {
-                    Ok(retryable) => retryable,
-                    Err(error) => {
-                        provenance_blockers.push(
-                            taskflow_core::consume::continue_use_case::state_access_blocker_code(
-                                &error.to_string(),
-                            )
-                            .to_string(),
-                        );
-                        false
-                    }
-                }
-            };
             let mut payload = host_bridge_adapter_payload(
                 &command.request,
                 &request,
-                provenance_blockers,
+                HostBridgeProvenanceResult {
+                    blockers: provenance_blockers,
+                    state_access,
+                    receipt_backed_retry_completion: receipt_backed_retry_completion_evidence,
+                },
                 Some(&retry_state_root),
-                receipt_backed_retry_completion_evidence,
             );
             if command.complete {
                 if let Some(result) = command.result_file.as_deref().and_then(|path| {
@@ -7940,11 +7949,11 @@ mod tests {
         configured_dev_team_first_step_for_task, dev_team_sequence, dev_team_sequence_for_task,
         dev_team_sequence_for_work_item, dispatch_target_for_agent_dispatch_lane,
         host_bridge_adapter_payload, host_bridge_changed_files_from_artifact,
+        HostBridgeProvenanceResult,
         host_bridge_completion_lane_args, host_bridge_normalized_implementation_artifact_path,
         host_bridge_auto_invocation_scaffold_for_payload,
         host_bridge_packet_paths_equivalent,
         host_bridge_observability_project_root,
-        host_bridge_request_has_retryable_dispatch_receipt_for_state_root,
         host_bridge_request_provenance_blockers,
         host_bridge_request_provenance_blockers_for_state_root,
         infer_host_bridge_state_root_from_request_path, lane_work_context,
@@ -8872,9 +8881,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             std::path::Path::new("request.json"),
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             None,
-            false,
         );
 
         assert_eq!(payload["status"], "pass");
@@ -9001,9 +9009,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             Some(&state_root),
-            false,
         );
 
         assert_eq!(payload["status"], "pass");
@@ -9069,9 +9076,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             std::path::Path::new("request.json"),
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             None,
-            false,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -9130,9 +9136,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             std::path::Path::new("request.json"),
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             None,
-            false,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -9172,9 +9177,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             std::path::Path::new("request.json"),
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             None,
-            false,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -9213,9 +9217,10 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             std::path::Path::new("/tmp/forged-request.json"),
             &request,
-            vec!["host_bridge_request_untrusted_path".to_string()],
+            HostBridgeProvenanceResult::from_blockers(vec![
+                "host_bridge_request_untrusted_path".to_string(),
+            ]),
             None,
-            false,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -10602,7 +10607,11 @@ mod tests {
             false,
         ));
 
-        assert!(blockers.contains(&"host_bridge_request_untrusted_path".to_string()));
+        assert!(
+            blockers
+                .blockers
+                .contains(&"host_bridge_request_untrusted_path".to_string())
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -10816,7 +10825,7 @@ mod tests {
             false,
         ));
         assert!(
-            blockers
+            blockers.blockers
                 .iter()
                 .any(|code| code == "host_bridge_request_untrusted_path")
         );
@@ -10825,7 +10834,6 @@ mod tests {
             &request,
             blockers,
             Some(&trusted_state_root),
-            false,
         );
         assert_eq!(payload["surface"], "vida agent host-bridge");
         assert_eq!(payload["status"], "blocked");
@@ -10941,7 +10949,7 @@ mod tests {
             false,
         ));
         assert!(
-            blockers
+            blockers.blockers
                 .iter()
                 .any(|code| code == "host_bridge_dispatch_receipt_missing")
         );
@@ -10950,7 +10958,6 @@ mod tests {
             &request,
             blockers.clone(),
             Some(&state_root),
-            false,
         );
         assert_eq!(payload["status"], "blocked");
         assert!(
@@ -12067,7 +12074,7 @@ mod tests {
         });
 
         assert!(!blockers.contains(&"host_bridge_dispatch_receipt_inactive".to_string()));
-        assert_eq!(blockers, Vec::<String>::new());
+        assert!(blockers.is_empty());
     }
 
     #[test]
@@ -12231,13 +12238,12 @@ mod tests {
             blockers
         });
 
-        assert_eq!(blockers, Vec::<String>::new());
+        assert!(blockers.blockers.is_empty());
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             Some(&state_root),
-            false,
         );
         assert_eq!(payload["status"], "pass");
         assert!(
@@ -12334,9 +12340,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             Some(&state_root),
-            false,
         );
 
         assert_eq!(payload["status"], "pass");
@@ -12474,13 +12479,13 @@ mod tests {
             .await
         });
 
-        assert!(!blockers.contains(&"host_bridge_dispatch_receipt_inactive".to_string()));
+        assert!(!blockers.blockers.contains(&"host_bridge_dispatch_receipt_inactive".to_string()));
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new())
+                .with_receipt_backed_retry_completion(),
             Some(&state_root),
-            true,
         );
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["host_bridge"]["request_status"], "pending");
@@ -12561,7 +12566,7 @@ mod tests {
         ));
 
         assert!(
-            blockers.contains(&"host_bridge_dispatch_receipt_missing".to_string()),
+            blockers.blockers.contains(&"host_bridge_dispatch_receipt_missing".to_string()),
             "retry intent without blocked receipt/result evidence must keep the public evidence blocker: {blockers:?}"
         );
         let payload = host_bridge_adapter_payload(
@@ -12569,7 +12574,6 @@ mod tests {
             &request,
             blockers,
             Some(&state_root),
-            false,
         );
         assert!(
             payload["blocker_codes"]
@@ -12676,14 +12680,13 @@ mod tests {
             false,
         ));
 
-        assert!(blockers.contains(&"host_bridge_request_not_pending".to_string()));
-        assert!(blockers.contains(&"host_bridge_dispatch_receipt_missing".to_string()));
+        assert!(blockers.blockers.contains(&"host_bridge_request_not_pending".to_string()));
+        assert!(blockers.blockers.contains(&"host_bridge_dispatch_receipt_missing".to_string()));
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
             blockers,
             Some(&state_root),
-            false,
         );
         assert!(
             !payload["host_bridge"]["completion_command"]
@@ -12793,15 +12796,6 @@ mod tests {
                 .await
                 .expect("retryable blocked receipt should record");
             store.close().await;
-            let canonical_packet_path =
-                std::fs::canonicalize(&packet_path).expect("packet path should canonicalize");
-            let retry_evidence = host_bridge_request_has_retryable_dispatch_receipt_for_state_root(
-                state_root,
-                &request,
-                Some(canonical_packet_path.as_path()),
-            )
-            .await
-            .expect("state store should remain readable for retry evidence");
             let blockers = host_bridge_request_provenance_blockers_for_state_root(
                 state_root,
                 &request_path,
@@ -12809,18 +12803,18 @@ mod tests {
                 true,
             )
             .await;
+            let retry_evidence = blockers.receipt_backed_retry_completion;
             (blockers, retry_evidence)
         });
 
         assert!(retry_evidence);
-        assert!(!blockers.contains(&"host_bridge_request_not_pending".to_string()));
-        assert_eq!(blockers, Vec::<String>::new());
+        assert!(!blockers.blockers.contains(&"host_bridge_request_not_pending".to_string()));
+        assert!(blockers.blockers.is_empty());
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
             blockers,
             Some(&state_root),
-            retry_evidence,
         );
         assert!(
             payload["host_bridge"]["completion_command"]
@@ -12828,6 +12822,105 @@ mod tests {
                 .expect("completion command")
                 .contains("--retry-completion")
         );
+    }
+
+    #[tokio::test]
+    async fn host_bridge_retry_probe_failure_keeps_typed_sanitized_state_access() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-retry-probe-corruption-{}-{nanos}",
+            std::process::id()
+        ));
+        let state_root = root.join(".vida/data/state");
+        let request_path = state_root.join("host-tool-bridge/requests/request.json");
+        let packet_path =
+            state_root.join("runtime-consumption/downstream-dispatch-packets/packet.json");
+        let result_path = state_root.join("host-tool-bridge/results/result.json");
+        let receipt_path = state_root.join("host-tool-bridge/receipts/receipt.json");
+        for directory in ["manifest", "sstables", "vlog", "wal"] {
+            std::fs::create_dir_all(state_root.join(directory))
+                .expect("corrupt SurrealKV fixture directory should exist");
+        }
+        std::fs::write(
+            state_root.join("wal/00000000000000000003.wal"),
+            "not a valid wal",
+        )
+        .expect("corrupt WAL evidence should write");
+        for path in [&request_path, &packet_path, &result_path, &receipt_path] {
+            std::fs::create_dir_all(path.parent().expect("fixture path parent"))
+                .expect("fixture path parent should exist");
+        }
+        std::fs::write(&packet_path, br#"{"run_id":"run-retry-probe-corruption"}"#)
+            .expect("packet should write");
+        let request = host_bridge_strict_current_request(serde_json::json!({
+            "schema_version": 1,
+            "status": "pending",
+            "request_id": "req-retry-probe-corruption",
+            "run_id": "run-retry-probe-corruption",
+            "task_id": "run-retry-probe-corruption",
+            "dispatch_target": "implementer",
+            "packet_path": packet_path.display().to_string(),
+            "backend_id": "internal_subagents",
+            "carrier_id": "junior",
+            "dispatch_transport": "host_tool_bridge",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "request_path": request_path.display().to_string(),
+            "result_path": result_path.display().to_string(),
+            "receipt_path": receipt_path.display().to_string()
+        }));
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request should serialize"),
+        )
+        .expect("request should write");
+
+        let provenance = host_bridge_request_provenance_blockers_for_state_root(
+            &state_root,
+            &request_path,
+            &request,
+            false,
+        )
+        .await;
+        assert!(provenance
+            .blockers
+            .contains(&"authoritative_state_store_open_failed".to_string()));
+        let diagnostic = provenance
+            .state_access
+            .expect("retry probe failure should retain typed state access");
+        assert_eq!(
+            diagnostic.error_kind,
+            state_store::StateStoreOpenErrorKind::Unknown
+        );
+        assert!(!diagnostic.retryable);
+        assert_eq!(
+            diagnostic.blocker_code,
+            "authoritative_state_store_open_failed"
+        );
+
+        let payload = host_bridge_adapter_payload(
+            &request_path,
+            &request,
+            provenance,
+            Some(&state_root),
+        );
+        assert_eq!(payload["status"], "blocked");
+        assert_eq!(
+            payload["state_access"]["error_kind"],
+            "unknown"
+        );
+        assert_eq!(payload["state_access"]["retryable"], false);
+        assert_eq!(
+            payload["state_access"]["blocker_code"],
+            "authoritative_state_store_open_failed"
+        );
+        assert_eq!(payload["host_bridge"]["state_access"], payload["state_access"]);
+        let state_access_text = payload["state_access"].to_string();
+        assert!(!state_access_text.contains(&state_root.display().to_string()));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -12853,13 +12946,12 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             std::path::Path::new("request.json"),
             &request,
-            vec![
+            HostBridgeProvenanceResult::from_blockers(vec![
                 taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing
                     .as_str()
                     .to_string(),
-            ],
+            ]),
             None,
-            false,
         );
 
         assert_eq!(payload["status"], super::release1_blocked_status());
@@ -12882,14 +12974,13 @@ mod tests {
         let mixed_blocker_payload = host_bridge_adapter_payload(
             std::path::Path::new("request.json"),
             &request,
-            vec![
+            HostBridgeProvenanceResult::from_blockers(vec![
                 taskflow_contracts::BlockerCode::HostBridgeDispatchReceiptMissing
                     .as_str()
                     .to_string(),
                 "host_bridge_result_path_unbounded".to_string(),
-            ],
+            ]),
             None,
-            false,
         );
         assert!(!super::host_bridge_payload_should_show_completion_command(
             &mixed_blocker_payload
@@ -12898,9 +12989,10 @@ mod tests {
         let other_blocker_payload = host_bridge_adapter_payload(
             std::path::Path::new("request.json"),
             &request,
-            vec!["host_bridge_result_path_unbounded".to_string()],
+            HostBridgeProvenanceResult::from_blockers(vec![
+                "host_bridge_result_path_unbounded".to_string(),
+            ]),
             None,
-            false,
         );
         assert!(!super::host_bridge_payload_should_show_completion_command(
             &other_blocker_payload
@@ -12974,9 +13066,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             Some(&state_root),
-            false,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -13034,9 +13125,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             Some(&state_root),
-            false,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -13127,9 +13217,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             Some(&state_root),
-            false,
         );
 
         assert_eq!(payload["status"], "pass");
@@ -13221,9 +13310,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             Some(&state_root),
-            false,
         );
 
         assert_eq!(payload["status"], "blocked");
@@ -13263,9 +13351,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             std::path::Path::new("request.json"),
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             None,
-            false,
         );
         let args = host_bridge_completion_lane_args(
             std::path::Path::new("request.json"),
@@ -13348,9 +13435,8 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             std::path::Path::new("request.json"),
             &request,
-            Vec::new(),
+            HostBridgeProvenanceResult::from_blockers(Vec::new()),
             None,
-            false,
         );
 
         assert_eq!(payload["status"], "pass");
