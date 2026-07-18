@@ -252,10 +252,11 @@ host_environment:
         invocation_mode: parent_host_tool_api
         dispatch_transport: host_tool_bridge
         receipt_mode: host_bridge_receipt
-        tool_family: codex_multi_agent
-        spawn_tool: multi_agent_v1.spawn_agent
-        wait_tool: multi_agent_v1.wait_agent
-        close_tool: multi_agent_v1.close_agent
+        operations:
+          spawn: multi_agent_v1.spawn_agent
+          wait: multi_agent_v1.wait_agent
+          dispose: multi_agent_v1.close_agent
+        dispose_policy: configured
         adapter_required: true
         no_adapter_policy: fail_closed_emit_request
         process_carrier_requires_explicit_backend: true

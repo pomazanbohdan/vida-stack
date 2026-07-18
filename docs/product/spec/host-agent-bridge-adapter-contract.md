@@ -77,6 +77,11 @@ host_tool_bridge:
   invocation_mode: parent_host_tool_api
   dispatch_transport: host_tool_bridge
   receipt_mode: host_bridge_receipt
+  operations:
+    spawn: <configured-parent-host-spawn-operation>
+    wait: <configured-parent-host-wait-operation>
+    dispose: <configured-parent-host-dispose-operation>
+  dispose_policy: configured | unavailable
   adapter_required: true
   no_adapter_policy: fail_closed_emit_request
   result_dir: .vida/data/state/host-tool-bridge/results
@@ -113,6 +118,14 @@ Host bridge requests must include the generic fields needed by any adapter:
   "adapter_kind": "codex_host_tools",
   "adapter_capability_id": "codex.multi_agent_v1",
   "invocation_mode": "parent_host_tool_api",
+  "adapter_operations": {
+    "spawn": "<configured-parent-host-spawn-operation>",
+    "wait": "<configured-parent-host-wait-operation>",
+    "dispose": "<configured-parent-host-dispose-operation>"
+  },
+  "adapter_contract_snapshot": "<canonical-resolved-registry-object>",
+  "adapter_contract_hash": "<config-digest-for-replay>",
+  "adapter_contract_source": "<config-or-registry-path>",
   "request_path": "...",
   "result_path": "...",
   "receipt_path": "..."
@@ -152,21 +165,19 @@ If the current environment does not expose the configured adapter capability, VI
 
 1. Read `host_tool_bridge_request.request_path`.
 2. Verify `adapter_kind`, `adapter_capability_id`, `packet_path`, `run_id`, `dispatch_target`, `backend_id`, `carrier_id`, and declared write scope.
-3. Invoke the configured host capability. For `codex_host_tools`, this means `multi_agent_v1.spawn_agent`, then `multi_agent_v1.wait_agent`, then `multi_agent_v1.close_agent`.
+3. Resolve and invoke the configured lifecycle operations in order: `operations.spawn`, then `operations.wait`, then `operations.dispose` when `dispose_policy: configured`. If disposal is unavailable, the registry must declare `dispose_policy: unavailable`; the adapter must not invent or infer a dispose operation.
 4. Write `host_tool_bridge_result` to `result_path` and `host_tool_bridge_receipt` to `receipt_path`.
 5. Call `vida lane complete <run-id> --receipt-id <id> --host-bridge-request <request_path> --host-agent-id <id> --host-bridge-summary <summary> --json`.
 
 The adapter is parent-session code, not a child process launched by `vida.exe`. VIDA may emit the request and validate completion, but the host adapter owns native host-tool invocation because those tools are not available inside the binary process.
 
-When the request names `adapter_kind: "codex_host_tools"`, `adapter_capability_id:
-"codex.multi_agent_v1"`, `invocation_mode: "parent_host_tool_api"`, and
-`dispatch_transport: "host_tool_bridge"`, VIDA must also emit a
+When a request resolves a configured parent-host adapter contract and
+`dispatch_transport` matches that contract, VIDA must also emit a
 `host_bridge_auto_invocation` scaffold. The scaffold is not execution evidence;
 it is the canonical, machine-readable parent-host adapter plan that allows the
-host integration to auto-invoke `multi_agent_v1.spawn_agent`,
-`multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent` without manual
-parent orchestration or shell interpolation. The scaffold must include request,
-packet, result, and receipt paths plus the required result fields:
+host integration to auto-invoke the registry-resolved lifecycle operations
+without manual parent orchestration or shell interpolation. The scaffold must
+include request, packet, result, and receipt paths plus the required result fields:
 `decision`, `verdict`, `blocker_codes`, `rework_target`, and
 `allowed_next_node`.
 
@@ -177,11 +188,10 @@ pending request with:
 vida agent host-bridge --request <request_path> --json
 ```
 
-The command is read-only. It returns the required `multi_agent_v1.spawn_agent`,
-`multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent` sequence, the
-expected result/receipt artifact paths, capacity blocker vocabulary, and the
-canonical `vida lane complete ... --host-bridge-request ...` command. It must not
-write completion artifacts or claim execution by itself.
+The command is read-only. It returns the registry-resolved lifecycle operation
+sequence, the expected result/receipt artifact paths, capacity blocker
+vocabulary, and the canonical `vida lane complete ... --host-bridge-request ...`
+command. It must not write completion artifacts or claim execution by itself.
 
 After the parent host adapter has executed the host agent, it can complete the
 same request through VIDA validation with:
@@ -192,6 +202,21 @@ vida agent host-bridge --request <request_path> --complete --host-agent-id <id> 
 
 `--complete` delegates the mutation to `vida lane complete`; it is not a second
 state writer.
+
+### Validation matrix
+
+| ID | Scenario | Required evidence | Expected result |
+| --- | --- | --- | --- |
+| Z | Empty registry | no adapter identity or lifecycle mapping | typed missing-config blocker; no invented defaults |
+| O | One configured operation | canonical registry operation map | request preserves the configured operation verbatim |
+| M | Multiple configured operations | spawn/wait and optional dispose policy | scaffold sequence follows registry order |
+| B | Blocked/missing capability | adapter-required policy + no usable contract | request emitted; receipt remains unbacked |
+| I | Invalid schema | malformed identity, operation, or dispose policy | typed contract error; no dispatch |
+| E | External adapter | explicit configured process carrier | process boundary remains separate from host bridge |
+| S | Snapshot replay | canonical snapshot, source, and config digest | replay can compare hash before invoking |
+| R | Receipt validation | result + receipt path and identity match | completion accepted only with validated evidence |
+| P | Parallel lanes | distinct request/packet/result/receipt paths | no cross-lane artifact collision |
+| C | Config change | changed registry operation or digest | stale request is refreshed or blocked closed |
 
 Minimum successful result:
 

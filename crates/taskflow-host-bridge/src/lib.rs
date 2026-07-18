@@ -1,3 +1,4 @@
+pub mod adapter_contract;
 pub mod adapter_payload;
 pub mod artifact_scope;
 pub mod completion;
@@ -8,12 +9,12 @@ pub mod provenance;
 pub mod receipt_binding;
 pub mod request;
 
+pub use adapter_contract::{HostBridgeAdapterContractError, HostBridgeAdapterOperations};
 pub use adapter_payload::{
-    HostBridgeAdapterPayloadInput, build_host_bridge_adapter_payload, host_bridge_operator_fields,
+    build_host_bridge_adapter_payload, host_bridge_operator_fields, HostBridgeAdapterPayloadInput,
 };
 pub use artifact_scope::{
-    HostBridgeImplementationArtifact, HostBridgeNormalizedImplementationArtifact,
-    ImplementationArtifactScopeDecision, attach_host_bridge_implementation_artifact,
+    attach_host_bridge_implementation_artifact,
     build_host_bridge_normalized_implementation_artifact, host_bridge_artifact_file,
     host_bridge_changed_files_from_artifact, host_bridge_normalized_implementation_artifact_path,
     host_bridge_record_component, host_bridge_request_implementation_artifacts,
@@ -21,10 +22,11 @@ pub use artifact_scope::{
     push_unique_host_bridge_implementation_artifact, validate_implementation_artifact_scope,
     validate_implementation_artifact_scope_with_proof_paths,
     write_host_bridge_normalized_implementation_artifact, write_host_bridge_request,
+    HostBridgeImplementationArtifact, HostBridgeNormalizedImplementationArtifact,
+    ImplementationArtifactScopeDecision,
 };
 pub use completion::{
-    HostBridgeCompletionEvidence, HostBridgeCompletionInput, HostBridgeCompletionVerdict,
-    HostBridgeResultVerdictFields, host_bridge_artifact_has_retryable_completion_blocker,
+    host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
     host_bridge_completed_result_has_preview_refresh_evidence,
@@ -44,42 +46,45 @@ pub use completion::{
     host_bridge_result_verdict_fields, host_bridge_result_verdict_fields_for_gate,
     host_bridge_result_verdict_fields_for_gate_and_next,
     materialize_host_bridge_completion_evidence, normalize_host_bridge_provenance_for_completion,
+    HostBridgeCompletionEvidence, HostBridgeCompletionInput, HostBridgeCompletionVerdict,
+    HostBridgeResultVerdictFields,
 };
 pub use completion_authority::{
-    BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_PROVENANCE_REJECTED, BLOCKER_RECEIPT_NOT_BOUND,
-    BLOCKER_SUMMARY_DERIVED, BLOCKER_TYPED_BLOCKED_OUTCOME, BLOCKER_TYPED_FAILED_OUTCOME,
+    completion_authority_transition_matrix, decide_host_bridge_completion_authority,
+    summary_blocker_codes, summary_text_reports_blocked_completion,
     HostBridgeCompletionAuthorityDecision, HostBridgeCompletionAuthorityInput,
     HostBridgeCompletionEffectIntent, HostBridgeCompletionEvent, HostBridgeCompletionFsm,
     HostBridgeCompletionState, HostBridgeCompletionTransition, HostBridgeCompletionTransitionCase,
-    completion_authority_transition_matrix, decide_host_bridge_completion_authority,
-    summary_blocker_codes, summary_text_reports_blocked_completion,
+    BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_PROVENANCE_REJECTED, BLOCKER_RECEIPT_NOT_BOUND,
+    BLOCKER_SUMMARY_DERIVED, BLOCKER_TYPED_BLOCKED_OUTCOME, BLOCKER_TYPED_FAILED_OUTCOME,
 };
 pub use errors::HostBridgeError;
 pub use legacy_normalization::{
-    CompletionBlocker, CompletionOutcome, FlowStepRef,
-    LEGACY_COMMAND_OPTIONS_SOURCE_CONTRACT_VERSION, LEGACY_HOST_BRIDGE_SOURCE_CONTRACT_VERSION,
-    LEGACY_LANE_COMPLETION_SOURCE_CONTRACT_VERSION, LEGACY_OUTCOME_CONTRADICTION,
-    LEGACY_RECEIPT_SOURCE_CONTRACT_VERSION, LEGACY_RUN_STATUS_SOURCE_CONTRACT_VERSION,
-    LegacyHostBridgeCompletionNormalization, LegacyHostBridgeCompletionNormalizationError,
     normalize_legacy_command_options, normalize_legacy_host_bridge_completion_result,
     normalize_legacy_lane_completion, normalize_legacy_receipt, normalize_legacy_run_status,
+    CompletionBlocker, CompletionOutcome, FlowStepRef, LegacyHostBridgeCompletionNormalization,
+    LegacyHostBridgeCompletionNormalizationError, LEGACY_COMMAND_OPTIONS_SOURCE_CONTRACT_VERSION,
+    LEGACY_HOST_BRIDGE_SOURCE_CONTRACT_VERSION, LEGACY_LANE_COMPLETION_SOURCE_CONTRACT_VERSION,
+    LEGACY_OUTCOME_CONTRADICTION, LEGACY_RECEIPT_SOURCE_CONTRACT_VERSION,
+    LEGACY_RUN_STATUS_SOURCE_CONTRACT_VERSION,
 };
 pub use provenance::{
-    HostBridgeProvenanceDecision, HostBridgeProvenanceInput,
     host_bridge_provenance_public_blocker_code, validate_host_bridge_request_provenance,
+    HostBridgeProvenanceDecision, HostBridgeProvenanceInput,
 };
 pub use receipt_binding::{
-    DispatchReceiptBindingDecision, DispatchReceiptBindingInput, validate_dispatch_receipt_binding,
+    validate_dispatch_receipt_binding, DispatchReceiptBindingDecision, DispatchReceiptBindingInput,
 };
 pub use request::{
-    HOST_BRIDGE_REQUIRED_RESULT_FIELDS, HostBridgeRequest, HostBridgeRequestPath,
     default_host_bridge_required_result_fields, effective_host_bridge_request,
-    host_bridge_blocked_result_contract, host_bridge_blocked_result_contract_allowed_next_node,
+    effective_host_bridge_request_with_registry, host_bridge_blocked_result_contract,
+    host_bridge_blocked_result_contract_allowed_next_node,
     host_bridge_blocked_result_contract_has_retry_evidence,
     host_bridge_blocked_result_contract_is_retryable, host_bridge_path_array,
     host_bridge_request_owned_paths, host_bridge_request_proof_artifact_paths,
     host_bridge_request_string, host_bridge_request_task_class, host_bridge_required_result_fields,
-    legacy_internal_subagents_host_bridge_request, read_host_bridge_request,
+    legacy_internal_subagents_host_bridge_request, read_host_bridge_request, HostBridgeRequest,
+    HostBridgeRequestPath, HOST_BRIDGE_REQUIRED_RESULT_FIELDS,
 };
 
 /// Compares host-bridge packet paths by runtime identity, not presentation spelling.
@@ -191,6 +196,22 @@ pub(crate) mod tests {
             adapter_capability_id: "codex.multi_agent_v1".to_string(),
             invocation_mode: "parent_host_tool_api".to_string(),
             adapter_contract_source: "request".to_string(),
+            adapter_operations: Some(
+                crate::HostBridgeAdapterOperations::from_registry_value(&json!({
+                    "adapter_kind": "codex_host_tools",
+                    "adapter_capability_id": "codex.multi_agent_v1",
+                    "invocation_mode": "parent_host_tool_api",
+                    "dispatch_transport": "host_tool_bridge",
+                    "receipt_mode": "host_bridge_receipt",
+                    "operations": {
+                        "spawn": "multi_agent_v1.spawn_agent",
+                        "wait": "multi_agent_v1.wait_agent",
+                        "dispose": "multi_agent_v1.close_agent"
+                    },
+                    "dispose_policy": "configured"
+                }))
+                .expect("test adapter contract"),
+            ),
             request_path: PathBuf::from("host-tool-bridge/requests/request.json"),
             result_path: PathBuf::from("host-tool-bridge/results/result.json"),
             receipt_path: PathBuf::from("host-tool-bridge/receipts/receipt.json"),

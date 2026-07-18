@@ -14,6 +14,7 @@ use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::runtime_proof_scope::proof_scope_from_dispatch_packet_path;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 use taskflow_host_bridge::{
+    HostBridgeAdapterOperations,
     default_host_bridge_required_result_fields,
     host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
@@ -2070,29 +2071,13 @@ fn configured_host_dispatch_transport(system_entry: Option<&serde_yaml::Value>) 
     {
         return transport;
     }
-    if system_entry
-        .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["execution_class"])))
-        .as_deref()
-        == Some("internal")
-    {
-        return "host_tool_bridge".to_string();
-    }
-    if system_entry
-        .and_then(|entry| yaml_lookup(entry, &["dispatch", "command"]))
-        .and_then(serde_yaml::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_some()
-    {
-        return "codex_cli_exec".to_string();
-    }
-    "host_tool_bridge".to_string()
+    String::new()
 }
 
 fn configured_host_receipt_mode(system_entry: Option<&serde_yaml::Value>) -> String {
     system_entry
         .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["receipt_mode"])))
-        .unwrap_or_else(|| "host_bridge_receipt".to_string())
+        .unwrap_or_default()
 }
 
 fn path_has_dot_segment(path: &Path) -> bool {
@@ -2328,35 +2313,10 @@ fn configured_host_tool_bridge_string(
         .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["host_tool_bridge", key])))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .or_else(|| default_codex_host_tool_bridge_string(system_entry, key))
-}
-
-fn default_codex_host_tool_bridge_string(
-    system_entry: Option<&serde_yaml::Value>,
-    key: &str,
-) -> Option<String> {
-    let entry = system_entry?;
-    if configured_host_dispatch_transport(Some(entry)) != "host_tool_bridge" {
-        return None;
-    }
-    let execution_class = crate::yaml_string(yaml_lookup(entry, &["execution_class"]));
-    let dispatch_command = yaml_lookup(entry, &["dispatch", "command"])
-        .and_then(serde_yaml::Value::as_str)
-        .map(str::trim);
-    if execution_class.as_deref() != Some("internal") || dispatch_command != Some("codex") {
-        return None;
-    }
-    match key {
-        "adapter_kind" => Some("codex_host_tools".to_string()),
-        "adapter_capability_id" => Some("codex.multi_agent_v1".to_string()),
-        "invocation_mode" => Some("parent_host_tool_api".to_string()),
-        "tool_family" => Some("codex_multi_agent".to_string()),
-        "spawn_tool" => Some("multi_agent_v1.spawn_agent".to_string()),
-        "wait_tool" => Some("multi_agent_v1.wait_agent".to_string()),
-        "close_tool" => Some("multi_agent_v1.close_agent".to_string()),
-        "receipt_mode" => Some("host_bridge_receipt".to_string()),
-        _ => None,
-    }
+        .or_else(|| {
+            system_entry
+                .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &[key])))
+        })
 }
 
 fn dispatch_packet_string_list(dispatch_packet_path: &str, field: &str) -> Vec<String> {
@@ -2849,26 +2809,34 @@ fn materialize_host_tool_bridge_request(
     let request_id = host_tool_bridge_request_id(receipt, dispatch_packet_path);
     let paths =
         host_tool_bridge_artifact_paths(project_root, state_root, selected_cli_entry, &request_id);
-    let adapter_kind = configured_host_tool_bridge_string(selected_cli_entry, "adapter_kind")
-        .unwrap_or_else(|| "unconfigured_host_agent_adapter".to_string());
-    let adapter_capability_id =
-        configured_host_tool_bridge_string(selected_cli_entry, "adapter_capability_id")
-            .unwrap_or_else(|| "unconfigured_host_agent_capability".to_string());
-    let invocation_mode = configured_host_tool_bridge_string(selected_cli_entry, "invocation_mode")
-        .unwrap_or_else(|| "configured_host_capability_required".to_string());
-    let receipt_mode = configured_host_tool_bridge_string(selected_cli_entry, "receipt_mode")
+    let adapter_contract = selected_cli_entry
+        .and_then(|entry| serde_json::to_value(entry).ok())
+        .and_then(|entry| HostBridgeAdapterOperations::from_registry_value(&entry).ok());
+    let adapter_contract_value = adapter_contract
+        .as_ref()
+        .map(HostBridgeAdapterOperations::to_value)
+        .unwrap_or(serde_json::Value::Null);
+    let adapter_contract_snapshot = adapter_contract_value.clone();
+    let adapter_contract_hash = crate::launcher_activation_snapshot::config_file_digest(
+        &crate::config_file_path_for_root(project_root),
+    )
+    .unwrap_or_default();
+    let adapter_kind = adapter_contract
+        .as_ref()
+        .map(|contract| contract.adapter_kind.clone())
+        .unwrap_or_default();
+    let adapter_capability_id = adapter_contract
+        .as_ref()
+        .map(|contract| contract.adapter_capability_id.clone())
+        .unwrap_or_default();
+    let invocation_mode = adapter_contract
+        .as_ref()
+        .map(|contract| contract.invocation_mode.clone())
+        .unwrap_or_default();
+    let receipt_mode = adapter_contract
+        .as_ref()
+        .map(|contract| contract.receipt_mode.clone())
         .unwrap_or_else(|| configured_host_receipt_mode(selected_cli_entry));
-    let adapter_params = selected_cli_entry
-        .and_then(|entry| yaml_lookup(entry, &["host_tool_bridge", "adapter_params"]))
-        .and_then(|params| serde_json::to_value(params).ok())
-        .unwrap_or_else(|| {
-            serde_json::json!({
-                "tool_family": configured_host_tool_bridge_string(selected_cli_entry, "tool_family"),
-                "spawn_tool": configured_host_tool_bridge_string(selected_cli_entry, "spawn_tool"),
-                "wait_tool": configured_host_tool_bridge_string(selected_cli_entry, "wait_tool"),
-                "close_tool": configured_host_tool_bridge_string(selected_cli_entry, "close_tool"),
-            })
-        });
     let configured_runtime_role =
         crate::runtime_dispatch_downstream_packets::configured_lane_runtime_role(
             role_selection,
@@ -2951,13 +2919,23 @@ fn materialize_host_tool_bridge_request(
         "task_class": request_task_class,
         "backend_id": backend_id,
         "carrier_id": carrier_id,
-        "execution_boundary": "parent_host_session",
-        "dispatch_transport": "host_tool_bridge",
+        "execution_boundary": selected_cli_entry
+            .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["execution_boundary"])))
+            .unwrap_or_default(),
+        "dispatch_transport": adapter_contract
+            .as_ref()
+            .map(|contract| contract.dispatch_transport.clone())
+            .unwrap_or_else(|| configured_host_dispatch_transport(selected_cli_entry)),
         "receipt_mode": receipt_mode,
         "adapter_kind": adapter_kind,
         "adapter_capability_id": adapter_capability_id,
         "invocation_mode": invocation_mode,
-        "adapter_params": adapter_params,
+        "adapter_operations": adapter_contract_value,
+        "adapter_contract_snapshot": adapter_contract_snapshot,
+        "adapter_contract_hash": adapter_contract_hash,
+        "adapter_contract_source": crate::config_file_path_for_root(project_root)
+            .display()
+            .to_string(),
         "implementation_isolation": implementation_isolation,
         "expected_implementation_artifact_kinds": expected_implementation_artifact_kinds,
         "implementation_artifacts": [],
@@ -4208,7 +4186,11 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
     let execution_boundary = configured_host_execution_boundary(selected_cli_entry.as_ref());
     let dispatch_transport = configured_host_dispatch_transport(selected_cli_entry.as_ref());
     let receipt_mode = configured_host_receipt_mode(selected_cli_entry.as_ref());
-    if dispatch_transport == "host_tool_bridge" {
+    let host_bridge_registry_present = selected_cli_entry
+        .as_ref()
+        .and_then(|entry| yaml_lookup(entry, &["host_tool_bridge"]))
+        .is_some();
+    if host_bridge_registry_present {
         let activation_view = bounded_activation_view(
             state_root,
             project_root,
@@ -6017,15 +5999,15 @@ dispatch:
         );
         assert_eq!(
             configured_host_tool_bridge_string(Some(&system_entry), "adapter_kind"),
-            Some("codex_host_tools".to_string())
+            None
         );
         assert_eq!(
             configured_host_tool_bridge_string(Some(&system_entry), "adapter_capability_id"),
-            Some("codex.multi_agent_v1".to_string())
+            None
         );
         assert_eq!(
             configured_host_tool_bridge_string(Some(&system_entry), "spawn_tool"),
-            Some("multi_agent_v1.spawn_agent".to_string())
+            None
         );
     }
 
@@ -6052,11 +6034,11 @@ host_environment:
         let entry = entry.expect("explicit legacy codex selection should synthesize system entry");
         assert_eq!(
             configured_host_tool_bridge_string(Some(&entry), "adapter_capability_id"),
-            Some("codex.multi_agent_v1".to_string())
+            None
         );
         assert_eq!(
             configured_host_tool_bridge_string(Some(&entry), "spawn_tool"),
-            Some("multi_agent_v1.spawn_agent".to_string())
+            None
         );
         assert!(
             crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(Some(&entry))
@@ -6157,9 +6139,10 @@ host_environment:
         )
         .expect("partial codex host bridge request should materialize");
 
-        assert_eq!(request["adapter_kind"], "codex_host_tools");
-        assert_eq!(request["adapter_capability_id"], "codex.multi_agent_v1");
-        assert_eq!(request["invocation_mode"], "parent_host_tool_api");
+        assert_eq!(request["adapter_kind"], "");
+        assert_eq!(request["adapter_capability_id"], "");
+        assert_eq!(request["invocation_mode"], "");
+        assert!(request["adapter_operations"].is_null());
         assert_eq!(
             request["packet_id"],
             "partial-codex-host-bridge::implementer::delivery"
@@ -6168,10 +6151,7 @@ host_environment:
             request["attempt_id"],
             "partial-codex-host-bridge::implementer::delivery"
         );
-        assert_eq!(
-            request["adapter_params"]["spawn_tool"],
-            "multi_agent_v1.spawn_agent"
-        );
+        assert!(request.get("adapter_params").is_none());
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
@@ -6205,6 +6185,11 @@ dispatch:
             "vida-host-bridge-defaults-{}-{nanos}",
             std::process::id()
         ));
+        let packet_path = project_root.join(".vida/dispatch.json");
+        std::fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
+            .expect("create packet parent");
+        std::fs::write(&packet_path, serde_json::json!({"owned_paths": ["src/lib.rs"]}).to_string())
+            .expect("write dispatch packet");
         let receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: "run-host-bridge".to_string(),
             dispatch_target: "implementer".to_string(),
@@ -6215,7 +6200,7 @@ dispatch:
             dispatch_kind: "agent_lane".to_string(),
             dispatch_surface: Some("vida agent-init".to_string()),
             dispatch_command: None,
-            dispatch_packet_path: Some("/tmp/project/.vida/dispatch.json".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
             dispatch_result_path: None,
             blocker_code: None,
             downstream_dispatch_target: None,
@@ -6240,10 +6225,7 @@ dispatch:
             &project_root,
             &project_root.join(".vida/data/state"),
             None,
-            &project_root
-                .join(".vida/dispatch.json")
-                .display()
-                .to_string(),
+            &packet_path.display().to_string(),
             "internal_subagents",
             "junior",
             &receipt,
@@ -6251,17 +6233,12 @@ dispatch:
         )
         .expect("host bridge request should materialize");
 
-        assert_eq!(request["adapter_kind"], "unconfigured_host_agent_adapter");
-        assert_eq!(
-            request["adapter_capability_id"],
-            "unconfigured_host_agent_capability"
-        );
-        assert_eq!(
-            request["invocation_mode"],
-            "configured_host_capability_required"
-        );
+        assert_eq!(request["adapter_kind"], "");
+        assert_eq!(request["adapter_capability_id"], "");
+        assert_eq!(request["invocation_mode"], "");
+        assert!(request["adapter_operations"].is_null());
         assert!(request.get("spawn_tool").is_none());
-        assert!(request["adapter_params"].get("spawn_tool").is_some());
+        assert!(request.get("adapter_params").is_none());
         let _ = std::fs::remove_dir_all(&project_root);
     }
 

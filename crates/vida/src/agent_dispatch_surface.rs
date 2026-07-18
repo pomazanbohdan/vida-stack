@@ -27,6 +27,7 @@ use runtime_path_policy::{
     new_output_path_under_root, path_contains_dot_segment,
 };
 use taskflow_host_bridge::{
+    HostBridgeAdapterOperations,
     DispatchReceiptBindingInput, HostBridgeAdapterPayloadInput, HostBridgeCompletionAuthorityInput,
     HostBridgeProvenanceInput, HostBridgeRequest, HostBridgeRequestPath,
     build_host_bridge_adapter_payload, build_host_bridge_normalized_implementation_artifact,
@@ -1295,18 +1296,30 @@ pub(crate) fn host_bridge_auto_invocation_scaffold_for_payload(
     let receipt_path = host_bridge["receipt_path"]
         .as_str()
         .or_else(|| payload["host_tool_bridge_request"]["receipt_path"].as_str());
-    let adapter_kind = host_bridge["adapter_kind"]
-        .as_str()
+    let adapter_operations = host_bridge
+        .get("adapter_operations")
+        .filter(|value| !value.is_null())
+        .or_else(|| payload["host_tool_bridge_request"].get("adapter_operations"))
+        .and_then(|value| HostBridgeAdapterOperations::from_registry_value(value).ok());
+    let adapter_kind = adapter_operations
+        .as_ref()
+        .map(|operations| operations.adapter_kind.as_str())
+        .or_else(|| host_bridge["adapter_kind"].as_str())
         .or_else(|| payload["host_tool_bridge_request"]["adapter_kind"].as_str());
-    let adapter_capability_id = host_bridge["adapter_capability_id"]
-        .as_str()
+    let adapter_capability_id = adapter_operations
+        .as_ref()
+        .map(|operations| operations.adapter_capability_id.as_str())
+        .or_else(|| host_bridge["adapter_capability_id"].as_str())
         .or_else(|| payload["host_tool_bridge_request"]["adapter_capability_id"].as_str());
-    let invocation_mode = host_bridge["invocation_mode"]
-        .as_str()
-        .or_else(|| payload["host_tool_bridge_request"]["invocation_mode"].as_str())
-        .unwrap_or("parent_host_tool_api");
-    let dispatch_transport = host_bridge["dispatch_transport"]
-        .as_str()
+    let invocation_mode = adapter_operations
+        .as_ref()
+        .map(|operations| operations.invocation_mode.as_str())
+        .or_else(|| host_bridge["invocation_mode"].as_str())
+        .or_else(|| payload["host_tool_bridge_request"]["invocation_mode"].as_str());
+    let dispatch_transport = adapter_operations
+        .as_ref()
+        .map(|operations| operations.dispatch_transport.as_str())
+        .or_else(|| host_bridge["dispatch_transport"].as_str())
         .or_else(|| payload["host_tool_bridge_request"]["dispatch_transport"].as_str());
     let blocker_codes = payload["blocker_codes"]
         .as_array()
@@ -1325,9 +1338,11 @@ pub(crate) fn host_bridge_auto_invocation_scaffold_for_payload(
     {
         blocker_codes.push(code);
     }
-    let request_gate_ready = dispatch_transport == Some("host_tool_bridge")
-        && adapter_kind == Some("codex_host_tools")
-        && adapter_capability_id == Some("codex.multi_agent_v1")
+    let request_gate_ready = adapter_operations.is_some()
+        && dispatch_transport.is_some_and(|value| !value.trim().is_empty())
+        && adapter_kind.is_some_and(|value| !value.trim().is_empty())
+        && adapter_capability_id.is_some_and(|value| !value.trim().is_empty())
+        && invocation_mode.is_some_and(|value| !value.trim().is_empty())
         && request_path.is_some()
         && packet_path.is_some()
         && result_path.is_some()
@@ -1357,11 +1372,10 @@ pub(crate) fn host_bridge_auto_invocation_scaffold_for_payload(
         "result_path": result_path,
         "receipt_path": receipt_path,
         "tool_sequence": if safe_to_auto_invoke {
-            serde_json::json!([
-                "multi_agent_v1.spawn_agent",
-                "multi_agent_v1.wait_agent",
-                "multi_agent_v1.close_agent"
-            ])
+            adapter_operations
+                .as_ref()
+                .map(|operations| serde_json::json!(operations.operation_sequence()))
+                .unwrap_or_else(|| serde_json::json!([]))
         } else {
             serde_json::json!([])
         },

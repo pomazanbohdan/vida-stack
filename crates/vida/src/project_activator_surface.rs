@@ -371,15 +371,7 @@ materialization_mode: codex_toml_catalog_render
 template_root: .codex
 runtime_root: .codex
 host_tool_bridge:
-  adapter_kind: codex_host_tools
-  adapter_capability_id: codex.multi_agent_v1
-  invocation_mode: parent_host_tool_api
   dispatch_transport: host_tool_bridge
-  receipt_mode: host_bridge_receipt
-  tool_family: codex_multi_agent
-  spawn_tool: multi_agent_v1.spawn_agent
-  wait_tool: multi_agent_v1.wait_agent
-  close_tool: multi_agent_v1.close_agent
   adapter_required: true
   no_adapter_policy: fail_closed_emit_request
   process_carrier_requires_explicit_backend: true
@@ -3151,7 +3143,7 @@ host_environment:
         assert_eq!(
             super::yaml_lookup(codex, &["host_tool_bridge", "adapter_capability_id"])
                 .and_then(serde_yaml::Value::as_str),
-            Some("codex.multi_agent_v1")
+            None
         );
         assert!(super::yaml_lookup(codex, &["carriers", "junior"]).is_some());
     }
@@ -3195,12 +3187,12 @@ host_environment:
         assert_eq!(
             super::yaml_lookup(codex, &["host_tool_bridge", "adapter_capability_id"])
                 .and_then(serde_yaml::Value::as_str),
-            Some("codex.multi_agent_v1")
+            None
         );
         assert_eq!(
             super::yaml_lookup(codex, &["host_tool_bridge", "spawn_tool"])
                 .and_then(serde_yaml::Value::as_str),
-            Some("multi_agent_v1.spawn_agent")
+            None
         );
         assert_eq!(
             super::yaml_lookup(codex, &["dispatch", "command"]).and_then(serde_yaml::Value::as_str),

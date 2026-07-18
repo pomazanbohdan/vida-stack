@@ -3,21 +3,21 @@ use std::path::Path;
 use operator_output::{
     command_text::human_command,
     operator_contracts::{
-        OperatorContractSpec, canonical_pass_blocked_contract_status_str,
-        finalize_operator_surface_verdict,
+        canonical_pass_blocked_contract_status_str, finalize_operator_surface_verdict,
+        OperatorContractSpec,
     },
 };
 use serde_json::Value;
-use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
+use taskflow_contracts::{release1_contract_status_str, Release1ContractStatus};
 
+use crate::adapter_contract::HostBridgeAdapterOperations;
 use crate::completion::{
     host_bridge_request_effectively_requires_implementation_artifacts,
     host_bridge_request_status_allows_parent_completion,
 };
 use crate::request::{
-    HostBridgeRequest, default_host_bridge_required_result_fields, effective_host_bridge_request,
-    host_bridge_blocked_result_contract, host_bridge_request_string,
-    legacy_internal_subagents_host_bridge_request,
+    default_host_bridge_required_result_fields, effective_host_bridge_request,
+    host_bridge_blocked_result_contract, host_bridge_request_string, HostBridgeRequest,
 };
 
 pub struct HostBridgeAdapterPayloadInput<'a> {
@@ -63,19 +63,8 @@ fn push_missing_field(missing: &mut Vec<String>, field: &str) {
 
 fn raw_host_bridge_request_missing_fields(request: &Value) -> Vec<String> {
     let mut missing = Vec::new();
-    if legacy_internal_subagents_host_bridge_request(request) {
-        for (field, sentinel) in [
-            ("adapter_kind", "unconfigured_host_agent_adapter"),
-            (
-                "adapter_capability_id",
-                "unconfigured_host_agent_capability",
-            ),
-            ("invocation_mode", "configured_host_capability_required"),
-        ] {
-            if host_bridge_request_string(request, field) == Some(sentinel) {
-                push_missing_field(&mut missing, field);
-            }
-        }
+    if HostBridgeAdapterOperations::from_request_value(request).is_err() {
+        push_missing_field(&mut missing, "adapter_operations");
     }
     missing
 }
@@ -168,12 +157,13 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         .as_ref()
         .ok()
         .map(|request| request.invocation_mode.as_str())
-        .unwrap_or("parent_host_tool_api");
+        .unwrap_or("");
     let adapter_contract_source = typed_request
         .as_ref()
         .ok()
         .map(|request| request.adapter_contract_source.as_str())
-        .unwrap_or("request");
+        .unwrap_or("");
+    let adapter_operations = HostBridgeAdapterOperations::from_request_value(request).ok();
     let required_result_fields = typed_request
         .as_ref()
         .ok()
@@ -205,7 +195,15 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
                 .to_string(),
         );
     }
-    if dispatch_transport != Some("host_tool_bridge") {
+    let configured_dispatch_transport = request
+        .get("adapter_operations")
+        .and_then(|value| HostBridgeAdapterOperations::from_registry_value(value).ok())
+        .map(|operations| operations.dispatch_transport);
+    if dispatch_transport.is_none_or(|value| value.trim().is_empty())
+        || configured_dispatch_transport
+            .as_deref()
+            .is_some_and(|configured| dispatch_transport != Some(configured))
+    {
         blocker_codes.push(
             taskflow_contracts::BlockerCode::HostBridgeRequestWrongTransport
                 .as_str()
@@ -222,7 +220,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
                 .to_string(),
         );
     }
-    if adapter_capability_id != Some("codex.multi_agent_v1") {
+    if adapter_operations.is_none() {
         blocker_codes.push(
             taskflow_contracts::BlockerCode::HostToolCapabilityMissing
                 .as_str()
@@ -252,25 +250,17 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         None
     };
     let host_tool_calls = if status == Release1ContractStatus::Pass.as_str() {
-        serde_json::json!([
-            {
-                "tool": "multi_agent_v1.spawn_agent",
-                "purpose": "start the selected parent-host subagent for the bounded dispatch packet",
-                "adapter_kind": adapter_kind,
-                "adapter_capability_id": adapter_capability_id,
-                "packet_path": packet_path,
-                "backend_id": backend_id,
-                "carrier_id": carrier_id
-            },
-            {
-                "tool": "multi_agent_v1.wait_agent",
-                "purpose": "wait for receipt-backed completion evidence from the spawned host agent"
-            },
-            {
-                "tool": "multi_agent_v1.close_agent",
-                "purpose": "release host thread capacity after completion or blocked result capture"
-            }
-        ])
+        adapter_operations
+            .as_ref()
+            .map(|operations| {
+                operations
+                    .operation_sequence()
+                    .into_iter()
+                    .map(|tool| serde_json::json!({ "tool": tool }))
+                    .collect::<Vec<_>>()
+            })
+            .map(Value::Array)
+            .unwrap_or_else(|| Value::Array(Vec::new()))
     } else {
         serde_json::json!([])
     };
@@ -288,7 +278,7 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
         "registry_update_required": true,
         "blocked_result_code": taskflow_contracts::BlockerCode::HostAgentCapacityUnavailable.as_str(),
         "next_actions": [
-            "Invoke multi_agent_v1.spawn_agent from the parent host session when capacity is available.",
+            "Invoke the configured spawn operation from the parent host session when capacity is available.",
             "If the parent host tool reports thread or capacity exhaustion, submit a blocked host bridge result with blocker_code host_agent_capacity_unavailable so the host-agent handle registry records capacity state."
         ]
     });
@@ -359,6 +349,9 @@ pub fn build_host_bridge_adapter_payload(input: HostBridgeAdapterPayloadInput<'_
             "adapter_capability_id": adapter_capability_id,
             "invocation_mode": invocation_mode,
             "adapter_contract_source": adapter_contract_source,
+            "adapter_operations": adapter_operations
+                .as_ref()
+                .map(HostBridgeAdapterOperations::to_value),
             "required_result_fields": required_result_fields.clone(),
             "missing_fields": missing,
             "result_path": result_path,
@@ -402,6 +395,20 @@ mod tests {
             "adapter_kind": "codex_host_tools",
             "adapter_capability_id": "codex.multi_agent_v1",
             "invocation_mode": "parent_host_tool_api",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_operations": {
+                "adapter_kind": "codex_host_tools",
+                "adapter_capability_id": "codex.multi_agent_v1",
+                "invocation_mode": "parent_host_tool_api",
+                "dispatch_transport": "host_tool_bridge",
+                "receipt_mode": "host_bridge_receipt",
+                "operations": {
+                    "spawn": "multi_agent_v1.spawn_agent",
+                    "wait": "multi_agent_v1.wait_agent",
+                    "dispose": "multi_agent_v1.close_agent"
+                },
+                "dispose_policy": "configured"
+            },
             "request_path": "request.json",
             "result_path": "result.json",
             "receipt_path": "receipt.json"
@@ -524,14 +531,12 @@ mod tests {
             payload["host_bridge"]["artifact_attach_command"],
             "vida agent host-bridge --request request.json --attach-artifact <artifact-path> --changed-file <changed-file> --artifact-kind patch_proposal"
         );
-        assert!(
-            payload["shared_fields"]["next_actions"]
-                .as_array()
-                .expect("next actions")
-                .first()
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|action| action.contains("--attach-artifact"))
-        );
+        assert!(payload["shared_fields"]["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .first()
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|action| action.contains("--attach-artifact")));
     }
 
     #[test]
@@ -550,14 +555,12 @@ mod tests {
             payload["host_bridge"]["artifact_attach_command"],
             "vida agent host-bridge --request request.json --attach-artifact <artifact-path> --changed-file <changed-file> --artifact-kind patch_proposal"
         );
-        assert!(
-            payload["shared_fields"]["next_actions"]
-                .as_array()
-                .expect("next actions")
-                .first()
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|action| action.contains("--attach-artifact"))
-        );
+        assert!(payload["shared_fields"]["next_actions"]
+            .as_array()
+            .expect("next actions")
+            .first()
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|action| action.contains("--attach-artifact")));
     }
 
     #[test]
@@ -568,10 +571,11 @@ mod tests {
         let payload = payload_for(&request);
 
         assert_eq!(payload["status"], "blocked");
-        assert_eq!(
-            payload["blocker_codes"],
-            json!(["host_bridge_request_missing_fields"])
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "host_bridge_request_missing_fields"));
         assert_eq!(
             payload["host_bridge"]["missing_fields"],
             json!(["packet_path"])
@@ -598,13 +602,19 @@ mod tests {
         let payload = payload_for(&request);
 
         assert_eq!(payload["status"], "blocked");
-        assert_eq!(
-            payload["blocker_codes"],
-            json!(["host_bridge_request_missing_fields"])
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "host_bridge_request_missing_fields"));
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "host_tool_capability_missing"));
         assert_eq!(
             payload["host_bridge"]["missing_fields"],
-            json!(["adapter_kind", "adapter_capability_id", "invocation_mode"])
+            json!(["adapter_operations"])
         );
         assert_eq!(payload["host_bridge"]["host_tool_calls"], json!([]));
     }
@@ -617,10 +627,11 @@ mod tests {
         let payload = payload_for(&request);
 
         assert_eq!(payload["status"], "blocked");
-        assert_eq!(
-            payload["blocker_codes"],
-            json!(["host_bridge_request_wrong_transport"])
-        );
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "host_bridge_request_wrong_transport"));
         assert_eq!(payload["host_bridge"]["dispatch_transport"], "filesystem");
         assert_eq!(payload["host_bridge"]["host_tool_calls"], json!([]));
     }

@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use runtime_path_policy::{ArtifactPathKind, StateRoot, existing_regular_file_under_root};
+use runtime_path_policy::{existing_regular_file_under_root, ArtifactPathKind, StateRoot};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::adapter_contract::{HostBridgeAdapterContractError, HostBridgeAdapterOperations};
 use crate::errors::HostBridgeError;
 
 const MAX_HOST_BRIDGE_REQUEST_BYTES: u64 = 1024 * 1024;
@@ -49,6 +50,7 @@ pub struct HostBridgeRequest {
     pub adapter_capability_id: String,
     pub invocation_mode: String,
     pub adapter_contract_source: String,
+    pub adapter_operations: Option<HostBridgeAdapterOperations>,
     pub request_path: PathBuf,
     pub result_path: PathBuf,
     pub receipt_path: PathBuf,
@@ -68,24 +70,18 @@ impl HostBridgeRequest {
                 .unwrap_or_else(|| required_string(&raw, "run_id").unwrap_or_default()),
             dispatch_target: required_string(&raw, "dispatch_target")?,
             packet_path: optional_path(&raw, "packet_path").unwrap_or_default(),
-            backend_id: optional_string(&raw, "backend_id")
-                .unwrap_or_else(|| "internal_subagents".to_string()),
-            carrier_id: optional_string(&raw, "carrier_id")
-                .unwrap_or_else(|| "internal_subagents".to_string()),
-            execution_boundary: optional_string(&raw, "execution_boundary")
-                .unwrap_or_else(|| "parent_host_session".to_string()),
-            dispatch_transport: optional_string(&raw, "dispatch_transport")
-                .unwrap_or_else(|| "host_tool_bridge".to_string()),
-            receipt_mode: optional_string(&raw, "receipt_mode")
-                .unwrap_or_else(|| "host_bridge_receipt".to_string()),
-            adapter_kind: optional_string(&raw, "adapter_kind")
-                .unwrap_or_else(|| "codex_host_tools".to_string()),
+            backend_id: optional_string(&raw, "backend_id").unwrap_or_default(),
+            carrier_id: optional_string(&raw, "carrier_id").unwrap_or_default(),
+            execution_boundary: optional_string(&raw, "execution_boundary").unwrap_or_default(),
+            dispatch_transport: optional_string(&raw, "dispatch_transport").unwrap_or_default(),
+            receipt_mode: optional_string(&raw, "receipt_mode").unwrap_or_default(),
+            adapter_kind: optional_string(&raw, "adapter_kind").unwrap_or_default(),
             adapter_capability_id: optional_string(&raw, "adapter_capability_id")
-                .unwrap_or_else(|| "codex.multi_agent_v1".to_string()),
-            invocation_mode: optional_string(&raw, "invocation_mode")
-                .unwrap_or_else(|| "parent_host_tool_api".to_string()),
+                .unwrap_or_default(),
+            invocation_mode: optional_string(&raw, "invocation_mode").unwrap_or_default(),
             adapter_contract_source: optional_string(&raw, "adapter_contract_source")
-                .unwrap_or_else(|| "request".to_string()),
+                .unwrap_or_default(),
+            adapter_operations: HostBridgeAdapterOperations::from_request_value(&raw).ok(),
             request_path: optional_path(&raw, "request_path").unwrap_or_default(),
             result_path: optional_path(&raw, "result_path").unwrap_or_default(),
             receipt_path: optional_path(&raw, "receipt_path").unwrap_or_default(),
@@ -324,64 +320,51 @@ pub fn host_bridge_request_proof_artifact_paths(request: &Value) -> Vec<PathBuf>
 }
 
 pub fn legacy_internal_subagents_host_bridge_request(request: &Value) -> bool {
-    host_bridge_request_string(request, "backend_id") == Some("internal_subagents")
-        && host_bridge_request_string(request, "dispatch_transport") == Some("host_tool_bridge")
-        && (host_bridge_request_string(request, "adapter_kind")
-            == Some("unconfigured_host_agent_adapter")
-            || host_bridge_request_string(request, "adapter_capability_id")
-                == Some("unconfigured_host_agent_capability")
-            || host_bridge_request_string(request, "invocation_mode")
-                == Some("configured_host_capability_required"))
+    HostBridgeAdapterOperations::from_request_value(request).is_err()
 }
 
 pub fn effective_host_bridge_request(request: &Value) -> Value {
-    if !legacy_internal_subagents_host_bridge_request(request) {
-        return request.clone();
-    }
+    request.clone()
+}
+
+/// Translate persisted legacy adapter aliases with an explicit registry row.
+/// Unknown or absent mappings remain an error and must be surfaced as a typed
+/// capability blocker by the caller.
+pub fn effective_host_bridge_request_with_registry(
+    request: &Value,
+    registry: &Value,
+) -> Result<Value, HostBridgeAdapterContractError> {
+    let contract = HostBridgeAdapterOperations::from_registry_value(registry)?;
     let mut effective = request.clone();
-    if let Some(object) = effective.as_object_mut() {
-        object.insert(
-            "adapter_kind".to_string(),
-            Value::String("codex_host_tools".to_string()),
-        );
-        object.insert(
-            "adapter_capability_id".to_string(),
-            Value::String("codex.multi_agent_v1".to_string()),
-        );
-        object.insert(
-            "invocation_mode".to_string(),
-            Value::String("parent_host_tool_api".to_string()),
-        );
-        object
-            .entry("receipt_mode".to_string())
-            .or_insert_with(|| Value::String("host_bridge_receipt".to_string()));
-        object.insert(
-            "adapter_contract_source".to_string(),
-            Value::String("legacy_internal_subagents_default".to_string()),
-        );
-        let adapter_params = object
-            .entry("adapter_params".to_string())
-            .or_insert_with(|| serde_json::json!({}));
-        if let Some(params) = adapter_params.as_object_mut() {
-            params.insert(
-                "tool_family".to_string(),
-                Value::String("codex_multi_agent".to_string()),
-            );
-            params.insert(
-                "spawn_tool".to_string(),
-                Value::String("multi_agent_v1.spawn_agent".to_string()),
-            );
-            params.insert(
-                "wait_tool".to_string(),
-                Value::String("multi_agent_v1.wait_agent".to_string()),
-            );
-            params.insert(
-                "close_tool".to_string(),
-                Value::String("multi_agent_v1.close_agent".to_string()),
-            );
-        }
-    }
-    effective
+    let object = effective
+        .as_object_mut()
+        .ok_or(HostBridgeAdapterContractError::InvalidField("request"))?;
+    object.insert(
+        "adapter_kind".to_string(),
+        Value::String(contract.adapter_kind.clone()),
+    );
+    object.insert(
+        "adapter_capability_id".to_string(),
+        Value::String(contract.adapter_capability_id.clone()),
+    );
+    object.insert(
+        "invocation_mode".to_string(),
+        Value::String(contract.invocation_mode.clone()),
+    );
+    object.insert(
+        "dispatch_transport".to_string(),
+        Value::String(contract.dispatch_transport.clone()),
+    );
+    object.insert(
+        "receipt_mode".to_string(),
+        Value::String(contract.receipt_mode.clone()),
+    );
+    object.insert("adapter_operations".to_string(), contract.to_value());
+    object.insert(
+        "adapter_contract_source".to_string(),
+        Value::String("configured_registry".to_string()),
+    );
+    Ok(effective)
 }
 
 pub fn read_host_bridge_request(
@@ -595,14 +578,27 @@ mod tests {
             "adapter_kind": "unconfigured_host_agent_adapter"
         });
 
-        let effective = effective_host_bridge_request(&request);
+        let registry = serde_json::json!({
+            "adapter_kind": "configured_adapter",
+            "adapter_capability_id": "configured_capability",
+            "invocation_mode": "configured_parent",
+            "dispatch_transport": "configured_transport",
+            "receipt_mode": "configured_receipt",
+            "operations": {
+                "spawn": "configured.spawn",
+                "wait": "configured.wait",
+                "dispose": "configured.dispose"
+            },
+            "dispose_policy": "configured"
+        });
+        let effective = effective_host_bridge_request_with_registry(&request, &registry).unwrap();
 
-        assert_eq!(effective["adapter_kind"], "codex_host_tools");
-        assert_eq!(effective["adapter_capability_id"], "codex.multi_agent_v1");
-        assert_eq!(effective["invocation_mode"], "parent_host_tool_api");
+        assert_eq!(effective["adapter_kind"], "configured_adapter");
+        assert_eq!(effective["adapter_capability_id"], "configured_capability");
+        assert_eq!(effective["invocation_mode"], "configured_parent");
         assert_eq!(
-            effective["adapter_params"]["spawn_tool"],
-            "multi_agent_v1.spawn_agent"
+            effective["adapter_operations"]["operations"]["spawn"],
+            "configured.spawn"
         );
     }
 
@@ -769,6 +765,21 @@ mod tests {
                 "receipt_mode": "host_bridge_receipt",
                 "adapter_kind": "codex_host_tools",
                 "adapter_capability_id": "codex.multi_agent_v1",
+                "invocation_mode": "parent_host_tool_api",
+                "receipt_mode": "host_bridge_receipt",
+                "adapter_operations": {
+                    "adapter_kind": "codex_host_tools",
+                    "adapter_capability_id": "codex.multi_agent_v1",
+                    "invocation_mode": "parent_host_tool_api",
+                    "dispatch_transport": "host_tool_bridge",
+                    "receipt_mode": "host_bridge_receipt",
+                    "operations": {
+                        "spawn": "multi_agent_v1.spawn_agent",
+                        "wait": "multi_agent_v1.wait_agent",
+                        "dispose": "multi_agent_v1.close_agent"
+                    },
+                    "dispose_policy": "configured"
+                },
                 "request_path": "host-tool-bridge/requests/request.json",
                 "result_path": "host-tool-bridge/results/result.json",
                 "receipt_path": "host-tool-bridge/receipts/receipt.json",
