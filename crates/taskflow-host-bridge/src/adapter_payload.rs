@@ -620,6 +620,29 @@ mod tests {
     }
 
     #[test]
+    fn host_bridge_adapter_payload_blocks_missing_operation_with_operator_artifacts() {
+        let mut request = request();
+        request["adapter_operations"]["operations"]
+            .as_object_mut()
+            .unwrap()
+            .remove("wait");
+        let payload = payload_for(&request);
+        assert_eq!(payload["status"], "blocked");
+        assert!(payload["blocker_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|code| code == "host_tool_capability_missing"));
+        assert!(payload["shared_fields"]["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty()));
+        assert_eq!(
+            payload["shared_fields"]["artifact_refs"]["request_path"],
+            "request.json"
+        );
+    }
+
+    #[test]
     fn host_bridge_adapter_payload_blocks_wrong_transport() {
         let mut request = request();
         request["dispatch_transport"] = json!("filesystem");

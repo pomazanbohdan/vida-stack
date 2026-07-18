@@ -118,7 +118,6 @@ impl HostBridgeAdapterOperations {
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(ToOwned::to_owned)
-            .or_else(|| operations.get("dispose").map(|_| "configured".to_string()))
             .ok_or(HostBridgeAdapterContractError::MissingDisposePolicy)?;
         if dispose_policy != "configured" && dispose_policy != "unavailable" {
             return Err(HostBridgeAdapterContractError::InvalidField(
@@ -259,6 +258,34 @@ mod tests {
     }
 
     #[test]
+    fn requires_explicit_dispose_policy_and_supports_unavailable_dispose() {
+        let mut unavailable = registry();
+        unavailable["dispose_policy"] = "unavailable".into();
+        unavailable["operations"]
+            .as_object_mut()
+            .unwrap()
+            .remove("dispose");
+        let contract = HostBridgeAdapterOperations::from_registry_value(&unavailable).unwrap();
+        assert_eq!(contract.operation_sequence(), ["host.spawn", "host.wait"]);
+
+        let mut malformed = registry();
+        malformed["dispose_policy"] = "implicit".into();
+        assert!(matches!(
+            HostBridgeAdapterOperations::from_registry_value(&malformed),
+            Err(HostBridgeAdapterContractError::InvalidField(
+                "dispose_policy"
+            ))
+        ));
+
+        let mut missing = registry();
+        missing["dispose_policy"] = Value::Null;
+        assert!(matches!(
+            HostBridgeAdapterOperations::from_registry_value(&missing),
+            Err(HostBridgeAdapterContractError::MissingDisposePolicy)
+        ));
+    }
+
+    #[test]
     fn translates_legacy_operation_aliases_only_on_registry_read() {
         let value = serde_json::json!({
             "adapter_kind": "legacy_adapter",
@@ -268,7 +295,8 @@ mod tests {
             "receipt_mode": "legacy_receipt",
             "spawn_tool": "legacy.spawn",
             "wait_tool": "legacy.wait",
-            "close_tool": "legacy.close"
+            "close_tool": "legacy.close",
+            "dispose_policy": "configured"
         });
         let contract = HostBridgeAdapterOperations::from_registry_value(&value).unwrap();
         assert_eq!(
@@ -279,5 +307,41 @@ mod tests {
                 "wait": "legacy.wait"
             })
         );
+    }
+
+    #[test]
+    fn request_aliases_do_not_bypass_canonical_operations_contract() {
+        let mut request = registry();
+        request["adapter_operations"] = serde_json::json!({
+            "adapter_kind": "configured_adapter",
+            "adapter_capability_id": "configured_capability",
+            "invocation_mode": "configured_parent_mode",
+            "dispatch_transport": "configured_transport",
+            "receipt_mode": "configured_receipt",
+            "spawn_tool": "host.spawn",
+            "wait_tool": "host.wait",
+            "dispose_policy": "configured",
+            "close_tool": "host.dispose"
+        });
+        let contract = HostBridgeAdapterOperations::from_request_value(&request).unwrap();
+        assert_eq!(contract.to_value()["operations"]["spawn"], "host.spawn");
+        assert!(
+            HostBridgeAdapterOperations::from_request_value(&serde_json::json!({
+                "adapter_operations": {"spawn_tool": "host.spawn", "wait_tool": "host.wait"}
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn canonical_nested_operations_shape_matches_request_contract() {
+        let value = HostBridgeAdapterOperations::from_registry_value(&registry())
+            .unwrap()
+            .to_value();
+        assert!(value.get("operations").and_then(Value::as_object).is_some());
+        assert_eq!(value["dispose_policy"], "configured");
+        for legacy in ["spawn_tool", "wait_tool", "close_tool", "dispose_tool"] {
+            assert!(value.get(legacy).is_none(), "legacy key leaked: {legacy}");
+        }
     }
 }

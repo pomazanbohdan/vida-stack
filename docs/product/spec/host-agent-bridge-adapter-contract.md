@@ -119,9 +119,17 @@ Host bridge requests must include the generic fields needed by any adapter:
   "adapter_capability_id": "codex.multi_agent_v1",
   "invocation_mode": "parent_host_tool_api",
   "adapter_operations": {
-    "spawn": "<configured-parent-host-spawn-operation>",
-    "wait": "<configured-parent-host-wait-operation>",
-    "dispose": "<configured-parent-host-dispose-operation>"
+    "adapter_kind": "<configured-adapter-kind>",
+    "adapter_capability_id": "<configured-capability-id>",
+    "invocation_mode": "<configured-invocation-mode>",
+    "dispatch_transport": "<configured-dispatch-transport>",
+    "receipt_mode": "<configured-receipt-mode>",
+    "operations": {
+      "spawn": "<configured-parent-host-spawn-operation>",
+      "wait": "<configured-parent-host-wait-operation>",
+      "dispose": "<configured-parent-host-dispose-operation>"
+    },
+    "dispose_policy": "configured | unavailable"
   },
   "adapter_contract_snapshot": "<canonical-resolved-registry-object>",
   "adapter_contract_hash": "<config-digest-for-replay>",
