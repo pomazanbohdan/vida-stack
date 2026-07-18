@@ -3,21 +3,21 @@ use std::path::Path;
 use operator_output::{
     command_text::human_command,
     operator_contracts::{
-        canonical_pass_blocked_contract_status_str, finalize_operator_surface_verdict,
-        OperatorContractSpec,
+        OperatorContractSpec, canonical_pass_blocked_contract_status_str,
+        finalize_operator_surface_verdict,
     },
 };
 use serde_json::Value;
-use taskflow_contracts::{release1_contract_status_str, Release1ContractStatus};
+use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
 
 use crate::completion::{
     host_bridge_request_effectively_requires_implementation_artifacts,
     host_bridge_request_status_allows_parent_completion,
 };
 use crate::request::{
-    default_host_bridge_required_result_fields, effective_host_bridge_request,
+    HostBridgeRequest, default_host_bridge_required_result_fields, effective_host_bridge_request,
     host_bridge_blocked_result_contract, host_bridge_request_string,
-    legacy_internal_subagents_host_bridge_request, HostBridgeRequest,
+    legacy_internal_subagents_host_bridge_request,
 };
 
 pub struct HostBridgeAdapterPayloadInput<'a> {
@@ -524,12 +524,14 @@ mod tests {
             payload["host_bridge"]["artifact_attach_command"],
             "vida agent host-bridge --request request.json --attach-artifact <artifact-path> --changed-file <changed-file> --artifact-kind patch_proposal"
         );
-        assert!(payload["shared_fields"]["next_actions"]
-            .as_array()
-            .expect("next actions")
-            .first()
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|action| action.contains("--attach-artifact")));
+        assert!(
+            payload["shared_fields"]["next_actions"]
+                .as_array()
+                .expect("next actions")
+                .first()
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|action| action.contains("--attach-artifact"))
+        );
     }
 
     #[test]
@@ -548,12 +550,14 @@ mod tests {
             payload["host_bridge"]["artifact_attach_command"],
             "vida agent host-bridge --request request.json --attach-artifact <artifact-path> --changed-file <changed-file> --artifact-kind patch_proposal"
         );
-        assert!(payload["shared_fields"]["next_actions"]
-            .as_array()
-            .expect("next actions")
-            .first()
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|action| action.contains("--attach-artifact")));
+        assert!(
+            payload["shared_fields"]["next_actions"]
+                .as_array()
+                .expect("next actions")
+                .first()
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|action| action.contains("--attach-artifact"))
+        );
     }
 
     #[test]

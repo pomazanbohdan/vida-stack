@@ -6,10 +6,10 @@ use crate::completion_authority::BLOCKER_ATTEMPT_SCOPE_GUARD;
 use crate::errors::HostBridgeError;
 use crate::request::HostBridgeRequest;
 use runtime_path_policy::atomic_write::write_json_replace;
-use runtime_path_policy::bounded_json::{read_json_value_file, TASK_ATTEMPT_ARTIFACT_LIMIT};
+use runtime_path_policy::bounded_json::{TASK_ATTEMPT_ARTIFACT_LIMIT, read_json_value_file};
 use runtime_path_policy::{
-    existing_regular_file_under_root, new_output_path_under_root, ArtifactPathKind,
-    PathPolicyError, StateRoot,
+    ArtifactPathKind, PathPolicyError, StateRoot, existing_regular_file_under_root,
+    new_output_path_under_root,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,7 +159,7 @@ pub fn push_unique_host_bridge_implementation_artifact(
         .get("attempt_id")
         .and_then(serde_json::Value::as_str)
         .map(str::trim);
-    if artifacts.iter().any(|existing| {
+    if let Some(existing) = artifacts.iter_mut().find(|existing| {
         existing
             .get("source_artifact_ref")
             .and_then(serde_json::Value::as_str)
@@ -171,6 +171,9 @@ pub fn push_unique_host_bridge_implementation_artifact(
                 .map(str::trim)
                 == attempt_id
     }) {
+        if *existing != artifact {
+            *existing = artifact;
+        }
         return;
     }
     artifacts.push(artifact);
@@ -587,6 +590,44 @@ mod tests {
         );
 
         assert_eq!(artifacts.len(), 2);
+    }
+
+    #[test]
+    fn same_key_artifact_refreshes_in_place_without_reordering_history() {
+        let historical = serde_json::json!({
+            "source_artifact_ref": "historical.json",
+            "attempt_id": "attempt-0",
+            "canonical_worktree_unchanged": true
+        });
+        let mut artifacts = vec![
+            historical.clone(),
+            serde_json::json!({
+                "source_artifact_ref": "manifest.json",
+                "attempt_id": "attempt-1",
+                "receipt_backed": true
+            }),
+            serde_json::json!({
+                "source_artifact_ref": "manifest.json",
+                "attempt_id": "attempt-2",
+                "receipt_backed": true
+            }),
+        ];
+        let refreshed = serde_json::json!({
+            "source_artifact_ref": "manifest.json",
+            "attempt_id": "attempt-1",
+            "receipt_backed": true,
+            "canonical_worktree_unchanged": true,
+            "canonical_worktree_touched": false,
+            "line_ending_churn": false
+        });
+
+        push_unique_host_bridge_implementation_artifact(&mut artifacts, refreshed.clone());
+        push_unique_host_bridge_implementation_artifact(&mut artifacts, refreshed.clone());
+
+        assert_eq!(artifacts.len(), 3);
+        assert_eq!(artifacts[0], historical);
+        assert_eq!(artifacts[1], refreshed);
+        assert_eq!(artifacts[2]["attempt_id"], "attempt-2");
     }
 
     #[test]

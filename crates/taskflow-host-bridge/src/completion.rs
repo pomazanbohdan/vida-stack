@@ -340,21 +340,8 @@ pub fn host_bridge_completed_result_has_preview_refresh_evidence(
     {
         return false;
     }
-    for field in ["request_id", "run_id", "dispatch_target"] {
-        let Some(request_value) = host_bridge_request_string(request, field) else {
-            return false;
-        };
-        let Some(result_value) = result
-            .get(field)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return false;
-        };
-        if request_value != result_value {
-            return false;
-        }
+    if !crate::host_bridge_dispatch_identity_blockers(request, result).is_empty() {
+        return false;
     }
     result
         .get("allowed_next_node")
@@ -362,6 +349,21 @@ pub fn host_bridge_completed_result_has_preview_refresh_evidence(
         .map(str::trim)
         .filter(|value| !value.is_empty() && *value != "next")
         .is_some()
+}
+
+fn host_bridge_identity_artifact_with_semantic_packet_path(value: &Value) -> Value {
+    let Some(packet_path) = value
+        .get("dispatch_packet_path")
+        .cloned()
+        .filter(|_| value.get("source_dispatch_packet_path").is_none())
+    else {
+        return value.clone();
+    };
+    let mut normalized = value.clone();
+    if let Some(object) = normalized.as_object_mut() {
+        object.insert("source_dispatch_packet_path".to_string(), packet_path);
+    }
+    normalized
 }
 
 #[must_use]
@@ -373,7 +375,7 @@ pub fn host_bridge_completion_identity_matches(
     expected_dispatch_target: &str,
     expected_packet_path: &str,
 ) -> bool {
-    let Some(request_id) = host_bridge_request_string(request, "request_id") else {
+    let Some(_request_id) = host_bridge_request_string(request, "request_id") else {
         return false;
     };
     let Some(request_run_id) = host_bridge_request_string(request, "run_id") else {
@@ -387,28 +389,18 @@ pub fn host_bridge_completion_identity_matches(
     };
     if request_run_id != expected_run_id
         || request_target != expected_dispatch_target
-        || request_packet_path != expected_packet_path
+        || !crate::host_bridge_packet_paths_equivalent(request_packet_path, expected_packet_path)
     {
         return false;
     }
-    if result.get("request_id").and_then(Value::as_str) != Some(request_id)
-        || result.get("run_id").and_then(Value::as_str) != Some(expected_run_id)
-        || result.get("dispatch_target").and_then(Value::as_str) != Some(expected_dispatch_target)
-        || result.get("source_dispatch_packet_path").and_then(Value::as_str)
-            != Some(expected_packet_path)
-    {
+    if !crate::host_bridge_dispatch_identity_blockers(request, result).is_empty() {
         return false;
     }
     let Some(receipt) = receipt else {
         return true;
     };
-    receipt.get("request_id").and_then(Value::as_str) == Some(request_id)
-        && receipt.get("run_id").and_then(Value::as_str) == Some(expected_run_id)
-        && receipt.get("dispatch_target").and_then(Value::as_str) == Some(expected_dispatch_target)
-        && receipt
-            .get("source_dispatch_packet_path")
-            .and_then(Value::as_str)
-            == Some(expected_packet_path)
+    let receipt = host_bridge_identity_artifact_with_semantic_packet_path(receipt);
+    crate::host_bridge_dispatch_identity_blockers(request, &receipt).is_empty()
         && receipt.get("completion_receipt_id").and_then(Value::as_str)
             == result.get("completion_receipt_id").and_then(Value::as_str)
         && receipt.get("receipt_backed").and_then(Value::as_bool) == Some(true)
@@ -1419,6 +1411,138 @@ mod tests {
             "developer",
             "runtime-consumption/other-packet.json"
         ));
+    }
+
+    #[test]
+    fn completion_identity_rejects_mismatched_full_dispatch_identity() {
+        let request = serde_json::json!({
+            "request_id": "req-full-identity",
+            "run_id": "run-full-identity",
+            "task_id": "task-full-identity",
+            "dispatch_target": "coach",
+            "packet_id": "packet-full-identity",
+            "attempt_id": "attempt-full-identity",
+            "backend_id": "internal_subagents",
+            "packet_path": "runtime-consumption/full-identity.json"
+        });
+        let result = serde_json::json!({
+            "request_id": "req-full-identity",
+            "run_id": "run-full-identity",
+            "task_id": "task-full-identity",
+            "dispatch_target": "coach",
+            "packet_id": "packet-full-identity",
+            "attempt_id": "attempt-full-identity",
+            "backend_id": "internal_subagents",
+            "source_dispatch_packet_path": "runtime-consumption/full-identity.json",
+            "completion_receipt_id": "completion-full-identity"
+        });
+        let receipt = serde_json::json!({
+            "request_id": "req-full-identity",
+            "run_id": "run-full-identity",
+            "task_id": "task-full-identity",
+            "dispatch_target": "coach",
+            "packet_id": "packet-full-identity",
+            "attempt_id": "attempt-full-identity",
+            "backend_id": "internal_subagents",
+            "dispatch_packet_path": "runtime-consumption/full-identity.json",
+            "completion_receipt_id": "completion-full-identity",
+            "receipt_backed": true
+        });
+
+        assert!(host_bridge_completion_identity_matches(
+            &request,
+            &result,
+            Some(&receipt),
+            "run-full-identity",
+            "coach",
+            "runtime-consumption/full-identity.json"
+        ));
+
+        for field in ["task_id", "packet_id", "attempt_id", "backend_id"] {
+            let mut mismatched_result = result.clone();
+            mismatched_result[field] = serde_json::json!("foreign-identity");
+            assert!(!host_bridge_completion_identity_matches(
+                &request,
+                &mismatched_result,
+                Some(&receipt),
+                "run-full-identity",
+                "coach",
+                "runtime-consumption/full-identity.json"
+            ));
+
+            let mut mismatched_receipt = receipt.clone();
+            mismatched_receipt[field] = serde_json::json!("foreign-identity");
+            assert!(!host_bridge_completion_identity_matches(
+                &request,
+                &result,
+                Some(&mismatched_receipt),
+                "run-full-identity",
+                "coach",
+                "runtime-consumption/full-identity.json"
+            ));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn completion_identity_matches_path_spellings_like_dispatch_validator() {
+        let root = std::env::temp_dir().join(format!(
+            "taskflow-host-bridge-completion-path-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        std::fs::create_dir_all(&packet_dir).expect("create packet directory");
+        let packet = packet_dir.join("current.json");
+        let other = packet_dir.join("other.json");
+        std::fs::write(&packet, "{}").expect("write packet");
+        std::fs::write(&other, "{}").expect("write other packet");
+        let normal = packet.display().to_string();
+        let extended = format!(r"\\?\{}", normal);
+        let mixed = normal.replace('\\', "/");
+        let request = serde_json::json!({
+            "request_id": "req-path",
+            "run_id": "run-path",
+            "dispatch_target": "tester",
+            "packet_path": normal,
+        });
+        let result = serde_json::json!({
+            "request_id": "req-path",
+            "run_id": "run-path",
+            "dispatch_target": "tester",
+            "source_dispatch_packet_path": extended,
+            "completion_receipt_id": "completion-path",
+        });
+        let receipt = serde_json::json!({
+            "request_id": "req-path",
+            "run_id": "run-path",
+            "dispatch_target": "tester",
+            "source_dispatch_packet_path": mixed,
+            "completion_receipt_id": "completion-path",
+            "receipt_backed": true,
+        });
+
+        assert!(host_bridge_completion_identity_matches(
+            &request,
+            &result,
+            Some(&receipt),
+            "run-path",
+            "tester",
+            &normal
+        ));
+        assert!(!host_bridge_completion_identity_matches(
+            &request,
+            &result,
+            Some(&receipt),
+            "run-path",
+            "tester",
+            &other.display().to_string()
+        ));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -3359,11 +3359,9 @@ mod tests {
             .record_run_graph_status(&status)
             .await
             .expect("foreign blocked run graph status should record");
-        assert!(
-            store
-                .current_session_identity_is_present()
-                .expect("current session identity should resolve")
-        );
+        assert!(store
+            .current_session_identity_is_present()
+            .expect("current session identity should resolve"));
         assert!(
             store
                 .latest_run_graph_status_for_current_session()
@@ -7146,19 +7144,41 @@ async fn merge_persisted_dispatch_receipt_without_resume_gate(
     else {
         return Ok(inputs);
     };
-    let active_packet_path = receipt
+    let requested_packet_path = normalized_packet_arg_path(&inputs.dispatch_packet_path);
+    let packet = crate::read_json_file_if_present(&requested_packet_path)
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut request_identity = packet.clone();
+    if let Some(object) = request_identity.as_object_mut() {
+        object.insert(
+            "packet_path".to_string(),
+            serde_json::json!(requested_packet_path.display().to_string()),
+        );
+    }
+    let persisted_packet_path = receipt
         .dispatch_packet_path
         .as_deref()
         .map(normalized_packet_arg_path);
-    let requested_packet_path = normalized_packet_arg_path(&inputs.dispatch_packet_path);
-    let packet_matches = active_packet_path
-        .as_ref()
-        .is_some_and(|path| path == &requested_packet_path);
-    if receipt.dispatch_target == inputs.dispatch_receipt.dispatch_target && packet_matches {
-        inputs.dispatch_receipt = receipt;
-        inputs.dispatch_packet_path = requested_packet_path.display().to_string();
-        inputs.dispatch_receipt.dispatch_packet_path = Some(inputs.dispatch_packet_path.clone());
+    let persisted_identity = serde_json::json!({
+        "run_id": &receipt.run_id,
+        "dispatch_target": &receipt.dispatch_target,
+        "source_dispatch_packet_path": persisted_packet_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        "backend_id": &receipt.selected_backend,
+    });
+    let identity_blockers = taskflow_host_bridge::host_bridge_dispatch_identity_blockers(
+        &request_identity,
+        &persisted_identity,
+    );
+    if !identity_blockers.is_empty() {
+        return Err(format!(
+            "Persisted dispatch receipt identity does not match the requested packet: {}.",
+            identity_blockers.join(",")
+        ));
     }
+    inputs.dispatch_receipt = receipt;
+    inputs.dispatch_packet_path = requested_packet_path.display().to_string();
+    inputs.dispatch_receipt.dispatch_packet_path = Some(inputs.dispatch_packet_path.clone());
     Ok(inputs)
 }
 

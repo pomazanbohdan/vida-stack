@@ -31,6 +31,35 @@ pub struct HostBridgeResultScaffoldInput {
     pub receipt_id: Option<String>,
 }
 
+fn request_identity_projection(request: &HostBridgeRequest) -> Value {
+    serde_json::json!({
+        "task_id": request.raw.get("task_id"),
+        "attempt_id": request.raw.get("attempt_id"),
+        "packet_id": request.raw.get("packet_id"),
+        "backend_id": request.raw.get("backend_id"),
+        "packet_path": request.raw.get("packet_path"),
+    })
+}
+
+fn receipt_identity_value(receipt: &Value, field: &str) -> Option<Value> {
+    receipt
+        .get(field)
+        .cloned()
+        .or_else(|| receipt.get("identity_binding")?.get(field).cloned())
+}
+
+fn receipt_identity_projection(receipt: &Value) -> Value {
+    serde_json::json!({
+        "task_id": receipt_identity_value(receipt, "task_id"),
+        "attempt_id": receipt_identity_value(receipt, "attempt_id"),
+        "packet_id": receipt_identity_value(receipt, "packet_id"),
+        "backend_id": receipt_identity_value(receipt, "backend_id")
+            .or_else(|| receipt_identity_value(receipt, "selected_backend")),
+        "source_dispatch_packet_path": receipt_identity_value(receipt, "source_dispatch_packet_path")
+            .or_else(|| receipt_identity_value(receipt, "dispatch_packet_path")),
+    })
+}
+
 pub fn validate_dispatch_receipt_binding(
     input: &DispatchReceiptBindingInput,
 ) -> DispatchReceiptBindingDecision {
@@ -68,6 +97,12 @@ pub fn validate_dispatch_receipt_binding(
     {
         blockers.push("receipt_dispatch_target_mismatch".to_string());
     }
+    blockers.extend(crate::host_bridge_dispatch_identity_blockers(
+        &request_identity_projection(&input.request),
+        &receipt_identity_projection(receipt),
+    ));
+    blockers.sort();
+    blockers.dedup();
 
     if blockers.is_empty() {
         DispatchReceiptBindingDecision {
@@ -117,6 +152,24 @@ pub fn build_host_bridge_result_scaffold(input: HostBridgeResultScaffoldInput) -
             input.request.dispatch_target
         )
     });
+    let attempt_id = input
+        .request
+        .raw
+        .get("attempt_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let packet_id = input
+        .request
+        .raw
+        .get("packet_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let selected_backend = input
+        .request
+        .raw
+        .get("selected_backend")
+        .cloned()
+        .unwrap_or_else(|| Value::String(input.request.backend_id.clone()));
 
     serde_json::json!({
         "schema_version": 1,
@@ -126,7 +179,11 @@ pub fn build_host_bridge_result_scaffold(input: HostBridgeResultScaffoldInput) -
         "request_id": input.request.request_id,
         "run_id": input.request.run_id,
         "task_id": input.request.task_id,
+        "attempt_id": attempt_id.clone(),
+        "packet_id": packet_id.clone(),
         "dispatch_target": input.request.dispatch_target,
+        "backend_id": input.request.backend_id,
+        "selected_backend": selected_backend.clone(),
         "decision": decision,
         "verdict": verdict,
         "blocker_codes": input.blocker_codes,
@@ -137,14 +194,25 @@ pub fn build_host_bridge_result_scaffold(input: HostBridgeResultScaffoldInput) -
             "receipt_backed": true,
             "source": "vida_agent_host_bridge_scaffold",
             "host_agent_id": input.host_agent_id,
-            "receipt_id": input.receipt_id
+            "receipt_id": input.receipt_id,
+            "request_id": input.request.request_id,
+            "run_id": input.request.run_id,
+            "task_id": input.request.task_id,
+            "attempt_id": attempt_id.clone(),
+            "packet_id": packet_id.clone(),
+            "backend_id": input.request.backend_id,
+            "selected_backend": selected_backend.clone()
         },
         "source_dispatch_packet_path": input.request.packet_path,
         "identity_binding": {
             "request_id": input.request.request_id,
             "run_id": input.request.run_id,
             "task_id": input.request.task_id,
-            "dispatch_target": input.request.dispatch_target
+            "attempt_id": attempt_id,
+            "packet_id": packet_id,
+            "dispatch_target": input.request.dispatch_target,
+            "backend_id": input.request.backend_id,
+            "selected_backend": selected_backend
         }
     })
 }
@@ -198,7 +266,11 @@ mod tests {
         let mut request = minimal_request();
         request.dispatch_target = "analyst".to_string();
         request.raw = serde_json::json!({
-            "allowed_next_node": "pass_to_designer"
+            "allowed_next_node": "pass_to_designer",
+            "attempt_id": "attempt-1",
+            "packet_id": "packet-1",
+            "backend_id": "internal_subagents",
+            "selected_backend": "internal_subagents"
         });
 
         let result = build_host_bridge_result_scaffold(HostBridgeResultScaffoldInput {
@@ -225,9 +297,16 @@ mod tests {
         );
         assert!(result.get("rework_target").is_some());
         assert_eq!(result["allowed_next_node"], "pass_to_designer");
+        assert_eq!(result["attempt_id"], "attempt-1");
+        assert_eq!(result["packet_id"], "packet-1");
+        assert_eq!(result["selected_backend"], "internal_subagents");
         assert_eq!(result["identity_binding"]["request_id"], "req-1");
         assert_eq!(result["identity_binding"]["run_id"], "run-1");
+        assert_eq!(result["identity_binding"]["attempt_id"], "attempt-1");
+        assert_eq!(result["identity_binding"]["packet_id"], "packet-1");
         assert_eq!(result["identity_binding"]["dispatch_target"], "analyst");
         assert_eq!(result["execution_evidence"]["receipt_backed"], true);
+        assert_eq!(result["execution_evidence"]["attempt_id"], "attempt-1");
+        assert_eq!(result["execution_evidence"]["packet_id"], "packet-1");
     }
 }

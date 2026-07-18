@@ -8,6 +8,7 @@ license.workspace = true
 runtime-path-policy = { path = "../runtime-path-policy" }
 operator-output = { path = "../operator-output" }
 taskflow-contracts = { path = "../taskflow-contracts" }
+taskflow-core = { path = "../taskflow-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

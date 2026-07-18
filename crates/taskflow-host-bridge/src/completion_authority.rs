@@ -12,8 +12,7 @@ pub const BLOCKER_SUMMARY_DERIVED: &str = "host_bridge_completion_summary_blocke
 pub const BLOCKER_ATTEMPT_SCOPE_INCOMPLETE: &str = "implementation_attempt_scope_incomplete";
 pub const BLOCKER_ATTEMPT_EMPTY_PATCH: &str = "implementation_artifact_has_no_changed_files";
 pub const BLOCKER_ATTEMPT_SCOPE_GUARD: &str = "implementation_attempt_scope_guard_violation";
-pub const BLOCKER_ATTEMPT_CANONICAL_WORKTREE: &str =
-    "isolated_worktree_canonical_worktree_touched";
+pub const BLOCKER_ATTEMPT_CANONICAL_WORKTREE: &str = "isolated_worktree_canonical_worktree_touched";
 pub const BLOCKER_ATTEMPT_CANONICAL_EVIDENCE: &str =
     "isolated_worktree_canonical_worktree_evidence_missing";
 pub const BLOCKER_ATTEMPT_LINE_ENDING_CHURN: &str =
@@ -92,7 +91,11 @@ impl HostBridgeImplementationAttemptAdmission {
             let retry_count = request
                 .get("retry_count")
                 .and_then(Value::as_u64)
-                .or_else(|| request.pointer("/retry_context/retry_count").and_then(Value::as_u64))
+                .or_else(|| {
+                    request
+                        .pointer("/retry_context/retry_count")
+                        .and_then(Value::as_u64)
+                })
                 .unwrap_or_default();
             let previous_fingerprint = request
                 .get("previous_attempt_fingerprint")
@@ -277,9 +280,15 @@ fn reports_broad_line_ending_churn(value: &Value) -> bool {
 
 fn capability_blockers(request: &Value) -> Vec<String> {
     let mut blockers = string_array(request.get("capability_blockers"));
-    blockers.extend(string_array(request.get("blocker_codes")).into_iter().filter(|code| {
-        code.contains("capability") || code.contains("host_tool") || code.contains("host_agent")
-    }));
+    blockers.extend(
+        string_array(request.get("blocker_codes"))
+            .into_iter()
+            .filter(|code| {
+                code.contains("capability")
+                    || code.contains("host_tool")
+                    || code.contains("host_agent")
+            }),
+    );
     blockers.sort();
     blockers.dedup();
     blockers
@@ -294,12 +303,18 @@ fn retry_receipt_matches(request: &Value) -> bool {
         return false;
     };
     receipt.get("receipt_backed").and_then(Value::as_bool) == Some(true)
-        && ["run_id", "task_id", "dispatch_target", "backend_id", "carrier_id"]
-            .iter()
-            .all(|field| {
-                request.get(*field).and_then(Value::as_str).is_none()
-                    || receipt.get(*field) == request.get(*field)
-            })
+        && [
+            "run_id",
+            "task_id",
+            "dispatch_target",
+            "backend_id",
+            "carrier_id",
+        ]
+        .iter()
+        .all(|field| {
+            request.get(*field).and_then(Value::as_str).is_none()
+                || receipt.get(*field) == request.get(*field)
+        })
         && request
             .get("retry_receipt_id")
             .and_then(Value::as_str)
@@ -340,10 +355,10 @@ fn fingerprint(request: &Value, blocker_codes: &[String]) -> String {
         request.get("backend_id").and_then(Value::as_str),
         request.get("carrier_fingerprint").and_then(Value::as_str),
         request.get("carrier_id").and_then(Value::as_str),
-        request.get("capability_fingerprint").and_then(Value::as_str),
         request
-            .get("adapter_capability_id")
+            .get("capability_fingerprint")
             .and_then(Value::as_str),
+        request.get("adapter_capability_id").and_then(Value::as_str),
         request.get("blocker_fingerprint").and_then(Value::as_str),
     ]
     .into_iter()
@@ -935,15 +950,16 @@ fn input<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        admit_host_bridge_implementation_attempt, fingerprint, BLOCKER_ATTEMPT_CANONICAL_WORKTREE,
-        BLOCKER_ATTEMPT_EMPTY_PATCH, BLOCKER_ATTEMPT_LINE_ENDING_CHURN,
-        BLOCKER_ATTEMPT_NO_REPEAT, BLOCKER_ATTEMPT_RETRY_RECEIPT, BLOCKER_OUTCOME_CONTRADICTION,
-        BLOCKER_SUMMARY_DERIVED, BLOCKER_TYPED_BLOCKED_OUTCOME, BLOCKER_TYPED_FAILED_OUTCOME,
+        BLOCKER_ATTEMPT_CANONICAL_WORKTREE, BLOCKER_ATTEMPT_EMPTY_PATCH,
+        BLOCKER_ATTEMPT_LINE_ENDING_CHURN, BLOCKER_ATTEMPT_NO_REPEAT,
+        BLOCKER_ATTEMPT_RETRY_RECEIPT, BLOCKER_OUTCOME_CONTRADICTION, BLOCKER_SUMMARY_DERIVED,
+        BLOCKER_TYPED_BLOCKED_OUTCOME, BLOCKER_TYPED_FAILED_OUTCOME,
         HostBridgeCompletionEffectIntent, HostBridgeCompletionEvent, HostBridgeCompletionFsm,
-        HostBridgeCompletionState, completion_authority_transition_matrix,
-        decide_host_bridge_completion_authority, input,
+        HostBridgeCompletionState, admit_host_bridge_implementation_attempt,
+        completion_authority_transition_matrix, decide_host_bridge_completion_authority,
+        fingerprint, input,
     };
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     #[test]
     fn passed_with_empty_blockers_cannot_emit_blocked_event_or_blocker() {
@@ -1223,15 +1239,21 @@ mod tests {
         let admission = admit_host_bridge_implementation_attempt(&request, Some(&artifacts));
 
         assert_eq!(admission.decision, "terminal_blocker");
-        assert!(admission
-            .blocker_codes
-            .contains(&BLOCKER_ATTEMPT_EMPTY_PATCH.to_string()));
-        assert!(admission
-            .blocker_codes
-            .contains(&BLOCKER_ATTEMPT_CANONICAL_WORKTREE.to_string()));
-        assert!(admission
-            .blocker_codes
-            .contains(&BLOCKER_ATTEMPT_LINE_ENDING_CHURN.to_string()));
+        assert!(
+            admission
+                .blocker_codes
+                .contains(&BLOCKER_ATTEMPT_EMPTY_PATCH.to_string())
+        );
+        assert!(
+            admission
+                .blocker_codes
+                .contains(&BLOCKER_ATTEMPT_CANONICAL_WORKTREE.to_string())
+        );
+        assert!(
+            admission
+                .blocker_codes
+                .contains(&BLOCKER_ATTEMPT_LINE_ENDING_CHURN.to_string())
+        );
     }
 
     #[test]
@@ -1263,12 +1285,16 @@ mod tests {
         let admission = admit_host_bridge_implementation_attempt(&request, None);
 
         assert_eq!(admission.decision, "terminal_blocker");
-        assert!(admission
-            .blocker_codes
-            .contains(&BLOCKER_ATTEMPT_NO_REPEAT.to_string()));
-        assert!(admission
-            .blocker_codes
-            .contains(&BLOCKER_ATTEMPT_RETRY_RECEIPT.to_string()));
+        assert!(
+            admission
+                .blocker_codes
+                .contains(&BLOCKER_ATTEMPT_NO_REPEAT.to_string())
+        );
+        assert!(
+            admission
+                .blocker_codes
+                .contains(&BLOCKER_ATTEMPT_RETRY_RECEIPT.to_string())
+        );
     }
 
     #[test]

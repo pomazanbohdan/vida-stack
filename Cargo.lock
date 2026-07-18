@@ -7276,6 +7276,7 @@ dependencies = [
  "serde",
  "serde_json",
  "taskflow-contracts",
+ "taskflow-core",
  "thiserror 2.0.18",
  "time",
 ]
@@ -7300,6 +7301,7 @@ dependencies = [
  "taskflow-contracts",
  "taskflow-core",
  "taskflow-state",
+ "vida-test-support",
 ]
 
 [[package]]
@@ -7314,6 +7316,7 @@ dependencies = [
  "taskflow-state",
  "taskflow-state-fs",
  "tempfile",
+ "vida-test-support",
 ]
 
 [[package]]
@@ -8384,6 +8387,9 @@ dependencies = [
  "serde_json",
  "snapbox",
  "taskflow-authority",
+ "taskflow-contracts",
+ "taskflow-core",
+ "taskflow-state",
  "trycmd",
  "vida-contracts",
  "vida-runtime-local",
