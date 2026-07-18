@@ -3,6 +3,7 @@ use crate::state_store::{RunGraphStatus, StateStore, StateStoreError};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RunGraphTaskAuthorityKind {
     AuthoritativeTaskPresent,
+    BlockedTaskAdmissionDenied,
     ClosedTaskStaleRun,
     MissingTaskStaleRun,
     TerminalClosureOk,
@@ -25,6 +26,19 @@ impl RunGraphTaskAuthorityVerdict {
         self.kind == RunGraphTaskAuthorityKind::ClosedTaskStaleRun
     }
 
+    pub(crate) fn task_blocked(&self) -> bool {
+        self.kind == RunGraphTaskAuthorityKind::BlockedTaskAdmissionDenied
+    }
+
+    pub(crate) fn continuation_admission_denied(&self) -> bool {
+        matches!(
+            self.kind,
+            RunGraphTaskAuthorityKind::BlockedTaskAdmissionDenied
+                | RunGraphTaskAuthorityKind::ClosedTaskStaleRun
+                | RunGraphTaskAuthorityKind::MissingTaskStaleRun
+        )
+    }
+
     pub(crate) fn task_closed(&self) -> bool {
         self.task_status
             .as_deref()
@@ -39,7 +53,8 @@ impl RunGraphTaskAuthorityVerdict {
     pub(crate) fn stale_for_active_projection(&self) -> bool {
         matches!(
             self.kind,
-            RunGraphTaskAuthorityKind::ClosedTaskStaleRun
+            RunGraphTaskAuthorityKind::BlockedTaskAdmissionDenied
+                | RunGraphTaskAuthorityKind::ClosedTaskStaleRun
                 | RunGraphTaskAuthorityKind::MissingTaskStaleRun
         )
     }
@@ -83,6 +98,20 @@ async fn authoritative_present_task(
     task_id: &str,
 ) -> Result<Option<RunGraphTaskAuthorityVerdict>, StateStoreError> {
     match store.show_task(task_id).await {
+        Ok(task)
+            if task.id == status.task_id
+                && matches!(
+                    taskflow_core::parse_task_status(&task.status),
+                    Some(taskflow_core::TaskStatus::Blocked)
+                ) =>
+        {
+            Ok(Some(RunGraphTaskAuthorityVerdict {
+                kind: RunGraphTaskAuthorityKind::BlockedTaskAdmissionDenied,
+                run_id: status.run_id.clone(),
+                task_id: task.id,
+                task_status: Some(task.status),
+            }))
+        }
         Ok(task) if !StateStore::task_status_is_closed_like(&task.status) => {
             Ok(Some(RunGraphTaskAuthorityVerdict {
                 kind: RunGraphTaskAuthorityKind::AuthoritativeTaskPresent,
@@ -123,6 +152,19 @@ pub(crate) async fn run_graph_task_authority_verdict(
     }
 
     match store.show_task(&status.task_id).await {
+        Ok(task)
+            if matches!(
+                taskflow_core::parse_task_status(&task.status),
+                Some(taskflow_core::TaskStatus::Blocked)
+            ) =>
+        {
+            Ok(RunGraphTaskAuthorityVerdict {
+                kind: RunGraphTaskAuthorityKind::BlockedTaskAdmissionDenied,
+                run_id: status.run_id.clone(),
+                task_id: status.task_id.clone(),
+                task_status: Some(task.status),
+            })
+        }
         Ok(task) if StateStore::task_status_is_closed_like(&task.status) => {
             Ok(RunGraphTaskAuthorityVerdict {
                 kind: RunGraphTaskAuthorityKind::ClosedTaskStaleRun,
@@ -198,6 +240,75 @@ mod tests {
             };
             assert!(verdict.task_closed(), "{alias} should be closed-like");
         }
+    }
+
+    #[tokio::test]
+    async fn authority_verdict_denies_blocked_task_admission_for_matching_run() {
+        let root = temp_authority_root("vida-run-graph-authority-blocked-task");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("blocked-task", "blocked"))
+            .await
+            .expect("persist blocked task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "blocked-run",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "blocked-task".to_string();
+        status.status = "blocked".to_string();
+
+        let verdict = run_graph_task_authority_verdict(&store, &status)
+            .await
+            .expect("authority verdict");
+        assert_eq!(
+            verdict.kind,
+            RunGraphTaskAuthorityKind::BlockedTaskAdmissionDenied
+        );
+        assert_eq!(verdict.run_id, "blocked-run");
+        assert_eq!(verdict.task_id, "blocked-task");
+        assert_eq!(verdict.task_status.as_deref(), Some("blocked"));
+        assert!(verdict.task_blocked());
+        assert!(verdict.continuation_admission_denied());
+        assert!(verdict.stale_for_active_projection());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn authority_verdict_keeps_unrelated_session_admissible() {
+        let root = temp_authority_root("vida-run-graph-authority-unrelated-session");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .persist_task_record(test_task_record("blocked-task", "blocked"))
+            .await
+            .expect("persist blocked task");
+        store
+            .persist_task_record(test_task_record("unrelated-task", "open"))
+            .await
+            .expect("persist unrelated task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "unrelated-run",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "unrelated-task".to_string();
+        status.status = "in_progress".to_string();
+
+        let verdict = run_graph_task_authority_verdict(&store, &status)
+            .await
+            .expect("authority verdict");
+        assert_eq!(
+            verdict.kind,
+            RunGraphTaskAuthorityKind::AuthoritativeTaskPresent
+        );
+        assert!(!verdict.task_blocked());
+        assert!(!verdict.continuation_admission_denied());
+        assert!(!verdict.stale_for_active_projection());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

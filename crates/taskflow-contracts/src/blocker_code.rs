@@ -303,10 +303,10 @@ pub fn is_selected_lane_assignment_guard_blocked(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_blocker_code_list, canonical_blocker_code_str,
+        BlockerCode, canonical_blocker_code_list, canonical_blocker_code_str,
         canonical_blocker_code_value_from_str, is_selected_lane_assignment_guard_blocked,
         is_selected_lane_runtime_assignment_truth_missing, selected_lane_assignment_guard_blocked,
-        selected_lane_runtime_assignment_truth_missing, BlockerCode,
+        selected_lane_runtime_assignment_truth_missing,
     };
     use std::collections::BTreeSet;
 

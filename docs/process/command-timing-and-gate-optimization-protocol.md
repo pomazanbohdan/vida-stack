@@ -154,6 +154,24 @@ If a tool cannot emit this envelope directly, the orchestrator must record it in
 22. After each coherent work pool, record whether root-token usage could have been reduced by earlier advisory prefetch, compact command output, task snapshot refresh, or batching TaskFlow mutations; create or update a TaskFlow optimization item when the answer is yes.
 23. Treat megabyte runtime JSON, unbounded `--json` defaults, raw host-bridge prompts in normal output, and missing field selectors as runtime defects when they materially increase root-token usage or make batch closure unreliable.
 
+## Bounded-Cycle Execution Strategy
+
+For each bounded cycle, bind one authoritative runtime snapshot and reuse it for selection, routing, proof, and closure until an explicit invalidation event (state mutation, dispatch/rebind, failed gate, ownership change, or elapsed freshness boundary) requires one replacement snapshot. Do not refresh the same evidence ad hoc between steps.
+
+Create one selector-bounded reusable proof bundle for the cycle. The bundle must retain the selected fields, exact command/surface, timing envelope, stdout/stderr artifact refs, verdict, blocker codes, and per-defect evidence needed by every in-scope gate; reuse it instead of repeating broad reads or reconstructing proof from chat.
+
+Batch defects into one execution unit only when all of these match: shared root cause, same owner layer, compatible and non-overlapping conflict domain, same execution posture, compatible acceptance/proof contract, and one common closure gate. Retain separate evidence and verdicts for every defect in the batch. If any condition differs, split the packet.
+
+Parallelize only independent read-only discovery, reproduction, and proof preparation. Serialize all writes, dispatch, wait-to-terminal, agent-handle close, merges, TaskFlow closure, release, install, and push operations, including operations that target different defects but share an authority or integration boundary.
+
+When a host bridge fails or loses its activation, retry or rebind idempotently with the same request and idempotency key before creating a new packet. A retry is successful only with execution evidence and a terminal result; activation-only, view-only, admissible-but-not-active, or receipt-recorded responses are never success and never authorize a new write path.
+
+Use focused proof once per defect, one package-level proof for the compatible batch, and broader proof only at the coherent pack or epic gate. Do not rerun a broader gate to recover missing focused fields; repair selectors or artifact capture first.
+
+After closure, run exactly one post-close runtime self-diagnostic for the coherent cycle. Record the truthful result, including blocker codes and a bounded blocker/rescope when any authority or projection is unavailable. When the diagnostic finds no reusable optimization, record `no_instruction_update_reason` explicitly; when it finds one, update the mapped canonical instruction/protocol owner in the same bounded batch.
+
+Every cycle must measure round trips, repeated reads, agent attempts, proof commands, and their durations/results. The optimization decision must identify which steps were removed, batched, reused, or parallelized, and demonstrate that fail-closed authority, per-defect evidence, and serialized closure gates were preserved.
+
 ## Gate Decision Model
 
 When a gate is slow or repeatedly blocks iteration, classify it with exactly one decision:

@@ -225,8 +225,9 @@ pub(crate) async fn current_runtime_projection(
                 .is_none_or(|current| current.run_id != global.run_id)
                 .then(|| global.run_id.clone())
         });
-    let active_exception_takeover_receipt =
-        store.latest_active_exception_takeover_dispatch_receipt().await?;
+    let active_exception_takeover_receipt = store
+        .latest_active_exception_takeover_dispatch_receipt()
+        .await?;
     let active_exception_takeover_owned = match active_exception_takeover_receipt.as_ref() {
         Some(receipt) => match store
             .current_session_can_mutate_run_graph_run(&receipt.run_id)
@@ -1279,18 +1280,20 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         continuation_binding,
                         taskflow_active_candidates,
                     );
-                let continuation_binding = if closed_task_active_run_projection_mismatch {
-                    crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
+                let continuation_binding = if session_identity_ambiguous {
+                    crate::continuation_binding_summary::apply_active_flow_mismatch_gate(
                         continuation_binding,
+                        latest_run_graph_status
+                            .as_ref()
+                            .map(|status| status.run_id.as_str()),
+                        competing_run_id.as_deref(),
                     )
                 } else {
                     continuation_binding
                 };
-                let continuation_binding = if session_identity_ambiguous {
-                    crate::continuation_binding_summary::apply_active_flow_mismatch_gate(
+                let continuation_binding = if closed_task_active_run_projection_mismatch {
+                    crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
                         continuation_binding,
-                        latest_run_graph_status.as_ref().map(|status| status.run_id.as_str()),
-                        competing_run_id.as_deref(),
                     )
                 } else {
                     continuation_binding
@@ -2814,7 +2817,9 @@ async fn refresh_cached_status_projection_runtime_fields_with_store(
     let continuation_binding = if session_identity_ambiguous {
         crate::continuation_binding_summary::apply_active_flow_mismatch_gate(
             continuation_binding,
-            latest_run_graph_status.as_ref().map(|status| status.run_id.as_str()),
+            latest_run_graph_status
+                .as_ref()
+                .map(|status| status.run_id.as_str()),
             competing_run_id.as_deref(),
         )
     } else {

@@ -467,8 +467,11 @@ pub(crate) fn implementation_artifact_scope_validation(
             }
         }
     });
-    let admission = taskflow_host_bridge::completion_authority::
-        admit_host_bridge_implementation_attempt(&admission_request, Some(artifacts));
+    let admission =
+        taskflow_host_bridge::completion_authority::admit_host_bridge_implementation_attempt(
+            &admission_request,
+            Some(artifacts),
+        );
     blocker_codes.extend(admission.blocker_codes);
     if !out_of_scope_paths.is_empty() {
         blocker_codes.push("implementation_attempt_scope_guard_violation".to_string());

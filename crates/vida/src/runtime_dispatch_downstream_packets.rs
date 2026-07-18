@@ -285,12 +285,11 @@ impl DownstreamDispatchPacketContract {
             } else {
                 Vec::new()
             };
-        let proof_artifact_paths =
-            proof_scope_from_planner_metadata_and_text(
-                &role_selection.execution_plan,
-                &role_selection.request,
-            )
-            .paths;
+        let proof_artifact_paths = proof_scope_from_planner_metadata_and_text(
+            &role_selection.execution_plan,
+            &role_selection.request,
+        )
+        .paths;
         let mut implementation_isolation =
             implementation_isolation_contract(handoff_task_class.as_str(), &owned_paths);
         if !proof_artifact_paths.is_empty() {
@@ -522,6 +521,8 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
     );
     let host_runtime =
         crate::runtime_dispatch_state::runtime_host_execution_contract_for_root(&project_root);
+    let receipt_has_execution_evidence =
+        crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(receipt);
     let effective_execution_posture =
         crate::runtime_dispatch_state::effective_execution_posture_summary(
             &role_selection.execution_plan,
@@ -529,8 +530,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
             selected_backend.as_deref(),
             contract.activation_agent_type.as_deref(),
             Some(&host_runtime),
-            downstream_target.is_empty()
-                && crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(receipt),
+            receipt_has_execution_evidence,
             None,
         );
     let execution_truth = crate::runtime_dispatch_state::dispatch_execution_route_summary(
@@ -539,7 +539,7 @@ pub(crate) fn downstream_dispatch_packet_body_with_owned_paths(
         selected_backend.as_deref(),
         None,
     );
-    let activation_evidence = if downstream_target.is_empty() {
+    let activation_evidence = if receipt_has_execution_evidence {
         crate::runtime_dispatch_state::dispatch_activation_evidence_summary(receipt)
     } else {
         neutral_downstream_activation_evidence()
@@ -1046,6 +1046,88 @@ mod tests {
         );
         assert_eq!(packet["downstream_lane_id"], "coach_test_gate");
         assert_eq!(packet["packet_template_kind"], "coach_review_packet");
+    }
+
+    #[test]
+    fn receipt_backed_execution_evidence_propagates_to_non_empty_downstream_packet() {
+        let result_path = std::env::temp_dir().join(format!(
+            "vida-downstream-host-bridge-result-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::write(
+            &result_path,
+            serde_json::json!({
+                "artifact_kind": "host_tool_bridge_result",
+                "status": "pass",
+                "execution_state": "executed",
+                "run_id": "feature-test",
+                "dispatch_target": "test_author",
+                "completed_target": "test_author",
+                "execution_evidence": {
+                    "status": "recorded",
+                    "receipt_backed": true,
+                    "receipt_id": "receipt-feature-test"
+                },
+                "activation_semantics": {
+                    "activation_kind": "execution_evidence",
+                    "view_only": false,
+                    "executes_packet": true,
+                    "records_completion_receipt": true
+                }
+            })
+            .to_string(),
+        )
+        .expect("host bridge result should write");
+        let mut receipt = receipt_with_coach_downstream();
+        receipt.dispatch_result_path = Some(result_path.display().to_string());
+
+        let packet = downstream_dispatch_packet_body_with_owned_paths(
+            &role_selection_with_empty_request(),
+            &serde_json::json!({ "run_id": "feature-test" }),
+            &receipt,
+            None,
+            &[],
+        );
+
+        assert_eq!(
+            packet["activation_vs_execution_evidence"]["evidence_state"],
+            "execution_evidence_recorded"
+        );
+        assert_eq!(
+            packet["activation_vs_execution_evidence"]["receipt_backed"],
+            true
+        );
+        assert_eq!(
+            packet["execution_evidence"]["receipt_id"],
+            "receipt-feature-test"
+        );
+
+        let _ = std::fs::remove_file(result_path);
+    }
+
+    #[test]
+    fn downstream_packet_keeps_activation_view_only_without_receipt_evidence() {
+        let packet = downstream_dispatch_packet_body_with_owned_paths(
+            &role_selection_with_empty_request(),
+            &serde_json::json!({ "run_id": "feature-test" }),
+            &receipt_with_coach_downstream(),
+            None,
+            &[],
+        );
+
+        assert_eq!(
+            packet["activation_vs_execution_evidence"]["evidence_state"],
+            "activation_view_only"
+        );
+        assert_eq!(
+            packet["activation_vs_execution_evidence"]["receipt_backed"],
+            false
+        );
+        assert!(packet["execution_evidence"].is_null());
     }
 
     #[test]

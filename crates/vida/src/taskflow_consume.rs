@@ -862,11 +862,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 eprintln!("{error}");
                                 return ExitCode::from(1);
                             }
-                            let mut dispatch_receipt =
-                                build_runtime_consumption_dispatch_receipt(
-                                    &role_selection,
-                                    &run_graph_bootstrap,
-                                );
+                            let mut dispatch_receipt = build_runtime_consumption_dispatch_receipt(
+                                &role_selection,
+                                &run_graph_bootstrap,
+                            );
                             let role_selection_value =
                                 crate::carrier_runtime_projection::carrier_policy_assignment_for_dispatch(
                                     &role_selection.execution_plan,
@@ -877,15 +876,14 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     &runtime_bundle.activation_bundle,
                                     &role_selection_value,
                                 );
-                            let carrier_policy_blockers = carrier_policy_revalidation[
-                                "blocker_codes"
-                            ]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(serde_json::Value::as_str)
-                            .map(str::to_string)
-                            .collect::<Vec<_>>();
+                            let carrier_policy_blockers =
+                                carrier_policy_revalidation["blocker_codes"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(serde_json::Value::as_str)
+                                    .map(str::to_string)
+                                    .collect::<Vec<_>>();
                             let mut taskflow_handoff_plan =
                                 super::build_taskflow_handoff_plan(&role_selection);
                             if !carrier_policy_blockers.is_empty() {
@@ -1177,7 +1175,9 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 role_selection.conversational_mode.is_some(),
                                 consume_final_blocker_code.as_deref(),
                             );
-                            if !consume_final_mode.is_read_only() && carrier_policy_blockers.is_empty() {
+                            if !consume_final_mode.is_read_only()
+                                && carrier_policy_blockers.is_empty()
+                            {
                                 let owned_paths_override = consume_final_owned_paths_override(
                                     &store,
                                     &role_selection,

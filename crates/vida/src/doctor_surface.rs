@@ -893,6 +893,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             };
             let crate::status_surface::CurrentRuntimeProjection {
                 current_session_status: current_session_run_graph_status,
+                global_status: latest_global_run_graph_status,
                 terminal_task_active_status: latest_terminal_task_active_run_graph_status,
                 status: latest_run_graph_status,
                 recovery: latest_run_graph_recovery,
@@ -1221,6 +1222,17 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 },
                 None => (false, false, false),
             };
+            let latest_global_run_graph_task_closed = match latest_global_run_graph_status.as_ref() {
+                Some(status) => match crate::taskflow_run_graph_task_authority::run_graph_task_authority_verdict(&store, status).await {
+                    Ok(verdict) => verdict.task_closed_stale_run(),
+                    Err(error) => {
+                        eprintln!("global run graph task authority: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                },
+                None => false,
+            };
+            latest_run_graph_task_closed |= latest_global_run_graph_task_closed;
             let terminal_task_active_run_graph_task_stale =
                 match latest_terminal_task_active_run_graph_status.as_ref() {
                     Some(terminal)
@@ -1245,8 +1257,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     }
                     _ => false,
                 };
-            let latest_run_graph_task_stale =
-                latest_run_graph_task_stale || terminal_task_active_run_graph_task_stale;
+            let latest_run_graph_task_stale = latest_run_graph_task_stale
+                || terminal_task_active_run_graph_task_stale
+                || latest_global_run_graph_task_closed;
             let latest_run_graph_approval_receipt = match latest_run_graph_status.as_ref() {
                 Some(status) => match store
                     .run_graph_approval_delegation_receipt(&status.run_id)

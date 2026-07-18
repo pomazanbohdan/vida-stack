@@ -441,6 +441,20 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
                 .unwrap_or("unknown"),
         ),
     );
+    crate::surface_render::print_surface_line(
+        inputs.render,
+        "continuation binding gate",
+        &format!(
+            "status={} reason={}",
+            inputs.continuation_binding["status"]
+                .as_str()
+                .unwrap_or("unknown"),
+            inputs.continuation_binding["ambiguity_reason"]
+                .as_str()
+                .filter(|reason| !reason.trim().is_empty())
+                .unwrap_or("none"),
+        ),
+    );
     if let Some(reason) = inputs.continuation_binding["ambiguity_reason"].as_str() {
         if !reason.trim().is_empty() {
             crate::surface_render::print_surface_line(
@@ -659,6 +673,19 @@ fn emit_status_toon_report(inputs: &StatusTextReportInputs<'_>) {
         } else {
             "unknown fail_closed=true activation_pending=true".to_string()
         },
+    ));
+    fields.push(operator_output::toon_report::OperatorToonField::text(
+        "continuation_binding_gate",
+        format!(
+            "status={} reason={}",
+            inputs.continuation_binding["status"]
+                .as_str()
+                .unwrap_or("unknown"),
+            inputs.continuation_binding["ambiguity_reason"]
+                .as_str()
+                .filter(|reason| !reason.trim().is_empty())
+                .unwrap_or("none"),
+        ),
     ));
     fields.push(operator_output::toon_report::OperatorToonField::text(
         "latest_run_graph_status",

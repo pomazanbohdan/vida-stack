@@ -253,10 +253,7 @@ pub(crate) fn csv_json_string_list(value: Option<&serde_json::Value>) -> Vec<Str
     }
 }
 
-pub(crate) fn json_trimmed_string_field(
-    value: &serde_json::Value,
-    key: &str,
-) -> Option<String> {
+pub(crate) fn json_trimmed_string_field(value: &serde_json::Value, key: &str) -> Option<String> {
     value
         .get(key)
         .and_then(serde_json::Value::as_str)
@@ -273,10 +270,7 @@ pub(crate) fn json_trimmed_string_field_any(
         .find_map(|key| json_trimmed_string_field(value, key))
 }
 
-pub(crate) fn json_nonempty_string_array_field(
-    value: &serde_json::Value,
-    key: &str,
-) -> bool {
+pub(crate) fn json_nonempty_string_array_field(value: &serde_json::Value, key: &str) -> bool {
     value
         .get(key)
         .and_then(serde_json::Value::as_array)
@@ -513,11 +507,8 @@ agent_extensions:
         });
 
         assert_eq!(
-            json_trimmed_string_field_any(
-                &value,
-                &["selected_backend_id", "selected_backend"]
-            )
-            .as_deref(),
+            json_trimmed_string_field_any(&value, &["selected_backend_id", "selected_backend"])
+                .as_deref(),
             Some("internal_subagents")
         );
     }

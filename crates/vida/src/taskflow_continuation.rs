@@ -1149,14 +1149,10 @@ mod tests {
             "implementation",
         );
         status.task_id = "task-auto-session".to_string();
-        let binding = sync_run_graph_continuation_binding(
-            &store,
-            &status,
-            "automatic_projection",
-        )
-        .await
-        .expect("automatic binding should resolve")
-        .expect("automatic binding should be recorded");
+        let binding = sync_run_graph_continuation_binding(&store, &status, "automatic_projection")
+            .await
+            .expect("automatic binding should resolve")
+            .expect("automatic binding should be recorded");
         let session_id = store
             .current_session_id()
             .expect("current session should resolve")

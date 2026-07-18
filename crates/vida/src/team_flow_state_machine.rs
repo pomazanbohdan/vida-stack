@@ -441,7 +441,7 @@ pub fn validate_dispatch_contract_rework_transition(
         dispatch_contract,
         "execution_lane_sequence",
     )
-        .map(|sm| sm.validate_rework_transition(current_role, requested_next_node, rework_target))
+    .map(|sm| sm.validate_rework_transition(current_role, requested_next_node, rework_target))
 }
 
 #[cfg(test)]

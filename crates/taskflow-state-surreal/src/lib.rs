@@ -40,6 +40,35 @@ pub const DEFAULT_STATE_ENTITY_SURFACES: &[&str] = &[
     "task_reconciliation_summary",
 ];
 
+pub const SURREAL_CONFORMANCE_EXCLUSION_CODE: &str = "surreal_state_adapter_unavailable";
+pub const SURREAL_CONFORMANCE_EXCLUSION_REASON: &str = "taskflow-state-surreal currently exposes SurrealKV target/bootstrap metadata only; its Cargo.toml has no surrealdb client/engine dependency and the crate exports no OperationalJournal implementation, so the shared state semantic corpus cannot be safely instantiated in this environment";
+pub const SURREAL_CONFORMANCE_EXCLUSION_EVIDENCE: &str = "crates/taskflow-state-surreal/Cargo.toml declares only thiserror; crates/taskflow-state-surreal/src/lib.rs contains no OperationalJournal implementation";
+
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("{blocker_code}: {reason}")]
+pub struct SurrealConformanceExclusion {
+    pub backend: &'static str,
+    pub status: &'static str,
+    pub blocker_code: &'static str,
+    pub reason: &'static str,
+    pub evidence: &'static str,
+}
+
+pub fn surreal_state_conformance_exclusion() -> SurrealConformanceExclusion {
+    SurrealConformanceExclusion {
+        backend: DEFAULT_BACKEND,
+        status: "excluded",
+        blocker_code: SURREAL_CONFORMANCE_EXCLUSION_CODE,
+        reason: SURREAL_CONFORMANCE_EXCLUSION_REASON,
+        evidence: SURREAL_CONFORMANCE_EXCLUSION_EVIDENCE,
+    }
+}
+
+/// Fail-closed boundary: no Surreal-backed semantic-corpus execution is claimed here.
+pub fn require_surreal_state_conformance() -> Result<(), SurrealConformanceExclusion> {
+    Err(surreal_state_conformance_exclusion())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SurrealStorageMeta {
     pub engine: &'static str,
@@ -181,8 +210,11 @@ mod tests {
     use super::{
         DEFAULT_BACKEND, DEFAULT_DATABASE, DEFAULT_ENGINE, DEFAULT_INSTRUCTION_SCHEMA_VERSION,
         DEFAULT_NAMESPACE, DEFAULT_STATE_ENTITY_SURFACES, DEFAULT_STATE_SCHEMA_VERSION,
-        DEFAULT_STATE_TABLES, StateSpineManifestContract, SurrealBootstrapPayload,
-        SurrealStorageMeta, SurrealStoreTarget, SurrealStoreTargetError,
+        DEFAULT_STATE_TABLES, SURREAL_CONFORMANCE_EXCLUSION_CODE,
+        SURREAL_CONFORMANCE_EXCLUSION_EVIDENCE, SURREAL_CONFORMANCE_EXCLUSION_REASON,
+        StateSpineManifestContract, SurrealBootstrapPayload, SurrealStorageMeta,
+        SurrealStoreTarget, SurrealStoreTargetError, require_surreal_state_conformance,
+        surreal_state_conformance_exclusion,
     };
     use std::path::PathBuf;
 
@@ -305,6 +337,27 @@ mod tests {
                     .map(|surface| (*surface).to_string())
                     .collect(),
             }
+        );
+    }
+
+    #[test]
+    fn fails_closed_when_surreal_adapter_cannot_run_shared_state_corpus() {
+        let exclusion = surreal_state_conformance_exclusion();
+
+        assert_eq!(exclusion.backend, DEFAULT_BACKEND);
+        assert_eq!(exclusion.status, "excluded");
+        assert_eq!(exclusion.blocker_code, SURREAL_CONFORMANCE_EXCLUSION_CODE);
+        assert_eq!(exclusion.reason, SURREAL_CONFORMANCE_EXCLUSION_REASON);
+        assert_eq!(exclusion.evidence, SURREAL_CONFORMANCE_EXCLUSION_EVIDENCE);
+        assert!(
+            exclusion
+                .reason
+                .contains("no OperationalJournal implementation")
+        );
+        assert!(exclusion.evidence.contains("Cargo.toml"));
+        assert_eq!(
+            require_surreal_state_conformance().expect_err("Surreal execution must fail closed"),
+            exclusion
         );
     }
 }

@@ -157,7 +157,10 @@ fn validate_registry_source_path(
         ));
     }
     let canonical_root = root.canonicalize().map_err(|error| {
-        format!("failed to canonicalize project root `{}`: {error}", root.display())
+        format!(
+            "failed to canonicalize project root `{}`: {error}",
+            root.display()
+        )
     })?;
     let canonical_source = source_path.canonicalize().map_err(|error| {
         format!(
@@ -966,7 +969,9 @@ agent_extensions:
             "version: 1\nroles:\n  - role_id: duplicate\n  - role_id: duplicate\n",
         )
         .expect("duplicate source registry should be written");
-        let runtime_path = harness.path().join(".vida/project/agent-extensions/roles.yaml");
+        let runtime_path = harness
+            .path()
+            .join(".vida/project/agent-extensions/roles.yaml");
         fs::write(&runtime_path, "version: 1\nroles:\n  - role_id: stable\n")
             .expect("runtime registry should be written");
         let config = serde_yaml::from_str(
@@ -994,7 +999,9 @@ agent_extensions:
     #[test]
     fn agent_extension_projection_rejects_unsafe_source_path_without_writes() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let runtime_path = harness.path().join(".vida/project/agent-extensions/roles.yaml");
+        let runtime_path = harness
+            .path()
+            .join(".vida/project/agent-extensions/roles.yaml");
         fs::create_dir_all(runtime_path.parent().expect("runtime parent should exist"))
             .expect("runtime registry dir should exist");
         fs::write(&runtime_path, "version: 1\nroles: []\n")
@@ -1042,8 +1049,12 @@ agent_extensions:
             "version: 1\nskills: malformed\n",
         )
         .expect("malformed skills source should be written");
-        let roles_runtime = harness.path().join(".vida/project/agent-extensions/roles.yaml");
-        let skills_runtime = harness.path().join(".vida/project/agent-extensions/skills.yaml");
+        let roles_runtime = harness
+            .path()
+            .join(".vida/project/agent-extensions/roles.yaml");
+        let skills_runtime = harness
+            .path()
+            .join(".vida/project/agent-extensions/skills.yaml");
         fs::write(&roles_runtime, "version: 1\nroles:\n  - role_id: stable\n")
             .expect("roles runtime should be written");
         fs::write(&skills_runtime, "version: 1\nskills: []\n")

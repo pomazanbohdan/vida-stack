@@ -344,7 +344,11 @@ fn policy_list_contains(policy: &serde_json::Value, field: &str, value: &str) ->
     policy
         .get(field)
         .and_then(serde_json::Value::as_array)
-        .map(|values| values.iter().any(|candidate| candidate.as_str() == Some(value)))
+        .map(|values| {
+            values
+                .iter()
+                .any(|candidate| candidate.as_str() == Some(value))
+        })
         .unwrap_or(false)
 }
 
@@ -374,8 +378,8 @@ pub(crate) fn carrier_policy_revalidation(
     let selected_reasoning = carrier_policy_string(assignment, "selected_reasoning_effort");
     let selected_runtime_role = carrier_policy_string(assignment, "selected_runtime_role")
         .or_else(|| carrier_policy_string(assignment, "runtime_role"));
-    let selected_task_class =
-        carrier_policy_string(assignment, "task_class").or_else(|| carrier_policy_string(assignment, "route_task_class"));
+    let selected_task_class = carrier_policy_string(assignment, "task_class")
+        .or_else(|| carrier_policy_string(assignment, "route_task_class"));
 
     let mut blockers = Vec::new();
     let mut reasons = Vec::new();
@@ -406,14 +410,18 @@ pub(crate) fn carrier_policy_revalidation(
             "mismatches": mismatches,
         });
     };
-    let Some(carrier) = roles.iter().find(|role| role["role_id"].as_str() == Some(selected_carrier)) else {
+    let Some(carrier) = roles
+        .iter()
+        .find(|role| role["role_id"].as_str() == Some(selected_carrier))
+    else {
         mismatches.push(serde_json::json!({
             "field": "selected_carrier_id",
             "selected": selected_carrier,
             "current": serde_json::Value::Null,
             "reason": "selected carrier is not admissible in the current carrier policy",
         }));
-        reasons.push("selected carrier is not admissible in the current carrier policy".to_string());
+        reasons
+            .push("selected carrier is not admissible in the current carrier policy".to_string());
         blockers.push(carrier_policy_mismatch_code().to_string());
         blockers.push(carrier_policy_reselection_code().to_string());
         blockers.sort();
@@ -462,7 +470,9 @@ pub(crate) fn carrier_policy_revalidation(
             "current": profiles.keys().collect::<Vec<_>>(),
             "reason": "selected model profile is not admissible in the current carrier policy",
         }));
-        reasons.push("selected model profile is not admissible in the current carrier policy".to_string());
+        reasons.push(
+            "selected model profile is not admissible in the current carrier policy".to_string(),
+        );
         blockers.push(carrier_policy_mismatch_code().to_string());
         blockers.push(carrier_policy_reselection_code().to_string());
         blockers.sort();
@@ -536,7 +546,8 @@ pub(crate) fn carrier_policy_revalidation(
                     "current": profile["runtime_roles"],
                     "reason": "selected runtime role is not admitted by current profile",
                 }));
-                reasons.push("selected runtime role is not admitted by current profile".to_string());
+                reasons
+                    .push("selected runtime role is not admitted by current profile".to_string());
             }
             None => {
                 mismatches.push(serde_json::json!({
@@ -667,7 +678,8 @@ pub(crate) fn carrier_policy_revalidation_for_project_root(
     project_root: &Path,
     assignment: &serde_json::Value,
 ) -> serde_json::Value {
-    let Ok(config) = crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root)
+    let Ok(config) =
+        crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root)
     else {
         return serde_json::json!({
             "status": "blocked",
@@ -788,8 +800,8 @@ mod tests {
                     .expect("blockers")
                     .iter()
                     .any(|code| {
-                        code
-                            == taskflow_contracts::BlockerCode::ActiveCarrierPolicyMismatch.as_str()
+                        code == taskflow_contracts::BlockerCode::ActiveCarrierPolicyMismatch
+                            .as_str()
                     }),
                 "field={field} result={result:#}"
             );
@@ -830,7 +842,8 @@ mod tests {
                     .as_array()
                     .expect("blockers")
                     .iter()
-                    .any(|code| code == taskflow_contracts::BlockerCode::ActiveCarrierPolicyMismatch.as_str()),
+                    .any(|code| code
+                        == taskflow_contracts::BlockerCode::ActiveCarrierPolicyMismatch.as_str()),
                 "field={field} result={result:#}"
             );
         }

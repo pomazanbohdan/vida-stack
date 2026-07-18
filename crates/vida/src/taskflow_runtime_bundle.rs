@@ -130,11 +130,13 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .latest_run_graph_recovery_summary_for_current_session()
         .await
         .map_err(|error| format!("Failed to read latest run graph recovery summary: {error}"))?;
-    let active_flow_mismatch = latest_global_run_graph_status.as_ref().is_some_and(|global| {
-        latest_run_graph_status
-            .as_ref()
-            .is_none_or(|current| current.run_id != global.run_id)
-    });
+    let active_flow_mismatch = latest_global_run_graph_status
+        .as_ref()
+        .is_some_and(|global| {
+            latest_run_graph_status
+                .as_ref()
+                .is_none_or(|current| current.run_id != global.run_id)
+        });
     let effective_latest_run_graph_status = latest_run_graph_status.as_ref();
     let effective_latest_run_graph_recovery = latest_run_graph_recovery.as_ref();
     let latest_terminal_task_active_run_graph_status = store
@@ -361,20 +363,22 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             && (latest_run_graph_task_closed
                 || global_closed_run_is_current
                 || terminal_closed_run_is_current);
-    let continuation_binding = if closed_task_active_run_projection_mismatch {
-        crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
+    let continuation_binding = if active_flow_mismatch {
+        crate::continuation_binding_summary::apply_active_flow_mismatch_gate(
             continuation_binding,
+            latest_run_graph_status
+                .as_ref()
+                .map(|status| status.run_id.as_str()),
+            latest_global_run_graph_status
+                .as_ref()
+                .map(|status| status.run_id.as_str()),
         )
     } else {
         continuation_binding
     };
-    let continuation_binding = if active_flow_mismatch {
-        crate::continuation_binding_summary::apply_active_flow_mismatch_gate(
+    let continuation_binding = if closed_task_active_run_projection_mismatch {
+        crate::continuation_binding_summary::apply_closed_task_active_run_projection_mismatch_gate(
             continuation_binding,
-            latest_run_graph_status.as_ref().map(|status| status.run_id.as_str()),
-            latest_global_run_graph_status
-                .as_ref()
-                .map(|status| status.run_id.as_str()),
         )
     } else {
         continuation_binding
@@ -3163,7 +3167,8 @@ mod tests {
                     crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_SEMANTICS
                         .to_string(),
                 active_executable_fingerprint_source:
-                    crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_SOURCE.to_string(),
+                    crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_SOURCE
+                        .to_string(),
                 installed_binaries: Vec::new(),
                 path_resolution: crate::runtime_consumption_surface::LauncherPathResolution {
                     command: "vida".to_string(),

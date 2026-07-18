@@ -1,5 +1,5 @@
-use serde_json::Value;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::Path;
 
 use surrealdb::Surreal;
@@ -506,7 +506,8 @@ fn taking_epic_admits_first_ready_child_once() {
     assert_eq!(updated["task"]["status"], "in_progress");
 
     let first_child = run_json_success(&fixture, None, &["task", "show", "epic-child-a", "--json"]);
-    let second_child = run_json_success(&fixture, None, &["task", "show", "epic-child-b", "--json"]);
+    let second_child =
+        run_json_success(&fixture, None, &["task", "show", "epic-child-b", "--json"]);
     assert_eq!(first_child["task"]["status"], "in_progress");
     assert_eq!(second_child["task"]["status"], "open");
 

@@ -15,3 +15,4 @@ taskflow-state-fs = { path = "../taskflow-state-fs" }
 [dev-dependencies]
 taskflow-core = { path = "../taskflow-core" }
 tempfile = "3.27.0"
+vida-test-support = { path = "../vida-test-support" }

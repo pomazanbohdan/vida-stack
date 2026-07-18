@@ -2143,6 +2143,9 @@ mod tests {
         verify_run_workflow_repository_corrupt_payload_fails_closed,
     };
     use tempfile::tempdir;
+    use vida_test_support::state_conformance::{
+        StateAdapterFactory, run_state_adapter_conformance,
+    };
 
     #[test]
     fn append_load_and_reopen_round_trip() {
@@ -2199,6 +2202,68 @@ mod tests {
             ),
             "normalized adapter must not keep the scaffold snapshot table"
         );
+    }
+
+    struct RedbJournalFactory {
+        directory: tempfile::TempDir,
+        path: Option<std::path::PathBuf>,
+        recovery_path: Option<std::path::PathBuf>,
+        generation: u64,
+    }
+
+    impl RedbJournalFactory {
+        fn new() -> Self {
+            Self {
+                directory: tempdir().expect("factory tempdir"),
+                path: None,
+                recovery_path: None,
+                generation: 0,
+            }
+        }
+    }
+
+    impl StateAdapterFactory for RedbJournalFactory {
+        fn backend_name(&self) -> &str {
+            "redb-compatibility"
+        }
+
+        fn fresh(&mut self) -> Result<Box<dyn OperationalJournal>, TaskflowStateError> {
+            self.generation += 1;
+            let path = self
+                .directory
+                .path()
+                .join(format!("conformance-{}.redb", self.generation));
+            self.path = Some(path.clone());
+            let journal = RedbOperationalJournal::create(path.clone())?;
+            if self.recovery_path.is_none() {
+                self.recovery_path = Some(path);
+            }
+            Ok(Box::new(journal))
+        }
+
+        fn reopen(&mut self) -> Result<Box<dyn OperationalJournal>, TaskflowStateError> {
+            let path = self
+                .recovery_path
+                .as_ref()
+                .expect("reopen requires the first committed journal");
+            Ok(Box::new(RedbOperationalJournal::open(path)?))
+        }
+
+        fn supports_restart_recovery(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn redb_compatibility_adapter_passes_shared_state_corpus_and_reopen() {
+        let mut factory = RedbJournalFactory::new();
+        let report = run_state_adapter_conformance(&mut factory)
+            .expect("redb compatibility adapter should pass the shared corpus");
+
+        assert_eq!(report.backend, "redb-compatibility");
+        assert_eq!(report.checks.len(), 7);
+        assert!(report.restart_recovered);
+        assert!(!report.partial_write_recovered);
     }
 
     #[test]

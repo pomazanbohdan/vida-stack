@@ -44,6 +44,32 @@ fn zombie_d_matrix_note(doubts: Value) -> String {
     )
 }
 
+fn zombie_d_rpc_matrix_note() -> String {
+    let matrix = serde_json::json!({
+        "schema_version": 1,
+        "metadata": {
+            "schema_version": 1,
+            "applicable_categories": ["R", "P", "C"]
+        },
+        "categories": {
+            "Z": {"status": "pass", "evidence_refs": ["z"]},
+            "O": {"status": "pass", "evidence_refs": ["o"]},
+            "M": {"status": "na", "reason": "single fixture contract"},
+            "B": {"status": "pass", "evidence_refs": ["b"]},
+            "I": {"status": "pass", "evidence_refs": ["i"]},
+            "E": {"status": "pass", "evidence_refs": ["e"]},
+            "S": {"status": "pass", "evidence_refs": ["s"]},
+            "R": {"status": "pass", "evidence_refs": ["replay-test"]},
+            "P": {"status": "pass", "evidence_refs": ["persistence-test"]},
+            "C": {"status": "pass", "evidence_refs": ["cross-surface-test"]}
+        },
+        "doubts": []
+    });
+    format!(
+        "task_proof_evidence:\n  proof_target: zombie_d_matrix\n  result: pass\n  evidence: {matrix}"
+    )
+}
+
 fn assert_zombie_d_operator_shape(value: &Value, label: &str) {
     vida_test_support::assert_release1_operator_shape(label, value);
     assert!(matches!(
@@ -347,10 +373,7 @@ fn closed_task_stale_host_bridge_run_projection_is_not_active_recovery() {
     );
     assert_eq!(run_graph["run_graph_status"]["context_state"], "sealed");
     assert_eq!(run_graph["run_graph_status"]["recovery_ready"], false);
-    assert_eq!(
-        run_graph["delegation_gate"]["delegated_cycle_open"],
-        false
-    );
+    assert_eq!(run_graph["delegation_gate"]["delegated_cycle_open"], false);
     assert_eq!(
         run_graph["delegation_gate"]["delegated_cycle_state"],
         "clear"
@@ -1136,7 +1159,6 @@ fn task_close_uses_latest_valid_persisted_zombie_d_matrix() {
             "--json",
         ],
     );
-
     let close = run_json_success(
         &fixture,
         &[
@@ -1154,9 +1176,96 @@ fn task_close_uses_latest_valid_persisted_zombie_d_matrix() {
         &["task", "show", "latest-valid-zombie-d-task", "--json"],
     );
     assert_eq!(show["task"]["status"], "closed");
-    assert!(show["task"]["notes"]
-        .as_str()
-        .is_some_and(|notes| notes.contains("resolved-doubt") && notes.matches("task_proof_evidence:").count() == 2));
+    assert!(
+        show["task"]["notes"]
+            .as_str()
+            .is_some_and(|notes| notes.contains("resolved-doubt")
+                && notes.matches("task_proof_evidence:").count() == 2)
+    );
+}
+
+#[test]
+fn task_close_accepts_replay_persistence_consistency_matrix_and_taskflow_metadata() {
+    let fixture = PersistentRuntimeFixture::state_only("zombie-d-rpc-matrix-close");
+    fixture.boot();
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "create",
+            "zombie-d-rpc-epic",
+            "ZOMBIE-D RPC matrix epic",
+            "--type",
+            "epic",
+            "--execution-mode",
+            "container_only",
+            "--json",
+        ],
+    );
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "create",
+            "zombie-d-rpc-task",
+            "Replay persistence cross-surface contract",
+            "--parent-id",
+            "zombie-d-rpc-epic",
+            "--labels",
+            "zombie-d,replay,persistence,cross-surface",
+            "--owned-path",
+            "crates/vida/src/zombie_d_gate.rs",
+            "--acceptance-target",
+            "Replay,Persistence,Cross-surface consistency",
+            "--proof-target",
+            "cargo test -p vida zombie_d -- --test-threads=1",
+            "--notes",
+            &zombie_d_rpc_matrix_note(),
+            "--execution-mode",
+            "sequential",
+            "--json",
+        ],
+    );
+    run_json_success(
+        &fixture,
+        &[
+            "task",
+            "proof",
+            "attach-evidence",
+            "zombie-d-rpc-task",
+            "--proof-target",
+            "cargo test -p vida zombie_d -- --test-threads=1",
+            "--result",
+            "pass",
+            "--artifact-ref",
+            "artifacts/zombie-d-rpc-focused-proof.txt",
+            "--evidence",
+            "R/P/C focused contract test and legacy migration proof passed",
+            "--json",
+        ],
+    );
+    let close = run_json_success(
+        &fixture,
+        &[
+            "task",
+            "close",
+            "zombie-d-rpc-task",
+            "--reason",
+            "R P C matrix proof passed",
+            "--json",
+        ],
+    );
+    assert_eq!(close["status"], "pass");
+    let show = run_json_success(&fixture, &["task", "show", "zombie-d-rpc-task", "--json"]);
+    assert_eq!(show["task"]["status"], "closed");
+    assert_eq!(
+        show["task"]["planner_metadata"]["acceptance_targets"],
+        serde_json::json!(["Replay", "Persistence", "Cross-surface consistency"])
+    );
+    assert_eq!(
+        show["task"]["planner_metadata"]["proof_targets"][0],
+        "cargo test -p vida zombie_d -- --test-threads=1"
+    );
 }
 
 #[test]

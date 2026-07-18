@@ -9319,21 +9319,32 @@ fn apply_configured_dev_team_route_to_state(
     selection: &RuntimeConsumptionLaneSelection,
     route: &crate::dev_team_sequence_contract::ConfiguredDevTeamTaskRoute,
 ) {
+    let dispatch_target = if route.task_class == "implementation" {
+        dispatch_contract_execution_lane_sequence(
+            &selection.execution_plan["development_flow"]["dispatch_contract"],
+        )
+        .into_iter()
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| route.dispatch_target.clone())
+    } else {
+        route.dispatch_target.clone()
+    };
     status.status = "ready".to_string();
     status.context_state = "ready".to_string();
     status.task_class = route.task_class.clone();
     status.route_task_class = route.task_class.clone();
-    status.next_node = Some(route.dispatch_target.clone());
-    status.lane_id = format!("{}_lane", route.dispatch_target);
-    status.lifecycle_stage = format!("{}_dispatch_ready", route.dispatch_target);
+    status.next_node = Some(dispatch_target.clone());
+    status.lane_id = format!("{}_lane", dispatch_target);
+    status.lifecycle_stage = format!("{}_dispatch_ready", dispatch_target);
     status.policy_gate = "not_required".to_string();
-    status.handoff_state = format!("awaiting_{}", route.dispatch_target);
-    status.resume_target = format!("dispatch.{}", route.dispatch_target);
+    status.handoff_state = format!("awaiting_{}", dispatch_target);
+    status.resume_target = format!("dispatch.{}", dispatch_target);
     status.recovery_ready = true;
     if let Some(selected_backend) =
         crate::runtime_dispatch_state::admissible_selected_backend_for_dispatch_target(
             &selection.execution_plan,
-            &route.dispatch_target,
+            &dispatch_target,
             None,
             None,
         )
@@ -9465,7 +9476,7 @@ fn seeded_run_graph_state_from_role_selection(
     };
     let lane_node = if is_conversation {
         selection.selected_role.clone()
-    } else if selection.selected_role == "worker" {
+    } else {
         dispatch_contract_execution_lane_sequence(
             &execution_plan["development_flow"]["dispatch_contract"],
         )
@@ -9477,10 +9488,6 @@ fn seeded_run_graph_state_from_role_selection(
                 .filter(|value| !value.is_empty())
         })
         .unwrap_or_else(|| selection.selected_role.clone())
-    } else {
-        json_raw_string_field(route, "analysis_route_task_class")
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| selection.selected_role.clone())
     };
     let selected_backend =
         crate::runtime_dispatch_state::admissible_selected_backend_for_dispatch_target(
@@ -11298,11 +11305,7 @@ mod tests {
 
     #[test]
     fn run_graph_specification_dispatch_convergence() {
-        let mut status = default_run_graph_state(
-            "task-specification-dispatch",
-            "defect",
-            "defect",
-        );
+        let mut status = default_run_graph_state("task-specification-dispatch", "defect", "defect");
         status.active_node = "reviewer".to_string();
         status.next_node = Some("coder".to_string());
         status.status = "ready".to_string();
@@ -15945,8 +15948,7 @@ agent_system:
             .expect("receipt present");
 
         assert_eq!(
-            receipt.dispatch_target,
-            "junior",
+            receipt.dispatch_target, "junior",
             "dispatch target follows the current configured worker lane mapping"
         );
         assert!(receipt.dispatch_packet_path.is_some());
@@ -17988,7 +17990,8 @@ agent_system:
                 planner_metadata: crate::state_store::TaskPlannerMetadata {
                     owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
                     proof_targets: vec![
-                        "seed -> advance -> dispatch-init preserves configured ordering".to_string(),
+                        "seed -> advance -> dispatch-init preserves configured ordering"
+                            .to_string(),
                     ],
                     ..crate::state_store::TaskPlannerMetadata::default()
                 },
@@ -18008,8 +18011,12 @@ agent_system:
             .get("development_flow")
             .and_then(|flow| flow.get("dispatch_contract"))
             .expect("seed should retain the dispatch contract");
-        let configured_sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
-        assert!(configured_sequence.len() >= 2, "configured sequence needs two steps");
+        let configured_sequence =
+            crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
+        assert!(
+            configured_sequence.len() >= 2,
+            "configured sequence needs two steps"
+        );
         let first = configured_sequence[0].clone();
         let second = configured_sequence[1].clone();
 
@@ -18095,8 +18102,12 @@ agent_system:
             .get("development_flow")
             .and_then(|flow| flow.get("dispatch_contract"))
             .expect("seed should retain the dispatch contract");
-        let configured_sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
-        assert!(configured_sequence.len() >= 2, "configured sequence needs two steps");
+        let configured_sequence =
+            crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
+        assert!(
+            configured_sequence.len() >= 2,
+            "configured sequence needs two steps"
+        );
         let first = configured_sequence[0].clone();
         let second = configured_sequence[1].clone();
         assert_eq!(seeded.status.next_node.as_deref(), Some(first.as_str()));
@@ -18276,7 +18287,8 @@ agent_system:
                 task_id,
                 title: "Reject blocked configured lane advance",
                 display_id: None,
-                description: "Configured lane advancement must fail closed for blocked seeded lanes.",
+                description:
+                    "Configured lane advancement must fail closed for blocked seeded lanes.",
                 issue_type: "runtime_defect",
                 status: "in_progress",
                 priority: 0,
@@ -18285,9 +18297,7 @@ agent_system:
                 execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
                 planner_metadata: crate::state_store::TaskPlannerMetadata {
                     owned_paths: vec!["crates/vida/src/taskflow_run_graph.rs".to_string()],
-                    proof_targets: vec![
-                        "blocked configured lane advance fails closed".to_string(),
-                    ],
+                    proof_targets: vec!["blocked configured lane advance fails closed".to_string()],
                     ..crate::state_store::TaskPlannerMetadata::default()
                 },
                 created_by: "test",
@@ -18308,7 +18318,8 @@ agent_system:
             .get("development_flow")
             .and_then(|flow| flow.get("dispatch_contract"))
             .expect("seed should retain the dispatch contract");
-        let configured_sequence = crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
+        let configured_sequence =
+            crate::dispatch_contract_execution_lane_sequence(dispatch_contract);
         let first_lane = configured_sequence
             .first()
             .cloned()
@@ -18630,11 +18641,13 @@ agent_system:
             dispatch_init["dispatch_receipt"]["dispatch_target"],
             "coder"
         );
-        assert!(store
-            .run_graph_dispatch_receipt(task_id)
-            .await
-            .expect("dispatch receipt lookup should succeed")
-            .is_some());
+        assert!(
+            store
+                .run_graph_dispatch_receipt(task_id)
+                .await
+                .expect("dispatch receipt lookup should succeed")
+                .is_some()
+        );
 
         let advanced = derive_advanced_run_graph_state(
             &store,

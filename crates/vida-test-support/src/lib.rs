@@ -16,6 +16,7 @@ pub mod engine_conformance;
 pub mod failure_injection;
 pub mod model;
 pub mod shadow_diff;
+pub mod state_conformance;
 
 #[cfg(unix)]
 const DEFAULT_TIMEOUT_ARGS: [&str; 3] = ["-k", "5s", "120s"];

@@ -12,3 +12,4 @@ taskflow-state = { path = "../taskflow-state" }
 
 [dev-dependencies]
 taskflow-core = { path = "../taskflow-core" }
+vida-test-support = { path = "../vida-test-support" }

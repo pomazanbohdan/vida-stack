@@ -13,13 +13,13 @@ pub(crate) fn cached_projection_has_ambiguous_continuation_without_active_unit(
     }
     [
         payload.get("continuation_binding"),
-        payload.get("init").and_then(|init| init.get("continuation_binding")),
+        payload
+            .get("init")
+            .and_then(|init| init.get("continuation_binding")),
     ]
     .into_iter()
     .flatten()
-    .any(|binding| {
-        binding.get("status").and_then(serde_json::Value::as_str) == Some("ambiguous")
-    })
+    .any(|binding| binding.get("status").and_then(serde_json::Value::as_str) == Some("ambiguous"))
 }
 
 fn explicit_binding_is_admissible_for_status(
@@ -2018,9 +2018,11 @@ mod tests {
         assert_eq!(gated["ambiguity_reason"], "active_flow_mismatch");
         assert_eq!(gated["scoped_run_id"], serde_json::Value::Null);
         assert_eq!(gated["global_run_id"], "foreign-run");
-        assert!(gated["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| codes.iter().any(|code| code == "continuation_binding_mismatch")));
+        assert!(gated["blocker_codes"].as_array().is_some_and(|codes| {
+            codes
+                .iter()
+                .any(|code| code == "continuation_binding_mismatch")
+        }));
     }
 
     use super::{
@@ -3970,11 +3972,57 @@ mod tests {
         assert_eq!(summary["status"], "bound");
         assert_eq!(summary["continuation_allowed"], true);
         assert_eq!(summary["binding_source"], "explicit_continuation_bind_task");
-        assert_eq!(
-            summary["active_bounded_unit"]["task_id"],
-            expected_task_id
-        );
+        assert_eq!(summary["active_bounded_unit"]["task_id"], expected_task_id);
         assert_eq!(summary["ambiguity_reason"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn blocked_task_authority_denies_matching_run_downstream_admission() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-blocked-task-authority",
+            "task-blocked-task-authority",
+            "coder",
+        );
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "coder_blocked".to_string();
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: status.run_id.clone(),
+            task_id: status.task_id.clone(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "downstream_dispatch_target",
+                "task_id": status.task_id,
+                "run_id": status.run_id,
+                "dispatch_target": "reviewer"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "operator explicitly bound the downstream task".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_downstream_bound".to_string(),
+            request_text: Some("continue downstream".to_string()),
+            recorded_at: "2026-07-16T00:00:00Z".to_string(),
+        };
+
+        let summary = build_continuation_binding_summary_with_task_authority(
+            Some(&binding),
+            Some(&status),
+            None,
+            None,
+            None,
+            false,
+            false,
+            true,
+            false,
+        );
+
+        assert_eq!(summary["status"], "ambiguous");
+        assert_eq!(summary["continuation_allowed"], false);
+        assert_eq!(summary["active_bounded_unit"], serde_json::Value::Null);
+        assert_eq!(summary["ambiguity_reason"], "latest_run_graph_task_closed");
+        assert_eq!(
+            summary["pause_boundary_gate"],
+            "forbidden_while_run_graph_status_blocked"
+        );
     }
 
     #[test]

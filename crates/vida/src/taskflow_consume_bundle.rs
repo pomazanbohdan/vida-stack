@@ -1915,10 +1915,9 @@ mod tests {
         build_dev_team_readiness, build_taskflow_agent_system_snapshot,
         bundle_check_operator_contracts_consistency_error, consume_bundle_check_next_actions,
         consume_bundle_operator_contract_status, db_first_activation_snapshot_validation_error,
-        fail_fast_with_timeout, normalize_agent_system_max_parallel_agents,
-        normalize_consume_bundle_blocker_codes, push_unique_string,
-        taskflow_docflow_seam_receipt_backed_check,
-        lane_role_profile_for_context,
+        fail_fast_with_timeout, lane_role_profile_for_context,
+        normalize_agent_system_max_parallel_agents, normalize_consume_bundle_blocker_codes,
+        push_unique_string, taskflow_docflow_seam_receipt_backed_check,
     };
     use crate::{
         DoctorLauncherSummary, RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence,
@@ -1948,7 +1947,8 @@ mod tests {
                     crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_SEMANTICS
                         .to_string(),
                 active_executable_fingerprint_source:
-                    crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_SOURCE.to_string(),
+                    crate::runtime_consumption_surface::LAUNCHER_BINARY_FINGERPRINT_SOURCE
+                        .to_string(),
                 installed_binaries: Vec::new(),
                 path_resolution: crate::runtime_consumption_surface::LauncherPathResolution {
                     command: "vida".to_string(),

@@ -142,8 +142,8 @@ pub(crate) fn authorized_dispatch_rework_route_from_receipt_fields(
     let completed_target = completed_result_target(&packet, completed_dispatch_target);
     let packet_fallback_path = (downstream_dispatch_result_path.is_none()
         && dispatch_result_path.is_none())
-        .then_some(dispatch_packet_path)
-        .flatten();
+    .then_some(dispatch_packet_path)
+    .flatten();
     for result_path in dispatch_result_path_candidates_from_receipt_fields(
         downstream_dispatch_result_path,
         dispatch_result_path,

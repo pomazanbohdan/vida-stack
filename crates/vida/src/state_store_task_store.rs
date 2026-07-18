@@ -7048,11 +7048,9 @@ mod tests {
         let implementer_packet_path = packet_dir.join("run-close-task-implementer.json");
         let project_root = crate::resolve_runtime_project_root().expect("resolve project root");
         let config = crate::load_project_overlay_yaml().expect("load project overlay");
-        let compiled_bundle = crate::build_compiled_agent_extension_bundle_for_root(
-            &config,
-            &project_root,
-        )
-        .expect("compile agent extension bundle");
+        let compiled_bundle =
+            crate::build_compiled_agent_extension_bundle_for_root(&config, &project_root)
+                .expect("compile agent extension bundle");
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),

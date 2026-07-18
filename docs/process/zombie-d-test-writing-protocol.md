@@ -6,7 +6,8 @@ or updating tests in `vida-stack`.
 ## Purpose
 
 Make test planning, proof coverage, and closure evidence explicit across the
-Z/O/M/B/I/E/S categories.
+Z/O/M/B/I/E/S categories, with additive R/P/C coverage for replay, persistence,
+and cross-surface consistency.
 
 ## Trigger
 
@@ -30,8 +31,8 @@ runtime commands, and current state evidence.
 
 ## Outputs
 
-Produce focused tests, the Z/O/M/B/I/E/S matrix, proof commands, artifact refs,
-and a closure-ready TaskFlow evidence record.
+Produce focused tests, the Z/O/M/B/I/E/S/R/P/C matrix, proof commands, artifact
+refs, and a closure-ready TaskFlow evidence record.
 
 ## Rules
 
@@ -102,6 +103,32 @@ matrix before broad verification:
 | I | Interface | Which public CLI, JSON, TOON/plain, fixture, API, or file contract exposes the behavior? |
 | E | Exceptions | How does the behavior fail closed, report blockers, and preserve actionable next actions? |
 | S | Simple | What pure helper or smallest contract can be tested without runtime setup? |
+| R | Replay | Does replay/rebuild/deterministic re-execution reproduce the same result, version, events, and proof hash? |
+| P | Persistence | Does durable state survive restart/recovery/restore, and does the fixture prove the persisted source of truth? |
+| C | Cross-surface consistency | Do every affected operator or public surfaces expose the same verdict, blockers, next actions, and artifact refs? |
+
+R/P/C are additive to the legacy matrix. They are applicable when the TaskFlow
+title, description, labels, notes, owned paths, acceptance targets, or proof
+targets identify replay/rebuild, durable state/recovery, or multiple operator
+surfaces/parity. An applicable facet must contain a row with `status: pass` and
+non-empty `evidence_refs`, or `status: na` with a concrete `reason`; omission is
+blocked. Non-applicable facets may remain absent for legacy records.
+
+The canonical matrix metadata for an applicable facet is:
+
+```json
+{
+  "schema_version": 1,
+  "metadata": {
+    "schema_version": 1,
+    "applicable_categories": ["R", "P", "C"]
+  }
+}
+```
+
+TaskFlow planner metadata is part of the applicability contract: preserve
+`owned_paths`, `acceptance_targets`, and `proof_targets` on the task so the
+validator can derive and report the required facets in `artifact_refs`.
 
 Add a doubt-driven row whenever a requirement rests on an assumption:
 
@@ -196,14 +223,17 @@ Before retrying closure after a ZOMBIE-D gate failure:
 
 1. inspect `vida task proof status <task-id> --json` and the task notes;
 2. keep one canonical `zombie_d_matrix` pass record before closure;
-3. encode `schema_version: 1`, `categories: {Z,O,M,B,I,E,S}`, and non-empty
+3. encode `schema_version: 1`, `categories: {Z,O,M,B,I,E,S,R,P,C}`, and non-empty
    `evidence_refs` for every `pass` category;
-4. replace stale or invalid earlier pass records, because the runtime parser
-   selects the first matching pass record;
-5. retry `vida task close` and require `closed=true` with `proof_verdict=pass`.
+4. include `metadata.applicable_categories` for every applicable R/P/C facet;
+5. replace stale or invalid earlier pass records, because the runtime parser
+   selects the latest target-specific pass record;
+6. retry `vida task close` and require `closed=true` with `proof_verdict=pass`.
 
 Evidence normalization must not promote a category from `blocked` to `pass`
-without a concrete test, artifact, or explicit non-applicable reason.
+without a concrete test, artifact, or explicit non-applicable reason. Legacy
+Z/O/M/B/I/E/S records remain readable; migration is complete when triggered
+R/P/C facets are added to the next canonical evidence record.
 
 ## Relationship To Existing Docs
 

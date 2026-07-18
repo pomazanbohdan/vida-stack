@@ -174,10 +174,12 @@ pub struct JournalAggregateSnapshotRecord {
     pub replay_hash: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct JournalAppendIdempotencyRecord {
     request_fingerprint: String,
     receipt: JournalAppendReceipt,
+    #[serde(default)]
+    conflicted: bool,
 }
 
 pub fn append_request_fingerprint(request: &JournalAppendRequest) -> String {
@@ -253,11 +255,11 @@ pub trait OperationalJournal {
     ) -> Option<JournalAggregateSnapshotRecord>;
 }
 
-pub struct RunWorkflowJournalRepository<'a, J: OperationalJournal> {
+pub struct RunWorkflowJournalRepository<'a, J: OperationalJournal + ?Sized> {
     journal: &'a mut J,
 }
 
-impl<'a, J: OperationalJournal> RunWorkflowJournalRepository<'a, J> {
+impl<'a, J: OperationalJournal + ?Sized> RunWorkflowJournalRepository<'a, J> {
     pub fn new(journal: &'a mut J) -> Self {
         Self { journal }
     }
@@ -513,7 +515,7 @@ pub struct RunWorkflowRepositoryConformanceReport {
     pub event_count: usize,
 }
 
-pub fn verify_run_workflow_repository_conformance<J: OperationalJournal>(
+pub fn verify_run_workflow_repository_conformance<J: OperationalJournal + ?Sized>(
     journal: &mut J,
     run_id: &str,
 ) -> Result<RunWorkflowRepositoryConformanceReport, TaskflowStateError> {
@@ -566,7 +568,9 @@ pub fn verify_run_workflow_repository_conformance<J: OperationalJournal>(
     })
 }
 
-pub fn verify_run_workflow_repository_corrupt_payload_fails_closed<J: OperationalJournal>(
+pub fn verify_run_workflow_repository_corrupt_payload_fails_closed<
+    J: OperationalJournal + ?Sized,
+>(
     journal: &mut J,
     run_id: &str,
 ) -> Result<(), TaskflowStateError> {
@@ -603,7 +607,7 @@ pub fn verify_run_workflow_repository_corrupt_payload_fails_closed<J: Operationa
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct InMemoryOperationalJournal {
     streams: HashMap<String, Vec<VidaDomainEventEnvelope>>,
     global_events: Vec<JournalEventRecord>,
@@ -646,10 +650,27 @@ impl OperationalJournal for InMemoryOperationalJournal {
         let idempotency_key = request.idempotency_key.clone();
         let command_id = request.command_id.clone();
         let request_fingerprint = append_request_fingerprint(&request);
-        if let Some(record) = self.append_idempotency.get(&idempotency_key.0) {
+        if let Some(record) = self.append_idempotency.get_mut(&idempotency_key.0) {
             if record.request_fingerprint == request_fingerprint {
+                if record.conflicted {
+                    return Err(TaskflowStateError::IdempotencyConflict(idempotency_key.0));
+                }
                 return Ok(record.receipt.clone());
             }
+            record.conflicted = true;
+            self.idempotency.insert(
+                idempotency_key.0.clone(),
+                JournalIdempotencyRecord {
+                    key: idempotency_key.clone(),
+                    command_id,
+                    state: JournalIdempotencyState::Conflicted,
+                    receipt_id: Some(VidaReceiptId(format!("append:{}", idempotency_key.0))),
+                    conflict_reason: Some(
+                        "idempotency_payload_conflict: same idempotency key used with different append payload"
+                            .to_string(),
+                    ),
+                },
+            );
             return Err(TaskflowStateError::IdempotencyConflict(idempotency_key.0));
         }
 
@@ -721,6 +742,7 @@ impl OperationalJournal for InMemoryOperationalJournal {
             JournalAppendIdempotencyRecord {
                 request_fingerprint,
                 receipt: receipt.clone(),
+                conflicted: false,
             },
         );
         Ok(receipt)

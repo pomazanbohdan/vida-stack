@@ -5,7 +5,26 @@ use serde_json::{Value, json};
 use crate::state_store::TaskRecord;
 
 const GATE_ID: &str = "zombie_d_test_writing";
-const REQUIRED_CATEGORIES: [&str; 7] = ["Z", "O", "M", "B", "I", "E", "S"];
+const LEGACY_REQUIRED_CATEGORIES: [&str; 7] = ["Z", "O", "M", "B", "I", "E", "S"];
+const CANONICAL_REQUIRED_CATEGORIES: [&str; 10] =
+    ["Z", "O", "M", "B", "I", "E", "S", "R", "P", "C"];
+const OPTIONAL_CATEGORIES: [&str; 3] = ["R", "P", "C"];
+const REPLAY_TOKENS: [&str; 4] = ["replay", "determin", "rebuild", "re-execut"];
+const PERSISTENCE_TOKENS: [&str; 6] = [
+    "persist",
+    "durable",
+    "recovery",
+    "checkpoint",
+    "restore",
+    "stateful",
+];
+const CONSISTENCY_TOKENS: [&str; 5] = [
+    "cross-surface",
+    "cross surface",
+    "multiple surface",
+    "multiple operator surface",
+    "surface consistency",
+];
 const DEFAULT_TASK_CLASSES: [&str; 4] = [
     "test_authoring",
     "regression_test",
@@ -28,29 +47,30 @@ struct ZombieDPolicy {
     enabled: bool,
     gate_id: String,
     required_categories: Vec<String>,
+    optional_categories: Vec<String>,
     task_classes: BTreeSet<String>,
     path_tokens: Vec<String>,
     enforcement_points: BTreeSet<String>,
     config_blockers: Vec<String>,
 }
 
-pub(crate) fn project_policy(
-    dev_team: &serde_yaml::Value,
-    blockers: &mut Vec<String>,
-) -> Value {
+pub(crate) fn project_policy(dev_team: &serde_yaml::Value, blockers: &mut Vec<String>) -> Value {
     let gate = crate::yaml_lookup(dev_team, &["zombie_d_gate"]);
     let enabled = crate::yaml_bool(
         gate.and_then(|value| crate::yaml_lookup(value, &["enabled"])),
         true,
     );
-    let gate_id = crate::yaml_string(
-        gate.and_then(|value| crate::yaml_lookup(value, &["gate_id"])),
-    )
-    .unwrap_or_else(|| GATE_ID.to_string());
-    let required_categories = string_list_or_default(
+    let gate_id =
+        crate::yaml_string(gate.and_then(|value| crate::yaml_lookup(value, &["gate_id"])))
+            .unwrap_or_else(|| GATE_ID.to_string());
+    let configured_required_categories = string_list_or_default(
         gate.and_then(|value| crate::yaml_lookup(value, &["required_categories"])),
-        &REQUIRED_CATEGORIES,
+        &LEGACY_REQUIRED_CATEGORIES,
     );
+    let required_categories = LEGACY_REQUIRED_CATEGORIES
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
     let task_classes = string_list_or_default(
         gate.and_then(|value| crate::yaml_lookup(value, &["applies_to", "task_classes"])),
         &DEFAULT_TASK_CLASSES,
@@ -67,12 +87,7 @@ pub(crate) fn project_policy(
     if gate_id.trim().is_empty() {
         config_blockers.push("invalid_zombie_d_gate_id".to_string());
     }
-    if required_categories
-        != REQUIRED_CATEGORIES
-            .iter()
-            .map(|value| value.to_string())
-            .collect::<Vec<_>>()
-    {
+    if !valid_required_categories(&configured_required_categories) {
         config_blockers.push("invalid_zombie_d_required_categories".to_string());
     }
     if task_classes.is_empty() {
@@ -91,6 +106,12 @@ pub(crate) fn project_policy(
         "enabled": enabled,
         "gate_id": gate_id,
         "required_categories": required_categories,
+        "optional_categories": OPTIONAL_CATEGORIES,
+        "migration": {
+            "legacy_categories": LEGACY_REQUIRED_CATEGORIES,
+            "legacy_profile_accepted": true,
+            "new_categories": OPTIONAL_CATEGORIES,
+        },
         "applies_to": {
             "task_classes": task_classes,
             "path_tokens": path_tokens,
@@ -123,9 +144,7 @@ pub(crate) fn evaluate_from_project_root(
             task,
             enforcement_point,
             vec!["zombie_d_gate_config_unavailable".to_string()],
-            vec![
-                "Resolve the project root before evaluating the ZOMBIE-D gate.".to_string(),
-            ],
+            vec!["Resolve the project root before evaluating the ZOMBIE-D gate.".to_string()],
             Value::Null,
         );
     };
@@ -205,31 +224,59 @@ pub(crate) fn close_block_payload(task: &TaskRecord, result: &Value) -> Option<V
     };
     let next_actions = string_array(result.get("next_actions"));
     crate::release1_operator_output::Release1OperatorOutputBuilder::new("vida task close")
-            .blocker_codes(operator_blocker_codes)
-            .next_actions(next_actions)
-            .artifact_refs(result["artifact_refs"].clone())
-            .extra_fields(json!({
-                "closed": false,
-                "continuation_blocked": true,
-                "automation_blocked": false,
-                "task_id": task.id,
-                "reason": "ZOMBIE-D semantic gate is incomplete",
-                "zombie_d_gate": result,
-            }))
-            .build()
-            .ok()
+        .blocker_codes(operator_blocker_codes)
+        .next_actions(next_actions)
+        .artifact_refs(result["artifact_refs"].clone())
+        .extra_fields(json!({
+            "closed": false,
+            "continuation_blocked": true,
+            "automation_blocked": false,
+            "task_id": task.id,
+            "reason": "ZOMBIE-D semantic gate is incomplete",
+            "zombie_d_gate": result,
+        }))
+        .build()
+        .ok()
 }
 
 fn policy_from_projection(value: Option<&Value>) -> ZombieDPolicy {
     let value = value.unwrap_or(&Value::Null);
     ZombieDPolicy {
-        enabled: value.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+        enabled: value
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
         gate_id: value
             .get("gate_id")
             .and_then(Value::as_str)
             .unwrap_or(GATE_ID)
             .to_string(),
-        required_categories: string_array(value.get("required_categories")),
+        required_categories: {
+            let configured = string_array(value.get("required_categories"));
+            let legacy = configured
+                .into_iter()
+                .filter(|category| LEGACY_REQUIRED_CATEGORIES.contains(&category.as_str()))
+                .collect::<Vec<_>>();
+            if legacy.is_empty() {
+                LEGACY_REQUIRED_CATEGORIES
+                    .iter()
+                    .map(|value| value.to_string())
+                    .collect()
+            } else {
+                legacy
+            }
+        },
+        optional_categories: {
+            let configured = string_array(value.get("optional_categories"));
+            if configured.is_empty() {
+                OPTIONAL_CATEGORIES
+                    .iter()
+                    .map(|value| value.to_string())
+                    .collect()
+            } else {
+                configured
+            }
+        },
         task_classes: lower_string_array(value.pointer("/applies_to/task_classes"))
             .into_iter()
             .collect(),
@@ -247,11 +294,16 @@ fn evaluate(
     task_class: Option<&str>,
     enforcement_point: &str,
 ) -> Value {
+    let applicable_categories = applicable_categories(policy, task);
+    let required_categories = required_categories_for_task(policy, task);
     let artifact_refs = json!({
         "task_id": task.id,
         "gate_id": policy.gate_id,
         "enforcement_point": enforcement_point,
         "proof_target": "zombie_d_matrix",
+        "required_categories": required_categories,
+        "applicable_categories": applicable_categories,
+        "taskflow_metadata": taskflow_metadata(task),
     });
     if !policy.enabled {
         return json!({
@@ -295,7 +347,10 @@ fn evaluate(
             task,
             enforcement_point,
             policy.config_blockers.clone(),
-            vec!["Repair the configured ZOMBIE-D gate policy before dispatch or closure.".to_string()],
+            vec![
+                "Repair the configured ZOMBIE-D gate policy before dispatch or closure."
+                    .to_string(),
+            ],
             artifact_refs,
         );
     }
@@ -366,9 +421,43 @@ fn validate_matrix(
     let Some(categories) = object.get("categories").and_then(Value::as_object) else {
         blockers.push("zombie_d_categories_missing".to_string());
         next_actions.push("Add categories Z/O/M/B/I/E/S to the matrix.".to_string());
-        return blocked_result(task, enforcement_point, blockers, next_actions, artifact_refs);
+        return blocked_result(
+            task,
+            enforcement_point,
+            blockers,
+            next_actions,
+            artifact_refs,
+        );
     };
-    for category in &policy.required_categories {
+    let required_categories = required_categories_for_task(policy, task);
+    let metadata_categories = string_array(
+        object
+            .get("metadata")
+            .and_then(|metadata| metadata.get("applicable_categories")),
+    );
+    let metadata_required_categories: Vec<String> = required_categories
+        .iter()
+        .filter(|category| OPTIONAL_CATEGORIES.contains(&category.as_str()))
+        .cloned()
+        .collect();
+    if !metadata_required_categories.is_empty() {
+        if object.get("metadata").and_then(Value::as_object).is_none() {
+            blockers.push("zombie_d_matrix_metadata_missing".to_string());
+        } else if object
+            .get("metadata")
+            .and_then(|metadata| metadata.get("schema_version"))
+            .and_then(Value::as_u64)
+            != Some(1)
+        {
+            blockers.push("zombie_d_matrix_metadata_schema_invalid".to_string());
+        }
+        for category in &metadata_required_categories {
+            if !metadata_categories.iter().any(|value| value == category) {
+                blockers.push(format!("zombie_d_metadata_category_missing:{category}"));
+            }
+        }
+    }
+    for category in &required_categories {
         let Some(row) = categories.get(category) else {
             blockers.push(format!("zombie_d_category_missing:{category}"));
             continue;
@@ -425,8 +514,77 @@ fn validate_matrix(
             "Complete the missing ZOMBIE-D rows and attach structured evidence for task `{}`.",
             task.id
         ));
-        blocked_result(task, enforcement_point, blockers, next_actions, artifact_refs)
+        blocked_result(
+            task,
+            enforcement_point,
+            blockers,
+            next_actions,
+            artifact_refs,
+        )
     }
+}
+
+fn valid_required_categories(categories: &[String]) -> bool {
+    categories
+        == LEGACY_REQUIRED_CATEGORIES
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+        || categories
+            == CANONICAL_REQUIRED_CATEGORIES
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+}
+
+fn required_categories_for_task(policy: &ZombieDPolicy, task: &TaskRecord) -> Vec<String> {
+    let mut categories = policy.required_categories.clone();
+    for category in applicable_categories(policy, task) {
+        if !categories.contains(&category) {
+            categories.push(category);
+        }
+    }
+    categories
+}
+
+fn applicable_categories(policy: &ZombieDPolicy, task: &TaskRecord) -> Vec<String> {
+    let text = task_contract_text(task);
+    policy
+        .optional_categories
+        .iter()
+        .filter(|category| {
+            let tokens = match category.as_str() {
+                "R" => &REPLAY_TOKENS[..],
+                "P" => &PERSISTENCE_TOKENS[..],
+                "C" => &CONSISTENCY_TOKENS[..],
+                _ => &[][..],
+            };
+            tokens.iter().any(|token| text.contains(token))
+        })
+        .cloned()
+        .collect()
+}
+
+fn task_contract_text(task: &TaskRecord) -> String {
+    [
+        task.title.as_str(),
+        task.description.as_str(),
+        task.notes.as_deref().unwrap_or_default(),
+        &task.labels.join(" "),
+        &task.planner_metadata.owned_paths.join(" "),
+        &task.planner_metadata.acceptance_targets.join(" "),
+        &task.planner_metadata.proof_targets.join(" "),
+    ]
+    .join(" ")
+    .to_ascii_lowercase()
+}
+
+fn taskflow_metadata(task: &TaskRecord) -> Value {
+    json!({
+        "owned_paths": task.planner_metadata.owned_paths,
+        "acceptance_targets": task.planner_metadata.acceptance_targets,
+        "proof_targets": task.planner_metadata.proof_targets,
+    })
 }
 
 fn blocked_result(
@@ -586,7 +744,7 @@ mod tests {
             "zombie_d_gate": {
                 "enabled": enabled,
                 "gate_id": GATE_ID,
-                "required_categories": REQUIRED_CATEGORIES,
+                "required_categories": LEGACY_REQUIRED_CATEGORIES,
                 "applies_to": {"task_classes": DEFAULT_TASK_CLASSES, "path_tokens": DEFAULT_PATH_TOKENS},
                 "enforcement_points": DEFAULT_ENFORCEMENT_POINTS,
                 "status": "ready",
@@ -619,21 +777,55 @@ mod tests {
         matrix_note_with_doubts(json!([]))
     }
 
+    fn rpc_matrix_note(p_status: &str) -> String {
+        let matrix = json!({
+            "schema_version": 1,
+            "metadata": {
+                "schema_version": 1,
+                "applicable_categories": ["R", "P", "C"]
+            },
+            "categories": {
+                "Z": {"status": "pass", "evidence_refs": ["z"]},
+                "O": {"status": "pass", "evidence_refs": ["o"]},
+                "M": {"status": "na", "reason": "single fixture contract"},
+                "B": {"status": "pass", "evidence_refs": ["b"]},
+                "I": {"status": "pass", "evidence_refs": ["i"]},
+                "E": {"status": "pass", "evidence_refs": ["e"]},
+                "S": {"status": "pass", "evidence_refs": ["s"]},
+                "R": {"status": "pass", "evidence_refs": ["replay-test"]},
+                "P": if p_status == "na" {
+                    json!({"status": "na", "reason": "fixture has no durable state"})
+                } else {
+                    json!({"status": "pass", "evidence_refs": ["persistence-test"]})
+                },
+                "C": {"status": "pass", "evidence_refs": ["cross-surface-test"]}
+            },
+            "doubts": []
+        });
+        format!(
+            "task_proof_evidence:\n  proof_target: zombie_d_matrix\n  result: pass\n  evidence: {matrix}"
+        )
+    }
+
     #[test]
     fn default_enabled_applicable_task_blocks_without_matrix() {
         let task = task(None, &[], &["crates/vida/tests/runtime.rs"]);
-        let result = evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "dispatch");
+        let result =
+            evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "dispatch");
         assert_eq!(result["status"], "blocked");
-        assert!(result["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_missing")));
+        assert!(
+            result["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_missing"))
+        );
     }
 
     #[test]
     fn structured_matrix_passes_all_categories() {
         let notes = matrix_note();
         let task = task(Some(&notes), &[], &["crates/vida/tests/runtime.rs"]);
-        let result = evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "handoff");
+        let result =
+            evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "handoff");
         assert_eq!(result["status"], "pass");
     }
 
@@ -641,7 +833,8 @@ mod tests {
     fn scalarized_yaml_matrix_passes_after_cli_transport() {
         let notes = "task_proof_evidence:\n  proof_target: zombie_d_matrix\n  result: pass\n  evidence: {schema_version: 1, categories: {Z: {status: pass, evidence_refs: [z]}, O: {status: pass, evidence_refs: [o]}, M: {status: na, reason: single}, B: {status: pass, evidence_refs: [b]}, I: {status: pass, evidence_refs: [i]}, E: {status: pass, evidence_refs: [e]}, S: {status: pass, evidence_refs: [s]}}, doubts: []}";
         let task = task(Some(notes), &[], &["crates/vida/tests/runtime.rs"]);
-        let result = evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
+        let result =
+            evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
         assert_eq!(result["status"], "pass");
     }
 
@@ -650,7 +843,8 @@ mod tests {
         let older = matrix_note_with_doubts(json!([{"id": "resolved-doubt"}]));
         let notes = format!("{older}\n\n{}", matrix_note());
         let task = task(Some(&notes), &[], &["crates/vida/tests/runtime.rs"]);
-        let result = evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
+        let result =
+            evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
         assert_eq!(result["status"], "pass");
         assert_eq!(result["matrix"]["doubts"], json!([]));
     }
@@ -662,19 +856,93 @@ mod tests {
             matrix_note()
         );
         let task = task(Some(&notes), &[], &["crates/vida/tests/runtime.rs"]);
-        let result = evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
+        let result =
+            evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
         assert_eq!(result["status"], "blocked");
-        assert!(result["blocker_codes"]
-            .as_array()
-            .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_invalid")));
+        assert!(
+            result["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_invalid"))
+        );
+    }
+
+    #[test]
+    fn replay_persistence_and_consistency_facets_are_required_from_taskflow_metadata() {
+        let task = task(
+            Some(&matrix_note()),
+            &["replay", "persistence", "cross-surface"],
+            &["crates/vida/tests/runtime.rs"],
+        );
+        let result =
+            evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
+        let blockers = string_array(result.get("blocker_codes"));
+        assert!(
+            blockers
+                .iter()
+                .any(|code| code == "zombie_d_matrix_metadata_missing")
+        );
+        for category in OPTIONAL_CATEGORIES {
+            assert!(
+                blockers
+                    .iter()
+                    .any(|code| code == &format!("zombie_d_category_missing:{category}")),
+                "missing blocker for {category}: {blockers:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn replay_persistence_and_consistency_facets_pass_with_metadata_and_evidence() {
+        let notes = rpc_matrix_note("pass");
+        let task = task(
+            Some(&notes),
+            &["replay", "persistence", "cross-surface"],
+            &["crates/vida/tests/runtime.rs"],
+        );
+        let result =
+            evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
+        assert_eq!(result["status"], "pass");
+        assert_eq!(
+            result["artifact_refs"]["applicable_categories"],
+            json!(["R", "P", "C"])
+        );
+        assert_eq!(
+            result["artifact_refs"]["taskflow_metadata"]["proof_targets"],
+            json!([])
+        );
+    }
+
+    #[test]
+    fn persistence_not_applicable_requires_a_reason() {
+        let notes = rpc_matrix_note("pass").replace(
+            "{\"status\":\"pass\",\"evidence_refs\":[\"persistence-test\"]}",
+            "{\"status\":\"na\"}",
+        );
+        let task = task(
+            Some(&notes),
+            &["replay", "persistence", "cross-surface"],
+            &["crates/vida/tests/runtime.rs"],
+        );
+        let result =
+            evaluate_from_readiness(&readiness(true), &task, Some("implementation"), "closure");
+        assert!(
+            string_array(result.get("blocker_codes"))
+                .iter()
+                .any(|code| code == "zombie_d_na_reason_missing:P")
+        );
     }
 
     #[test]
     fn disabled_gate_does_not_block_applicable_task() {
         let task = task(None, &[], &["crates/vida/tests/runtime.rs"]);
-        let result = evaluate_from_readiness(&readiness(false), &task, Some("implementation"), "dispatch");
+        let result =
+            evaluate_from_readiness(&readiness(false), &task, Some("implementation"), "dispatch");
         assert_eq!(result["status"], "disabled");
-        assert!(result["blocker_codes"].as_array().is_some_and(|codes| codes.is_empty()));
+        assert!(
+            result["blocker_codes"]
+                .as_array()
+                .is_some_and(|codes| codes.is_empty())
+        );
     }
 
     #[test]
@@ -694,5 +962,25 @@ mod tests {
         assert_eq!(disabled_projection["enabled"], false);
         assert_eq!(disabled_projection["configured"], true);
         assert!(disabled_blockers.is_empty());
+    }
+
+    #[test]
+    fn project_policy_accepts_legacy_categories_and_advertises_rpc_migration() {
+        for configured in ["[Z, O, M, B, I, E, S]", "[Z, O, M, B, I, E, S, R, P, C]"] {
+            let config: serde_yaml::Value = serde_yaml::from_str(&format!(
+                "zombie_d_gate:\n  required_categories: {configured}\n"
+            ))
+            .expect("configured YAML");
+            let mut blockers = Vec::new();
+            let projection = project_policy(&config, &mut blockers);
+            assert!(blockers.is_empty());
+            assert_eq!(projection["status"], "ready");
+            assert_eq!(
+                projection["required_categories"],
+                json!(["Z", "O", "M", "B", "I", "E", "S"])
+            );
+            assert_eq!(projection["migration"]["legacy_profile_accepted"], true);
+            assert_eq!(projection["optional_categories"], json!(["R", "P", "C"]));
+        }
     }
 }

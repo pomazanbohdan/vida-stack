@@ -639,7 +639,10 @@ pub(crate) fn print_task_show_missing(render: RenderMode, task_id: &str, as_json
         return;
     }
     if matches!(render, RenderMode::Plain) {
-        println!("{}", taskflow_format_toon::render_value_section("vida task show", &payload));
+        println!(
+            "{}",
+            taskflow_format_toon::render_value_section("vida task show", &payload)
+        );
         return;
     }
     print_surface_header(render, "vida task show");
@@ -2859,7 +2862,10 @@ mod tests {
 
         assert_eq!(payload["surface"], "vida task show");
         assert_eq!(payload["status"], "blocked");
-        assert_eq!(payload["blocker_codes"], serde_json::json!(["task_missing"]));
+        assert_eq!(
+            payload["blocker_codes"],
+            serde_json::json!(["task_missing"])
+        );
         assert_eq!(payload["requested_task_id"], "missing-task");
         assert_eq!(payload["missing_task"], true);
         assert_eq!(

@@ -3375,7 +3375,9 @@ mod tests {
             targets,
             vec![(
                 "current".to_string(),
-                root.join("current").join("bin").join(vida_binary_file_name())
+                root.join("current")
+                    .join("bin")
+                    .join(vida_binary_file_name())
             )]
         );
     }

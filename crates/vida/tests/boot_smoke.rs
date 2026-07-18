@@ -5240,8 +5240,7 @@ fn orchestrator_init_summary_snapshot_contract() {
         assert_eq!(parsed["view"], "summary");
         assert_eq!(parsed["full_output_available"], true);
         assert!(
-            parsed["active_bounded_unit"].is_object()
-                || parsed["active_bounded_unit"].is_null()
+            parsed["active_bounded_unit"].is_object() || parsed["active_bounded_unit"].is_null()
         );
         assert!(parsed["next_actions"].is_array());
         assert!(parsed["sequential_vs_parallel_posture"].is_string());
@@ -5267,8 +5266,8 @@ fn orchestrator_init_summary_snapshot_contract() {
         "{}",
         String::from_utf8_lossy(&full.stderr)
     );
-    let full_json: serde_json::Value = serde_json::from_slice(&full.stdout)
-        .expect("full orchestrator-init JSON should parse");
+    let full_json: serde_json::Value =
+        serde_json::from_slice(&full.stdout).expect("full orchestrator-init JSON should parse");
     assert_eq!(full_json["view"], "full");
     assert!(full_json["dev_team_readiness"].is_object());
     assert!(full_json["orchestrator_runtime_contract"].is_object());
@@ -18391,13 +18390,15 @@ fn create_zombie_d_dispatch_matrix_task(state_dir: &str, task_id: &str, title: &
     assert_output_success(&output, "ZOMBIE-D dispatch matrix task create");
     let created = parse_json_output(&output, "ZOMBIE-D dispatch matrix task create");
     assert_eq!(created["task"]["id"], task_id);
-    assert!(created["task"]["planner_metadata"]["owned_paths"]
-        .as_array()
-        .is_some_and(|paths| {
-            paths
-                .iter()
-                .any(|path| path.as_str() == Some("crates/vida/tests/boot_smoke.rs"))
-        }));
+    assert!(
+        created["task"]["planner_metadata"]["owned_paths"]
+            .as_array()
+            .is_some_and(|paths| {
+                paths
+                    .iter()
+                    .any(|path| path.as_str() == Some("crates/vida/tests/boot_smoke.rs"))
+            })
+    );
 }
 
 fn zombie_d_prepare_bridge_pending_task(
@@ -18450,8 +18451,7 @@ fn zombie_d_prepare_bridge_pending_task(
         "ZOMBIE-D continuation bind should succeed: {binding}"
     );
     assert_eq!(
-        binding["binding"]["status"],
-        "bound",
+        binding["binding"]["status"], "bound",
         "binding should be explicit: {binding}"
     );
 
@@ -18620,10 +18620,14 @@ fn agent_dispatch_next_initial_implementation_zombie_d_public_matrix() {
         ],
         "ZOMBIE-D initial implementation dispatch",
     );
-    assert!(initial_success, "initial implementation must dispatch: {initial}");
+    assert!(
+        initial_success,
+        "initial implementation must dispatch: {initial}"
+    );
     assert_eq!(initial["status"], "pass");
     assert_eq!(initial["selected_lanes"][0]["task_id"], task_id);
-    assert_eq!(initial["selected_lanes"][0]["task_class"], "implementation");
+    assert_eq!(initial["selected_lanes"][0]["role_label"], "analyst");
+    assert_eq!(initial["selected_lanes"][0]["task_class"], "specification");
     assert_eq!(
         initial["flow_projection"]["zombie_d_gate"]["admission_scope"],
         "initial_implementation_dispatch"
@@ -18692,8 +18696,17 @@ fn agent_dispatch_next_initial_implementation_zombie_d_public_matrix() {
         String::from_utf8_lossy(&help.stdout),
         String::from_utf8_lossy(&help.stderr)
     );
-    for option in ["--dev-team", "--current-task-id", "--lanes", "--full", "--json"] {
-        assert!(help_text.contains(option), "help must document {option}: {help_text}");
+    for option in [
+        "--dev-team",
+        "--current-task-id",
+        "--lanes",
+        "--full",
+        "--json",
+    ] {
+        assert!(
+            help_text.contains(option),
+            "help must document {option}: {help_text}"
+        );
     }
 
     // Z/E: persisted runtime state keeps handoff fail-closed; closure below asserts the matrix gate.
@@ -18712,13 +18725,14 @@ fn agent_dispatch_next_initial_implementation_zombie_d_public_matrix() {
         "ZOMBIE-D later handoff proof",
     );
     assert_eq!(
-        handoff["status"],
-        "blocked",
+        handoff["status"], "blocked",
         "handoff proof must fail closed: {handoff}"
     );
-    assert!(handoff["blocker_codes"]
-        .as_array()
-        .is_some_and(|blockers| !blockers.is_empty()));
+    assert!(
+        handoff["blocker_codes"]
+            .as_array()
+            .is_some_and(|blockers| !blockers.is_empty())
+    );
 
     let (blocked_close, close_success) = zombie_d_json_command(
         &project_root,
@@ -18739,9 +18753,11 @@ fn agent_dispatch_next_initial_implementation_zombie_d_public_matrix() {
         blocked_close["blocker_codes"],
         serde_json::json!(["missing_gate_evidence"])
     );
-    assert!(blocked_close["zombie_d_gate"]["blocker_codes"]
-        .as_array()
-        .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_missing")));
+    assert!(
+        blocked_close["zombie_d_gate"]["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| code == "zombie_d_matrix_missing"))
+    );
 
     // S: attach the complete matrix through the public proof surface, then close.
     let evidence = serde_json::json!({
@@ -18775,7 +18791,10 @@ fn agent_dispatch_next_initial_implementation_zombie_d_public_matrix() {
         ],
         "ZOMBIE-D proof attach",
     );
-    assert!(attached_success, "matrix proof attach should pass: {attached}");
+    assert!(
+        attached_success,
+        "matrix proof attach should pass: {attached}"
+    );
     let (closed, closed_success) = zombie_d_json_command(
         &project_root,
         &state_dir,
@@ -18896,8 +18915,7 @@ fn orchestrator_init_closed_task_zombie_d_public_matrix() {
     );
     assert!(!zombie_d_has_closed_task_gate(&simple_status));
     assert_eq!(
-        simple_status["latest_run_graph_status"]["run_id"],
-        simple_task_id,
+        simple_status["latest_run_graph_status"]["run_id"], simple_task_id,
         "explicitly bound session status should remain scoped: {simple_status}"
     );
     assert_eq!(
@@ -18927,7 +18945,10 @@ fn orchestrator_init_closed_task_zombie_d_public_matrix() {
         &["taskflow", "run-graph", "status", one_task_id, "--json"],
         "ZOMBIE-D one run-graph status",
     );
-    assert!(zombie_d_has_closed_task_gate(&one_graph));
+    assert!(
+        zombie_d_has_closed_task_gate(&one_graph),
+        "one graph must expose the closed-task gate: {one_graph}"
+    );
     assert_eq!(one_graph["run_graph_status"]["task_id"], one_task_id);
     let (one_recovery, _) = zombie_d_json_command(
         &project_root,
@@ -18994,13 +19015,8 @@ fn orchestrator_init_closed_task_zombie_d_public_matrix() {
         ),
     ];
     for (label, args) in public_surfaces {
-        let (payload, success) = zombie_d_run_graph_json_command(
-            &project_root,
-            &state_dir,
-            many_b,
-            &args,
-            label,
-        );
+        let (payload, success) =
+            zombie_d_run_graph_json_command(&project_root, &state_dir, many_b, &args, label);
         assert!(
             !success || payload["status"] == "blocked",
             "{label} must fail closed: {payload}"
@@ -19050,15 +19066,14 @@ fn orchestrator_init_closed_task_zombie_d_public_matrix() {
     );
 
     // Interface: compact default, explicit JSON, and help/options remain public and aligned.
-    let compact_status = status_with_session_timeout(
-        &project_root,
-        &state_dir,
-        many_b,
-        &["status"],
-    );
+    let compact_status =
+        status_with_session_timeout(&project_root, &state_dir, many_b, &["status"]);
     assert!(compact_status.status.success());
     let compact_stdout = String::from_utf8_lossy(&compact_status.stdout);
-    assert!(compact_stdout.contains("closed_task_active_run_projection_mismatch"));
+    assert!(
+        compact_stdout.contains("closed_task_active_run_projection_mismatch"),
+        "compact status output must expose the canonical closed-task gate: {compact_stdout}"
+    );
     assert!(!compact_stdout.contains("--json"));
     for args in [
         vec!["orchestrator-init", "--help"],
@@ -19287,15 +19302,16 @@ fn team_flow_transition_cli_parity_zombie_d() {
     assert_eq!(graph["run_graph_status"]["next_node"], next_node);
     assert_eq!(graph["run_graph_status"]["run_id"], run_id);
 
-    let (status, status_success) = zombie_d_json_command(
-        &project_root,
-        &state_dir,
-        &["status", "--json"],
-        "team-flow status JSON",
-    );
+    let status_output =
+        status_with_session_timeout(&project_root, &state_dir, run_id, &["status", "--json"]);
+    let status_success = status_output.status.success();
+    let status = parse_json_output(&status_output, "team-flow status JSON");
     assert!(status_success, "status should pass: {status}");
     assert_zombie_d_operator_shape(&status, "vida status");
-    assert_eq!(status["latest_run_graph_status"]["run_id"], run_id);
+    assert_eq!(
+        status["latest_run_graph_status"]["run_id"], run_id,
+        "team-flow status must project the current run: {status}"
+    );
 
     let bridge_project_root = repo_root();
     let bridge_state_dir = unique_state_dir();
@@ -20263,4 +20279,376 @@ fn boot_with_extra_argument_fails_closed() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Unsupported `vida boot` argument `unexpected`"));
+}
+
+#[test]
+fn agent_assignment_admissibility_zombie_d_public_matrix() {
+    // Z: an empty persisted fixture rejects dispatch without inventing a lane.
+    let (zero_project_root, zero_state_dir) = bootstrap_project_runtime(
+        "agent-assignment-admissibility-zombie-d-zero",
+        "Agent Assignment Admissibility ZOMBIE-D zero",
+    );
+    let (zero, _zero_success) = zombie_d_json_command(
+        &zero_project_root,
+        &zero_state_dir,
+        &[
+            "agent",
+            "dispatch-next",
+            "--state-dir",
+            &zero_state_dir,
+            "--lanes",
+            "1",
+            "--full",
+            "--json",
+        ],
+        "assignment admissibility Z zero",
+    );
+    assert_eq!(
+        zero["status"], "blocked",
+        "Z must reject zero candidates: {zero}"
+    );
+    assert!(
+        zero["selected_lanes"]
+            .as_array()
+            .is_some_and(|lanes| lanes.is_empty())
+    );
+    assert!(
+        zero["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| !codes.is_empty())
+    );
+
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "agent-assignment-admissibility-zombie-d-public",
+        "Agent Assignment Admissibility ZOMBIE-D public",
+    );
+
+    // O/B: the public selector admits one implementation and keeps all boundary
+    // classes on their configured runtime-role/task-class route.
+    struct BoundaryCase {
+        code: &'static str,
+        runtime_role: &'static str,
+        task_class: &'static str,
+    }
+    let boundary_cases = [
+        BoundaryCase {
+            code: "B-implementation",
+            runtime_role: "worker",
+            task_class: "implementation",
+        },
+        BoundaryCase {
+            code: "B-verification",
+            runtime_role: "verifier",
+            task_class: "verification",
+        },
+        BoundaryCase {
+            code: "B-coach",
+            runtime_role: "coach",
+            task_class: "coach",
+        },
+    ];
+    for case in boundary_cases {
+        let (selection, success) = zombie_d_json_command(
+            &project_root,
+            &state_dir,
+            &[
+                "agent",
+                "select",
+                "--runtime-role",
+                case.runtime_role,
+                "--task-class",
+                case.task_class,
+                "--state-dir",
+                &state_dir,
+                "--json",
+            ],
+            case.code,
+        );
+        assert!(success, "{} must select: {selection}", case.code);
+        assert_eq!(selection["surface"], "vida agent select");
+        assert_eq!(selection["status"], "pass", "{}: {selection}", case.code);
+        assert_eq!(selection["selection"]["enabled"], true);
+        assert_eq!(selection["selection"]["task_class"], case.task_class);
+        assert!(
+            selection["selection"]["selected_write_scope"]
+                .as_str()
+                .is_some_and(|scope| !scope.is_empty())
+        );
+        assert!(
+            selection["selection"]["selection_source_paths"]["selected_write_scope"]
+                .as_str()
+                .is_some_and(|path| !path.is_empty())
+        );
+        if case.task_class == "implementation" {
+            assert_ne!(
+                selection["selection"]["selected_write_scope"], "read_only",
+                "O must not admit a read-only implementation carrier: {selection}"
+            );
+        }
+    }
+
+    // E: an invalid public request remains fail-closed and names the reason.
+    let (invalid, invalid_success) = zombie_d_json_command(
+        &project_root,
+        &state_dir,
+        &[
+            "agent",
+            "dispatch-next",
+            "--state-dir",
+            &state_dir,
+            "--lanes",
+            "0",
+            "--full",
+            "--json",
+        ],
+        "assignment admissibility E invalid lanes",
+    );
+    assert!(!invalid_success, "E must fail closed: {invalid}");
+    assert_eq!(invalid["status"], "blocked");
+    assert!(
+        invalid["blocker_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| code == "invalid_lanes_requested"))
+    );
+    assert!(invalid["next_actions"].as_array().is_some_and(|actions| {
+        actions.iter().any(|action| {
+            action
+                .as_str()
+                .is_some_and(|value| value.contains("--lanes"))
+        })
+    }));
+    assert!(
+        invalid
+            .get("artifact_refs")
+            .map_or(true, serde_json::Value::is_null),
+        "E artifact_refs is N/A for this preview-only exception surface: {invalid}"
+    );
+
+    let task_one = "agent-assignment-admissibility-zombie-d-many-one";
+    let task_two = "agent-assignment-admissibility-zombie-d-many-two";
+    create_zombie_d_dispatch_matrix_task(
+        &state_dir,
+        task_one,
+        "Agent Assignment Admissibility ZOMBIE-D many one",
+    );
+    create_zombie_d_dispatch_matrix_task(
+        &state_dir,
+        task_two,
+        "Agent Assignment Admissibility ZOMBIE-D many two",
+    );
+    for (task_id, owned_path, conflict_domain) in [
+        (
+            task_one,
+            "crates/vida/tests/boot_smoke.rs",
+            "assignment-matrix-domain-one",
+        ),
+        (
+            task_two,
+            "crates/vida/tests/task_smoke.rs",
+            "assignment-matrix-domain-two",
+        ),
+    ] {
+        let updated = bounded_vida_output(
+            &["-k", "5s", "20s"],
+            "assignment admissibility M parallel fixture update",
+            |command| {
+                command.args([
+                    "task",
+                    "update",
+                    task_id,
+                    "--execution-mode",
+                    "parallel_safe",
+                    "--order-bucket",
+                    "assignment-matrix",
+                    "--parallel-group",
+                    "assignment-matrix",
+                    "--conflict-domain",
+                    conflict_domain,
+                    "--owned-path",
+                    owned_path,
+                    "--state-dir",
+                    &state_dir,
+                    "--json",
+                ]);
+            },
+        );
+        assert_output_success(
+            &updated,
+            "assignment admissibility M parallel fixture update",
+        );
+        let updated = parse_json_output(
+            &updated,
+            "assignment admissibility M parallel fixture update",
+        );
+        assert_eq!(
+            updated["task"]["execution_semantics"]["execution_mode"],
+            "parallel_safe"
+        );
+        assert_eq!(
+            updated["task"]["planner_metadata"]["owned_paths"][0],
+            owned_path
+        );
+    }
+
+    // M/I: multiple persisted candidates produce multiple public lanes, each
+    // carrying assignment source truth and an actionable receipt-backed command.
+    let (many, many_success) = zombie_d_json_command(
+        &project_root,
+        &state_dir,
+        &[
+            "agent",
+            "dispatch-next",
+            "--current-task-id",
+            task_one,
+            "--state-dir",
+            &state_dir,
+            "--lanes",
+            "2",
+            "--full",
+            "--json",
+        ],
+        "assignment admissibility M many and I public JSON dispatch",
+    );
+    assert!(many_success, "M/I dispatch preview must pass: {many}");
+    let selected_lanes = many["selected_lanes"]
+        .as_array()
+        .expect("M must expose selected lanes");
+    assert_eq!(
+        selected_lanes.len(),
+        2,
+        "M must select both ready candidates: {many}"
+    );
+    for lane in selected_lanes {
+        assert_eq!(lane["task_class"], "implementation");
+        assert_eq!(lane["selection_truth"]["task_class"], "implementation");
+        assert!(
+            lane["selection_truth"]["selection_source_paths"]["selected_write_scope"]
+                .as_str()
+                .is_some_and(|path| !path.is_empty())
+        );
+        assert_eq!(
+            lane["dispatch_command_kind"],
+            "startup_activation_view_only"
+        );
+        assert!(
+            lane["receipt_backed_execution_command"]
+                .as_str()
+                .is_some_and(|command| command.contains("--execute-dispatch"))
+        );
+    }
+    assert_eq!(many["execute_supported"], false);
+    assert_eq!(many["execution_attempted"], false);
+
+    // I: default compact output, explicit JSON, help/options, and persisted
+    // fixture parity all describe the same bounded dispatch surface. Actual
+    // receipt execution is N/A here because this public command is preview-only.
+    let compact = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "assignment admissibility I compact output",
+        |command| {
+            command
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .args([
+                    "agent",
+                    "dispatch-next",
+                    "--current-task-id",
+                    task_one,
+                    "--state-dir",
+                    &state_dir,
+                    "--lanes",
+                    "1",
+                ]);
+        },
+    );
+    assert!(compact.status.success());
+    let compact_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&compact.stdout),
+        String::from_utf8_lossy(&compact.stderr)
+    );
+    assert!(compact_text.contains("agent dispatch-next:"));
+    assert!(!compact_text.contains("blocked_candidates"));
+
+    let help = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "assignment admissibility I help/options",
+        |command| {
+            command
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .args(["agent", "dispatch-next", "--help"]);
+        },
+    );
+    assert!(help.status.success());
+    let help_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&help.stdout),
+        String::from_utf8_lossy(&help.stderr)
+    );
+    for option in ["--state-dir", "--lanes", "--full", "--json"] {
+        assert!(
+            help_text.contains(option),
+            "I help must document {option}: {help_text}"
+        );
+    }
+
+    let (persisted, persisted_success) = zombie_d_json_command(
+        &project_root,
+        &state_dir,
+        &[
+            "task",
+            "show",
+            task_one,
+            "--state-dir",
+            &state_dir,
+            "--json",
+        ],
+        "assignment admissibility I persisted fixture",
+    );
+    assert!(
+        persisted_success,
+        "I persisted fixture must remain readable: {persisted}"
+    );
+    assert_eq!(persisted["task"]["id"], task_one);
+    assert_eq!(persisted["task"]["status"], "open");
+
+    // S: smallest public contract is the plain selector; no task fixture or
+    // dispatch packet is required to prove one admissible assignment.
+    let plain = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "assignment admissibility S smallest selector contract",
+        |command| {
+            command
+                .current_dir(&project_root)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .args([
+                    "agent",
+                    "select",
+                    "--runtime-role",
+                    "worker",
+                    "--task-class",
+                    "implementation",
+                    "--state-dir",
+                    &state_dir,
+                ]);
+        },
+    );
+    assert!(plain.status.success());
+    let plain_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&plain.stdout),
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    assert!(plain_text.contains("agent select: pass"));
+    assert!(plain_text.contains("selected carrier:"));
+
+    let _ = fs::remove_dir_all(&zero_project_root);
+    let _ = fs::remove_dir_all(&project_root);
 }

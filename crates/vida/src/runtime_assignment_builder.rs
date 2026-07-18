@@ -2503,10 +2503,7 @@ fn stage_policy_assignment(
                 "agent_system.stage_attempt_policies.{stage_id}.attempts[{index}]"
             )),
         );
-        map.insert(
-            "isolation".to_string(),
-            serde_json::json!(isolation),
-        );
+        map.insert("isolation".to_string(), serde_json::json!(isolation));
         map.insert(
             "requested_carrier_id".to_string(),
             stage_policy_optional_string(row, &["carrier_id", "agent_id", "role_id"])

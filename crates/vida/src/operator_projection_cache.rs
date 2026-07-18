@@ -360,9 +360,7 @@ pub(crate) fn projection_cache_control_payload(
                 .and_then(|body| {
                     serde_json::from_str::<serde_json::Value>(&body)
                         .ok()
-                        .and_then(|payload| {
-                            payload.get("projection_cache_dependencies").cloned()
-                        })
+                        .and_then(|payload| payload.get("projection_cache_dependencies").cloned())
                 })
                 .unwrap_or(serde_json::Value::Null);
             Some((age_millis, cached_invalidation_tuple))
@@ -1068,8 +1066,7 @@ fn write_bytes_without_following_symlinks(path: &Path, body: &[u8]) -> std::io::
 mod tests {
     use super::{
         annotate_projection_cache_control, projection_cache_control_payload,
-        projection_cache_recompute_reason,
-        projection_path, read_fresh_json_projection,
+        projection_cache_recompute_reason, projection_path, read_fresh_json_projection,
         read_fresh_json_projection_with_dependency_marker,
         read_launcher_stale_state_fresh_recent_json_projection, read_recent_json_projection,
         read_recent_json_projection_with_dependency_marker,
@@ -1107,7 +1104,10 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(&root).expect("state root should be writable");
-        let marker = crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(&root);
+        let marker =
+            crate::state_store::StateStore::canonical_task_snapshot_marker_path_for_state_root(
+                &root,
+            );
         fs::write(&marker, "cache-marker-1").expect("task marker should write");
         write_json_projection(
             &root,
@@ -1152,7 +1152,10 @@ mod tests {
         let annotated: serde_json::Value =
             serde_json::from_str(&annotated).expect("annotated projection should remain json");
         assert_eq!(annotated["projection_cache"]["mode"], "refresh");
-        assert_eq!(annotated["projection_cache"]["recompute_reason"], "refresh_requested");
+        assert_eq!(
+            annotated["projection_cache"]["recompute_reason"],
+            "refresh_requested"
+        );
         assert_eq!(annotated["projection_cache"]["max_age_millis"], 42_000);
 
         let _ = fs::remove_dir_all(root);
@@ -1183,11 +1186,7 @@ mod tests {
             &serde_json::json!({"status": "pass"}),
         );
         assert_eq!(
-            projection_cache_recompute_reason(
-                &root,
-                "agent-dispatch-next-old",
-                Duration::ZERO
-            ),
+            projection_cache_recompute_reason(&root, "agent-dispatch-next-old", Duration::ZERO),
             "max_age_exceeded"
         );
         let _ = fs::remove_dir_all(root);
@@ -2029,13 +2028,14 @@ mod tests {
         let cached = read_fresh_json_projection(&root, "orchestrator-init-summary-latest")
             .expect("fresh projection should be readable");
 
-        let rendered = super::apply_runtime_continuation_binding_overlay_to_fresh_payload_for_projection(
-            &root,
-            "orchestrator-init-summary-latest",
-            &cached,
-            &overlay,
-        )
-        .expect("fresh overlay should update payload");
+        let rendered =
+            super::apply_runtime_continuation_binding_overlay_to_fresh_payload_for_projection(
+                &root,
+                "orchestrator-init-summary-latest",
+                &cached,
+                &overlay,
+            )
+            .expect("fresh overlay should update payload");
         assert!(
             !rendered.contains('\n'),
             "fresh orchestrator-init summary overlay must preserve compact JSON"
