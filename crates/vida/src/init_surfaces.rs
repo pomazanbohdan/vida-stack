@@ -4492,6 +4492,8 @@ mod tests {
                     TempStateHarness::new().expect("temp state harness should initialize");
                 let _cwd = guard_current_dir(harness.path());
                 let _state_dir_env = EnvVarGuard::unset("VIDA_STATE_DIR");
+                let vida_root = harness.path().to_string_lossy().to_string();
+                let _vida_root_env = EnvVarGuard::set("VIDA_ROOT", &vida_root);
 
                 assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
                 wait_for_state_unlock(harness.path());
@@ -4576,6 +4578,153 @@ mod tests {
                 };
                 fs::write(&config_path, updated).expect("config should point at fake codex");
 
+                let config_value: serde_yaml::Value = serde_yaml::from_str(
+                    &fs::read_to_string(&config_path).expect("config should parse after updates"),
+                )
+                .expect("fixture config should decode");
+                let selected_cli_system = crate::yaml_string(crate::yaml_lookup(
+                    &config_value,
+                    &["host_environment", "cli_system"],
+                ))
+                .expect("fixture should select a host CLI system");
+                let selected_cli_entry = crate::yaml_lookup(
+                    &config_value,
+                    &[
+                        "host_environment",
+                        "systems",
+                        selected_cli_system.as_str(),
+                    ],
+                )
+                .expect("selected host CLI entry should exist");
+                let host_bridge_entry = crate::yaml_lookup(selected_cli_entry, &["host_tool_bridge"])
+                    .expect("selected host CLI should configure host bridge");
+                let runtime_assignment = crate::yaml_lookup(
+                    &config_value,
+                    &[
+                        "agent_system",
+                        "stage_attempt_policies",
+                        "implementation",
+                        "attempts",
+                    ],
+                )
+                .and_then(serde_yaml::Value::as_sequence)
+                .and_then(|attempts| attempts.first())
+                .expect("implementation runtime assignment should exist");
+                let selected_backend = crate::yaml_string(crate::yaml_lookup(
+                    runtime_assignment,
+                    &["carrier_id"],
+                ))
+                .expect("implementation runtime assignment should select backend");
+                let selected_model_profile_id = crate::yaml_string(crate::yaml_lookup(
+                    runtime_assignment,
+                    &["model_profile_id"],
+                ))
+                .expect("implementation runtime assignment should select model profile");
+                let carrier_catalog = crate::yaml_lookup(selected_cli_entry, &["carriers"])
+                    .and_then(serde_yaml::Value::as_mapping)
+                    .expect("selected host CLI should expose carrier catalog");
+                let (selected_carrier_id, selected_carrier_entry) = carrier_catalog
+                    .iter()
+                    .find_map(|(carrier_id, carrier_entry)| {
+                        let default_profile = crate::yaml_string(crate::yaml_lookup(
+                            carrier_entry,
+                            &["default_model_profile"],
+                        ))?;
+                        if default_profile == selected_model_profile_id {
+                            carrier_id
+                                .as_str()
+                                .map(|carrier_id| (carrier_id.to_string(), carrier_entry))
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("runtime assignment should resolve configured carrier");
+                let selected_profile_entry = crate::yaml_lookup(
+                    selected_carrier_entry,
+                    &["model_profiles", selected_model_profile_id.as_str()],
+                )
+                .expect("configured carrier should expose selected model profile");
+                let selected_model_ref = crate::yaml_string(crate::yaml_lookup(
+                    selected_profile_entry,
+                    &["model_ref"],
+                ))
+                .expect("selected model profile should configure model reference");
+                let selected_reasoning_effort = crate::yaml_string(crate::yaml_lookup(
+                    selected_profile_entry,
+                    &["reasoning_effort"],
+                ))
+                .expect("selected model profile should configure reasoning effort");
+                let activation_runtime_role = crate::yaml_string(crate::yaml_lookup(
+                    runtime_assignment,
+                    &["runtime_role"],
+                ))
+                .expect("implementation runtime assignment should select runtime role");
+                let task_class = crate::yaml_string(crate::yaml_lookup(
+                    runtime_assignment,
+                    &["task_class"],
+                ))
+                .expect("implementation runtime assignment should select task class");
+                let execution_boundary = crate::yaml_string(crate::yaml_lookup(
+                    selected_cli_entry,
+                    &["execution_boundary"],
+                ))
+                .expect("selected host CLI should configure execution boundary");
+                let dispatch_transport = crate::yaml_string(crate::yaml_lookup(
+                    selected_cli_entry,
+                    &["dispatch_transport"],
+                ))
+                .expect("selected host CLI should configure dispatch transport");
+                let receipt_mode = crate::yaml_string(crate::yaml_lookup(
+                    selected_cli_entry,
+                    &["receipt_mode"],
+                ))
+                .expect("selected host CLI should configure receipt mode");
+                let adapter_kind = crate::yaml_string(crate::yaml_lookup(
+                    host_bridge_entry,
+                    &["adapter_kind"],
+                ))
+                .expect("host bridge should configure adapter kind");
+                let adapter_capability_id = crate::yaml_string(crate::yaml_lookup(
+                    host_bridge_entry,
+                    &["adapter_capability_id"],
+                ))
+                .expect("host bridge should configure adapter capability");
+                let invocation_mode = crate::yaml_string(crate::yaml_lookup(
+                    host_bridge_entry,
+                    &["invocation_mode"],
+                ))
+                .expect("host bridge should configure invocation mode");
+                let mut lane_admissibility = serde_json::Map::new();
+                lane_admissibility.insert(task_class.clone(), json!(true));
+                let role_selection_execution_plan = json!({
+                    "backend_admissibility_matrix": [{
+                        "backend_id": selected_backend.clone(),
+                        "backend_class": "internal",
+                        "lane_admissibility": lane_admissibility
+                    }],
+                    "development_flow": {
+                        "implementer": {
+                            "executor_backend": selected_backend.clone()
+                        }
+                    },
+                    "runtime_assignment": {
+                        "selected_carrier_id": selected_carrier_id.clone(),
+                        "selected_backend_id": selected_backend.clone(),
+                        "selected_dispatch_backend_id": selected_backend.clone(),
+                        "selected_model_profile_id": selected_model_profile_id.clone(),
+                        "selected_model_ref": selected_model_ref,
+                        "selected_reasoning_effort": selected_reasoning_effort,
+                        "selected_runtime_role": activation_runtime_role.clone(),
+                        "task_class": task_class.clone(),
+                        "execution_boundary": execution_boundary.clone(),
+                        "dispatch_transport": dispatch_transport.clone(),
+                        "receipt_mode": receipt_mode.clone(),
+                        "adapter_kind": adapter_kind.clone(),
+                        "adapter_capability_id": adapter_capability_id.clone(),
+                        "invocation_mode": invocation_mode
+                    }
+                });
+
                 let original_path = std::env::var("PATH").ok();
                 let mut path_entries = vec![fake_bin.clone()];
                 if let Some(original_path) = original_path.as_deref() {
@@ -4641,7 +4790,7 @@ mod tests {
                 "crates/vida/src/init_surfaces.rs".to_string(),
             ],
             compiled_bundle: serde_json::Value::Null,
-            execution_plan: agent_lane_test_execution_plan("junior"),
+            execution_plan: role_selection_execution_plan,
             reason: "test".to_string(),
         };
                 let run_graph_bootstrap = json!({
@@ -4655,7 +4804,7 @@ mod tests {
                     next_node: Some("worker".to_string()),
                     status: "ready".to_string(),
                     route_task_class: "implementation".to_string(),
-                    selected_backend: "junior".to_string(),
+                    selected_backend: selected_backend.clone(),
                     lane_id: "worker_lane".to_string(),
                     lifecycle_stage: "dispatch_ready".to_string(),
                     policy_gate: "single_task_scope_required".to_string(),
@@ -4693,9 +4842,9 @@ mod tests {
                     downstream_dispatch_executed_count: 0,
                     downstream_dispatch_active_target: None,
                     downstream_dispatch_last_target: None,
-                    activation_agent_type: Some("junior".to_string()),
-                    activation_runtime_role: Some("worker".to_string()),
-                    selected_backend: Some("junior".to_string()),
+                    activation_agent_type: Some(selected_carrier_id),
+                    activation_runtime_role: Some(activation_runtime_role.clone()),
+                    selected_backend: Some(selected_backend.clone()),
                     recorded_at: "2026-04-17T00:00:00Z".to_string(),
                 };
                 let handoff_plan = json!({});
@@ -4708,11 +4857,6 @@ mod tests {
                 );
                 let dispatch_packet_path =
                     write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
-                let mut persisted_receipt = receipt.clone();
-                persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
-                runtime
-                    .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
-                    .expect("dispatch receipt should record");
                 drop(store);
 
                 assert_eq!(

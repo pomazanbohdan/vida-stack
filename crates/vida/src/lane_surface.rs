@@ -9,8 +9,9 @@ use runtime_path_policy::{
 };
 use serde::Serialize;
 use taskflow_host_bridge::{
-    decide_host_bridge_completion_authority, host_bridge_artifact_has_retryable_completion_blocker,
-    host_bridge_blocked_result_contract, host_bridge_blocked_result_contract_allowed_next_node,
+    decide_host_bridge_completion_authority, default_host_bridge_required_result_fields,
+    host_bridge_artifact_has_retryable_completion_blocker, host_bridge_blocked_result_contract,
+    host_bridge_blocked_result_contract_allowed_next_node,
     host_bridge_blocked_result_contract_is_retryable,
     host_bridge_completed_artifact_status_is_admissible,
     host_bridge_completed_result_execution_state_is_admissible,
@@ -21,7 +22,6 @@ use taskflow_host_bridge::{
     host_bridge_request_proof_artifact_paths, host_bridge_request_status_after_completion,
     host_bridge_result_declares_no_code_change, host_bridge_result_verdict_fields_for_gate,
     host_bridge_result_verdict_fields_for_gate_and_next,
-    default_host_bridge_required_result_fields,
     materialize_host_bridge_completion_evidence as materialize_shared_host_bridge_completion_evidence,
     normalize_host_bridge_provenance_for_completion,
     read_host_bridge_request as read_typed_host_bridge_request, validate_dispatch_receipt_binding,
@@ -7531,6 +7531,7 @@ mod tests {
         .expect("forged result should write");
         std::fs::write(
             &request_path,
+            current_host_bridge_request_fixture(
             serde_json::json!({
                 "status": "completed",
                 "dispatch_transport": "host_tool_bridge",
@@ -7538,7 +7539,14 @@ mod tests {
                 "request_id": "req-forged",
                 "run_id": "run-forged",
                 "dispatch_target": "implementer"
-            })
+                }),
+                "run-forged",
+                "implementer",
+                &root.join("host-tool-bridge/packets/forged.json"),
+                &request_path,
+                &result_path,
+                &root.join("host-tool-bridge/receipts/forged.json"),
+            )
             .to_string(),
         )
         .expect("request should write");
@@ -7843,9 +7851,9 @@ mod tests {
         object
             .entry("task_id")
             .or_insert_with(|| serde_json::json!(run_id));
-        object.entry("attempt_id").or_insert_with(|| {
-            serde_json::json!(format!("{run_id}::host-bridge-fixture-attempt"))
-        });
+        object
+            .entry("attempt_id")
+            .or_insert_with(|| serde_json::json!(format!("{run_id}::host-bridge-fixture-attempt")));
         object
             .entry("packet_id")
             .or_insert_with(|| serde_json::json!(request_id));
@@ -7916,18 +7924,19 @@ mod tests {
             .get("adapter_contract_snapshot")
             .cloned()
             .unwrap_or(adapter_operations);
-        let adapter_hash = blake3::hash(
-            &serde_json::to_vec(&adapter_snapshot).expect("adapter fixture snapshot"),
-        )
+        let adapter_hash =
+            blake3::hash(&serde_json::to_vec(&adapter_snapshot).expect("adapter fixture snapshot"))
         .to_hex()
         .to_string();
-        object.insert("adapter_contract_hash".to_string(), serde_json::json!(adapter_hash));
+        object.insert(
+            "adapter_contract_hash".to_string(),
+            serde_json::json!(adapter_hash),
+        );
         object
             .entry("adapter_contract_source")
             .or_insert_with(|| serde_json::json!("vida.config.yaml"));
-        object
-            .entry("implementation_isolation")
-            .or_insert_with(|| serde_json::json!({
+        object.entry("implementation_isolation").or_insert_with(|| {
+            serde_json::json!({
                 "schema_version": "implementation-isolation-v1",
                 "artifact_contract": "stage_attempt_implementation_artifact_v1",
                 "owned_paths": [],
@@ -7935,7 +7944,8 @@ mod tests {
                 "scope_policy": {
                     "changed_files_must_be_subset_of_owned_paths": true
                 }
-            }));
+            })
+        });
         if let Some(isolation) = object
             .get_mut("implementation_isolation")
             .and_then(serde_json::Value::as_object_mut)
@@ -7952,11 +7962,11 @@ mod tests {
             isolation
                 .entry("canonical_worktree_writes_allowed")
                 .or_insert_with(|| serde_json::json!(false));
-            isolation
-                .entry("scope_policy")
-                .or_insert_with(|| serde_json::json!({
+            isolation.entry("scope_policy").or_insert_with(|| {
+                serde_json::json!({
                     "changed_files_must_be_subset_of_owned_paths": true
-                }));
+                })
+            });
             if let Some(scope_policy) = isolation
                 .get_mut("scope_policy")
                 .and_then(serde_json::Value::as_object_mut)
@@ -7975,17 +7985,19 @@ mod tests {
         object
             .entry("required_result_fields")
             .or_insert_with(|| serde_json::json!(default_host_bridge_required_result_fields()));
-        object
-            .entry("blocked_result_contract")
-            .or_insert_with(|| serde_json::json!({
+        object.entry("blocked_result_contract").or_insert_with(|| {
+            serde_json::json!({
                 "execution_state": "blocked",
                 "decision": "rework_required",
                 "verdict": "rework_required",
                 "required_result_fields": default_host_bridge_required_result_fields(),
                 "rework_target_required_when_blocked": true,
                 "allowed_next_node": serde_json::Value::Null
-            }));
-        object.entry("owned_paths").or_insert_with(|| serde_json::json!([]));
+            })
+        });
+        object
+            .entry("owned_paths")
+            .or_insert_with(|| serde_json::json!([]));
         object
             .entry("proof_artifact_paths")
             .or_insert_with(|| serde_json::json!([]));
@@ -8009,6 +8021,152 @@ mod tests {
             serde_json::json!(receipt_path.display().to_string()),
         );
         request
+    }
+
+    fn normalize_current_host_bridge_request_file(
+        request_path: &std::path::Path,
+        run_id: &str,
+        dispatch_target: &str,
+        packet_path: &std::path::Path,
+        result_path: &std::path::Path,
+        receipt_path: &std::path::Path,
+    ) {
+        let request: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(request_path).expect("read host bridge request fixture"),
+        )
+        .expect("host bridge request fixture should decode");
+        let request = current_host_bridge_request_fixture(
+            request,
+            run_id,
+            dispatch_target,
+            packet_path,
+            request_path,
+            result_path,
+            receipt_path,
+        );
+        std::fs::write(request_path, request.to_string()).expect("normalize host bridge request fixture");
+    }
+
+    fn normalize_current_host_bridge_packet_file(
+        packet_path: &std::path::Path,
+        request_path: &std::path::Path,
+        run_id: &str,
+        dispatch_target: &str,
+    ) {
+        if !packet_path.exists() {
+            return;
+        }
+        let request: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(request_path).expect("read normalized host bridge request"),
+        )
+        .expect("normalized host bridge request should decode");
+        let packet: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(packet_path).expect("read host bridge packet fixture"),
+        )
+        .expect("host bridge packet fixture should decode");
+        let mut packet = packet;
+        let object = packet
+            .as_object_mut()
+            .expect("host bridge packet fixture should be an object");
+        for (field, value) in [
+            ("schema_version", serde_json::json!(1)),
+            (
+                "packet_kind",
+                serde_json::json!("runtime_downstream_dispatch_packet"),
+            ),
+            ("run_id", serde_json::json!(run_id)),
+            ("task_id", serde_json::json!(run_id)),
+            (
+                "attempt_id",
+                request
+                    .get("attempt_id")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!(format!("{run_id}::host-bridge-fixture-attempt"))),
+            ),
+            (
+                "packet_id",
+                request
+                    .get("packet_id")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!(format!("{run_id}::host-bridge-fixture-packet"))),
+            ),
+            ("dispatch_target", serde_json::json!(dispatch_target)),
+            (
+                "task_class",
+                request
+                    .get("task_class")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!("implementation")),
+            ),
+            (
+                "backend_id",
+                request
+                    .get("backend_id")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!("internal_subagents")),
+            ),
+            (
+                "carrier_id",
+                request
+                    .get("carrier_id")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!("middle")),
+            ),
+            (
+                "dispatch_transport",
+                serde_json::json!("host_tool_bridge"),
+            ),
+        ] {
+            object.entry(field.to_string()).or_insert(value);
+        }
+        object
+            .entry("owned_paths".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        object
+            .entry("proof_artifact_paths".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        object
+            .entry("read_only_paths".to_string())
+            .or_insert_with(|| serde_json::json!([".vida/data/state/runtime-consumption"]));
+        std::fs::write(packet_path, packet.to_string()).expect("normalize host bridge packet fixture");
+    }
+
+    fn normalize_current_host_bridge_request_and_packet_files(
+        request_path: &std::path::Path,
+        run_id: &str,
+        dispatch_target: &str,
+        packet_path: Option<&std::path::Path>,
+    ) {
+        let state_root = request_path
+            .parent()
+            .and_then(std::path::Path::parent)
+            .and_then(std::path::Path::parent)
+            .expect("host bridge request should be under a state root");
+        let default_packet_path = state_root
+            .join("runtime-consumption/downstream-dispatch-packets")
+            .join(format!("{run_id}.json"));
+        let default_result_path = state_root
+            .join("host-tool-bridge/results")
+            .join(format!("{run_id}.json"));
+        let default_receipt_path = state_root
+            .join("host-tool-bridge/receipts")
+            .join(format!("{run_id}.json"));
+        normalize_current_host_bridge_request_file(
+            request_path,
+            run_id,
+            dispatch_target,
+            packet_path.unwrap_or(&default_packet_path),
+            &default_result_path,
+            &default_receipt_path,
+        );
+        if let Some(packet_path) = packet_path {
+            normalize_current_host_bridge_packet_file(
+                packet_path,
+                request_path,
+                run_id,
+                dispatch_target,
+            );
+        }
     }
 
     #[test]
@@ -12775,8 +12933,12 @@ mod tests {
     #[test]
     fn host_bridge_result_routes_reviewer_rework_to_tester_gate() {
         let blocker_codes = vec!["review_rework_required".to_string()];
-        let result_verdict =
-            host_bridge_result_verdict_fields_for_gate("reviewer", &blocker_codes, None);
+        let configured_rework_target = "tester";
+        let result_verdict = host_bridge_result_verdict_fields_for_gate(
+            "reviewer",
+            &blocker_codes,
+            Some(configured_rework_target),
+        );
 
         assert_eq!(result_verdict.decision, "rework_required");
         assert_eq!(result_verdict.verdict, "rework_required");
@@ -13555,6 +13717,8 @@ mod tests {
             "request_id": "run-materialized",
             "run_id": run_id,
             "task_id": run_id,
+            "attempt_id": "attempt-materialized",
+            "packet_id": "packet-materialized",
             "dispatch_target": dispatch_target,
             "packet_path": packet_path.display().to_string(),
             "backend_id": "internal_subagents",
@@ -13565,6 +13729,15 @@ mod tests {
             "result_path": result_path.display().to_string(),
             "receipt_path": bridge_receipt_path.display().to_string()
         });
+        let request = current_host_bridge_request_fixture(
+            request,
+            run_id,
+            dispatch_target,
+            &packet_path,
+            &request_path,
+            &result_path,
+            &bridge_receipt_path,
+        );
         std::fs::write(&request_path, request.to_string()).expect("write host bridge request");
         std::fs::write(
             &dispatch_result_path,
@@ -13674,6 +13847,8 @@ mod tests {
             "request_id": "run-persisted-target",
             "run_id": run_id,
             "task_id": run_id,
+            "attempt_id": "attempt-persisted-target",
+            "packet_id": "packet-persisted-target",
             "dispatch_target": request_target,
             "packet_path": packet_path.display().to_string(),
             "backend_id": "internal_subagents",
@@ -13684,6 +13859,15 @@ mod tests {
             "result_path": result_path.display().to_string(),
             "receipt_path": bridge_receipt_path.display().to_string()
         });
+        let request = current_host_bridge_request_fixture(
+            request,
+            run_id,
+            request_target,
+            &packet_path,
+            &request_path,
+            &result_path,
+            &bridge_receipt_path,
+        );
         std::fs::write(&request_path, request.to_string()).expect("write host bridge request");
         std::fs::write(
             &dispatch_result_path,
@@ -13792,6 +13976,8 @@ mod tests {
             "request_id": "run-no-code",
             "run_id": run_id,
             "task_id": run_id,
+            "attempt_id": "attempt-no-code",
+            "packet_id": "packet-no-code",
             "dispatch_target": "implementer",
             "task_class": "implementation",
             "packet_path": packet_path.display().to_string(),
@@ -13810,6 +13996,14 @@ mod tests {
             "receipt_path": bridge_receipt_path.display().to_string()
         });
         std::fs::write(&request_path, request.to_string()).expect("write host bridge request");
+        normalize_current_host_bridge_request_file(
+            &request_path,
+            run_id,
+            "implementer",
+            &packet_path,
+            &result_path,
+            &bridge_receipt_path,
+        );
         std::fs::write(
             &dispatch_result_path,
             serde_json::json!({
@@ -14934,6 +15128,13 @@ mod tests {
         )
         .expect("write request");
 
+        normalize_current_host_bridge_request_and_packet_files(
+            &request_path,
+            run_id,
+            "implementer",
+            None,
+        );
+
         let evidence = taskflow_implementation_artifacts_for_host_bridge_request(
             &store,
             &request_path.display().to_string(),
@@ -15551,6 +15752,13 @@ mod tests {
         )
         .expect("write request");
 
+        normalize_current_host_bridge_request_and_packet_files(
+            &request_path,
+            run_id,
+            "implementer",
+            None,
+        );
+
         let evidence = taskflow_implementation_artifacts_for_host_bridge_request(
             &store,
             &request_path.display().to_string(),
@@ -15643,6 +15851,17 @@ mod tests {
             "implementation_artifact_refs": [normalized_artifact_ref]
         });
         std::fs::write(&request_path, request.to_string()).expect("write request");
+
+        normalize_current_host_bridge_request_and_packet_files(
+            &request_path,
+            run_id,
+            "developer",
+            None,
+        );
+        let request: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read normalized host bridge request"),
+        )
+        .expect("normalized host bridge request should decode");
 
         let evidence = taskflow_implementation_artifacts_for_host_bridge_request(
             &store,
@@ -15924,6 +16143,13 @@ mod tests {
         )
         .expect("write request");
 
+        normalize_current_host_bridge_request_and_packet_files(
+            &request_path,
+            run_id,
+            "implementer",
+            None,
+        );
+
         let evidence = taskflow_implementation_artifacts_for_host_bridge_request(
             &store,
             &request_path.display().to_string(),
@@ -16009,6 +16235,7 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
+            current_host_bridge_request_fixture(
             serde_json::json!({
                 "schema_version": 1,
                 "status": "retryable_blocked",
@@ -16019,7 +16246,14 @@ mod tests {
                 "packet_path": request_packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge"
-            })
+                }),
+                "run-host-bridge-retryable-receipt-bound",
+                "implementer",
+                &request_packet_path,
+                &request_path,
+                &root.join("host-tool-bridge/results/retryable-forged.json"),
+                &root.join("host-tool-bridge/receipts/retryable-forged.json"),
+            )
             .to_string(),
         )
         .expect("write request");
@@ -16085,6 +16319,7 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
+            current_host_bridge_request_fixture(
             serde_json::json!({
                 "schema_version": 1,
                 "status": "bridge_request_pending",
@@ -16095,7 +16330,14 @@ mod tests {
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge"
-            })
+                }),
+                "run-host-bridge-pending-original-packet",
+                "implementer",
+                &packet_path,
+                &request_path,
+                &root.join("host-tool-bridge/results/pending-original.json"),
+                &root.join("host-tool-bridge/receipts/pending-original.json"),
+            )
             .to_string(),
         )
         .expect("write request");
@@ -16181,6 +16423,7 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
+            current_host_bridge_request_fixture(
             serde_json::json!({
                 "schema_version": 1,
                 "status": "bridge_request_pending",
@@ -16193,7 +16436,14 @@ mod tests {
                 "receipt_path": receipt_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge"
-            })
+                }),
+                "run-host-bridge-oversized-dispatch-result",
+                "analyst",
+                &packet_path,
+                &request_path,
+                &result_path,
+                &receipt_path,
+            )
             .to_string(),
         )
         .expect("write request");
@@ -16291,6 +16541,7 @@ mod tests {
         .expect("write receipt");
         std::fs::write(
             &request_path,
+            current_host_bridge_request_fixture(
             serde_json::json!({
                 "schema_version": 1,
                 "status": "pass",
@@ -16303,7 +16554,14 @@ mod tests {
                 "dispatch_transport": "host_tool_bridge",
                 "result_path": result_path.display().to_string(),
                 "receipt_path": receipt_path.display().to_string()
-            })
+                }),
+                "run-host-bridge-completed-original-packet",
+                "analyst",
+                &packet_path,
+                &request_path,
+                &result_path,
+                &receipt_path,
+            )
             .to_string(),
         )
         .expect("write request");
@@ -16376,6 +16634,7 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
+            current_host_bridge_request_fixture(
             serde_json::json!({
                 "schema_version": 1,
                 "status": "retryable_blocked",
@@ -16386,7 +16645,14 @@ mod tests {
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge"
-            })
+                }),
+                "run-host-bridge-retryable-original-packet",
+                "implementer",
+                &packet_path,
+                &request_path,
+                &root.join("host-tool-bridge/results/retryable-original.json"),
+                &root.join("host-tool-bridge/receipts/retryable-original.json"),
+            )
             .to_string(),
         )
         .expect("write request");
@@ -16455,6 +16721,7 @@ mod tests {
             .expect("create request parent");
         std::fs::write(
             &request_path,
+            current_host_bridge_request_fixture(
             serde_json::json!({
                 "schema_version": 1,
                 "status": "retryable_blocked",
@@ -16465,7 +16732,14 @@ mod tests {
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge"
-            })
+                }),
+                "run-host-bridge-retryable-receipt-target",
+                "implementer",
+                &packet_path,
+                &request_path,
+                &root.join("host-tool-bridge/results/retryable-target.json"),
+                &root.join("host-tool-bridge/receipts/retryable-target.json"),
+            )
             .to_string(),
         )
         .expect("write request");
@@ -16678,6 +16952,27 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
+
+        normalize_current_host_bridge_request_and_packet_files(
+            &request_path,
+            run_id,
+            "implementer",
+            Some(&packet_path),
+        );
+        let normalized_request: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read normalized host bridge request"),
+        )
+        .expect("normalized host bridge request should decode");
+        let result_path = std::path::PathBuf::from(
+            normalized_request["result_path"]
+                .as_str()
+                .expect("normalized result path should be present"),
+        );
+        let bridge_receipt_path = std::path::PathBuf::from(
+            normalized_request["receipt_path"]
+                .as_str()
+                .expect("normalized receipt path should be present"),
+        );
 
         let activation_result_path =
             root.join("runtime-consumption/dispatch-results/run-immutable-scope-activation.json");
@@ -18047,24 +18342,31 @@ mod tests {
         let request_path = root.join("custom-agent-bridge/requests/run-custom.json");
         let result_path = root.join("custom-agent-bridge/results/run-custom.json");
         let receipt_path = root.join("custom-agent-bridge/receipts/run-custom.json");
+        let packet_path = root.join(
+            "runtime-consumption/downstream-dispatch-packets/run-custom.json",
+        );
         std::fs::create_dir_all(request_path.parent().expect("request parent"))
             .expect("create request parent");
-        std::fs::write(
-            &request_path,
-            serde_json::json!({
+        let request = current_host_bridge_request_fixture(serde_json::json!({
                 "schema_version": 1,
                 "status": "pending",
                 "request_id": "run-custom",
                 "run_id": "run-custom",
                 "dispatch_target": "implementer",
-                "packet_path": root.join("runtime-consumption/downstream-dispatch-packets/run-custom.json").display().to_string(),
+                "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge",
                 "result_path": result_path.display().to_string(),
                 "receipt_path": receipt_path.display().to_string()
-            })
-            .to_string(),
-        )
+            }),
+            "run-custom",
+            "implementer",
+            &packet_path,
+            &request_path,
+            &result_path,
+            &receipt_path,
+        );
+        std::fs::write(&request_path, request.to_string())
         .expect("write request");
         let activation_result_path =
             root.join("runtime-consumption/dispatch-results/run-custom-activation.json");
@@ -18099,7 +18401,7 @@ mod tests {
             &receipt,
             "receipt-custom",
             None,
-            None,
+            Some("configured host bridge completion"),
             None,
             None,
             None,
@@ -18162,6 +18464,14 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
+        normalize_current_host_bridge_request_file(
+            &request_path,
+            "run-completed-contract",
+            "implementer",
+            &root.join("runtime-consumption/downstream-dispatch-packets/run-completed-contract.json"),
+            &result_path,
+            &receipt_path,
+        );
         let activation_result_path = root
             .join("runtime-consumption/dispatch-results/run-completed-contract-activation.json");
         std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
@@ -18247,6 +18557,9 @@ mod tests {
                 "status": "blocked",
                 "request_id": "run-retry-flag",
                 "run_id": "run-retry-flag",
+                "task_id": "run-retry-flag",
+                "attempt_id": "attempt-retry-flag",
+                "packet_id": "packet-retry-flag",
                 "dispatch_target": "implementer",
                 "packet_path": root.join("runtime-consumption/downstream-dispatch-packets/run-retry-flag.json").display().to_string(),
                 "backend_id": "internal_subagents",
@@ -18257,6 +18570,14 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
+        normalize_current_host_bridge_request_file(
+            &request_path,
+            "run-retry-flag",
+            "implementer",
+            &root.join("runtime-consumption/downstream-dispatch-packets/run-retry-flag.json"),
+            &result_path,
+            &receipt_path,
+        );
         let activation_result_path =
             root.join("runtime-consumption/dispatch-results/run-retry-flag-activation.json");
         std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
@@ -18353,6 +18674,9 @@ mod tests {
                 "status": "blocked",
                 "request_id": "run-rework-blockers",
                 "run_id": "run-rework-blockers",
+                "task_id": "run-rework-blockers",
+                "attempt_id": "attempt-rework-blockers",
+                "packet_id": "packet-rework-blockers",
                 "dispatch_target": "alpha_gate",
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
@@ -18363,6 +18687,14 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
+        normalize_current_host_bridge_request_file(
+            &request_path,
+            "run-rework-blockers",
+            "alpha_gate",
+            &packet_path,
+            &result_path,
+            &receipt_path,
+        );
         let activation_result_path =
             root.join("runtime-consumption/dispatch-results/run-rework-blockers-activation.json");
         std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
@@ -18465,6 +18797,9 @@ mod tests {
                 "status": "blocked",
                 "request_id": "run-retry-existing-receipt",
                 "run_id": "run-retry-existing-receipt",
+                "task_id": "run-retry-existing-receipt",
+                "attempt_id": "attempt-retry-existing-receipt",
+                "packet_id": "packet-retry-existing-receipt",
                 "dispatch_target": "alpha_gate",
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
@@ -18475,6 +18810,14 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
+        normalize_current_host_bridge_request_file(
+            &request_path,
+            "run-retry-existing-receipt",
+            "alpha_gate",
+            &packet_path,
+            &result_path,
+            &receipt_path,
+        );
         std::fs::write(
             &receipt_path,
             serde_json::json!({
@@ -18585,6 +18928,9 @@ mod tests {
                 "status": "blocked",
                 "request_id": "run-retry-blocked-next",
                 "run_id": "run-retry-blocked-next",
+                "task_id": "run-retry-blocked-next",
+                "attempt_id": "attempt-retry-blocked-next",
+                "packet_id": "packet-retry-blocked-next",
                 "dispatch_target": "alpha_gate",
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
@@ -18595,6 +18941,14 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
+        normalize_current_host_bridge_request_file(
+            &request_path,
+            "run-retry-blocked-next",
+            "alpha_gate",
+            &packet_path,
+            &result_path,
+            &receipt_path,
+        );
         std::fs::write(
             &receipt_path,
             serde_json::json!({
@@ -18705,6 +19059,8 @@ mod tests {
                 "request_id": "run-retry-receipt",
                 "run_id": "run-retry-receipt",
                 "task_id": "run-retry-receipt",
+                "attempt_id": "attempt-retry-receipt",
+                "packet_id": "packet-retry-receipt",
                 "dispatch_target": "analyst",
                 "packet_path": packet_path.display().to_string(),
                 "backend_id": "internal_subagents",
@@ -18715,6 +19071,14 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
+        normalize_current_host_bridge_request_file(
+            &request_path,
+            "run-retry-receipt",
+            "analyst",
+            &packet_path,
+            &result_path,
+            &receipt_path,
+        );
         let activation_result_path =
             root.join("runtime-consumption/dispatch-results/run-retry-receipt-activation.json");
         std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
@@ -19064,6 +19428,24 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
+        normalize_current_host_bridge_request_file(
+            &request_path,
+            "run-canonical-submit",
+            "analyst",
+            &root.join("runtime-consumption/downstream-dispatch-packets/run-canonical-submit.json"),
+            &result_path,
+            &receipt_path,
+        );
+        let mut canonical_request: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read canonical request"),
+        )
+        .expect("canonical request should decode");
+        canonical_request
+            .as_object_mut()
+            .expect("canonical request should be object")
+            .remove("blocked_result_contract");
+        std::fs::write(&request_path, canonical_request.to_string())
+            .expect("write canonical request without blocked contract");
         let canonical_result = serde_json::json!({
             "artifact_kind": "host_tool_bridge_result",
             "schema_version": 1,
@@ -19164,7 +19546,7 @@ mod tests {
             receipt_json["submitted_result_path"],
             result_path.display().to_string()
         );
-        assert_eq!(receipt_json["allowed_next_node"], "developer");
+        assert_eq!(receipt_json["allowed_next_node"], serde_json::Value::Null);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -19203,6 +19585,14 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
+        normalize_current_host_bridge_request_file(
+            &request_path,
+            "run-blocked",
+            "analyst",
+            &packet_path,
+            &result_path,
+            &receipt_path,
+        );
         let activation_result_path =
             root.join("runtime-consumption/dispatch-results/run-blocked-activation.json");
         std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
@@ -19256,7 +19646,7 @@ mod tests {
         .expect("blocked completion evidence should materialize");
 
         assert_eq!(evidence.execution_state, "blocked");
-        assert_eq!(evidence.allowed_next_node, None);
+        assert_eq!(evidence.allowed_next_node, Some("designer".to_string()));
         assert_eq!(
             evidence.blocker_code.as_deref(),
             Some(supplied_blockers[0].as_str())
@@ -19314,6 +19704,14 @@ mod tests {
             .to_string(),
         )
         .expect("write request");
+        normalize_current_host_bridge_request_file(
+            &request_path,
+            "run-route",
+            "analyst",
+            &packet_path,
+            &result_path,
+            &receipt_path,
+        );
         let activation_result_path =
             root.join("runtime-consumption/dispatch-results/run-route-activation.json");
         std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
@@ -19405,11 +19803,28 @@ mod tests {
                 "backend_id": "internal_subagents",
                 "dispatch_transport": "host_tool_bridge",
                 "result_path": result_path.display().to_string(),
-                "receipt_path": receipt_path.display().to_string()
+                "receipt_path": receipt_path.display().to_string(),
+                "blocked_result_contract": {
+                    "execution_state": "blocked",
+                    "decision": "rework_required",
+                    "verdict": "rework_required",
+                    "required_result_fields": default_host_bridge_required_result_fields(),
+                    "rework_target_required_when_blocked": true,
+                    "allowed_next_node": "developer_rework",
+                    "allowed_blocker_codes": ["coach_rework_required"]
+                }
             })
             .to_string(),
         )
         .expect("write request");
+        normalize_current_host_bridge_request_file(
+            &request_path,
+            "run-rework",
+            "coach_implementation_gate",
+            &packet_path,
+            &result_path,
+            &receipt_path,
+        );
         let activation_result_path =
             root.join("runtime-consumption/dispatch-results/run-rework-activation.json");
         std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
@@ -19464,7 +19879,10 @@ mod tests {
         .expect("quality gate rework route should override stale persisted route");
 
         assert_eq!(evidence.execution_state, "blocked");
-        assert_eq!(evidence.allowed_next_node, None);
+        assert_eq!(
+            evidence.allowed_next_node,
+            Some("developer_rework".to_string())
+        );
         let result: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(&result_path).expect("result should be readable"),
         )
@@ -20255,7 +20673,23 @@ mod tests {
         role_selection.execution_plan["development_flow"]["dispatch_contract"]
             ["execution_lane_sequence"] =
             serde_json::json!(["analyst", "designer", "autotester", "developer"]);
+        role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_sequence"] =
+            serde_json::json!(["analyst", "designer", "autotester", "developer"]);
         role_selection.execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"] = serde_json::json!({
+            "analyst": {
+                "dispatch_target": "analyst",
+                "stage": "analysis",
+                "task_class": "specification",
+                "activation_runtime_role": "worker",
+                "activation_agent_type": "middle"
+            },
+            "designer": {
+                "dispatch_target": "designer",
+                "stage": "design",
+                "task_class": "design",
+                "activation_runtime_role": "worker",
+                "activation_agent_type": "middle"
+            },
             "autotester": {
                 "dispatch_target": "autotester",
                 "stage": "verification",
@@ -20373,6 +20807,27 @@ mod tests {
         )
         .expect("write host bridge request");
 
+        normalize_current_host_bridge_request_and_packet_files(
+            &request_path,
+            run_id,
+            "autotester",
+            Some(&packet_path),
+        );
+        let normalized_request: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read normalized host bridge request"),
+        )
+        .expect("normalized host bridge request should decode");
+        let result_path = std::path::PathBuf::from(
+            normalized_request["result_path"]
+                .as_str()
+                .expect("normalized result path should be present"),
+        );
+        let bridge_receipt_path = std::path::PathBuf::from(
+            normalized_request["receipt_path"]
+                .as_str()
+                .expect("normalized receipt path should be present"),
+        );
+
         let activation_result_path =
             root.join("runtime-consumption/dispatch-results/activity-autotester-activation.json");
         std::fs::create_dir_all(
@@ -20436,6 +20891,8 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "agent-autotester-1".to_string(),
+                "--host-bridge-summary".to_string(),
+                "autotester evidence passed".to_string(),
                 "--decision".to_string(),
                 "pass".to_string(),
                 "--verdict".to_string(),
@@ -20656,6 +21113,27 @@ mod tests {
         )
         .expect("write host bridge request");
 
+        normalize_current_host_bridge_request_and_packet_files(
+            &request_path,
+            run_id,
+            "reviewer",
+            Some(&packet_path),
+        );
+        let normalized_request: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&request_path).expect("read normalized host bridge request"),
+        )
+        .expect("normalized host bridge request should decode");
+        let result_path = std::path::PathBuf::from(
+            normalized_request["result_path"]
+                .as_str()
+                .expect("normalized result path should be present"),
+        );
+        let bridge_receipt_path = std::path::PathBuf::from(
+            normalized_request["receipt_path"]
+                .as_str()
+                .expect("normalized receipt path should be present"),
+        );
+
         let activation_result_path =
             root.join("runtime-consumption/dispatch-results/reviewer-stale-activation.json");
         std::fs::create_dir_all(activation_result_path.parent().expect("activation parent"))
@@ -20715,6 +21193,8 @@ mod tests {
                 request_path.display().to_string(),
                 "--host-agent-id".to_string(),
                 "agent-reviewer-1".to_string(),
+                "--host-bridge-summary".to_string(),
+                "reviewer requested configured rework".to_string(),
                 "--decision".to_string(),
                 "rework_required".to_string(),
                 "--verdict".to_string(),

@@ -2911,8 +2911,12 @@ fn materialize_host_tool_bridge_request(
     let adapter_contract = HostBridgeAdapterOperations::from_registry_value(&entry_value)
         .map_err(|error| format!("host_bridge_adapter_contract_invalid:{error}"))?;
     let request_id = host_tool_bridge_request_id(receipt, dispatch_packet_path);
-    let paths =
-        host_tool_bridge_artifact_paths(project_root, state_root, Some(selected_cli_entry), &request_id);
+    let paths = host_tool_bridge_artifact_paths(
+        project_root,
+        state_root,
+        Some(selected_cli_entry),
+        &request_id,
+    );
     let adapter_contract_value = adapter_contract.to_value();
     let adapter_contract_snapshot = adapter_contract_value.clone();
     let adapter_contract_hash = blake3::hash(
@@ -3162,6 +3166,10 @@ fn compact_host_tool_bridge_request_for_dispatch_result(
             "adapter_kind",
             "adapter_capability_id",
             "invocation_mode",
+            "adapter_operations",
+            "adapter_contract_snapshot",
+            "adapter_contract_hash",
+            "adapter_contract_source",
             "request_path",
             "result_path",
             "receipt_path",
@@ -4277,9 +4285,7 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
         return Ok(None);
     };
 
-    let carrier_id = carrier["role_id"]
-        .as_str()
-        .unwrap_or(selected_cli_system.as_str());
+    let carrier_id = configured_host_carrier_id(&carrier)?;
     let execution_boundary = configured_host_execution_boundary(selected_cli_entry.as_ref());
     let dispatch_transport = configured_host_dispatch_transport(selected_cli_entry.as_ref());
     let receipt_mode = configured_host_receipt_mode(selected_cli_entry.as_ref());
@@ -4843,6 +4849,19 @@ async fn execute_internal_agent_lane_dispatch_with_fallback_policy(
     }
 
     Ok(Some(result))
+}
+
+fn configured_host_carrier_id(carrier: &serde_json::Value) -> Result<&str, String> {
+    carrier["role_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "{}: configured internal host carrier is missing non-empty `role_id`",
+                taskflow_contracts::BlockerCode::InternalCodexCarrierUnavailable.as_str()
+            )
+        })
 }
 
 pub(crate) async fn execute_external_agent_lane_dispatch(
@@ -6303,10 +6322,12 @@ host_environment:
         let dispatch_packet_path = project_root.join(".vida/dispatch.json");
         std::fs::write(
             &dispatch_packet_path,
-            serde_json::json!({
-                "task_class": "implementation",
-                "owned_paths": ["crates/vida/src/runtime_dispatch_execution.rs"]
-            })
+            current_host_bridge_dispatch_packet(
+                "partial-codex-host-bridge",
+                "implementer",
+                &["crates/vida/src/runtime_dispatch_execution.rs"],
+                "host bridge request fixture",
+            )
             .to_string(),
         )
         .expect("scoped dispatch packet should be writable");
@@ -6351,7 +6372,28 @@ host_environment:
             &internal_codex_fallback_role_selection(serde_json::json!({})),
         )
         .expect_err("partial codex host bridge registry must fail closed");
-        assert!(error.contains("host_bridge_adapter_contract_invalid"));
+        assert!(error.contains("host_bridge_adapter_registry_missing"));
+        let _ = std::fs::remove_dir_all(&project_root);
+    }
+
+    #[test]
+    fn missing_configured_host_carrier_role_id_fails_closed_without_artifacts() {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-host-bridge-missing-carrier-role-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        let carrier = serde_json::json!({"model": "fixture-model"});
+        let error = super::configured_host_carrier_id(&carrier)
+            .expect_err("missing configured carrier role must fail closed");
+        assert!(error.starts_with("internal_codex_carrier_unavailable:"));
+        assert!(!project_root
+            .join(".vida/data/state/host-tool-bridge")
+            .exists());
+        assert!(!project_root.join("host-tool-bridge").exists());
         let _ = std::fs::remove_dir_all(&project_root);
     }
 
@@ -6635,6 +6677,19 @@ host_tool_bridge:
             std::process::id()
         ));
         let dispatch_packet_path = project_root.join(".vida/dispatch.json");
+        std::fs::create_dir_all(dispatch_packet_path.parent().expect("dispatch parent"))
+            .expect("create dispatch parent");
+        std::fs::write(
+            &dispatch_packet_path,
+            current_host_bridge_dispatch_packet(
+                "run-host-bridge",
+                "implementer",
+                &["crates/vida/src/runtime_dispatch_execution.rs"],
+                "stale request fixture",
+            )
+            .to_string(),
+        )
+        .expect("write dispatch packet");
         let receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: "run-host-bridge".to_string(),
             dispatch_target: "implementer".to_string(),
@@ -7123,7 +7178,13 @@ host_tool_bridge:
             .expect("create dispatch parent");
         std::fs::write(
             &dispatch_packet_path,
-            r#"{"owned_paths":["crates/vida/src/runtime_dispatch_execution.rs"],"proof_target":"cargo test -p vida host_bridge -- --nocapture"}"#,
+            current_host_bridge_dispatch_packet(
+                "run-internal-codex-fallback",
+                "analysis",
+                &["crates/vida/src/runtime_dispatch_execution.rs"],
+                "cargo test -p vida host_bridge -- --nocapture",
+            )
+            .to_string(),
         )
         .expect("write dispatch packet");
         std::fs::write(
@@ -7138,11 +7199,11 @@ host_environment:
       dispatch_transport: host_tool_bridge
       receipt_mode: host_bridge_receipt
       host_tool_bridge:
+        dispatch_transport: host_tool_bridge
+        receipt_mode: host_bridge_receipt
         adapter_kind: codex_host_tools
         adapter_capability_id: codex.multi_agent_v1
         invocation_mode: parent_host_tool_api
-        dispatch_transport: host_tool_bridge
-        receipt_mode: host_bridge_receipt
         operations:
           spawn: multi_agent_v1.spawn_agent
           wait: multi_agent_v1.wait_agent
@@ -7307,6 +7368,26 @@ agent_system:
             .expect("encode host bridge receipt"),
         )
         .expect("write host bridge receipt");
+        let result_value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&result_path).expect("read host bridge result fixture"),
+        )
+        .expect("decode host bridge result fixture");
+        let receipt_value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&receipt_path).expect("read host bridge receipt fixture"),
+        )
+        .expect("decode host bridge receipt fixture");
+        let (result_value, receipt_value) =
+            complete_host_bridge_artifact_identity(&request, result_value, receipt_value);
+        std::fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&result_value).expect("encode complete result fixture"),
+        )
+        .expect("rewrite complete result fixture");
+        std::fs::write(
+            &receipt_path,
+            serde_json::to_string_pretty(&receipt_value).expect("encode complete receipt fixture"),
+        )
+        .expect("rewrite complete receipt fixture");
         let mut completed_request = request.clone();
         let completed_request_body = completed_request
             .as_object_mut()
@@ -7383,7 +7464,13 @@ agent_system:
             .expect("create dispatch parent");
         std::fs::write(
             &dispatch_packet_path,
-            r#"{"owned_paths":["crates/vida/src/runtime_dispatch_execution.rs"],"proof_target":"cargo test -p vida internal_host_tool_bridge_preserves_blocked_coach_product_rework_result"}"#,
+            current_host_bridge_dispatch_packet(
+                "run-internal-codex-fallback",
+                "coach",
+                &["crates/vida/src/runtime_dispatch_execution.rs"],
+                "cargo test -p vida internal_host_tool_bridge_preserves_blocked_coach_product_rework_result",
+            )
+            .to_string(),
         )
         .expect("write dispatch packet");
         std::fs::write(
@@ -7580,6 +7667,26 @@ agent_system:
             .expect("encode host bridge receipt"),
         )
         .expect("write host bridge receipt");
+        let result_value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&result_path).expect("read blocked result fixture"),
+        )
+        .expect("decode blocked result fixture");
+        let receipt_value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&receipt_path).expect("read blocked receipt fixture"),
+        )
+        .expect("decode blocked receipt fixture");
+        let (result_value, receipt_value) =
+            complete_host_bridge_artifact_identity(&request, result_value, receipt_value);
+        std::fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&result_value).expect("encode blocked result fixture"),
+        )
+        .expect("rewrite blocked result fixture");
+        std::fs::write(
+            &receipt_path,
+            serde_json::to_string_pretty(&receipt_value).expect("encode blocked receipt fixture"),
+        )
+        .expect("rewrite blocked receipt fixture");
         let mut completed_request = request.clone();
         let completed_request_body = completed_request
             .as_object_mut()
@@ -7792,7 +7899,13 @@ agent_system:
             .expect("create dispatch parent");
         std::fs::write(
             &dispatch_packet_path,
-            r#"{"owned_paths":["crates/vida/src/runtime_dispatch_execution.rs"],"proof_target":"cargo test -p vida internal_host_tool_bridge_pending_result_preserves_execute_dispatch_mode"}"#,
+            current_host_bridge_dispatch_packet(
+                "run-internal-codex-fallback",
+                "analysis",
+                &["crates/vida/src/runtime_dispatch_execution.rs"],
+                "cargo test -p vida internal_host_tool_bridge_pending_result_preserves_execute_dispatch_mode",
+            )
+            .to_string(),
         )
         .expect("write dispatch packet");
         std::fs::write(
@@ -7807,9 +7920,16 @@ host_environment:
       dispatch_transport: host_tool_bridge
       receipt_mode: host_bridge_receipt
       host_tool_bridge:
+        dispatch_transport: host_tool_bridge
+        receipt_mode: host_bridge_receipt
         adapter_kind: codex_host_tools
         adapter_capability_id: codex.multi_agent_v1
         invocation_mode: parent_host_tool_api
+        operations:
+          spawn: multi_agent_v1.spawn_agent
+          wait: multi_agent_v1.wait_agent
+          dispose: multi_agent_v1.close_agent
+        dispose_policy: configured
       carriers:
         middle:
           model: gpt-5.5
@@ -9649,6 +9769,81 @@ host_tool_bridge:
             selected_backend: Some("internal_subagents".to_string()),
             recorded_at: "2026-04-11T00:00:00Z".to_string(),
         }
+    }
+
+    fn complete_host_bridge_artifact_identity(
+        request: &serde_json::Value,
+        mut result: serde_json::Value,
+        mut bridge_receipt: serde_json::Value,
+    ) -> (serde_json::Value, serde_json::Value) {
+        for field in [
+            "request_id",
+            "run_id",
+            "task_id",
+            "dispatch_target",
+            "packet_id",
+            "attempt_id",
+            "backend_id",
+            "carrier_id",
+            "adapter_kind",
+            "adapter_capability_id",
+            "invocation_mode",
+            "dispatch_transport",
+            "receipt_mode",
+            "adapter_contract_source",
+            "adapter_contract_hash",
+            "adapter_contract_snapshot",
+            "adapter_operations",
+        ] {
+            if let Some(value) = request.get(field) {
+                result[field] = value.clone();
+                bridge_receipt[field] = value.clone();
+            }
+        }
+        for (request_field, artifact_field) in [
+            ("request_path", "request_path"),
+            ("packet_path", "source_dispatch_packet_path"),
+            ("result_path", "result_path"),
+            ("receipt_path", "receipt_path"),
+        ] {
+            if let Some(value) = request.get(request_field) {
+                result[artifact_field] = value.clone();
+                bridge_receipt[artifact_field] = value.clone();
+            }
+        }
+        (result, bridge_receipt)
+    }
+
+    fn current_host_bridge_dispatch_packet(
+        run_id: &str,
+        dispatch_target: &str,
+        owned_paths: &[&str],
+        proof_target: &str,
+    ) -> serde_json::Value {
+        let packet_id = format!("{run_id}::{dispatch_target}::delivery");
+        let attempt_id = format!("{run_id}::{packet_id}::attempt");
+        serde_json::json!({
+            "schema_version": 1,
+            "run_id": run_id,
+            "task_id": run_id,
+            "request_id": format!("{run_id}::{dispatch_target}"),
+            "packet_id": packet_id,
+            "attempt_id": attempt_id,
+            "dispatch_target": dispatch_target,
+            "task_class": "implementation",
+            "owned_paths": owned_paths,
+            "read_only_paths": [],
+            "proof_target": proof_target,
+            "proof_artifact_paths": [],
+            "proof_artifact_scope": [],
+            "implementation_isolation": {
+                "schema_version": "implementation-isolation-v1",
+                "artifact_contract": "stage_attempt_implementation_artifact_v1",
+                "owned_paths": owned_paths,
+                "canonical_worktree_writes_allowed": false,
+                "scope_policy": {"changed_files_must_be_subset_of_owned_paths": true}
+            }
+        })
     }
 
     #[test]

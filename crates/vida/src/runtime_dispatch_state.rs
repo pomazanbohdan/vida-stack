@@ -9494,16 +9494,14 @@ mod tests {
     use crate::state_store::CreateTaskRequest;
     use crate::state_store::RunGraphDispatchReceipt;
     use crate::temp_state::TempStateHarness;
-    use crate::test_cli_support::guard_current_dir;
+    use crate::test_cli_support::{guard_current_dir, EnvVarGuard};
     use crate::{run, Cli};
     use clap::Parser;
     use serde_json::json;
-    use std::cell::Cell;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
     use std::process::ExitCode;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -9961,63 +9959,6 @@ host_environment:
                 _proxy_override: ProxyStateDirOverrideGuard::set(path),
                 _env_guard: EnvVarGuard::set("VIDA_STATE_DIR", &env_value),
             }
-        }
-    }
-
-    struct EnvVarGuard {
-        lock: Option<MutexGuard<'static, ()>>,
-        key: &'static str,
-        original: Option<String>,
-    }
-
-    struct RecoveringMutex(Mutex<()>);
-
-    impl RecoveringMutex {
-        fn lock(&self) -> MutexGuard<'_, ()> {
-            self.0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-        }
-    }
-
-    fn env_var_lock() -> &'static RecoveringMutex {
-        static LOCK: OnceLock<RecoveringMutex> = OnceLock::new();
-        LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
-    }
-
-    thread_local! {
-        static ENV_VAR_GUARD_DEPTH: Cell<usize> = const { Cell::new(0) };
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let lock = ENV_VAR_GUARD_DEPTH.with(|depth| {
-                let current = depth.get();
-                depth.set(current + 1);
-                (current == 0).then(|| env_var_lock().lock())
-            });
-            let original = env::var(key).ok();
-            std::env::set_var(key, value);
-            Self {
-                lock,
-                key,
-                original,
-            }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(value) = self.original.as_deref() {
-                std::env::set_var(self.key, value);
-            } else {
-                std::env::remove_var(self.key);
-            }
-            ENV_VAR_GUARD_DEPTH.with(|depth| {
-                let current = depth.get();
-                depth.set(current.saturating_sub(1));
-            });
-            let _ = self.lock.take();
         }
     }
 
