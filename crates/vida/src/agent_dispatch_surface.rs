@@ -8811,7 +8811,7 @@ mod tests {
 
     #[test]
     fn host_bridge_adapter_payload_renders_parent_host_tool_contract() {
-        let request = serde_json::json!({
+        let request = host_bridge_strict_current_request(serde_json::json!({
             "schema_version": 1,
             "status": "pending",
             "request_id": "req-1",
@@ -8830,7 +8830,7 @@ mod tests {
             "request_path": "request.json",
             "result_path": "result.json",
             "receipt_path": "receipt.json"
-        });
+        }));
         let payload = host_bridge_adapter_payload(
             std::path::Path::new("request.json"),
             &request,
@@ -8861,7 +8861,9 @@ mod tests {
         assert!(completion_command.contains("--submit-result '<host-bridge-result-file>'"));
         assert!(!completion_command.contains("--submit-result result.json"));
         assert!(
-            completion_command.contains("--receipt-id run-1-implementer-req-1-host-bridge-receipt")
+            completion_command.contains(
+                "--receipt-id run-1-implementer-req-1-packet-host-bridge-receipt"
+            )
         );
         assert_eq!(payload["current_request_identity"]["request_id"], "req-1");
         assert_eq!(
@@ -8933,7 +8935,7 @@ mod tests {
         )
         .expect("write packet");
         let canonical_result_path = state_root.join("host-tool-bridge/results/result.json");
-        let request = serde_json::json!({
+        let request = host_bridge_strict_current_request(serde_json::json!({
             "schema_version": 1,
             "status": "pending",
             "request_id": "req-analyst",
@@ -8954,7 +8956,7 @@ mod tests {
             "request_path": request_path.display().to_string(),
             "result_path": canonical_result_path.display().to_string(),
             "receipt_path": state_root.join("host-tool-bridge/receipts/receipt.json").display().to_string()
-        });
+        }));
         std::fs::write(&request_path, request.to_string()).expect("write request");
 
         let payload = host_bridge_adapter_payload(
@@ -8970,11 +8972,11 @@ mod tests {
             .as_str()
             .expect("completion command");
         assert!(completion_command.starts_with("vida agent host-bridge --request "));
-        assert!(completion_command.contains("--receipt-id run-analyst-source_lane-"));
-        assert!(
-            !completion_command
-                .contains("--receipt-id run-analyst-source_lane-host-bridge-receipt")
-        );
+        assert!(completion_command.contains(
+            "--receipt-id run-analyst-analyst-req-analyst-packet-host-bridge-receipt"
+        ));
+        assert!(!completion_command
+            .contains("--receipt-id run-analyst-source_lane-host-bridge-receipt"));
         assert_eq!(
             payload["current_request_identity"]["request_id"],
             "req-analyst"
@@ -9004,7 +9006,7 @@ mod tests {
     }
 
     #[test]
-    fn host_bridge_adapter_payload_normalizes_legacy_internal_subagents_adapter_contract() {
+    fn host_bridge_adapter_payload_rejects_legacy_internal_subagents_adapter_contract() {
         let request = serde_json::json!({
             "schema_version": 1,
             "status": "pending",
@@ -9034,22 +9036,35 @@ mod tests {
         );
 
         assert_eq!(payload["status"], "blocked");
-        assert_eq!(
-            payload["blocker_codes"],
-            serde_json::json!(["host_bridge_request_missing_fields"])
-        );
+        let blockers = payload["blocker_codes"]
+            .as_array()
+            .expect("strict legacy blockers should render")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>();
+        for expected in [
+            "host_bridge_request_missing_fields",
+            "host_bridge_request_not_pending",
+            "host_tool_capability_missing",
+        ] {
+            assert!(
+                blockers.contains(&expected),
+                "strict legacy request should remain blocked by {expected}: {payload}"
+            );
+        }
         assert_eq!(
             payload["host_bridge"]["adapter_capability_id"],
-            "codex.multi_agent_v1"
+            "unconfigured_host_agent_capability"
         );
         assert_eq!(
             payload["host_bridge"]["adapter_contract_source"],
-            "legacy_internal_subagents_default"
+            ""
         );
-        assert_eq!(
-            payload["host_bridge"]["missing_fields"],
-            serde_json::json!(["adapter_kind", "adapter_capability_id", "invocation_mode"])
-        );
+        assert!(payload["host_bridge"]["missing_fields"]
+            .as_array()
+            .expect("strict missing fields")
+            .iter()
+            .any(|field| field == "task_id"));
         assert_eq!(
             payload["host_bridge"]["host_tool_calls"],
             serde_json::json!([])
@@ -9245,8 +9260,78 @@ mod tests {
         }
     }
 
+    fn host_bridge_strict_current_request(mut request: serde_json::Value) -> serde_json::Value {
+        let object = request
+            .as_object_mut()
+            .expect("host bridge request fixture should be an object");
+        let request_id = object
+            .get("request_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("req-fixture");
+        let run_id = object
+            .get("run_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("run-fixture");
+        let defaults = [
+            ("task_id", format!("{run_id}-task")),
+            ("attempt_id", format!("{request_id}-attempt")),
+            ("packet_id", format!("{request_id}-packet")),
+            ("execution_boundary", "parent_host_session".to_string()),
+            ("receipt_mode", "host_bridge_receipt".to_string()),
+            ("invocation_mode", "parent_host_tool_api".to_string()),
+        ];
+        for (field, value) in defaults {
+            object
+                .entry(field.to_string())
+                .or_insert_with(|| serde_json::Value::String(value));
+        }
+        if !object.contains_key("adapter_operations") {
+            object.insert(
+                "adapter_operations".to_string(),
+                serde_json::json!({
+                    "adapter_kind": "codex_host_tools",
+                    "adapter_capability_id": "codex.multi_agent_v1",
+                    "invocation_mode": "parent_host_tool_api",
+                    "dispatch_transport": "host_tool_bridge",
+                    "receipt_mode": "host_bridge_receipt",
+                    "operations": {
+                        "spawn": "multi_agent_v1.spawn_agent",
+                        "wait": "multi_agent_v1.wait_agent",
+                        "dispose": "multi_agent_v1.close_agent"
+                    },
+                    "dispose_policy": "configured"
+                }),
+            );
+        }
+        let snapshot = object
+            .get("adapter_operations")
+            .cloned()
+            .expect("adapter operations fixture should exist");
+        object
+            .entry("adapter_contract_snapshot".to_string())
+            .or_insert_with(|| snapshot.clone());
+        let snapshot = object
+            .get("adapter_contract_snapshot")
+            .cloned()
+            .expect("adapter contract snapshot fixture should exist");
+        object.entry("adapter_contract_hash".to_string()).or_insert_with(|| {
+            serde_json::Value::String(
+                blake3::hash(&serde_json::to_vec(&snapshot).expect("snapshot serializes"))
+                    .to_hex()
+                    .to_string(),
+            )
+        });
+        object
+            .entry("adapter_contract_source".to_string())
+            .or_insert_with(|| serde_json::Value::String("configured_registry".to_string()));
+        object
+            .entry("request_path".to_string())
+            .or_insert_with(|| serde_json::Value::String("request.json".to_string()));
+        request
+    }
+
     fn host_bridge_validate_request() -> serde_json::Value {
-        serde_json::json!({
+        host_bridge_strict_current_request(serde_json::json!({
             "schema_version": 1,
             "status": "pending",
             "request_id": "req-validate-1",
@@ -9266,7 +9351,7 @@ mod tests {
             "result_path": "host-tool-bridge/results/result.json",
             "receipt_path": "host-tool-bridge/receipts/receipt.json",
             "allowed_next_node": "epsilon_gate"
-        })
+        }))
     }
 
     fn host_bridge_validate_result(allowed_next_node: &str) -> serde_json::Value {
@@ -9746,7 +9831,7 @@ mod tests {
             .expect("packet should serialize"),
         )
         .expect("packet should write");
-        let request = serde_json::json!({
+        let request = host_bridge_strict_current_request(serde_json::json!({
             "schema_version": 1,
             "status": "pending",
             "request_id": "req-synthetic-rework",
@@ -9771,7 +9856,7 @@ mod tests {
                     "allowed_next_node": "alpha_rework"
                 }
             }
-        });
+        }));
         let result = serde_json::json!({
             "artifact_kind": "host_tool_bridge_result",
             "schema_version": 1,
@@ -11739,7 +11824,7 @@ mod tests {
             .expect("result should serialize"),
         )
         .expect("result file should be written");
-        let request = serde_json::json!({
+        let request = host_bridge_strict_current_request(serde_json::json!({
             "schema_version": 1,
             "status": "blocked",
             "request_id": "req-retry",
@@ -11754,7 +11839,7 @@ mod tests {
             "request_path": request_path.display().to_string(),
             "result_path": result_path.display().to_string(),
             "receipt_path": receipt_path.display().to_string()
-        });
+        }));
         std::fs::write(
             &request_path,
             serde_json::to_vec_pretty(&request).expect("request should serialize"),
@@ -11831,7 +11916,7 @@ mod tests {
             .expect("packet should serialize"),
         )
         .expect("packet file should be written");
-        let request = serde_json::json!({
+        let request = host_bridge_strict_current_request(serde_json::json!({
             "schema_version": 1,
             "status": "pending",
             "request_id": "req-pending-adapter",
@@ -11849,7 +11934,7 @@ mod tests {
             "request_path": request_path.display().to_string(),
             "result_path": result_path.display().to_string(),
             "receipt_path": receipt_path.display().to_string()
-        });
+        }));
         std::fs::write(
             &request_path,
             serde_json::to_vec_pretty(&request).expect("request should serialize"),
@@ -11908,9 +11993,9 @@ mod tests {
         let payload = host_bridge_adapter_payload(
             &request_path,
             &request,
-            blockers.clone(),
+            Vec::new(),
             Some(&state_root),
-            false,
+            true,
         );
         assert_eq!(payload["status"], "pass");
         assert_eq!(payload["host_bridge"]["request_status"], "pending");
@@ -12476,7 +12561,7 @@ mod tests {
             .expect("result should serialize"),
         )
         .expect("result file should be written");
-        let request = serde_json::json!({
+        let request = host_bridge_strict_current_request(serde_json::json!({
             "schema_version": 1,
             "status": "blocked",
             "request_id": "req-contract-retry",
@@ -12496,7 +12581,7 @@ mod tests {
                 "verdict": "rework_required",
                 "allowed_next_node": "repair_rework"
             }
-        });
+        }));
         std::fs::write(
             &request_path,
             serde_json::to_vec_pretty(&request).expect("request should serialize"),
@@ -12707,7 +12792,7 @@ mod tests {
 
     #[test]
     fn host_bridge_adapter_payload_advertises_attach_for_implementation_task_class() {
-        let request = serde_json::json!({
+        let request = host_bridge_strict_current_request(serde_json::json!({
             "schema_version": 1,
             "status": "pending",
             "request_id": "req-attach",
@@ -12722,7 +12807,7 @@ mod tests {
             "adapter_capability_id": "codex.multi_agent_v1",
             "result_path": "result.json",
             "receipt_path": "receipt.json"
-        });
+        }));
 
         let payload = host_bridge_adapter_payload(
             std::path::Path::new("request.json"),

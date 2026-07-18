@@ -372,7 +372,7 @@ mod tests {
     use super::*;
 
     fn request() -> Value {
-        json!({
+        let mut request = json!({
             "schema_version": 1,
             "status": "pending",
             "request_id": "req-1",
@@ -408,7 +408,16 @@ mod tests {
             "request_path": "request.json",
             "result_path": "result.json",
             "receipt_path": "receipt.json"
-        })
+        });
+        let snapshot = request["adapter_operations"].clone();
+        request["adapter_contract_snapshot"] = snapshot.clone();
+        request["adapter_contract_hash"] = json!(
+            blake3::hash(&serde_json::to_vec(&snapshot).expect("snapshot serializes"))
+                .to_hex()
+                .to_string()
+        );
+        request["adapter_contract_source"] = json!("configured_registry");
+        request
     }
 
     fn payload_for(request: &Value) -> Value {

@@ -5,9 +5,6 @@ use serde_json::Value;
 use taskflow_contracts::{Release1ContractStatus, release1_contract_status_str};
 use time::OffsetDateTime;
 
-use crate::legacy_normalization::{
-    LEGACY_OUTCOME_CONTRADICTION, normalize_legacy_host_bridge_completion_result,
-};
 use crate::provenance::HostBridgeProvenanceDecision;
 use crate::receipt_binding::DispatchReceiptBindingDecision;
 use crate::request::{
@@ -537,23 +534,10 @@ pub fn host_bridge_result_verdict_contract_blockers(
     result: &Value,
     required_result_fields: &[String],
 ) -> Vec<String> {
-    let legacy_normalization = normalize_legacy_host_bridge_completion_result(result);
-    let normalized_result_contract = legacy_normalization
-        .as_ref()
-        .ok()
-        .map(|normalization| normalization.result_contract.clone());
-    let result = normalized_result_contract.as_ref().unwrap_or(result);
     let required_fields = crate::request::canonical_host_bridge_required_result_fields(
         required_result_fields.to_vec(),
     );
     let mut blockers = Vec::new();
-    if legacy_normalization
-        .as_ref()
-        .err()
-        .is_some_and(|error| error.blocker_code == LEGACY_OUTCOME_CONTRADICTION)
-    {
-        push_unique_blocker(&mut blockers, LEGACY_OUTCOME_CONTRADICTION);
-    }
     for field in required_fields {
         if !result.get(field.as_str()).is_some_and(|value| {
             if field == "blocker_codes" {
@@ -787,7 +771,7 @@ mod tests {
     use super::*;
     use crate::provenance::HostBridgeProvenanceDecision;
     use crate::receipt_binding::DispatchReceiptBindingDecision;
-    use crate::tests::minimal_request;
+    use crate::tests::{augment_dispatch_identity, minimal_request};
 
     #[test]
     fn completion_evidence_is_blocked_when_receipt_binding_rejected() {
@@ -1036,19 +1020,21 @@ mod tests {
     }
 
     #[test]
-    fn result_verdict_contract_accepts_legacy_pass_executed_empty_blockers() {
+    fn result_verdict_contract_rejects_missing_current_verdict_fields() {
         let result = serde_json::json!({
             "status": "pass",
             "execution_state": "executed",
             "blocker_codes": []
         });
 
-        assert_eq!(
-            host_bridge_result_verdict_contract_blockers(
-                &result,
-                &crate::request::default_host_bridge_required_result_fields(),
-            ),
-            Vec::<String>::new()
+        let blockers = host_bridge_result_verdict_contract_blockers(
+            &result,
+            &crate::request::default_host_bridge_required_result_fields(),
+        );
+        assert!(
+            blockers
+                .iter()
+                .any(|blocker| blocker == "host_bridge_result_missing_verdict_field")
         );
     }
 
@@ -1083,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    fn result_verdict_contract_rejects_legacy_mixed_pass_blocker_tuple() {
+    fn result_verdict_contract_rejects_noncanonical_mixed_pass_blocker_tuple() {
         let result = serde_json::json!({
             "status": "pass",
             "execution_state": "executed",
@@ -1100,7 +1086,7 @@ mod tests {
         assert!(
             blockers
                 .iter()
-                .any(|blocker| blocker == LEGACY_OUTCOME_CONTRADICTION)
+                .any(|blocker| blocker == "host_bridge_result_missing_verdict_field")
         );
     }
 
@@ -1310,13 +1296,13 @@ mod tests {
 
     #[test]
     fn completed_result_preview_refresh_evidence_requires_provenance_and_identity() {
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "request_id": "req-1",
             "run_id": "run-1",
             "dispatch_target": "developer"
             ,"packet_path": "runtime-consumption/dispatch-packet.json"
         });
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "status": "pass",
             "execution_state": "executed",
             "artifact_kind": "host_tool_bridge_result",
@@ -1331,6 +1317,7 @@ mod tests {
             "completion_receipt_id": "completion-1",
             "allowed_next_node": "tester"
         });
+        augment_dispatch_identity(&mut request, &mut result);
 
         assert!(host_bridge_completed_result_has_preview_refresh_evidence(
             &request, &result
@@ -1355,20 +1342,20 @@ mod tests {
 
     #[test]
     fn completion_identity_rejects_foreign_late_result_after_terminal_block() {
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "request_id": "req-1",
             "run_id": "run-1",
             "dispatch_target": "developer",
             "packet_path": "runtime-consumption/dispatch-packet.json"
         });
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "request_id": "req-1",
             "run_id": "run-1",
             "dispatch_target": "developer",
             "source_dispatch_packet_path": "runtime-consumption/dispatch-packet.json",
             "completion_receipt_id": "completion-1"
         });
-        let receipt = serde_json::json!({
+        let mut receipt = serde_json::json!({
             "request_id": "req-1",
             "run_id": "run-1",
             "dispatch_target": "developer",
@@ -1376,6 +1363,8 @@ mod tests {
             "completion_receipt_id": "completion-1",
             "receipt_backed": true
         });
+        augment_dispatch_identity(&mut request, &mut result);
+        augment_dispatch_identity(&mut request, &mut receipt);
         assert!(host_bridge_completion_identity_matches(
             &request,
             &result,
@@ -1415,7 +1404,7 @@ mod tests {
 
     #[test]
     fn completion_identity_rejects_mismatched_full_dispatch_identity() {
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "request_id": "req-full-identity",
             "run_id": "run-full-identity",
             "task_id": "task-full-identity",
@@ -1425,7 +1414,7 @@ mod tests {
             "backend_id": "internal_subagents",
             "packet_path": "runtime-consumption/full-identity.json"
         });
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "request_id": "req-full-identity",
             "run_id": "run-full-identity",
             "task_id": "task-full-identity",
@@ -1436,7 +1425,7 @@ mod tests {
             "source_dispatch_packet_path": "runtime-consumption/full-identity.json",
             "completion_receipt_id": "completion-full-identity"
         });
-        let receipt = serde_json::json!({
+        let mut receipt = serde_json::json!({
             "request_id": "req-full-identity",
             "run_id": "run-full-identity",
             "task_id": "task-full-identity",
@@ -1448,6 +1437,8 @@ mod tests {
             "completion_receipt_id": "completion-full-identity",
             "receipt_backed": true
         });
+        augment_dispatch_identity(&mut request, &mut result);
+        augment_dispatch_identity(&mut request, &mut receipt);
 
         assert!(host_bridge_completion_identity_matches(
             &request,
@@ -1503,20 +1494,20 @@ mod tests {
         let normal = packet.display().to_string();
         let extended = format!(r"\\?\{}", normal);
         let mixed = normal.replace('\\', "/");
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "request_id": "req-path",
             "run_id": "run-path",
             "dispatch_target": "tester",
             "packet_path": normal,
         });
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "request_id": "req-path",
             "run_id": "run-path",
             "dispatch_target": "tester",
             "source_dispatch_packet_path": extended,
             "completion_receipt_id": "completion-path",
         });
-        let receipt = serde_json::json!({
+        let mut receipt = serde_json::json!({
             "request_id": "req-path",
             "run_id": "run-path",
             "dispatch_target": "tester",
@@ -1524,6 +1515,8 @@ mod tests {
             "completion_receipt_id": "completion-path",
             "receipt_backed": true,
         });
+        augment_dispatch_identity(&mut request, &mut result);
+        augment_dispatch_identity(&mut request, &mut receipt);
 
         assert!(host_bridge_completion_identity_matches(
             &request,

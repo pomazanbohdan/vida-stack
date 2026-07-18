@@ -52,6 +52,36 @@ function Add-Violation {
     $List.Add([pscustomobject]@{ path = $Path; rule = $Rule; detail = $Detail })
 }
 
+function Get-SurfaceInventory {
+    $specs = @(
+        [pscustomobject]@{ name = "crates"; path = "crates"; include = @("*.rs") },
+        [pscustomobject]@{ name = "scripts"; path = "scripts"; include = @("*.ps1", "*.cmd", "*.sh") },
+        [pscustomobject]@{ name = ".github/workflows"; path = ".github/workflows"; include = @("*.yml", "*.yaml") },
+        [pscustomobject]@{ name = "docs"; path = "docs"; include = @("*generated*", "*.template.md", "*.template.yaml", "*.jsonl") }
+    )
+    $paths = New-Object System.Collections.Generic.List[object]
+    $familyCounts = [ordered]@{}
+    $missingFamilies = New-Object System.Collections.Generic.List[string]
+    foreach ($spec in $specs) {
+        if (-not (Test-Path -LiteralPath $spec.path -PathType Container)) {
+            $familyCounts[$spec.name] = 0
+            $missingFamilies.Add($spec.name)
+            continue
+        }
+        $files = @(Get-ChildItem -Path $spec.path -Recurse -File -Include $spec.include -ErrorAction SilentlyContinue)
+        $familyCounts[$spec.name] = $files.Count
+        foreach ($file in $files) { $paths.Add($file) }
+        if ($files.Count -eq 0) { $missingFamilies.Add($spec.name) }
+    }
+    return [pscustomobject]@{
+        paths = @($paths.ToArray() | Sort-Object -Property FullName -Unique)
+        family_counts = $familyCounts
+        missing_families = @($missingFamilies.ToArray())
+    }
+}
+
+$surfaceInventory = Get-SurfaceInventory
+
 if ($SelfTest) {
     $selfTestValues = @("fixture.spawn", "fixture.wait", "fixture.dispose")
     $syntheticProduction = 'adapter_operations: fixture.spawn'
@@ -61,6 +91,13 @@ if ($SelfTest) {
     }
     if (-not $selfTestValues.Where({ $syntheticAllowed.Contains($_) }).Count) {
         throw "self-test failed: allowed config detection"
+    }
+    $expectedSurfaceCount = ($surfaceInventory.family_counts.Values | Measure-Object -Sum).Sum
+    if ($surfaceInventory.missing_families.Count -gt 0) {
+        throw "self-test failed: missing surface family '$($surfaceInventory.missing_families -join ', ')'"
+    }
+    if ($surfaceInventory.paths.Count -ne $expectedSurfaceCount -or $surfaceInventory.paths.Count -lt 4) {
+        throw "self-test failed: flattened surface count '$($surfaceInventory.paths.Count)' does not match family inventory '$expectedSurfaceCount'"
     }
     Write-Host "host bridge capability neutrality self-test: pass"
     exit 0
@@ -72,12 +109,7 @@ $configPaths = @(
 ) | Where-Object { Test-Path -LiteralPath $_ }
 $configuredValues = @($configPaths | ForEach-Object { Get-ConfiguredAdapterValues $_ } | Sort-Object -Unique)
 
-$surfacePaths = @(
-    (Get-ChildItem -Path "crates" -Recurse -File -Filter "*.rs" -ErrorAction SilentlyContinue),
-    (Get-ChildItem -Path "scripts" -Recurse -File -Include "*.ps1","*.cmd","*.sh" -ErrorAction SilentlyContinue),
-    (Get-ChildItem -Path ".github/workflows" -Recurse -File -Include "*.yml","*.yaml" -ErrorAction SilentlyContinue),
-    (Get-ChildItem -Path "docs" -Recurse -File -Include "*generated*","*.template.md","*.template.yaml","*.jsonl" -ErrorAction SilentlyContinue)
-) | Where-Object { $_ } | Sort-Object -Property FullName -Unique
+$surfacePaths = @($surfaceInventory.paths)
 
 $allowedPaths = @(
     (Resolve-Path -LiteralPath "vida.config.yaml" -ErrorAction SilentlyContinue).Path,
@@ -87,6 +119,13 @@ $allowedPaths = @(
 ) | Where-Object { $_ }
 
 $violations = New-Object System.Collections.Generic.List[object]
+foreach ($family in $surfaceInventory.missing_families) {
+    Add-Violation $violations $family "surface_family_missing" "required neutrality scan family is absent or empty"
+}
+$expectedSurfaceCount = ($surfaceInventory.family_counts.Values | Measure-Object -Sum).Sum
+if ($surfacePaths.Count -ne $expectedSurfaceCount -or $surfacePaths.Count -lt 4) {
+    Add-Violation $violations "scripts/check-host-bridge-capability-neutrality.ps1" "surface_scan_count_too_small" "flattened scan count does not match family inventory"
+}
 foreach ($file in $surfacePaths) {
     $path = $file.FullName
     $normalized = $path -replace "\\", "/"
@@ -100,6 +139,8 @@ foreach ($file in $surfacePaths) {
         }
     }
     if ($normalized -notmatch "/adapter_contract\.rs$" -and
+        $normalized -notmatch "/taskflow-host-bridge/src/request\.rs$" -and
+        $normalized -notmatch "/check-host-bridge-capability-neutrality\.ps1$" -and
         $text -match '(?m)\b(spawn_tool|wait_tool|close_tool|dispose_tool)\b') {
         Add-Violation $violations $normalized "legacy_operation_alias_in_production_surface" "legacy lifecycle alias"
     }
@@ -130,6 +171,7 @@ $result = [pscustomobject]@{
     config_paths = @($configPaths)
     scanned_surface_count = $surfacePaths.Count
     scanned_surface_roots = @("crates", "scripts", ".github/workflows", "docs")
+    scanned_surface_families = $surfaceInventory.family_counts
     allowed_config_and_contract_paths = @($allowedPaths)
     configured_values = @($configuredValues)
     violations = @($violations.ToArray())

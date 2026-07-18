@@ -33,11 +33,27 @@ pub struct HostBridgeResultScaffoldInput {
 
 fn request_identity_projection(request: &HostBridgeRequest) -> Value {
     serde_json::json!({
-        "task_id": request.raw.get("task_id"),
-        "attempt_id": request.raw.get("attempt_id"),
-        "packet_id": request.raw.get("packet_id"),
-        "backend_id": request.raw.get("backend_id"),
-        "packet_path": request.raw.get("packet_path"),
+        "request_id": request.request_id,
+        "run_id": request.run_id,
+        "task_id": request.task_id,
+        "attempt_id": request.attempt_id,
+        "packet_id": request.packet_id,
+        "dispatch_target": request.dispatch_target,
+        "backend_id": request.backend_id,
+        "carrier_id": request.carrier_id,
+        "adapter_kind": request.adapter_kind,
+        "adapter_capability_id": request.adapter_capability_id,
+        "invocation_mode": request.invocation_mode,
+        "dispatch_transport": request.dispatch_transport,
+        "receipt_mode": request.receipt_mode,
+        "adapter_contract_source": request.adapter_contract_source,
+        "adapter_contract_snapshot": request.adapter_contract_snapshot,
+        "adapter_contract_hash": request.adapter_contract_hash,
+        "adapter_operations": request.adapter_operations.as_ref().map(|ops| ops.to_value()),
+        "request_path": request.request_path,
+        "packet_path": request.packet_path,
+        "result_path": request.result_path,
+        "receipt_path": request.receipt_path,
     })
 }
 
@@ -50,13 +66,29 @@ fn receipt_identity_value(receipt: &Value, field: &str) -> Option<Value> {
 
 fn receipt_identity_projection(receipt: &Value) -> Value {
     serde_json::json!({
+        "request_id": receipt_identity_value(receipt, "request_id"),
+        "run_id": receipt_identity_value(receipt, "run_id"),
         "task_id": receipt_identity_value(receipt, "task_id"),
         "attempt_id": receipt_identity_value(receipt, "attempt_id"),
         "packet_id": receipt_identity_value(receipt, "packet_id"),
+        "dispatch_target": receipt_identity_value(receipt, "dispatch_target"),
         "backend_id": receipt_identity_value(receipt, "backend_id")
             .or_else(|| receipt_identity_value(receipt, "selected_backend")),
+        "carrier_id": receipt_identity_value(receipt, "carrier_id"),
+        "adapter_kind": receipt_identity_value(receipt, "adapter_kind"),
+        "adapter_capability_id": receipt_identity_value(receipt, "adapter_capability_id"),
+        "invocation_mode": receipt_identity_value(receipt, "invocation_mode"),
+        "dispatch_transport": receipt_identity_value(receipt, "dispatch_transport"),
+        "receipt_mode": receipt_identity_value(receipt, "receipt_mode"),
+        "adapter_contract_source": receipt_identity_value(receipt, "adapter_contract_source"),
+        "adapter_contract_snapshot": receipt_identity_value(receipt, "adapter_contract_snapshot"),
+        "adapter_contract_hash": receipt_identity_value(receipt, "adapter_contract_hash"),
+        "adapter_operations": receipt_identity_value(receipt, "adapter_operations"),
+        "request_path": receipt_identity_value(receipt, "request_path"),
         "source_dispatch_packet_path": receipt_identity_value(receipt, "source_dispatch_packet_path")
-            .or_else(|| receipt_identity_value(receipt, "dispatch_packet_path")),
+            .or_else(|| receipt_identity_value(receipt, "packet_path")),
+        "result_path": receipt_identity_value(receipt, "result_path"),
+        "receipt_path": receipt_identity_value(receipt, "receipt_path"),
     })
 }
 
@@ -84,9 +116,7 @@ pub fn validate_dispatch_receipt_binding(
     {
         blockers.push("receipt_status_not_pass".to_string());
     }
-    if string_field(receipt, "request_id").is_some()
-        && string_field(receipt, "request_id") != Some(input.request.request_id.as_str())
-    {
+    if string_field(receipt, "request_id") != Some(input.request.request_id.as_str()) {
         blockers.push("receipt_request_id_mismatch".to_string());
     }
     if string_field(receipt, "run_id") != Some(input.request.run_id.as_str()) {
@@ -97,9 +127,19 @@ pub fn validate_dispatch_receipt_binding(
     {
         blockers.push("receipt_dispatch_target_mismatch".to_string());
     }
+    let request_identity = request_identity_projection(&input.request);
+    let mut receipt_identity = receipt_identity_projection(receipt);
+    if input.allow_active_packet_target_override {
+        if let Some(identity) = receipt_identity.as_object_mut() {
+            identity.insert(
+                "dispatch_target".to_string(),
+                Value::String(input.request.dispatch_target.clone()),
+            );
+        }
+    }
     blockers.extend(crate::host_bridge_dispatch_identity_blockers(
-        &request_identity_projection(&input.request),
-        &receipt_identity_projection(receipt),
+        &request_identity,
+        &receipt_identity,
     ));
     blockers.sort();
     blockers.dedup();
@@ -152,18 +192,8 @@ pub fn build_host_bridge_result_scaffold(input: HostBridgeResultScaffoldInput) -
             input.request.dispatch_target
         )
     });
-    let attempt_id = input
-        .request
-        .raw
-        .get("attempt_id")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let packet_id = input
-        .request
-        .raw
-        .get("packet_id")
-        .cloned()
-        .unwrap_or(Value::Null);
+    let attempt_id = Value::String(input.request.attempt_id.clone());
+    let packet_id = Value::String(input.request.packet_id.clone());
     let selected_backend = input
         .request
         .raw
@@ -184,12 +214,39 @@ pub fn build_host_bridge_result_scaffold(input: HostBridgeResultScaffoldInput) -
         "dispatch_target": input.request.dispatch_target,
         "backend_id": input.request.backend_id,
         "selected_backend": selected_backend.clone(),
+        "carrier_id": input.request.carrier_id,
+        "adapter_kind": input.request.adapter_kind,
+        "adapter_capability_id": input.request.adapter_capability_id,
+        "invocation_mode": input.request.invocation_mode,
+        "dispatch_transport": input.request.dispatch_transport,
+        "receipt_mode": input.request.receipt_mode,
+        "adapter_contract_source": input.request.adapter_contract_source,
+        "adapter_contract_snapshot": input.request.adapter_contract_snapshot,
+        "adapter_contract_hash": input.request.adapter_contract_hash,
+        "adapter_operations": input.request.adapter_operations.as_ref().map(|ops| ops.to_value()),
+        "request_path": input.request.request_path,
+        "packet_path": input.request.packet_path,
+        "result_path": input.request.result_path,
+        "receipt_path": input.request.receipt_path,
         "decision": decision,
         "verdict": verdict,
         "blocker_codes": input.blocker_codes,
         "rework_target": input.rework_target,
         "allowed_next_node": allowed_next_node,
         "summary": summary,
+        "carrier_id": input.request.carrier_id,
+        "adapter_kind": input.request.adapter_kind,
+        "adapter_capability_id": input.request.adapter_capability_id,
+        "invocation_mode": input.request.invocation_mode,
+        "dispatch_transport": input.request.dispatch_transport,
+        "receipt_mode": input.request.receipt_mode,
+        "adapter_contract_source": input.request.adapter_contract_source,
+        "adapter_contract_snapshot": input.request.adapter_contract_snapshot,
+        "adapter_contract_hash": input.request.adapter_contract_hash,
+        "adapter_operations": input.request.adapter_operations.as_ref().map(|ops| ops.to_value()),
+        "request_path": input.request.request_path,
+        "result_path": input.request.result_path,
+        "receipt_path": input.request.receipt_path,
         "execution_evidence": {
             "receipt_backed": true,
             "source": "vida_agent_host_bridge_scaffold",
@@ -212,7 +269,21 @@ pub fn build_host_bridge_result_scaffold(input: HostBridgeResultScaffoldInput) -
             "packet_id": packet_id,
             "dispatch_target": input.request.dispatch_target,
             "backend_id": input.request.backend_id,
-            "selected_backend": selected_backend
+            "selected_backend": selected_backend,
+            "carrier_id": input.request.carrier_id,
+            "adapter_kind": input.request.adapter_kind,
+            "adapter_capability_id": input.request.adapter_capability_id,
+            "invocation_mode": input.request.invocation_mode,
+            "dispatch_transport": input.request.dispatch_transport,
+            "receipt_mode": input.request.receipt_mode,
+            "adapter_contract_source": input.request.adapter_contract_source,
+            "adapter_contract_snapshot": input.request.adapter_contract_snapshot,
+            "adapter_contract_hash": input.request.adapter_contract_hash,
+            "adapter_operations": input.request.adapter_operations.as_ref().map(|ops| ops.to_value()),
+            "request_path": input.request.request_path,
+            "packet_path": input.request.packet_path,
+            "result_path": input.request.result_path,
+            "receipt_path": input.request.receipt_path
         }
     })
 }
@@ -248,13 +319,23 @@ mod tests {
 
     #[test]
     fn receipt_binding_allows_active_packet_target_override() {
+        let request = minimal_request();
+        let mut receipt = build_host_bridge_result_scaffold(HostBridgeResultScaffoldInput {
+            request: request.clone(),
+            decision: None,
+            verdict: None,
+            blocker_codes: Vec::new(),
+            rework_target: None,
+            allowed_next_node: Some("next_node".to_string()),
+            summary: None,
+            host_agent_id: Some("host-agent".to_string()),
+            receipt_id: Some("receipt-1".to_string()),
+        });
+        receipt["dispatch_status"] = Value::String("bridge_request_pending".to_string());
+        receipt["dispatch_target"] = Value::String("coach".to_string());
         let decision = validate_dispatch_receipt_binding(&DispatchReceiptBindingInput {
-            request: minimal_request(),
-            receipt: Some(serde_json::json!({
-                "dispatch_status": "bridge_request_pending",
-                "run_id": "run-1",
-                "dispatch_target": "coach"
-            })),
+            request,
+            receipt: Some(receipt),
             allow_active_packet_target_override: true,
         });
 

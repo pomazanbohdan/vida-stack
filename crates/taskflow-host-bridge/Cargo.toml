@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+blake3 = { workspace = true }
 runtime-path-policy = { path = "../runtime-path-policy" }
 operator-output = { path = "../operator-output" }
 taskflow-contracts = { path = "../taskflow-contracts" }

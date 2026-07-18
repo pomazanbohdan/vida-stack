@@ -7271,6 +7271,7 @@ dependencies = [
 name = "taskflow-host-bridge"
 version = "0.9.7"
 dependencies = [
+ "blake3",
  "operator-output",
  "runtime-path-policy",
  "serde",

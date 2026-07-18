@@ -34,10 +34,42 @@ pub const HOST_BRIDGE_REQUIRED_IDENTITY_FIELDS: &[&str] = &[
     "dispatch_transport",
 ];
 
+pub const HOST_BRIDGE_REQUIRED_CURRENT_SCHEMA_FIELDS: &[&str] = &[
+    "schema_version",
+    "execution_boundary",
+    "receipt_mode",
+    "adapter_contract_source",
+    "adapter_contract_snapshot",
+    "adapter_contract_hash",
+    "request_path",
+];
+
 pub fn validate_host_bridge_request_identity(
     value: &Value,
 ) -> Result<HostBridgeAdapterOperations, HostBridgeError> {
+    match value.get("schema_version") {
+        None => {
+            return Err(HostBridgeError::MissingRequiredField {
+                field: "schema_version",
+            });
+        }
+        Some(version) if version.as_u64() != Some(1) => {
+            return Err(HostBridgeError::InvalidRequiredField {
+                field: "schema_version",
+            });
+        }
+        Some(_) => {}
+    }
     for field in HOST_BRIDGE_REQUIRED_IDENTITY_FIELDS {
+        required_string(value, field)?;
+    }
+    for field in [
+        "execution_boundary",
+        "receipt_mode",
+        "adapter_contract_source",
+        "adapter_contract_hash",
+        "request_path",
+    ] {
         required_string(value, field)?;
     }
     if value.get("adapter_operations").is_none() {
@@ -52,6 +84,7 @@ pub fn validate_host_bridge_request_identity(
         "adapter_capability_id",
         "invocation_mode",
         "dispatch_transport",
+        "receipt_mode",
     ] {
         let top_level = required_string(value, field)?;
         let nested = match field {
@@ -59,11 +92,36 @@ pub fn validate_host_bridge_request_identity(
             "adapter_capability_id" => &contract.adapter_capability_id,
             "invocation_mode" => &contract.invocation_mode,
             "dispatch_transport" => &contract.dispatch_transport,
+            "receipt_mode" => &contract.receipt_mode,
             _ => unreachable!("parity fields are exhaustive"),
         };
         if top_level != *nested {
             return Err(HostBridgeError::InvalidRequiredField { field });
         }
+    }
+    let snapshot = value
+        .get("adapter_contract_snapshot")
+        .filter(|snapshot| snapshot.is_object())
+        .ok_or(HostBridgeError::InvalidRequiredField {
+            field: "adapter_contract_snapshot",
+        })?;
+    let canonical_snapshot = contract.to_value();
+    if snapshot != &canonical_snapshot {
+        return Err(HostBridgeError::InvalidRequiredField {
+            field: "adapter_contract_snapshot",
+        });
+    }
+    let expected_hash = blake3::hash(&serde_json::to_vec(snapshot).map_err(|_| {
+        HostBridgeError::InvalidRequiredField {
+            field: "adapter_contract_snapshot",
+        }
+    })?)
+    .to_hex()
+    .to_string();
+    if required_string(value, "adapter_contract_hash")? != expected_hash {
+        return Err(HostBridgeError::InvalidRequiredField {
+            field: "adapter_contract_hash",
+        });
     }
     Ok(contract)
 }
@@ -71,7 +129,19 @@ pub fn validate_host_bridge_request_identity(
 pub fn host_bridge_request_error_fields(error: &HostBridgeError) -> Vec<String> {
     match error {
         HostBridgeError::MissingRequiredField { field } => vec![(*field).to_string()],
-        HostBridgeError::InvalidRequiredField { .. } => vec!["adapter_operations".to_string()],
+        HostBridgeError::InvalidRequiredField { field }
+            if matches!(
+                *field,
+                "adapter_kind"
+                    | "adapter_capability_id"
+                    | "invocation_mode"
+                    | "dispatch_transport"
+                    | "receipt_mode"
+            ) =>
+        {
+            vec!["adapter_operations".to_string()]
+        }
+        HostBridgeError::InvalidRequiredField { field } => vec![(*field).to_string()],
         HostBridgeError::AdapterContract(_) => vec!["adapter_operations".to_string()],
         _ => Vec::new(),
     }
@@ -113,6 +183,8 @@ pub struct HostBridgeRequest {
     pub adapter_capability_id: String,
     pub invocation_mode: String,
     pub adapter_contract_source: String,
+    pub adapter_contract_snapshot: Value,
+    pub adapter_contract_hash: String,
     pub adapter_operations: Option<HostBridgeAdapterOperations>,
     pub request_path: PathBuf,
     pub result_path: PathBuf,
@@ -126,7 +198,7 @@ impl HostBridgeRequest {
     pub fn from_value(raw: Value) -> Result<Self, HostBridgeError> {
         let adapter_operations = validate_host_bridge_request_identity(&raw)?;
         Ok(Self {
-            schema_version: optional_u32(&raw, "schema_version").unwrap_or(0),
+            schema_version: 1,
             status: required_string(&raw, "status")?,
             request_id: required_string(&raw, "request_id")?,
             run_id: required_string(&raw, "run_id")?,
@@ -137,16 +209,21 @@ impl HostBridgeRequest {
             packet_path: required_path(&raw, "packet_path")?,
             backend_id: required_string(&raw, "backend_id")?,
             carrier_id: required_string(&raw, "carrier_id")?,
-            execution_boundary: optional_string(&raw, "execution_boundary").unwrap_or_default(),
+            execution_boundary: required_string(&raw, "execution_boundary")?,
             dispatch_transport: required_string(&raw, "dispatch_transport")?,
-            receipt_mode: optional_string(&raw, "receipt_mode").unwrap_or_default(),
+            receipt_mode: required_string(&raw, "receipt_mode")?,
             adapter_kind: required_string(&raw, "adapter_kind")?,
             adapter_capability_id: required_string(&raw, "adapter_capability_id")?,
             invocation_mode: required_string(&raw, "invocation_mode")?,
-            adapter_contract_source: optional_string(&raw, "adapter_contract_source")
-                .unwrap_or_default(),
+            adapter_contract_source: required_string(&raw, "adapter_contract_source")?,
+            adapter_contract_snapshot: raw.get("adapter_contract_snapshot").cloned().ok_or(
+                HostBridgeError::MissingRequiredField {
+                    field: "adapter_contract_snapshot",
+                },
+            )?,
+            adapter_contract_hash: required_string(&raw, "adapter_contract_hash")?,
             adapter_operations: Some(adapter_operations),
-            request_path: optional_path(&raw, "request_path").unwrap_or_default(),
+            request_path: required_path(&raw, "request_path")?,
             result_path: required_path(&raw, "result_path")?,
             receipt_path: required_path(&raw, "receipt_path")?,
             required_result_fields: host_bridge_required_result_fields(&raw),
@@ -495,28 +572,8 @@ fn required_string(value: &Value, field: &'static str) -> Result<String, HostBri
         .ok_or(HostBridgeError::MissingRequiredField { field })
 }
 
-fn optional_path(value: &Value, field: &'static str) -> Option<PathBuf> {
-    optional_string(value, field).map(PathBuf::from)
-}
-
 fn required_path(value: &Value, field: &'static str) -> Result<PathBuf, HostBridgeError> {
     Ok(PathBuf::from(required_string(value, field)?))
-}
-
-fn optional_string(value: &Value, field: &'static str) -> Option<String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn optional_u32(value: &Value, field: &'static str) -> Option<u32> {
-    value
-        .get(field)
-        .and_then(Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
 }
 
 fn path_array(value: &Value, field: &'static str) -> Vec<PathBuf> {
@@ -558,7 +615,7 @@ mod tests {
     use super::*;
 
     fn complete_current_request() -> Value {
-        serde_json::json!({
+        let mut request = serde_json::json!({
             "schema_version": 1,
             "status": "pending",
             "request_id": "req-1",
@@ -591,8 +648,16 @@ mod tests {
                     "dispose": "multi_agent_v1.close_agent"
                 },
                 "dispose_policy": "configured"
-            }
-        })
+            },
+            "request_path": "request.json"
+        });
+        let snapshot = request["adapter_operations"].clone();
+        let hash = blake3::hash(&serde_json::to_vec(&snapshot).expect("snapshot serializes"))
+            .to_hex()
+            .to_string();
+        request["adapter_contract_snapshot"] = snapshot;
+        request["adapter_contract_hash"] = Value::String(hash);
+        request
     }
 
     fn temp_root(name: &str) -> PathBuf {
@@ -862,7 +927,7 @@ mod tests {
         assert!(matches!(
             err,
             HostBridgeError::MissingRequiredField {
-                field: "request_id"
+                field: "schema_version"
             }
         ));
     }
@@ -874,55 +939,18 @@ mod tests {
             .join("host-tool-bridge")
             .join("requests")
             .join("request.json");
-        std::fs::write(
-            &request,
-            serde_json::json!({
-                "schema_version": 1,
-                "status": "pending",
-                "request_id": "req-1",
-                "run_id": "run-1",
-                "task_id": "task-1",
-                "attempt_id": "attempt-1",
-                "packet_id": "packet-1",
-                "dispatch_target": "developer",
-                "packet_path": "runtime-consumption/packet.json",
-                "backend_id": "internal_subagents",
-                "carrier_id": "senior",
-                "execution_boundary": "parent_host_session",
-                "dispatch_transport": "host_tool_bridge",
-                "receipt_mode": "host_bridge_receipt",
-                "adapter_kind": "codex_host_tools",
-                "adapter_capability_id": "codex.multi_agent_v1",
-                "invocation_mode": "parent_host_tool_api",
-                "receipt_mode": "host_bridge_receipt",
-                "adapter_operations": {
-                    "adapter_kind": "codex_host_tools",
-                    "adapter_capability_id": "codex.multi_agent_v1",
-                    "invocation_mode": "parent_host_tool_api",
-                    "dispatch_transport": "host_tool_bridge",
-                    "receipt_mode": "host_bridge_receipt",
-                    "operations": {
-                        "spawn": "multi_agent_v1.spawn_agent",
-                        "wait": "multi_agent_v1.wait_agent",
-                        "dispose": "multi_agent_v1.close_agent"
-                    },
-                    "dispose_policy": "configured"
-                },
-                "request_path": "host-tool-bridge/requests/request.json",
-                "result_path": "host-tool-bridge/results/result.json",
-                "receipt_path": "host-tool-bridge/receipts/receipt.json",
-                "required_result_fields": [
-                    "decision",
-                    "verdict",
-                    "blocker_codes",
-                    "rework_target",
-                    "allowed_next_node"
-                ],
-                "owned_paths": ["crates/taskflow-host-bridge/src/lib.rs"]
-            })
-            .to_string(),
-        )
-        .unwrap();
+        let mut request_value = complete_current_request();
+        request_value["dispatch_target"] = Value::String("developer".to_string());
+        request_value["packet_path"] = Value::String("runtime-consumption/packet.json".to_string());
+        request_value["request_path"] =
+            Value::String("host-tool-bridge/requests/request.json".to_string());
+        request_value["result_path"] =
+            Value::String("host-tool-bridge/results/result.json".to_string());
+        request_value["receipt_path"] =
+            Value::String("host-tool-bridge/receipts/receipt.json".to_string());
+        request_value["owned_paths"] =
+            serde_json::json!(["crates/taskflow-host-bridge/src/lib.rs"]);
+        std::fs::write(&request, request_value.to_string()).unwrap();
 
         let loaded =
             read_host_bridge_request(&HostBridgeRequestPath::new(&root, &request)).unwrap();

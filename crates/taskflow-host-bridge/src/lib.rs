@@ -1,10 +1,13 @@
+#![recursion_limit = "256"]
+
 pub mod adapter_contract;
 pub mod adapter_payload;
 pub mod artifact_scope;
 pub mod completion;
 pub mod completion_authority;
 pub mod errors;
-pub mod legacy_normalization;
+#[cfg(test)]
+mod legacy_normalization;
 pub mod provenance;
 pub mod receipt_binding;
 pub mod request;
@@ -57,15 +60,6 @@ pub use completion_authority::{
     summary_blocker_codes, summary_text_reports_blocked_completion,
 };
 pub use errors::HostBridgeError;
-pub use legacy_normalization::{
-    CompletionBlocker, CompletionOutcome, FlowStepRef,
-    LEGACY_COMMAND_OPTIONS_SOURCE_CONTRACT_VERSION, LEGACY_HOST_BRIDGE_SOURCE_CONTRACT_VERSION,
-    LEGACY_LANE_COMPLETION_SOURCE_CONTRACT_VERSION, LEGACY_OUTCOME_CONTRADICTION,
-    LEGACY_RECEIPT_SOURCE_CONTRACT_VERSION, LEGACY_RUN_STATUS_SOURCE_CONTRACT_VERSION,
-    LegacyHostBridgeCompletionNormalization, LegacyHostBridgeCompletionNormalizationError,
-    normalize_legacy_command_options, normalize_legacy_host_bridge_completion_result,
-    normalize_legacy_lane_completion, normalize_legacy_receipt, normalize_legacy_run_status,
-};
 pub use provenance::{
     HostBridgeProvenanceDecision, HostBridgeProvenanceInput,
     host_bridge_provenance_public_blocker_code, validate_host_bridge_request_provenance,
@@ -121,16 +115,19 @@ pub fn host_bridge_dispatch_identity_blockers(
         ("packet_id", "packet_id"),
         ("attempt_id", "attempt_id"),
         ("backend_id", "backend_id"),
+        ("carrier_id", "carrier_id"),
+        ("adapter_kind", "adapter_kind"),
+        ("adapter_capability_id", "adapter_capability_id"),
+        ("invocation_mode", "invocation_mode"),
+        ("dispatch_transport", "dispatch_transport"),
+        ("receipt_mode", "receipt_mode"),
+        ("adapter_contract_source", "adapter_contract_source"),
+        ("adapter_contract_hash", "adapter_contract_hash"),
     ] {
-        let Some(expected) = request
+        let expected = request
             .get(request_field)
             .and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        let Some(expected) = (!expected.trim().is_empty()).then_some(expected) else {
-            continue;
-        };
+            .filter(|value| !value.trim().is_empty());
         let actual = result
             .get(result_field)
             .or_else(|| {
@@ -141,27 +138,42 @@ pub fn host_bridge_dispatch_identity_blockers(
                 }
             })
             .and_then(serde_json::Value::as_str);
-        if actual != Some(expected) {
+        if expected.is_none() || actual != expected {
             blockers.push(format!(
                 "host_bridge_result_identity_mismatch:{request_field}"
             ));
         }
     }
-    for (request_field, result_field) in [("packet_path", "source_dispatch_packet_path")] {
-        let Some(expected) = request
+    for (request_field, result_field) in [
+        ("request_path", "request_path"),
+        ("packet_path", "source_dispatch_packet_path"),
+        ("result_path", "result_path"),
+        ("receipt_path", "receipt_path"),
+    ] {
+        let expected = request
             .get(request_field)
             .and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        let matches = result
+            .filter(|value| !value.trim().is_empty());
+        let actual = result
             .get(result_field)
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|actual| host_bridge_packet_paths_equivalent(expected, actual));
+            .filter(|value| !value.trim().is_empty());
+        let matches = match (expected, actual) {
+            (Some(expected), Some(actual)) if request_field == "packet_path" => {
+                host_bridge_packet_paths_equivalent(expected, actual)
+            }
+            (Some(expected), Some(actual)) => expected == actual,
+            _ => false,
+        };
         if !matches {
             blockers.push(format!(
                 "host_bridge_result_identity_mismatch:{request_field}"
             ));
+        }
+    }
+    for field in ["adapter_contract_snapshot", "adapter_operations"] {
+        if request.get(field) != result.get(field) {
+            blockers.push(format!("host_bridge_result_identity_mismatch:{field}"));
         }
     }
     blockers.sort();
@@ -177,7 +189,99 @@ pub(crate) mod tests {
 
     use crate::request::HostBridgeRequest;
 
+    pub(crate) fn augment_dispatch_identity(
+        request: &mut serde_json::Value,
+        artifact: &mut serde_json::Value,
+    ) {
+        let defaults = [
+            ("task_id", "task-test"),
+            ("attempt_id", "attempt-test"),
+            ("packet_id", "packet-test"),
+            ("backend_id", "internal_subagents"),
+            ("carrier_id", "carrier-test"),
+            ("adapter_kind", "adapter-test"),
+            ("adapter_capability_id", "capability-test"),
+            ("invocation_mode", "invocation-test"),
+            ("dispatch_transport", "host_tool_bridge"),
+            ("receipt_mode", "host_bridge_receipt"),
+            ("adapter_contract_source", "test-source"),
+            ("request_path", "request.json"),
+            ("result_path", "result.json"),
+            ("receipt_path", "receipt.json"),
+        ];
+        for (field, value) in defaults {
+            if request.get(field).is_none() {
+                request[field] = serde_json::Value::String(value.to_string());
+            }
+        }
+        let snapshot = serde_json::json!({
+            "adapter_kind": request["adapter_kind"],
+            "adapter_capability_id": request["adapter_capability_id"],
+            "invocation_mode": request["invocation_mode"],
+            "dispatch_transport": request["dispatch_transport"],
+            "receipt_mode": request["receipt_mode"],
+            "operations": {
+                "spawn": "test.spawn",
+                "wait": "test.wait",
+                "dispose": "test.dispose"
+            },
+            "dispose_policy": "configured"
+        });
+        request["adapter_operations"] = snapshot.clone();
+        request["adapter_contract_snapshot"] = snapshot.clone();
+        request["adapter_contract_hash"] = serde_json::json!(
+            blake3::hash(&serde_json::to_vec(&snapshot).expect("identity snapshot"))
+                .to_hex()
+                .to_string()
+        );
+        for field in [
+            "request_id",
+            "run_id",
+            "task_id",
+            "attempt_id",
+            "packet_id",
+            "dispatch_target",
+            "backend_id",
+            "carrier_id",
+            "adapter_kind",
+            "adapter_capability_id",
+            "invocation_mode",
+            "dispatch_transport",
+            "receipt_mode",
+            "adapter_contract_source",
+            "adapter_contract_snapshot",
+            "adapter_contract_hash",
+            "request_path",
+            "result_path",
+            "receipt_path",
+            "adapter_operations",
+        ] {
+            artifact[field] = request[field].clone();
+        }
+        artifact["source_dispatch_packet_path"] = request["packet_path"].clone();
+    }
+
     pub(crate) fn minimal_request() -> HostBridgeRequest {
+        let adapter_operations = crate::HostBridgeAdapterOperations::from_registry_value(&json!({
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "operations": {
+                "spawn": "multi_agent_v1.spawn_agent",
+                "wait": "multi_agent_v1.wait_agent",
+                "dispose": "multi_agent_v1.close_agent"
+            },
+            "dispose_policy": "configured"
+        }))
+        .expect("test adapter contract");
+        let adapter_contract_snapshot = adapter_operations.to_value();
+        let adapter_contract_hash = blake3::hash(
+            &serde_json::to_vec(&adapter_contract_snapshot).expect("test adapter snapshot"),
+        )
+        .to_hex()
+        .to_string();
         HostBridgeRequest {
             schema_version: 1,
             status: "pending".to_string(),
@@ -197,22 +301,9 @@ pub(crate) mod tests {
             adapter_capability_id: "codex.multi_agent_v1".to_string(),
             invocation_mode: "parent_host_tool_api".to_string(),
             adapter_contract_source: "request".to_string(),
-            adapter_operations: Some(
-                crate::HostBridgeAdapterOperations::from_registry_value(&json!({
-                    "adapter_kind": "codex_host_tools",
-                    "adapter_capability_id": "codex.multi_agent_v1",
-                    "invocation_mode": "parent_host_tool_api",
-                    "dispatch_transport": "host_tool_bridge",
-                    "receipt_mode": "host_bridge_receipt",
-                    "operations": {
-                        "spawn": "multi_agent_v1.spawn_agent",
-                        "wait": "multi_agent_v1.wait_agent",
-                        "dispose": "multi_agent_v1.close_agent"
-                    },
-                    "dispose_policy": "configured"
-                }))
-                .expect("test adapter contract"),
-            ),
+            adapter_contract_snapshot,
+            adapter_contract_hash,
+            adapter_operations: Some(adapter_operations),
             request_path: PathBuf::from("host-tool-bridge/requests/request.json"),
             result_path: PathBuf::from("host-tool-bridge/results/result.json"),
             receipt_path: PathBuf::from("host-tool-bridge/receipts/receipt.json"),
@@ -240,7 +331,7 @@ pub(crate) mod tests {
         std::fs::write(&stale_packet, "{}").expect("write stale packet");
         let current_packet = current_packet.display().to_string();
         let stale_packet = stale_packet.display().to_string();
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "request_id": "request-tester-2",
             "run_id": "run-retry",
             "task_id": "task-retry",
@@ -250,7 +341,7 @@ pub(crate) mod tests {
             "packet_path": current_packet.clone(),
             "backend_id": "internal_subagents"
         });
-        let current_result = serde_json::json!({
+        let mut current_result = serde_json::json!({
             "request_id": "request-tester-2",
             "run_id": "run-retry",
             "task_id": "task-retry",
@@ -260,6 +351,7 @@ pub(crate) mod tests {
             "source_dispatch_packet_path": current_packet,
             "selected_backend": "internal_subagents"
         });
+        augment_dispatch_identity(&mut request, &mut current_result);
         assert!(
             super::host_bridge_dispatch_identity_blockers(&request, &current_result).is_empty()
         );
@@ -285,6 +377,54 @@ pub(crate) mod tests {
                 .any(|blocker| blocker.ends_with(":packet_path"))
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dispatch_identity_rejects_missing_or_mutated_contract_and_request_id() {
+        let mut request = serde_json::to_value(minimal_request()).expect("serialize request");
+        let mut artifact = request.clone();
+        augment_dispatch_identity(&mut request, &mut artifact);
+        assert!(super::host_bridge_dispatch_identity_blockers(&request, &artifact).is_empty());
+
+        for field in [
+            "adapter_operations",
+            "adapter_contract_snapshot",
+            "adapter_contract_hash",
+            "adapter_contract_source",
+            "request_id",
+        ] {
+            let mut missing = artifact.clone();
+            missing
+                .as_object_mut()
+                .expect("artifact object")
+                .remove(field);
+            assert!(
+                super::host_bridge_dispatch_identity_blockers(&request, &missing)
+                    .iter()
+                    .any(|blocker| blocker.ends_with(&format!(":{field}"))),
+                "missing `{field}` must block identity"
+            );
+
+            let mut mutated = artifact.clone();
+            match field {
+                "adapter_operations" => {
+                    mutated[field]["operations"]["spawn"] = serde_json::json!("forged.spawn")
+                }
+                "adapter_contract_snapshot" => {
+                    mutated[field]["operations"]["spawn"] = serde_json::json!("forged.spawn")
+                }
+                "adapter_contract_hash" => mutated[field] = serde_json::json!("forged-hash"),
+                "adapter_contract_source" => mutated[field] = serde_json::json!("forged-source"),
+                "request_id" => mutated[field] = serde_json::json!("foreign-request"),
+                _ => unreachable!(),
+            }
+            assert!(
+                super::host_bridge_dispatch_identity_blockers(&request, &mutated)
+                    .iter()
+                    .any(|blocker| blocker.ends_with(&format!(":{field}"))),
+                "mutated `{field}` must block identity"
+            );
+        }
     }
 
     #[cfg(windows)]

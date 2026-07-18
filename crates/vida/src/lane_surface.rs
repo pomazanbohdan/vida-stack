@@ -3884,10 +3884,12 @@ fn trusted_host_bridge_receipt_packet_matches_request(
         crate::runtime_dispatch_state::normalize_persisted_runtime_path(authoritative_packet_path);
     let authoritative_packet_path =
         canonicalize_existing_state_path(state_root, &authoritative_packet_path, "packet")?;
-    Ok(Some(taskflow_host_bridge::host_bridge_packet_paths_equivalent(
-        &request_packet_path.display().to_string(),
-        &authoritative_packet_path.display().to_string(),
-    )))
+    Ok(Some(
+        taskflow_host_bridge::host_bridge_packet_paths_equivalent(
+            &request_packet_path.display().to_string(),
+            &authoritative_packet_path.display().to_string(),
+        ),
+    ))
 }
 
 fn path_has_dot_segment(path: &Path) -> bool {
@@ -4921,6 +4923,7 @@ fn materialize_host_bridge_completion_evidence(
         receipt: Some(serde_json::json!({
             "receipt_backed": true,
             "dispatch_status": persisted_receipt.dispatch_status,
+            "request_id": request.get("request_id"),
             "run_id": persisted_receipt.run_id,
             "dispatch_target": if allow_reconciled_request_paths {
                 dispatch_target
@@ -4928,6 +4931,16 @@ fn materialize_host_bridge_completion_evidence(
                 persisted_receipt.dispatch_target.as_str()
             },
             "backend_id": persisted_receipt.selected_backend.clone(),
+            "carrier_id": request.get("carrier_id"),
+            "adapter_kind": request.get("adapter_kind"),
+            "adapter_capability_id": request.get("adapter_capability_id"),
+            "invocation_mode": request.get("invocation_mode"),
+            "dispatch_transport": request.get("dispatch_transport"),
+            "receipt_mode": request.get("receipt_mode"),
+            "adapter_contract_source": request.get("adapter_contract_source"),
+            "adapter_contract_snapshot": request.get("adapter_contract_snapshot"),
+            "adapter_contract_hash": request.get("adapter_contract_hash"),
+            "adapter_operations": request.get("adapter_operations"),
             "source_dispatch_packet_path": persisted_receipt
                 .dispatch_packet_path
                 .clone()
@@ -4936,10 +4949,13 @@ fn materialize_host_bridge_completion_evidence(
                         .get("packet_path")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string)
-                }),
+            }),
             "task_id": request.get("task_id"),
             "attempt_id": request.get("attempt_id"),
             "packet_id": request.get("packet_id"),
+            "request_path": request.get("request_path"),
+            "result_path": request.get("result_path"),
+            "receipt_path": request.get("receipt_path"),
         })),
         allow_active_packet_target_override: allow_reconciled_request_paths,
     });
@@ -12683,6 +12699,24 @@ mod tests {
         let result_path = root.join("host-tool-bridge/results/run-host-bridge-developer.json");
         let bridge_receipt_path =
             root.join("host-tool-bridge/receipts/run-host-bridge-developer.json");
+        let adapter_operations = serde_json::json!({
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "operations": {
+                "spawn": "multi_agent_v1.spawn_agent",
+                "wait": "multi_agent_v1.wait_agent",
+                "dispose": "multi_agent_v1.close_agent"
+            },
+            "dispose_policy": "configured"
+        });
+        let adapter_contract_hash = blake3::hash(
+            &serde_json::to_vec(&adapter_operations).expect("adapter contract snapshot"),
+        )
+        .to_hex()
+        .to_string();
         std::fs::create_dir_all(
             request_path
                 .parent()
@@ -12696,6 +12730,9 @@ mod tests {
                 "status": "pending",
                 "request_id": "run-host-bridge-developer",
                 "run_id": run_id,
+                "task_id": run_id,
+                "attempt_id": "host-bridge-complete-attempt",
+                "packet_id": "run-host-bridge-developer-packet",
                 "dispatch_target": "developer",
                 "task_class": "implementation",
                 "packet_path": packet_path.display().to_string(),
@@ -12703,10 +12740,23 @@ mod tests {
                 "carrier_id": "junior",
                 "execution_boundary": "parent_host_session",
                 "dispatch_transport": "host_tool_bridge",
+                "receipt_mode": "host_bridge_receipt",
+                "adapter_kind": "codex_host_tools",
+                "adapter_capability_id": "codex.multi_agent_v1",
+                "invocation_mode": "parent_host_tool_api",
+                "adapter_operations": adapter_operations,
+                "adapter_contract_snapshot": adapter_operations,
+                "adapter_contract_hash": adapter_contract_hash,
+                "adapter_contract_source": "vida.config.yaml",
+                "request_path": request_path.display().to_string(),
                 "implementation_isolation": {
                     "schema_version": "implementation-isolation-v1",
                     "artifact_contract": "stage_attempt_implementation_artifact_v1",
-                    "owned_paths": ["crates/vida/src/lane_surface.rs"]
+                    "owned_paths": ["crates/vida/src/lane_surface.rs"],
+                    "canonical_worktree_writes_allowed": false,
+                    "scope_policy": {
+                        "changed_files_must_be_subset_of_owned_paths": true
+                    }
                 },
                 "implementation_artifacts": [],
                 "result_path": result_path.display().to_string(),

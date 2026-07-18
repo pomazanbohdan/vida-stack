@@ -14,7 +14,6 @@ use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::runtime_proof_scope::proof_scope_from_dispatch_packet_path;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 use taskflow_host_bridge::{
-    HostBridgeAdapterOperations,
     default_host_bridge_required_result_fields,
     host_bridge_artifact_has_retryable_completion_blocker,
     host_bridge_completed_artifact_status_is_admissible,
@@ -22,7 +21,8 @@ use taskflow_host_bridge::{
     host_bridge_completed_result_status_is_admissible,
     host_bridge_existing_request_status_is_admissible, host_bridge_packet_paths_equivalent,
     host_bridge_result_verdict_contract_blockers, normalized_host_bridge_attempt_id,
-    validate_dispatch_receipt_binding, DispatchReceiptBindingInput, HostBridgeRequest,
+    validate_dispatch_receipt_binding, DispatchReceiptBindingInput, HostBridgeAdapterOperations,
+    HostBridgeRequest,
 };
 
 fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> String {
@@ -2325,10 +2325,7 @@ fn configured_host_tool_bridge_string(
         .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &["host_tool_bridge", key])))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .or_else(|| {
-            system_entry
-                .and_then(|entry| crate::yaml_string(yaml_lookup(entry, &[key])))
-        })
+        .or_else(|| system_entry.and_then(|entry| crate::yaml_string(yaml_lookup(entry, &[key]))))
 }
 
 fn dispatch_packet_string_list(dispatch_packet_path: &str, field: &str) -> Vec<String> {
@@ -2788,17 +2785,17 @@ fn existing_host_bridge_request_needs_adapter_refresh(
             == Some("host_tool_bridge")
         && explicit_legacy_alias
         && (existing
-        .get("adapter_kind")
-        .and_then(serde_json::Value::as_str)
-        == Some("unconfigured_host_agent_adapter")
-        || existing
-            .get("adapter_capability_id")
+            .get("adapter_kind")
             .and_then(serde_json::Value::as_str)
-            == Some("unconfigured_host_agent_capability")
-        || existing
-            .get("invocation_mode")
-            .and_then(serde_json::Value::as_str)
-            == Some("configured_host_capability_required"));
+            == Some("unconfigured_host_agent_adapter")
+            || existing
+                .get("adapter_capability_id")
+                .and_then(serde_json::Value::as_str)
+                == Some("unconfigured_host_agent_capability")
+            || existing
+                .get("invocation_mode")
+                .and_then(serde_json::Value::as_str)
+                == Some("configured_host_capability_required"));
     let expected_configured = expected
         .get("adapter_kind")
         .and_then(serde_json::Value::as_str)
@@ -2882,7 +2879,8 @@ fn existing_host_bridge_request_needs_pending_contract_refresh(
     ]
     .iter()
     .any(|field| !host_bridge_request_value_matches(existing, expected, field));
-    core_changed || (adapter_changed && HostBridgeAdapterOperations::from_request_value(expected).is_ok())
+    core_changed
+        || (adapter_changed && HostBridgeAdapterOperations::from_request_value(expected).is_ok())
 }
 
 fn materialize_host_tool_bridge_request(
@@ -3357,6 +3355,19 @@ fn host_bridge_receipt_binding_value(
         "source_dispatch_packet_path": request.get("packet_path"),
         "backend_id": backend_id,
         "selected_backend": backend_id,
+        "carrier_id": request.get("carrier_id"),
+        "adapter_kind": request.get("adapter_kind"),
+        "adapter_capability_id": request.get("adapter_capability_id"),
+        "invocation_mode": request.get("invocation_mode"),
+        "dispatch_transport": request.get("dispatch_transport"),
+        "receipt_mode": request.get("receipt_mode"),
+        "adapter_contract_source": request.get("adapter_contract_source"),
+        "adapter_contract_snapshot": request.get("adapter_contract_snapshot"),
+        "adapter_contract_hash": request.get("adapter_contract_hash"),
+        "adapter_operations": request.get("adapter_operations"),
+        "request_path": request.get("request_path"),
+        "result_path": request.get("result_path"),
+        "receipt_path": request.get("receipt_path"),
     })
 }
 
@@ -5493,15 +5504,16 @@ mod tests {
         configured_external_dispatch_wall_timeout_seconds, configured_host_dispatch_transport,
         configured_host_execution_boundary, configured_host_receipt_mode,
         configured_host_tool_bridge_dir, configured_host_tool_bridge_string,
-        host_bridge_registry_missing_for_internal_backend,
-        existing_host_bridge_request_needs_pending_contract_refresh,
         configured_internal_host_activation_parts,
         configured_internal_host_dispatch_no_output_timeout_seconds,
         configured_internal_host_dispatch_wall_timeout_seconds,
         configured_internal_host_runtime_env, dispatch_packet_path_should_render_as_downstream,
         dispatch_packet_prompt, execute_external_agent_lane_dispatch,
-        execute_internal_agent_lane_dispatch, external_provider_output_confirms_execution,
-        external_provider_output_confirms_execution_for_mode, host_tool_bridge_artifact_paths,
+        execute_internal_agent_lane_dispatch,
+        existing_host_bridge_request_needs_pending_contract_refresh,
+        external_provider_output_confirms_execution,
+        external_provider_output_confirms_execution_for_mode,
+        host_bridge_registry_missing_for_internal_backend, host_tool_bridge_artifact_paths,
         host_tool_bridge_request_id, internal_codex_output_confirms_execution,
         internal_host_activation_only_blocker_code, internal_host_app_bridge_requires_fail_closed,
         internal_host_windows_sandbox_preflight_blocker,
@@ -6171,9 +6183,7 @@ host_tool_bridge:
             "adapter_contract_hash": "hash-a",
             "adapter_contract_source": "vida.config.yaml"
         });
-        assert!(!existing_host_bridge_request_needs_pending_contract_refresh(
-            &expected, &expected
-        ));
+        assert!(!existing_host_bridge_request_needs_pending_contract_refresh(&expected, &expected));
         for (field, value) in [
             ("adapter_contract_hash", serde_json::json!("hash-b")),
             (
@@ -6205,10 +6215,12 @@ host_tool_bridge:
         }
         let mut malformed_expected = expected.clone();
         malformed_expected["adapter_operations"] = serde_json::Value::Null;
-        assert!(!existing_host_bridge_request_needs_pending_contract_refresh(
-            &expected,
-            &malformed_expected
-        ));
+        assert!(
+            !existing_host_bridge_request_needs_pending_contract_refresh(
+                &expected,
+                &malformed_expected
+            )
+        );
     }
 
     #[test]
@@ -6408,8 +6420,11 @@ dispatch:
         let packet_path = project_root.join(".vida/dispatch.json");
         std::fs::create_dir_all(packet_path.parent().expect("packet parent should exist"))
             .expect("create packet parent");
-        std::fs::write(&packet_path, serde_json::json!({"owned_paths": ["src/lib.rs"]}).to_string())
-            .expect("write dispatch packet");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({"owned_paths": ["src/lib.rs"]}).to_string(),
+        )
+        .expect("write dispatch packet");
         let receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: "run-host-bridge".to_string(),
             dispatch_target: "implementer".to_string(),
@@ -7162,6 +7177,13 @@ host_environment:
         adapter_kind: codex_host_tools
         adapter_capability_id: codex.multi_agent_v1
         invocation_mode: parent_host_tool_api
+        dispatch_transport: host_tool_bridge
+        receipt_mode: host_bridge_receipt
+        operations:
+          spawn: multi_agent_v1.spawn_agent
+          wait: multi_agent_v1.wait_agent
+          dispose: multi_agent_v1.close_agent
+        dispose_policy: configured
       carriers:
         middle:
           model: gpt-5.5
@@ -7415,6 +7437,13 @@ host_environment:
         adapter_kind: codex_host_tools
         adapter_capability_id: codex.multi_agent_v1
         invocation_mode: parent_host_tool_api
+        dispatch_transport: host_tool_bridge
+        receipt_mode: host_bridge_receipt
+        operations:
+          spawn: multi_agent_v1.spawn_agent
+          wait: multi_agent_v1.wait_agent
+          dispose: multi_agent_v1.close_agent
+        dispose_policy: configured
       carriers:
         middle:
           model: gpt-5.5
@@ -7653,12 +7682,32 @@ agent_system:
     #[test]
     fn host_bridge_rejects_parent_result_missing_structured_verdict_fields() {
         let receipt = internal_codex_fallback_receipt("packet.json");
+        let adapter_operations = serde_json::json!({
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "operations": {
+                "spawn": "multi_agent_v1.spawn_agent",
+                "wait": "multi_agent_v1.wait_agent",
+                "dispose": "multi_agent_v1.close_agent"
+            },
+            "dispose_policy": "configured"
+        });
+        let adapter_contract_hash = blake3::hash(
+            &serde_json::to_vec(&adapter_operations).expect("adapter contract snapshot"),
+        )
+        .to_hex()
+        .to_string();
         let request = serde_json::json!({
             "schema_version": 1,
             "status": "completed",
             "request_id": "req-1",
             "run_id": receipt.run_id,
             "task_id": receipt.run_id,
+            "attempt_id": "attempt-1",
+            "packet_id": "packet-1",
             "dispatch_target": receipt.dispatch_target,
             "packet_path": "packet.json",
             "backend_id": "internal_subagents",
@@ -7669,6 +7718,10 @@ agent_system:
             "adapter_kind": "codex_host_tools",
             "adapter_capability_id": "codex.multi_agent_v1",
             "invocation_mode": "parent_host_tool_api",
+            "adapter_operations": adapter_operations,
+            "adapter_contract_snapshot": adapter_operations,
+            "adapter_contract_hash": adapter_contract_hash,
+            "adapter_contract_source": "vida.config.yaml",
             "request_path": "request.json",
             "result_path": "result.json",
             "receipt_path": "receipt.json",
@@ -7682,7 +7735,24 @@ agent_system:
             "execution_state": "executed",
             "request_id": "req-1",
             "run_id": receipt.run_id,
+            "task_id": receipt.run_id,
+            "attempt_id": "attempt-1",
+            "packet_id": "packet-1",
             "dispatch_target": receipt.dispatch_target,
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_operations": adapter_operations,
+            "adapter_contract_snapshot": adapter_operations,
+            "adapter_contract_hash": adapter_contract_hash,
+            "adapter_contract_source": "vida.config.yaml",
+            "request_path": "request.json",
+            "result_path": "result.json",
+            "receipt_path": "receipt.json",
             "completion_receipt_id": "completion-1",
             "source_dispatch_packet_path": "packet.json",
             "execution_evidence": {
@@ -7698,10 +7768,25 @@ agent_system:
             "receipt_backed": true,
             "request_id": "req-1",
             "run_id": receipt.run_id,
+            "task_id": receipt.run_id,
+            "attempt_id": "attempt-1",
+            "packet_id": "packet-1",
             "dispatch_target": receipt.dispatch_target,
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_operations": adapter_operations,
+            "adapter_contract_snapshot": adapter_operations,
+            "adapter_contract_hash": adapter_contract_hash,
+            "adapter_contract_source": "vida.config.yaml",
             "completion_receipt_id": "completion-1",
             "request_path": "request.json",
             "result_path": "result.json",
+            "receipt_path": "receipt.json",
             "source_dispatch_packet_path": "packet.json"
         });
 
@@ -7960,6 +8045,13 @@ host_environment:
         adapter_kind: codex_host_tools
         adapter_capability_id: codex.multi_agent_v1
         invocation_mode: parent_host_tool_api
+        dispatch_transport: host_tool_bridge
+        receipt_mode: host_bridge_receipt
+        operations:
+          spawn: multi_agent_v1.spawn_agent
+          wait: multi_agent_v1.wait_agent
+          dispose: multi_agent_v1.close_agent
+        dispose_policy: configured
       carriers:
         middle:
           model: gpt-5.5
@@ -8044,7 +8136,24 @@ agent_system:
                 "verdict": "rework_required",
                 "request_id": request_id,
                 "run_id": receipt.run_id,
+                "task_id": request["task_id"],
+                "attempt_id": request["attempt_id"],
+                "packet_id": request["packet_id"],
                 "dispatch_target": receipt.dispatch_target,
+                "backend_id": request["backend_id"],
+                "carrier_id": request["carrier_id"],
+                "adapter_kind": request["adapter_kind"],
+                "adapter_capability_id": request["adapter_capability_id"],
+                "invocation_mode": request["invocation_mode"],
+                "dispatch_transport": request["dispatch_transport"],
+                "receipt_mode": request["receipt_mode"],
+                "adapter_operations": request["adapter_operations"],
+                "adapter_contract_snapshot": request["adapter_contract_snapshot"],
+                "adapter_contract_hash": request["adapter_contract_hash"],
+                "adapter_contract_source": request["adapter_contract_source"],
+                "request_path": request["request_path"],
+                "result_path": request["result_path"],
+                "receipt_path": request["receipt_path"],
                 "completion_receipt_id": "host-bridge-completion-test",
                 "blocker_codes": ["host_agent_execution_failed"],
                 "rework_target": "developer",
@@ -8068,10 +8177,25 @@ agent_system:
                 "receipt_backed": true,
                 "request_id": request_id,
                 "run_id": receipt.run_id,
+                "task_id": request["task_id"],
+                "attempt_id": request["attempt_id"],
+                "packet_id": request["packet_id"],
                 "dispatch_target": receipt.dispatch_target,
+                "backend_id": request["backend_id"],
+                "carrier_id": request["carrier_id"],
+                "adapter_kind": request["adapter_kind"],
+                "adapter_capability_id": request["adapter_capability_id"],
+                "invocation_mode": request["invocation_mode"],
+                "dispatch_transport": request["dispatch_transport"],
+                "receipt_mode": request["receipt_mode"],
+                "adapter_operations": request["adapter_operations"],
+                "adapter_contract_snapshot": request["adapter_contract_snapshot"],
+                "adapter_contract_hash": request["adapter_contract_hash"],
+                "adapter_contract_source": request["adapter_contract_source"],
                 "completion_receipt_id": "host-bridge-completion-test",
                 "request_path": request_path,
                 "result_path": result_path.display().to_string(),
+                "receipt_path": request["receipt_path"],
                 "source_dispatch_packet_path": packet_path
             }))
             .expect("encode host bridge receipt"),
@@ -8322,11 +8446,31 @@ dispatch:
     #[test]
     fn host_bridge_rejects_receipt_result_path_not_bound_to_request_result() {
         let receipt = internal_codex_fallback_receipt("/tmp/dispatch.json");
+        let adapter_operations = serde_json::json!({
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "operations": {
+                "spawn": "multi_agent_v1.spawn_agent",
+                "wait": "multi_agent_v1.wait_agent",
+                "dispose": "multi_agent_v1.close_agent"
+            },
+            "dispose_policy": "configured"
+        });
+        let adapter_contract_hash = blake3::hash(
+            &serde_json::to_vec(&adapter_operations).expect("adapter contract snapshot"),
+        )
+        .to_hex()
+        .to_string();
         let request = serde_json::json!({
             "schema_version": 1,
             "request_id": "run-target-dispatch-host-tool-bridge",
             "run_id": receipt.run_id,
             "task_id": receipt.run_id,
+            "attempt_id": "attempt-1",
+            "packet_id": "packet-1",
             "dispatch_target": receipt.dispatch_target,
             "backend_id": "internal_subagents",
             "carrier_id": "middle",
@@ -8336,6 +8480,10 @@ dispatch:
             "adapter_kind": "codex_host_tools",
             "adapter_capability_id": "codex.multi_agent_v1",
             "invocation_mode": "parent_host_tool_api",
+            "adapter_operations": adapter_operations,
+            "adapter_contract_snapshot": adapter_operations,
+            "adapter_contract_hash": adapter_contract_hash,
+            "adapter_contract_source": "vida.config.yaml",
             "request_path": "/tmp/.vida/data/state/host-bridge/requests/request.json",
             "result_path": "/tmp/.vida/data/state/host-bridge/results/result.json",
             "receipt_path": "/tmp/.vida/data/state/host-bridge/receipts/receipt.json",
@@ -8356,7 +8504,24 @@ dispatch:
             "allowed_next_node": "closure",
             "request_id": "run-target-dispatch-host-tool-bridge",
             "run_id": receipt.run_id,
+            "task_id": receipt.run_id,
+            "attempt_id": "attempt-1",
+            "packet_id": "packet-1",
             "dispatch_target": receipt.dispatch_target,
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_operations": adapter_operations,
+            "adapter_contract_snapshot": adapter_operations,
+            "adapter_contract_hash": adapter_contract_hash,
+            "adapter_contract_source": "vida.config.yaml",
+            "request_path": "/tmp/.vida/data/state/host-bridge/requests/request.json",
+            "result_path": "/tmp/.vida/data/state/host-bridge/results/result.json",
+            "receipt_path": "/tmp/.vida/data/state/host-bridge/receipts/receipt.json",
             "completion_receipt_id": "host-bridge-completion-test",
             "source_dispatch_packet_path": "/tmp/dispatch.json",
             "execution_evidence": {
@@ -8372,10 +8537,25 @@ dispatch:
             "receipt_backed": true,
             "request_id": "run-target-dispatch-host-tool-bridge",
             "run_id": receipt.run_id,
+            "task_id": receipt.run_id,
+            "attempt_id": "attempt-1",
+            "packet_id": "packet-1",
             "dispatch_target": receipt.dispatch_target,
+            "backend_id": "internal_subagents",
+            "carrier_id": "middle",
+            "adapter_kind": "codex_host_tools",
+            "adapter_capability_id": "codex.multi_agent_v1",
+            "invocation_mode": "parent_host_tool_api",
+            "dispatch_transport": "host_tool_bridge",
+            "receipt_mode": "host_bridge_receipt",
+            "adapter_operations": adapter_operations,
+            "adapter_contract_snapshot": adapter_operations,
+            "adapter_contract_hash": adapter_contract_hash,
+            "adapter_contract_source": "vida.config.yaml",
             "completion_receipt_id": "host-bridge-completion-test",
             "request_path": "/tmp/.vida/data/state/host-bridge/requests/request.json",
             "result_path": "/tmp/.vida/data/state/host-bridge/results/attacker-result.json",
+            "receipt_path": "/tmp/.vida/data/state/host-bridge/receipts/receipt.json",
             "source_dispatch_packet_path": "/tmp/dispatch.json"
         });
 
@@ -8391,7 +8571,7 @@ dispatch:
         .expect_err("receipt result path must be bound to the active request result");
 
         assert!(
-            error.contains("receipt result_path does not match"),
+            error.contains("Host bridge completion identity does not match"),
             "unexpected error: {error}"
         );
     }
@@ -10345,6 +10525,13 @@ host_tool_bridge:
   adapter_kind: codex_host_tools
   adapter_capability_id: codex.multi_agent_v1
   invocation_mode: parent_host_tool_api
+  dispatch_transport: host_tool_bridge
+  receipt_mode: host_bridge_receipt
+  operations:
+    spawn: multi_agent_v1.spawn_agent
+    wait: multi_agent_v1.wait_agent
+    dispose: multi_agent_v1.close_agent
+  dispose_policy: configured
 "#,
         )
         .expect("host bridge config should parse");
@@ -10455,6 +10642,13 @@ host_tool_bridge:
   adapter_kind: codex_host_tools
   adapter_capability_id: codex.multi_agent_v1
   invocation_mode: parent_host_tool_api
+  dispatch_transport: host_tool_bridge
+  receipt_mode: host_bridge_receipt
+  operations:
+    spawn: multi_agent_v1.spawn_agent
+    wait: multi_agent_v1.wait_agent
+    dispose: multi_agent_v1.close_agent
+  dispose_policy: configured
 "#,
         )
         .expect("host bridge config should parse");
@@ -10578,6 +10772,13 @@ host_tool_bridge:
   adapter_kind: codex_host_tools
   adapter_capability_id: codex.multi_agent_v1
   invocation_mode: parent_host_tool_api
+  dispatch_transport: host_tool_bridge
+  receipt_mode: host_bridge_receipt
+  operations:
+    spawn: multi_agent_v1.spawn_agent
+    wait: multi_agent_v1.wait_agent
+    dispose: multi_agent_v1.close_agent
+  dispose_policy: configured
 "#,
         )
         .expect("host bridge config should parse");
@@ -10662,6 +10863,13 @@ host_tool_bridge:
   adapter_kind: codex_host_tools
   adapter_capability_id: codex.multi_agent_v1
   invocation_mode: parent_host_tool_api
+  dispatch_transport: host_tool_bridge
+  receipt_mode: host_bridge_receipt
+  operations:
+    spawn: multi_agent_v1.spawn_agent
+    wait: multi_agent_v1.wait_agent
+    dispose: multi_agent_v1.close_agent
+  dispose_policy: configured
 "#,
         )
         .expect("host bridge config should parse");
@@ -10751,6 +10959,13 @@ host_tool_bridge:
   adapter_kind: codex_host_tools
   adapter_capability_id: codex.multi_agent_v1
   invocation_mode: parent_host_tool_api
+  dispatch_transport: host_tool_bridge
+  receipt_mode: host_bridge_receipt
+  operations:
+    spawn: multi_agent_v1.spawn_agent
+    wait: multi_agent_v1.wait_agent
+    dispose: multi_agent_v1.close_agent
+  dispose_policy: configured
  "#,
         )
         .expect("host bridge config should parse");
